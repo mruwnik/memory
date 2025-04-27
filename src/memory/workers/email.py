@@ -13,7 +13,7 @@ import pathlib
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem
-from memory.common.settings import FILE_STORAGE_DIR, MAX_INLINE_ATTACHMENT_SIZE
+from memory.common import settings
 
 logger = logging.getLogger(__name__)
 
@@ -151,16 +151,18 @@ def process_attachment(attachment: Attachment, message_id: str) -> Attachment | 
     Returns:
         Processed attachment dictionary with appropriate metadata
     """
-    if attachment["size"] <= MAX_INLINE_ATTACHMENT_SIZE:
-        attachment["content"] = base64.b64encode(attachment["content"]).decode('utf-8')
+    if not (content := attachment.get("content")):
         return attachment
+
+    if attachment["size"] <= settings.MAX_INLINE_ATTACHMENT_SIZE:
+        return {**attachment, "content": base64.b64encode(content).decode('utf-8')}
 
     safe_message_id = re.sub(r'[<>\s:/\\]', '_', message_id)
     unique_id = str(uuid.uuid4())[:8]
     safe_filename = re.sub(r'[/\\]', '_', attachment["filename"])
     
     # Create user subdirectory
-    user_dir = FILE_STORAGE_DIR / safe_message_id
+    user_dir = settings.FILE_STORAGE_DIR / safe_message_id
     user_dir.mkdir(parents=True, exist_ok=True)
     
     # Final path for the attachment
@@ -168,9 +170,8 @@ def process_attachment(attachment: Attachment, message_id: str) -> Attachment | 
     
     # Write the file
     try:
-        file_path.write_bytes(attachment["content"])
-        attachment["path"] = file_path
-        return attachment
+        file_path.write_bytes(content)
+        return {**attachment, "path": file_path}
     except Exception as e:
         logger.error(f"Failed to save attachment {safe_filename} to disk: {str(e)}")
     return None
