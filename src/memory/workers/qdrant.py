@@ -1,33 +1,13 @@
 import logging
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, cast
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from memory.common import settings
+from memory.common.embedding import Collection, DEFAULT_COLLECTIONS, DistanceType, Vector
 
 logger = logging.getLogger(__name__)
-
-# Type of distance metric
-DistanceType = Literal["Cosine", "Dot", "Euclidean"]
-Vector = list[float]
-
-class Collection(TypedDict):
-    dimension: int
-    distance: DistanceType
-    on_disk: bool
-    shards: int
-
-
-DEFAULT_COLLECTIONS: dict[str, Collection] = {
-    "mail": {"dimension": 1536, "distance": "Cosine"},
-    # "chat": {"dimension": 1536, "distance": "Cosine"},
-    # "git": {"dimension": 1536, "distance": "Cosine"},
-    # "photo": {"dimension": 512, "distance": "Cosine"},
-    # "book": {"dimension": 1536, "distance": "Cosine"},
-    # "blog": {"dimension": 1536, "distance": "Cosine"},
-    # "doc": {"dimension": 1536, "distance": "Cosine"},
-}
 
 
 def get_qdrant_client() -> qdrant_client.QdrantClient:

@@ -700,7 +700,7 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
         vector_ids = vectorize_email(mail_message)
         
         assert len(vector_ids) == 1
-        assert vector_ids[0] == "00000000-0000-0000-0000-000000000001"
+        assert vector_ids[0] == "mail/00000000-0000-0000-0000-000000000001"
 
 
 def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
@@ -741,6 +741,9 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         file_path=None,
     )
     
+    file_path = mail_message.attachments_path / "stored.txt"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(b"This is stored content")
     attachment2 = EmailAttachment(
         id=2,
         mail_message_id=mail_message.id,
@@ -748,21 +751,19 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         content_type="text/plain",
         size=200,
         content=None,
-        file_path="/path/to/stored.txt",
+        file_path=str(file_path),
     )
     
     db_session.add_all([attachment1, attachment2])
     db_session.flush()
     
     # Mock embedding functions but use real qdrant
-    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536), \
-         patch("memory.common.embedding.embed_file", return_value=[0.7] * 1536):
-        
+    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536):
         # Call the function
         vector_ids = vectorize_email(mail_message)
         
         # Verify results
         assert len(vector_ids) == 3
-        assert vector_ids[0] == "00000000-0000-0000-0000-000000000001"
-        assert vector_ids[1] == "00000000-0000-0000-0000-000000000002"
-        assert vector_ids[2] == "00000000-0000-0000-0000-000000000003"
+        assert vector_ids[0] == "mail/00000000-0000-0000-0000-000000000001"
+        assert vector_ids[1] == "doc/00000000-0000-0000-0000-000000000002"
+        assert vector_ids[2] == "doc/00000000-0000-0000-0000-000000000003"

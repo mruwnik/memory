@@ -11,7 +11,7 @@ from email.utils import parsedate_to_datetime
 from typing import Generator, Callable, TypedDict, Literal
 import pathlib
 from sqlalchemy.orm import Session
-
+from collections import defaultdict
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
 from memory.common import settings, embedding
 from memory.workers.qdrant import get_qdrant_client, upsert_vectors
@@ -462,27 +462,35 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
 def vectorize_email(email: MailMessage) -> list[float]:
     qdrant_client = get_qdrant_client()
 
-    vector_ids = [str(uuid.uuid4())]
-    vectors = [embedding.embed_text(email.body_raw)]
-    payloads = [email.as_payload()]
-
-    for attachment in email.attachments:
-        vector_ids.append(str(uuid.uuid4()))
-        payloads.append(attachment.as_payload())
-
-        if attachment.file_path:
-            vector = embedding.embed_file(attachment.file_path)
-        else:
-            vector = embedding.embed_text(attachment.content)
-        vectors.append(vector)
-
+    vector_id = uuid.uuid4()
     upsert_vectors(
         client=qdrant_client,
         collection_name="mail",
-        ids=vector_ids,
-        vectors=vectors,
-        payloads=payloads,
+        ids=[str(vector_id)],
+        vectors=[embedding.embed_text(email.body_raw)],
+        payloads=[email.as_payload()],
     )
-    
+    vector_ids = [f"mail/{vector_id}"]
+
+    embeds = defaultdict(list)
+    for attachment in email.attachments:
+        if attachment.file_path:
+            content = pathlib.Path(attachment.file_path).read_bytes()
+        else:
+            content = attachment.content
+        collection, vector = embedding.embed(attachment.content_type, content)
+        embeds[collection].append((str(uuid.uuid4()), vector, attachment.as_payload()))
+
+    for collection, embeds in embeds.items():
+        ids, vectors, payloads = zip(*embeds)
+        upsert_vectors(
+            client=qdrant_client,
+            collection_name=collection,
+            ids=ids,
+            vectors=vectors,
+            payloads=payloads,
+        )
+        vector_ids.extend([f"{collection}/{vector_id}" for vector_id in ids])
+
     logger.info(f"Stored embedding for message {email.message_id}")
     return vector_ids
