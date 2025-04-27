@@ -1,21 +1,16 @@
 """
 Database connection utilities.
 """
-import os
-
+from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
+
+from memory.common import settings
 
 
 def get_engine():
     """Create SQLAlchemy engine from environment variables"""
-    user = os.getenv("POSTGRES_USER", "kb")
-    password = os.getenv("POSTGRES_PASSWORD", "kb")
-    host = os.getenv("POSTGRES_HOST", "postgres")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "kb")
-    
-    return create_engine(f"postgresql://{user}:{password}@{host}:{port}/{db}")
+    return create_engine(settings.DB_URL)
 
 
 def get_session_factory():
@@ -32,6 +27,20 @@ def get_scoped_session():
     return scoped_session(session_factory) 
 
 
+@contextmanager
 def make_session():
-    with get_scoped_session() as session:
+    """
+    Context manager for database sessions.
+    
+    Yields:
+        SQLAlchemy session that will be automatically closed
+    """
+    session = get_scoped_session()
+    try:
         yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.remove()

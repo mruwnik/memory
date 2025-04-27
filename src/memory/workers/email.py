@@ -6,7 +6,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Generator
+from typing import Generator, Callable
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem
@@ -85,13 +85,13 @@ def extract_body(msg: email.message.Message) -> str:
 
 def extract_attachments(msg: email.message.Message) -> list[dict]:
     """
-    Extract attachment metadata from email.
+    Extract attachment metadata and content from email.
     
     Args:
         msg: Email message object
         
     Returns:
-        List of attachment metadata dicts
+        List of attachment dictionaries with metadata and content
     """
     if not msg.is_multipart():
         return []
@@ -103,11 +103,16 @@ def extract_attachments(msg: email.message.Message) -> list[dict]:
             continue
 
         if filename := part.get_filename():
-            attachments.append({
-                "filename": filename,
-                "content_type": part.get_content_type(),
-                "size": len(part.get_payload(decode=True))
-            })
+            try:
+                content = part.get_payload(decode=True)
+                attachments.append({
+                    "filename": filename,
+                    "content_type": part.get_content_type(),
+                    "size": len(content),
+                    "content": content
+                })
+            except Exception as e:
+                logger.error(f"Error extracting attachment content for {filename}: {str(e)}")
 
     return attachments
 
@@ -265,7 +270,7 @@ def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> tuple[str, bytes] | None:
 def fetch_email_since(
     conn: imaplib.IMAP4_SSL,
     folder: str,
-    since_date: datetime
+    since_date: datetime = datetime(1970, 1, 1)
 ) -> list[tuple[str, bytes]]:
     """
     Fetch emails from a folder since a given date.
@@ -304,7 +309,8 @@ def process_folder(
     conn: imaplib.IMAP4_SSL,
     folder: str,
     account: EmailAccount,
-    since_date: datetime
+    since_date: datetime,
+    processor: Callable[[int, str, str, bytes], int | None],
 ) -> dict:
     """
     Process a single folder from an email account.
@@ -319,17 +325,14 @@ def process_folder(
         Stats dictionary for the folder
     """
     new_messages, errors = 0, 0
-    emails = []  # Initialize to avoid UnboundLocalError
+    emails = []
 
     try:
         emails = fetch_email_since(conn, folder, since_date)
         
         for uid, raw_email in emails:
             try:
-                # Import process_message here to avoid circular imports
-                from memory.workers.tasks.email import process_message
-                
-                task = process_message.delay(
+                task = processor(
                     account_id=account.id,
                     message_id=uid,
                     folder=folder,

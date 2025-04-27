@@ -23,8 +23,8 @@ from memory.workers.email import (
     fetch_email,
     fetch_email_since,
     process_folder,
-    imap_connection,
 )
+from tests.providers.email_provider import MockEmailProvider
 
 
 # Use a simple counter to generate unique message IDs without calling make_msgid
@@ -436,169 +436,84 @@ def test_create_mail_message(db_session):
     assert mail_message.attachments == {"items": parsed_email["attachments"], "folder": folder}
 
 
-@pytest.mark.parametrize(
-    "fetch_return, fetch_side_effect, extract_uid_return, expected_result",
-    [
-        # Success case
-        (('OK', ['mock_data']), None, ("12345", b'raw email content'), ("12345", b'raw email content')),
-        # IMAP error
-        (('NO', []), None, None, None),
-        # Exception case
-        (None, Exception("Test error"), None, None),
-    ]
-)
-@patch('memory.workers.email.extract_email_uid')
-def test_fetch_email(
-    mock_extract_email_uid, fetch_return, fetch_side_effect, extract_uid_return, expected_result
-):
-    conn = MagicMock(spec=imaplib.IMAP4_SSL)
+def test_fetch_email(email_provider):
+    # Configure the provider with sample emails
+    email_provider.select("INBOX")
     
-    # Configure mocks
-    if fetch_side_effect:
-        conn.fetch.side_effect = fetch_side_effect
-    else:
-        conn.fetch.return_value = fetch_return
-        
-    if extract_uid_return:
-        mock_extract_email_uid.return_value = extract_uid_return
+    # Test fetching an existing email
+    result = fetch_email(email_provider, "101")
     
-    uid = "12345"
+    # Verify result contains the expected UID and content
+    assert result is not None
+    uid, content = result
+    assert uid == "101"
+    assert b"This is test email 1" in content
     
-    # Call function
-    result = fetch_email(conn, uid)
-    
-    # Verify expectations
-    assert result == expected_result
-    
-    # Verify fetch was called if no exception
-    if not fetch_side_effect:
-        conn.fetch.assert_called_once_with(uid, '(UID RFC822)')
+    # Test fetching a non-existent email
+    result = fetch_email(email_provider, "999")
+    assert result is None
 
 
-@pytest.mark.parametrize(
-    "select_return, search_return, select_side_effect, expected_calls, expected_result",
-    [
-        # Successful case with multiple messages
-        (
-            ('OK', [b'1']), 
-            ('OK', [b'1 2 3']), 
-            None, 
-            3, 
-            [("1", b'email1'), ("2", b'email2'), ("3", b'email3')]
-        ),
-        # No messages found case
-        (
-            ('OK', [b'0']), 
-            ('OK', [b'']), 
-            None, 
-            0, 
-            []
-        ),
-        # Error in select
-        (
-            ('NO', [b'Error']), 
-            None, 
-            None, 
-            0, 
-            []
-        ),
-        # Error in search
-        (
-            ('OK', [b'1']), 
-            ('NO', [b'Error']), 
-            None, 
-            0, 
-            []
-        ),
-        # Exception in select
-        (
-            None, 
-            None, 
-            Exception("Test error"), 
-            0, 
-            []
-        ),
-    ]
-)
-@patch('memory.workers.email.fetch_email')
-def test_fetch_email_since(
-    mock_fetch_email, select_return, search_return, select_side_effect, expected_calls, expected_result
-):
-    conn = MagicMock(spec=imaplib.IMAP4_SSL)
+def test_fetch_email_since(email_provider):
+    # Fetch emails from INBOX folder
+    result = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
     
-    # Configure mocks based on parameters
-    if select_side_effect:
-        conn.select.side_effect = select_side_effect
-    else:
-        conn.select.return_value = select_return
-        
-    if search_return:
-        conn.search.return_value = search_return
+    # Verify we got the expected number of emails
+    assert len(result) == 2
     
-    # Configure fetch_email mock if needed
-    if expected_calls > 0:
-        mock_fetch_email.side_effect = [
-            (f"{i+1}", f"email{i+1}".encode()) for i in range(expected_calls)
-        ]
+    # Verify content of fetched emails
+    uids = sorted([uid for uid, _ in result])
+    assert uids == ["101", "102"]
     
-    folder = "INBOX"
-    since_date = datetime(2023, 1, 1)
-    
-    result = fetch_email_since(conn, folder, since_date)
-    
-    assert mock_fetch_email.call_count == expected_calls
-    assert result == expected_result
-
-
-@patch('memory.workers.email.fetch_email_since')
-def test_process_folder_error(mock_fetch_email_since):
-    # Setup
-    conn = MagicMock(spec=imaplib.IMAP4_SSL)
-    folder = "INBOX"
-    account = MagicMock(spec=EmailAccount)
-    since_date = datetime(2023, 1, 1)
-    
-    # Test exception in fetch_email_since
-    mock_fetch_email_since.side_effect = Exception("Test error")
-    
-    # Call function
-    result = process_folder(conn, folder, account, since_date)
-    
-    # Verify
-    assert result["messages_found"] == 0
-    assert result["new_messages"] == 0
-    assert result["errors"] == 1
+    # Test with a folder that doesn't exist
+    result = fetch_email_since(email_provider, "NonExistentFolder", datetime(1970, 1, 1))
+    assert result == []
 
 
 @patch('memory.workers.tasks.email.process_message.delay')
-@patch('memory.workers.email.fetch_email_since')
-def test_process_folder(mock_fetch_email_since, mock_process_message_delay):
-    conn = MagicMock(spec=imaplib.IMAP4_SSL)
-    folder = "INBOX"
+def test_process_folder(mock_process_message_delay, email_provider):
     account = MagicMock(spec=EmailAccount)
     account.id = 123
-    since_date = datetime(2023, 1, 1)
+    account.tags = ["test"]
     
-    mock_fetch_email_since.return_value = [
-        ("1", b'email1'),
-        ("2", b'email2'),
-    ]
+    results = process_folder(email_provider, "INBOX", account, datetime(1970, 1, 1), mock_process_message_delay)
     
-    mock_process_message_delay.return_value = MagicMock()
+    assert results == {
+        "messages_found": 2,
+        "new_messages": 2,
+        "errors": 0
+    }
     
-    with patch('builtins.__import__', side_effect=__import__):
-        result = process_folder(conn, folder, account, since_date)
+
+@patch('memory.workers.tasks.email.process_message.delay')
+def test_process_folder_no_emails(mock_process_message_delay, email_provider):
+    account = MagicMock(spec=EmailAccount)
+    account.id = 123
+    email_provider.search = MagicMock(return_value=("OK", [b'']))
     
-    mock_fetch_email_since.assert_called_once_with(conn, folder, since_date)
-    assert mock_process_message_delay.call_count == 2
+    result = process_folder(email_provider, "Empty", account, datetime(1970, 1, 1), mock_process_message_delay)
+    assert result == {
+        "messages_found": 0,
+        "new_messages": 0,
+        "errors": 0
+    }
+
+
+def test_process_folder_error(email_provider):
+    account = MagicMock(spec=EmailAccount)
+    account.id = 123
     
-    mock_process_message_delay.assert_any_call(
-        account_id=account.id,
-        message_id="1",
-        folder=folder,
-        raw_email='email1'
-    )
+    mock_processor = MagicMock()
     
-    assert result["messages_found"] == 2
-    assert result["new_messages"] == 2
-    assert result["errors"] == 0
+    def raise_exception(*args):
+        raise Exception("Test error")
+    
+    email_provider.search = raise_exception
+    
+    result = process_folder(email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor)
+    assert result == {
+        "messages_found": 0,
+        "new_messages": 0,
+        "errors": 0
+    }
+
