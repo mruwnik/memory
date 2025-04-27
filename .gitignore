@@ -1,0 +1,5 @@
+.env
+.DS_Store
+secrets/
+acme.json
+__pycache__/

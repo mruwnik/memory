@@ -1,0 +1,239 @@
+version: "3.9"
+
+# --------------------------------------------------------------------- networks
+networks:
+  kbnet:                 # internal overlay – NOT exposed
+    driver: bridge
+
+# --------------------------------------------------------------------- secrets
+secrets:
+  postgres_password:   {file: ./secrets/postgres_password.txt}
+  jwt_secret:          {file: ./secrets/jwt_secret.txt}
+  openai_key:          {file: ./secrets/openai_key.txt}
+
+# --------------------------------------------------------------------- volumes
+volumes:
+  db_data:       {}     # Postgres
+  qdrant_data:   {}     # Qdrant
+  rabbitmq_data: {}     # RabbitMQ
+
+# ------------------------------ X-templates ----------------------------
+x-common-env: &env
+  RABBITMQ_USER: kb
+  TZ: "Etc/UTC"
+
+
+x-worker-base: &worker-base
+  build: 
+    context: .
+    dockerfile: docker/workers/Dockerfile
+  restart: unless-stopped
+  networks: [kbnet]
+  security_opt: ["no-new-privileges=true"]
+  depends_on: [postgres, rabbitmq, qdrant]
+  env_file: [.env]
+  environment: &worker-env
+    <<: *env
+    POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    # DSNs are built in worker entrypoint from user + pw files
+    QDRANT_URL: http://qdrant:6333
+    OPENAI_API_KEY_FILE: /run/secrets/openai_key
+  secrets: [postgres_password, openai_key]
+  read_only: true
+  tmpfs: [/tmp,/var/tmp]
+  cap_drop: [ALL]
+  logging:
+    options: {max-size: "10m", max-file: "3"}
+
+# ================================ SERVICES ============================
+
+services:
+# ----------------------------------------------------------------- data layer
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    networks: [kbnet]
+    environment:
+      <<: *env
+      POSTGRES_USER: kb
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: kb
+    secrets: [postgres_password]
+    volumes:
+      - db_data:/var/lib/postgresql/data:rw
+      - ./db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 4g
+    cpus: "1.5"
+    security_opt: ["no-new-privileges=true"]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    networks: [kbnet]
+    environment:
+      <<: *env
+      RABBITMQ_DEFAULT_USER: "kb"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD}"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq:rw
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    cpus: "0.5"
+    security_opt: ["no-new-privileges=true"]
+    ports:  # UI only on localhost
+      - "127.0.0.1:15672:15672"
+
+  qdrant:
+    image: qdrant/qdrant:v1.14.0
+    restart: unless-stopped
+    networks: [kbnet]
+    volumes:
+      - qdrant_data:/qdrant/storage:rw
+    tmpfs:
+      - /tmp
+      - /var/tmp
+      - /qdrant/snapshots:rw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "2", "-O", "-", "localhost:6333/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 4g
+    cpus: "2"
+    security_opt: ["no-new-privileges=true"]
+    cap_drop: [ALL]
+
+# ------------------------------------------------------------ API / gateway
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/api/Dockerfile
+  #   restart: unless-stopped
+  #   networks: [kbnet]
+  #   depends_on: [postgres, rabbitmq, qdrant]
+  #   environment:
+  #     <<: *env
+  #     JWT_SECRET_FILE: /run/secrets/jwt_secret
+  #     OPENAI_API_KEY_FILE: /run/secrets/openai_key
+  #     POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  #     QDRANT_URL: http://qdrant:6333
+  #   secrets: [jwt_secret, openai_key, postgres_password]
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 5
+  #   mem_limit: 768m
+  #   cpus: "1"
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.kb.rule=Host(`${TRAEFIK_DOMAIN}`)"
+  #     - "traefik.http.routers.kb.entrypoints=websecure"
+  #     - "traefik.http.services.kb.loadbalancer.server.port=8000"
+
+  traefik:
+    image: traefik:v3.0
+    restart: unless-stopped
+    networks: [kbnet]
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.network=kbnet"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # - "--certificatesresolvers.le.acme.httpchallenge=true"
+      # - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+      # - "--certificatesresolvers.le.acme.email=${LE_EMAIL}"
+      # - "--certificatesresolvers.le.acme.storage=/acme.json"
+      - "--log.level=INFO"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # - ./acme.json:/acme.json:rw
+
+# ------------------------------------------------------------ Celery workers
+  worker-text:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "medium_embed"
+    deploy: {resources: {limits: {cpus: "2", memory: 3g}}}
+
+  worker-photo:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "photo_embed"
+    deploy: {resources: {limits: {cpus: "4", memory: 4g}}}
+
+  worker-ocr:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "low_ocr"
+    deploy: {resources: {limits: {cpus: "4", memory: 4g}}}
+
+  worker-git:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "git_summary"
+    deploy: {resources: {limits: {cpus: "1", memory: 1g}}}
+
+  worker-rss:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "rss"
+    deploy: {resources: {limits: {cpus: "0.5", memory: 512m}}}
+
+  worker-docs:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "docs"
+    deploy: {resources: {limits: {cpus: "1", memory: 1g}}}
+
+# ------------------------------------------------------------ watchtower (auto-update)
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    command: ["--schedule", "0 0 4 * * *", "--cleanup"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: [kbnet]
+
+# ------------------------------------------------------------------- profiles: observability (opt-in)
+# services:
+#   prometheus:
+#     image: prom/prometheus:v2.52
+#     profiles: ["obs"]
+#     networks: [kbnet]
+#     volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+#     restart: unless-stopped
+#     ports: ["127.0.0.1:9090:9090"]
+
+#   grafana:
+#     image: grafana/grafana:10
+#     profiles: ["obs"]
+#     networks: [kbnet]
+#     volumes: [./observability/grafana:/var/lib/grafana]
+#     restart: unless-stopped
+#     environment:
+#       GF_SECURITY_ADMIN_USER: admin
+#       GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_pw
+#     secrets: [grafana_pw]
+#     ports: ["127.0.0.1:3000:3000"]
+
+# secrets:  # extra secret for Grafana, not needed otherwise
+#   grafana_pw:
+#     file: ./secrets/grafana_pw.txt
