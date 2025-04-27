@@ -56,7 +56,6 @@ def run_alembic_migrations(db_name: str) -> None:
     project_root = Path(__file__).parent.parent.parent.parent.parent
     alembic_ini = project_root / "db" / "migrations" / "alembic.ini"
     
-    breakpoint()
     subprocess.run(
         ["alembic", "-c", str(alembic_ini), "upgrade", "head"],
         env={**os.environ, "DATABASE_URL": settings.make_db_url(db=db_name)},

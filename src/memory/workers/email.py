@@ -6,7 +6,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-
+from typing import Generator
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem
@@ -227,12 +227,15 @@ def check_message_exists(db_session: Session, message_id: str, message_hash: byt
     Returns:
         True if message exists, False otherwise
     """
-    return (
-        # Check by message_id first (faster)
-        message_id and db_session.query(MailMessage).filter(MailMessage.message_id == message_id).first()
-        # Then check by message_hash
-        or db_session.query(SourceItem).filter(SourceItem.sha256 == message_hash).first() is not None
-    )
+    # Check by message_id first (faster)
+    if message_id:
+        mail_message = db_session.query(MailMessage).filter(MailMessage.message_id == message_id).first()
+        if mail_message is not None:
+            return True
+    
+    # Then check by message_hash
+    source_item = db_session.query(SourceItem).filter(SourceItem.sha256 == message_hash).first()
+    return source_item is not None
 
 
 def extract_email_uid(msg_data: bytes) -> tuple[str, str]:
@@ -316,12 +319,16 @@ def process_folder(
         Stats dictionary for the folder
     """
     new_messages, errors = 0, 0
+    emails = []  # Initialize to avoid UnboundLocalError
 
     try:
         emails = fetch_email_since(conn, folder, since_date)
         
         for uid, raw_email in emails:
             try:
+                # Import process_message here to avoid circular imports
+                from memory.workers.tasks.email import process_message
+                
                 task = process_message.delay(
                     account_id=account.id,
                     message_id=uid,
@@ -346,7 +353,7 @@ def process_folder(
 
 
 @contextmanager
-def imap_connection(account: EmailAccount) -> imaplib.IMAP4_SSL:
+def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None, None]:
     conn = imaplib.IMAP4_SSL(
         host=account.imap_server,
         port=account.imap_port
