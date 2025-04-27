@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timedelta
 
-from memory.common.db.models import EmailAccount, MailMessage, SourceItem
+from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
 from memory.workers.tasks.email import process_message
 
 
@@ -82,7 +82,7 @@ def test_process_simple_email(db_session, test_email_account):
     assert mail_message.sender == "alice@example.com"
     assert "bob@example.com" in mail_message.recipients
     assert "This is test email 1" in mail_message.body_raw
-    assert mail_message.attachments.get("folder") == "INBOX"
+    assert mail_message.folder == "INBOX"
 
 
 def test_process_email_with_attachment(db_session, test_email_account):
@@ -96,19 +96,24 @@ def test_process_email_with_attachment(db_session, test_email_account):
     
     assert source_id is not None
     
-    # Check mail message specifics and attachment
+    # Check mail message specifics
     mail_message = db_session.query(MailMessage).filter(MailMessage.source_id == source_id).first()
     assert mail_message is not None
     assert mail_message.subject == "Email with Attachment"
     assert mail_message.sender == "eve@example.com"
     assert "This email has an attachment" in mail_message.body_raw
-    assert mail_message.attachments.get("folder") == "Archive"
+    assert mail_message.folder == "Archive"
     
-    # Check attachments were processed
-    attachment_items = mail_message.attachments.get("items", [])
-    assert len(attachment_items) > 0
-    assert attachment_items[0]["filename"] == "test.txt"
-    assert attachment_items[0]["content_type"] == "text/plain"
+    # Check attachments were processed and stored in the EmailAttachment table
+    attachments = db_session.query(EmailAttachment).filter(
+        EmailAttachment.mail_message_id == mail_message.id
+    ).all()
+    
+    assert len(attachments) > 0
+    assert attachments[0].filename == "test.txt"
+    assert attachments[0].content_type == "text/plain"
+    # Either content or file_path should be set
+    assert attachments[0].content is not None or attachments[0].file_path is not None
 
 
 def test_process_empty_message(db_session, test_email_account):

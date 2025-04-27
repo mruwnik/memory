@@ -1,13 +1,15 @@
 """
 Database models for the knowledge base system.
 """
+from pathlib import Path
 from sqlalchemy import (
     Column, ForeignKey, Integer, BigInteger, Text, DateTime, Boolean,
     ARRAY, func, Numeric, CheckConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR
 from sqlalchemy.ext.declarative import declarative_base
-
+from sqlalchemy.orm import relationship
+from memory.common import settings
 
 Base = declarative_base()
 
@@ -47,14 +49,41 @@ class MailMessage(Base):
     recipients = Column(ARRAY(Text))
     sent_at = Column(DateTime(timezone=True))
     body_raw = Column(Text)
-    attachments = Column(JSONB)
+    folder = Column(Text)
     tsv = Column(TSVECTOR)
+    
+    attachments = relationship("EmailAttachment", back_populates="mail_message", cascade="all, delete-orphan")
+
+    @property
+    def attachments_path(self) -> Path:
+        return Path(settings.FILE_STORAGE_DIR) / self.sender / (self.folder or 'INBOX')
     
     # Add indexes
     __table_args__ = (
         Index('mail_sent_idx', 'sent_at'),
         Index('mail_recipients_idx', 'recipients', postgresql_using='gin'),
         Index('mail_tsv_idx', 'tsv', postgresql_using='gin'),
+    )
+
+
+class EmailAttachment(Base):
+    __tablename__ = 'email_attachment'
+    
+    id = Column(BigInteger, primary_key=True)
+    mail_message_id = Column(BigInteger, ForeignKey('mail_message.id', ondelete='CASCADE'), nullable=False)
+    filename = Column(Text, nullable=False)
+    content_type = Column(Text)
+    size = Column(Integer)
+    content = Column(BYTEA) # For small files stored inline
+    file_path = Column(Text) # For larger files stored on disk
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    mail_message = relationship("MailMessage", back_populates="attachments")
+    
+    # Add indexes
+    __table_args__ = (
+        Index('email_attachment_message_idx', 'mail_message_id'),
+        Index('email_attachment_filename_idx', 'filename'),
     )
 
 

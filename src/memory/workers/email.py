@@ -12,7 +12,7 @@ from typing import Generator, Callable, TypedDict, Literal
 import pathlib
 from sqlalchemy.orm import Session
 
-from memory.common.db.models import EmailAccount, MailMessage, SourceItem
+from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
 from memory.common import settings
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ def extract_attachments(msg: email.message.Message) -> list[Attachment]:
     return attachments
 
 
-def process_attachment(attachment: Attachment, message_id: str) -> Attachment | None:
+def process_attachment(attachment: Attachment, message: MailMessage) -> EmailAttachment | None:
     """Process an attachment, storing large files on disk and returning metadata.
     
     Args:
@@ -151,33 +151,33 @@ def process_attachment(attachment: Attachment, message_id: str) -> Attachment | 
     Returns:
         Processed attachment dictionary with appropriate metadata
     """
-    if not (content := attachment.get("content")):
-        return attachment
+    content, file_path = None, None
+    if not (real_content := attachment.get("content")):
+        "No content, so just save the metadata"
+    elif attachment["size"] <= settings.MAX_INLINE_ATTACHMENT_SIZE:
+        content = base64.b64encode(real_content)
+    else:
+        safe_filename = re.sub(r'[/\\]', '_', attachment["filename"])
+        user_dir = message.attachments_path
+        user_dir.mkdir(parents=True, exist_ok=True)
+        file_path = user_dir / safe_filename
+        try:
+            file_path.write_bytes(real_content)
+        except Exception as e:
+            logger.error(f"Failed to save attachment {safe_filename} to disk: {str(e)}")
+            return None
 
-    if attachment["size"] <= settings.MAX_INLINE_ATTACHMENT_SIZE:
-        return {**attachment, "content": base64.b64encode(content).decode('utf-8')}
-
-    safe_message_id = re.sub(r'[<>\s:/\\]', '_', message_id)
-    unique_id = str(uuid.uuid4())[:8]
-    safe_filename = re.sub(r'[/\\]', '_', attachment["filename"])
-    
-    # Create user subdirectory
-    user_dir = settings.FILE_STORAGE_DIR / safe_message_id
-    user_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Final path for the attachment
-    file_path = user_dir / f"{unique_id}_{safe_filename}"
-    
-    # Write the file
-    try:
-        file_path.write_bytes(content)
-        return {**attachment, "path": file_path}
-    except Exception as e:
-        logger.error(f"Failed to save attachment {safe_filename} to disk: {str(e)}")
-    return None
+    return EmailAttachment(
+        mail_message_id=message.id,
+        filename=attachment["filename"],
+        content_type=attachment.get("content_type"),
+        size=attachment.get("size"),
+        content=content,
+        file_path=file_path and str(file_path),
+    )
 
 
-def process_attachments(attachments: list[Attachment], message_id: str) -> list[Attachment]:
+def process_attachments(attachments: list[Attachment], message: MailMessage) -> list[EmailAttachment]:
     """
     Process email attachments, storing large files on disk and returning metadata.
     
@@ -193,7 +193,7 @@ def process_attachments(attachments: list[Attachment], message_id: str) -> list[
 
     return [
         attachment
-        for a in attachments if (attachment := process_attachment(a, message_id))
+        for a in attachments if (attachment := process_attachment(a, message))
     ]
 
 
@@ -275,7 +275,7 @@ def create_mail_message(
     folder: str,
 ) -> MailMessage:
     """
-    Create a new mail message record.
+    Create a new mail message record and associated attachments.
     
     Args:
         db_session: Database session
@@ -286,12 +286,6 @@ def create_mail_message(
     Returns:
         Newly created MailMessage
     """
-    processed_attachments = process_attachments(
-        parsed_email["attachments"], 
-        parsed_email["message_id"]
-    )
-    print("processed_attachments", processed_attachments)
-    
     mail_message = MailMessage(
         source_id=source_id,
         message_id=parsed_email["message_id"],
@@ -300,9 +294,15 @@ def create_mail_message(
         recipients=parsed_email["recipients"],
         sent_at=parsed_email["sent_at"],
         body_raw=parsed_email["body"],
-        attachments={"items": processed_attachments, "folder": folder}
+        folder=folder,
     )
     db_session.add(mail_message)
+    db_session.flush()
+    
+    if parsed_email["attachments"]:
+        processed_attachments = process_attachments(parsed_email["attachments"], mail_message)
+        db_session.add_all(processed_attachments)
+    
     return mail_message
 
 

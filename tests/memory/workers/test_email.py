@@ -4,14 +4,12 @@ import email.mime.text
 import email.mime.base
 import base64
 import pathlib
-import re
 
 from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY, MagicMock, patch
 import pytest
-from memory.common.db.models import SourceItem
-from memory.common.db.models import MailMessage, EmailAccount
+from memory.common.db.models import SourceItem, MailMessage, EmailAttachment, EmailAccount
 from memory.common import settings
 from memory.workers.email import (
     compute_message_hash,
@@ -224,17 +222,23 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
         "size": attachment_size,
         "content": b"a" * attachment_size,
     }
+    message = MailMessage(
+        id=1,
+        message_id=message_id,
+        sender="sender@example.com",
+        folder="INBOX",
+    )
 
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", max_inline_size):
-        result = process_attachment(attachment, message_id)
+        result = process_attachment(attachment, message)
 
     assert result is not None
     # For inline attachments, content should be base64 encoded string
-    assert isinstance(result["content"], str)
+    assert isinstance(result.content, bytes)
     # Decode the base64 string and compare with the original content
-    decoded_content = base64.b64decode(result["content"].encode('utf-8'))
+    decoded_content = base64.b64decode(result.content)
     assert decoded_content == attachment["content"]
-    assert "path" not in result
+    assert result.file_path is None
 
 
 @pytest.mark.parametrize(
@@ -253,18 +257,18 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
         "size": attachment_size,
         "content": b"a" * attachment_size,
     }
-
+    message = MailMessage(
+        id=1,
+        message_id=message_id,
+        sender="sender@example.com",
+        folder="INBOX",
+    )
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", max_inline_size):
-        result = process_attachment(attachment, message_id)
+        result = process_attachment(attachment, message)
 
     assert result is not None
-    # For disk-stored attachments, content should not be modified and path should be set
-    assert "path" in result
-    assert isinstance(result["path"], pathlib.Path)
-
-    # Verify the path contains safe message ID
-    safe_message_id = re.sub(r"[<>\s:/\\]", "_", message_id)
-    assert safe_message_id in str(result["path"])
+    assert not result.content
+    assert result.file_path == str(settings.FILE_STORAGE_DIR / "sender@example.com" / "INBOX" / "test.txt")
 
 
 def test_process_attachment_write_error():
@@ -275,6 +279,12 @@ def test_process_attachment_write_error():
         "size": 100,
         "content": b"a" * 100,
     }
+    message = MailMessage(
+        id=1,
+        message_id="<test@example.com>",
+        sender="sender@example.com",
+        folder="INBOX",
+    )
 
     # Mock write_bytes to raise an exception
     def mock_write_bytes(self, content):
@@ -284,7 +294,7 @@ def test_process_attachment_write_error():
         patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", 10),
         patch.object(pathlib.Path, "write_bytes", mock_write_bytes),
     ):
-        assert process_attachment(attachment, "<test@example.com>") is None
+        assert process_attachment(attachment, message) is None
 
 
 def test_process_attachments_empty():
@@ -316,20 +326,26 @@ def test_process_attachments_mixed():
             "content": b"c" * 30,
         },
     ]
+    message = MailMessage(
+        id=1,
+        message_id="<test@example.com>",
+        sender="sender@example.com",
+        folder="INBOX",
+    )
 
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", 50):
         # Process attachments
-        results = process_attachments(attachments, "<test@example.com>")
+        results = process_attachments(attachments, message)
 
     # Verify we have all attachments processed
     assert len(results) == 3
 
     # Verify small attachments are base64 encoded
-    assert isinstance(results[0]["content"], str)
-    assert isinstance(results[2]["content"], str)
+    assert isinstance(results[0].content, bytes)
+    assert isinstance(results[2].content, bytes)
 
     # Verify large attachment has a path
-    assert "path" in results[1]
+    assert results[1].file_path is not None
 
 
 @pytest.mark.parametrize(
@@ -520,7 +536,16 @@ def test_check_message_exists(
 
 
 def test_create_mail_message(db_session):
-    source_id = 1
+    source_item = SourceItem(
+        id=1,
+        modality="mail",
+        sha256=b"test_hash_bytes" + bytes(28),
+        tags=["test"],
+        byte_length=100,
+    )
+    db_session.add(source_item)
+    db_session.flush()
+    source_id = source_item.id
     parsed_email = {
         "message_id": "<test@example.com>",
         "subject": "Test Subject",
@@ -542,6 +567,8 @@ def test_create_mail_message(db_session):
         folder=folder,
     )
 
+    attachments = db_session.query(EmailAttachment).filter(EmailAttachment.mail_message_id == mail_message.id).all()
+
     # Verify the mail message was created correctly
     assert isinstance(mail_message, MailMessage)
     assert mail_message.source_id == source_id
@@ -551,10 +578,7 @@ def test_create_mail_message(db_session):
     assert mail_message.recipients == parsed_email["recipients"]
     assert mail_message.sent_at == parsed_email["sent_at"]
     assert mail_message.body_raw == parsed_email["body"]
-    assert mail_message.attachments == {
-        "items": parsed_email["attachments"],
-        "folder": folder,
-    }
+    assert mail_message.attachments == attachments
 
 
 def test_fetch_email(email_provider):
