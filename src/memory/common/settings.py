@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def boolean_env(key: str, default: bool = False) -> bool:
+    return os.getenv(key, "0").lower() in ("1", "true", "yes")
+
 
 DB_USER = os.getenv("DB_USER", "kb")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "kb")
@@ -22,3 +25,11 @@ FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Maximum attachment size to store directly in the database (10MB)
 MAX_INLINE_ATTACHMENT_SIZE = int(os.getenv("MAX_INLINE_ATTACHMENT_SIZE", 1 * 1024 * 1024))  
+
+# Qdrant settings
+QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_GRPC_PORT = int(os.getenv("QDRANT_GRPC_PORT", "6334"))
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
+QDRANT_PREFER_GRPC = boolean_env("QDRANT_PREFER_GRPC", False)  
+QDRANT_TIMEOUT = int(os.getenv("QDRANT_TIMEOUT", "60"))

@@ -6,11 +6,14 @@ import uuid
 from pathlib import Path
 
 import pytest
+import qdrant_client
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from testcontainers.qdrant import QdrantContainer
 
 from memory.common import settings
 from tests.providers.email_provider import MockEmailProvider
+from memory.workers.qdrant import initialize_collections
 
 
 def get_test_db_name() -> str:
@@ -197,3 +200,13 @@ def email_provider():
 def mock_file_storage(tmp_path: Path):
     with patch("memory.common.settings.FILE_STORAGE_DIR", tmp_path):
         yield
+
+
+@pytest.fixture
+def qdrant():
+    with QdrantContainer() as qdrant:
+        client = qdrant.get_client()
+        with patch.object(qdrant_client, "QdrantClient", return_value=client):
+            initialize_collections(client)
+            yield client
+

@@ -13,7 +13,8 @@ import pathlib
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
-from memory.common import settings
+from memory.common import settings, embedding
+from memory.workers.qdrant import get_qdrant_client, upsert_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -456,3 +457,32 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
             conn.logout()
         except Exception as e:
             logger.error(f"Error logging out from {account.imap_server}: {str(e)}")
+
+
+def vectorize_email(email: MailMessage) -> list[float]:
+    qdrant_client = get_qdrant_client()
+
+    vector_ids = [str(uuid.uuid4())]
+    vectors = [embedding.embed_text(email.body_raw)]
+    payloads = [email.as_payload()]
+
+    for attachment in email.attachments:
+        vector_ids.append(str(uuid.uuid4()))
+        payloads.append(attachment.as_payload())
+
+        if attachment.file_path:
+            vector = embedding.embed_file(attachment.file_path)
+        else:
+            vector = embedding.embed_text(attachment.content)
+        vectors.append(vector)
+
+    upsert_vectors(
+        client=qdrant_client,
+        collection_name="mail",
+        ids=vector_ids,
+        vectors=vectors,
+        payloads=payloads,
+    )
+    
+    logger.info(f"Stored embedding for message {email.message_id}")
+    return vector_ids

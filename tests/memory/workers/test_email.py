@@ -27,8 +27,20 @@ from memory.workers.email import (
     process_folder,
     process_attachment,
     process_attachments,
+    vectorize_email,
 )
 
+
+@pytest.fixture
+def mock_uuid4():
+    i = 0
+    def uuid4():
+        nonlocal i
+        i += 1
+        return f"00000000-0000-0000-0000-00000000000{i}"
+
+    with patch("uuid.uuid4", side_effect=uuid4):
+        yield
 
 
 # Use a simple counter to generate unique message IDs without calling make_msgid
@@ -655,3 +667,102 @@ def test_process_folder_error(email_provider):
         email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor
     )
     assert result == {"messages_found": 0, "new_messages": 0, "errors": 0}
+
+
+def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
+    source_item = SourceItem(
+        id=1,
+        modality="mail",
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        byte_length=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+    )
+    db_session.add(source_item)
+    db_session.flush()
+    
+    # Create mail message
+    mail_message = MailMessage(
+        id=1,
+        source_id=1,
+        message_id="<test-vector@example.com>",
+        subject="Test Vectorization",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        body_raw="This is a test email for vectorization",
+        folder="INBOX",
+    )
+    db_session.add(mail_message)
+    db_session.flush()
+    
+    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536):
+        vector_ids = vectorize_email(mail_message)
+        
+        assert len(vector_ids) == 1
+        assert vector_ids[0] == "00000000-0000-0000-0000-000000000001"
+
+
+def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
+    source_item = SourceItem(
+        id=2,
+        modality="mail",
+        sha256=b"test_hash2" + bytes(24),
+        tags=["test"],
+        byte_length=200,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+    )
+    db_session.add(source_item)
+    db_session.flush()
+    
+    # Create mail message
+    mail_message = MailMessage(
+        id=2,
+        source_id=2,
+        message_id="<test-vector-attach@example.com>",
+        subject="Test Vectorization with Attachments",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        body_raw="This is a test email with attachments",
+        folder="INBOX",
+    )
+    db_session.add(mail_message)
+    db_session.flush()
+    
+    # Add two attachments - one with content and one with file_path
+    attachment1 = EmailAttachment(
+        id=1,
+        mail_message_id=mail_message.id,
+        filename="inline.txt",
+        content_type="text/plain",
+        size=100,
+        content=base64.b64encode(b"This is inline content"),
+        file_path=None,
+    )
+    
+    attachment2 = EmailAttachment(
+        id=2,
+        mail_message_id=mail_message.id,
+        filename="stored.txt",
+        content_type="text/plain",
+        size=200,
+        content=None,
+        file_path="/path/to/stored.txt",
+    )
+    
+    db_session.add_all([attachment1, attachment2])
+    db_session.flush()
+    
+    # Mock embedding functions but use real qdrant
+    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536), \
+         patch("memory.common.embedding.embed_file", return_value=[0.7] * 1536):
+        
+        # Call the function
+        vector_ids = vectorize_email(mail_message)
+        
+        # Verify results
+        assert len(vector_ids) == 3
+        assert vector_ids[0] == "00000000-0000-0000-0000-000000000001"
+        assert vector_ids[1] == "00000000-0000-0000-0000-000000000002"
+        assert vector_ids[2] == "00000000-0000-0000-0000-000000000003"

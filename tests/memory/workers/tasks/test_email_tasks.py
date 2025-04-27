@@ -56,7 +56,7 @@ def test_email_account(db_session):
     return account
 
 
-def test_process_simple_email(db_session, test_email_account):
+def test_process_simple_email(db_session, test_email_account, qdrant):
     """Test processing a simple email message."""
     source_id = process_message(
         account_id=test_email_account.id,
@@ -85,7 +85,7 @@ def test_process_simple_email(db_session, test_email_account):
     assert mail_message.folder == "INBOX"
 
 
-def test_process_email_with_attachment(db_session, test_email_account):
+def test_process_email_with_attachment(db_session, test_email_account, qdrant):
     """Test processing a message with an attachment."""
     source_id = process_message(
         account_id=test_email_account.id,
@@ -116,7 +116,7 @@ def test_process_email_with_attachment(db_session, test_email_account):
     assert attachments[0].content is not None or attachments[0].file_path is not None
 
 
-def test_process_empty_message(db_session, test_email_account):
+def test_process_empty_message(db_session, test_email_account, qdrant):
     """Test processing an empty/invalid message."""
     source_id = process_message(
         account_id=test_email_account.id,
@@ -128,7 +128,7 @@ def test_process_empty_message(db_session, test_email_account):
     assert source_id is None
 
 
-def test_process_duplicate_message(db_session, test_email_account):
+def test_process_duplicate_message(db_session, test_email_account, qdrant):
     """Test that duplicate messages are detected and not stored again."""
     # First call should succeed and create records
     source_id_1 = process_message(

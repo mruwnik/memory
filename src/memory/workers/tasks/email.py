@@ -12,6 +12,7 @@ from memory.workers.email import (
     imap_connection,
     parse_email_message,
     process_folder,
+    vectorize_email,
 )
 
 
@@ -63,11 +64,15 @@ def process_message(
         
         source_item = create_source_item(db, message_hash, account.tags, len(raw_email))
         
-        create_mail_message(db, source_item.id, parsed_email, folder)
+        mail_message = create_mail_message(db, source_item.id, parsed_email, folder)
         
+        source_item.vector_ids = vectorize_email(mail_message)
         db.commit()
-        
-        # TODO: Queue for embedding once that's implemented
+            
+        logger.info(f"Stored embedding for message {parsed_email['message_id']}")
+        logger.info("Vector IDs:")
+        for vector_id in source_item.vector_ids:
+            logger.info(f" - {vector_id}")
         
         return source_item.id
 

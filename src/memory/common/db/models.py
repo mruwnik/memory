@@ -29,6 +29,8 @@ class SourceItem(Base):
     byte_length = Column(Integer)
     mime_type = Column(Text)
     
+    mail_message = relationship("MailMessage", back_populates="source", uselist=False)
+    
     # Add table-level constraint and indexes
     __table_args__ = (
         CheckConstraint("embed_status IN ('RAW','QUEUED','STORED','FAILED')"),
@@ -53,10 +55,23 @@ class MailMessage(Base):
     tsv = Column(TSVECTOR)
     
     attachments = relationship("EmailAttachment", back_populates="mail_message", cascade="all, delete-orphan")
+    source = relationship("SourceItem", back_populates="mail_message")
 
     @property
     def attachments_path(self) -> Path:
         return Path(settings.FILE_STORAGE_DIR) / self.sender / (self.folder or 'INBOX')
+    
+    def as_payload(self) -> dict:
+        return {
+            "source_id": self.source_id,
+            "message_id": self.message_id,
+            "subject": self.subject,
+            "sender": self.sender,
+            "recipients": self.recipients,
+            "folder": self.folder,
+            "tags": self.source.tags,
+            "date": self.sent_at and self.sent_at.isoformat() or None,
+        }
     
     # Add indexes
     __table_args__ = (
@@ -79,6 +94,17 @@ class EmailAttachment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     mail_message = relationship("MailMessage", back_populates="attachments")
+    
+    def as_payload(self) -> dict:
+        return {
+            "filename": self.filename,
+            "content_type": self.content_type,
+            "size": self.size,
+            "created_at": self.created_at and self.created_at.isoformat() or None,
+            "mail_message_id": self.mail_message_id,
+            "source_id": self.mail_message.source_id,
+            "tags": self.mail_message.source.tags,
+        }
     
     # Add indexes
     __table_args__ = (
