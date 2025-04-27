@@ -30,3 +30,8 @@ def get_scoped_session():
     engine = get_engine()
     session_factory = sessionmaker(bind=engine)
     return scoped_session(session_factory) 
+
+
+def make_session():
+    with get_scoped_session() as session:
+        yield session

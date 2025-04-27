@@ -16,6 +16,7 @@ def read_requirements(filename: str) -> list[str]:
 common_requires = read_requirements('requirements-common.txt')
 api_requires = read_requirements('requirements-api.txt')
 workers_requires = read_requirements('requirements-workers.txt')
+dev_requires = read_requirements('requirements-dev.txt')
 
 setup(
     name="memory",
@@ -27,5 +28,7 @@ setup(
         "api": api_requires + common_requires,
         "workers": workers_requires + common_requires,
         "common": common_requires,
+        "dev": dev_requires,
+        "all": api_requires + workers_requires + common_requires + dev_requires,
     },
 ) 

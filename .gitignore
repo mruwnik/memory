@@ -3,3 +3,14 @@
 secrets/
 acme.json
 __pycache__/
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+
+docker-compose.override.yml
+docker/pgadmin

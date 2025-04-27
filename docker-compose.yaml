@@ -61,7 +61,6 @@ services:
     secrets: [postgres_password]
     volumes:
       - db_data:/var/lib/postgresql/data:rw
-      - ./db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kb"]
       interval: 10s
