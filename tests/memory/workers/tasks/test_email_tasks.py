@@ -1,89 +1,39 @@
 import pytest
 from datetime import datetime, timedelta
 
-from memory.common.db.models import EmailAccount
-from memory.workers.tasks.email import process_message, sync_account, sync_all_accounts
-# from ..email_provider import MockEmailProvider
+from memory.common.db.models import EmailAccount, MailMessage, SourceItem
+from memory.workers.tasks.email import process_message
 
 
-@pytest.fixture
-def sample_emails():
-    """Fixture providing a sample set of test emails across different folders."""
-    now = datetime.now()
-    yesterday = now - timedelta(days=1)
-    last_week = now - timedelta(days=7)
-    
-    return {
-        "INBOX": [
-            {
-                "uid": 101,
-                "flags": "\\Seen",
-                "date": now.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-                "date_internal": now.strftime("%d-%b-%Y %H:%M:%S +0000"),
-                "from": "alice@example.com",
-                "to": "bob@example.com",
-                "subject": "Recent Test Email",
-                "message_id": "<test-101@example.com>",
-                "body": "This is a recent test email"
-            },
-            {
-                "uid": 102,
-                "flags": "",
-                "date": yesterday.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-                "date_internal": yesterday.strftime("%d-%b-%Y %H:%M:%S +0000"),
-                "from": "charlie@example.com",
-                "to": "bob@example.com",
-                "subject": "Yesterday's Email",
-                "message_id": "<test-102@example.com>",
-                "body": "This email was sent yesterday"
-            }
-        ],
-        "Sent": [
-            {
-                "uid": 201,
-                "flags": "\\Seen",
-                "date": yesterday.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-                "date_internal": yesterday.strftime("%d-%b-%Y %H:%M:%S +0000"),
-                "from": "bob@example.com",
-                "to": "alice@example.com",
-                "subject": "Re: Test Email",
-                "message_id": "<test-201@example.com>",
-                "body": "This is a reply to the test email"
-            }
-        ],
-        "Archive": [
-            {
-                "uid": 301,
-                "flags": "\\Seen",
-                "date": last_week.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-                "date_internal": last_week.strftime("%d-%b-%Y %H:%M:%S +0000"),
-                "from": "david@example.com",
-                "to": "bob@example.com",
-                "subject": "Old Email",
-                "message_id": "<test-301@example.com>",
-                "body": "This is an old email from last week"
-            },
-            {
-                "uid": 302,
-                "flags": "\\Seen",
-                "date": last_week.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-                "date_internal": last_week.strftime("%d-%b-%Y %H:%M:%S +0000"),
-                "from": "eve@example.com",
-                "to": "bob@example.com",
-                "subject": "Email with Attachment",
-                "message_id": "<test-302@example.com>",
-                "body": "This email has an attachment",
-                "attachments": [
-                    {
-                        "filename": "test.txt",
-                        "maintype": "text",
-                        "subtype": "plain",
-                        "content": b"This is a test attachment"
-                    }
-                ]
-            }
-        ]
-    }
+# Test email constants
+SIMPLE_EMAIL_RAW = """From: alice@example.com
+To: bob@example.com
+Subject: Test Email 1
+Message-ID: <test-101@example.com>
+Date: Tue, 14 May 2024 10:00:00 +0000
+
+This is test email 1"""
+
+EMAIL_WITH_ATTACHMENT_RAW = """From: eve@example.com
+To: bob@example.com
+Subject: Email with Attachment
+Message-ID: <test-302@example.com>
+Date: Tue, 7 May 2024 10:00:00 +0000
+Content-Type: multipart/mixed; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain
+
+This email has an attachment
+
+--boundary123
+Content-Type: text/plain; name="test.txt"
+Content-Disposition: attachment; filename="test.txt"
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyBhIHRlc3QgYXR0YWNobWVudA==
+
+--boundary123--"""
 
 
 @pytest.fixture
@@ -104,3 +54,104 @@ def test_email_account(db_session):
     db_session.add(account)
     db_session.commit()
     return account
+
+
+def test_process_simple_email(db_session, test_email_account):
+    """Test processing a simple email message."""
+    source_id = process_message(
+        account_id=test_email_account.id,
+        message_id="101",
+        folder="INBOX",
+        raw_email=SIMPLE_EMAIL_RAW,
+    )
+    
+    assert source_id is not None
+    
+    # Check that the source item was created
+    source_item = db_session.query(SourceItem).filter(SourceItem.id == source_id).first()
+    assert source_item is not None
+    assert source_item.modality == "mail"
+    assert source_item.tags == test_email_account.tags
+    assert source_item.mime_type == "message/rfc822"
+    assert source_item.embed_status == "RAW"
+    
+    # Check that the mail message was created and linked to the source
+    mail_message = db_session.query(MailMessage).filter(MailMessage.source_id == source_id).first()
+    assert mail_message is not None
+    assert mail_message.subject == "Test Email 1"
+    assert mail_message.sender == "alice@example.com"
+    assert "bob@example.com" in mail_message.recipients
+    assert "This is test email 1" in mail_message.body_raw
+    assert mail_message.attachments.get("folder") == "INBOX"
+
+
+def test_process_email_with_attachment(db_session, test_email_account):
+    """Test processing a message with an attachment."""
+    source_id = process_message(
+        account_id=test_email_account.id,
+        message_id="302",
+        folder="Archive",
+        raw_email=EMAIL_WITH_ATTACHMENT_RAW,
+    )
+    
+    assert source_id is not None
+    
+    # Check mail message specifics and attachment
+    mail_message = db_session.query(MailMessage).filter(MailMessage.source_id == source_id).first()
+    assert mail_message is not None
+    assert mail_message.subject == "Email with Attachment"
+    assert mail_message.sender == "eve@example.com"
+    assert "This email has an attachment" in mail_message.body_raw
+    assert mail_message.attachments.get("folder") == "Archive"
+    
+    # Check attachments were processed
+    attachment_items = mail_message.attachments.get("items", [])
+    assert len(attachment_items) > 0
+    assert attachment_items[0]["filename"] == "test.txt"
+    assert attachment_items[0]["content_type"] == "text/plain"
+
+
+def test_process_empty_message(db_session, test_email_account):
+    """Test processing an empty/invalid message."""
+    source_id = process_message(
+        account_id=test_email_account.id,
+        message_id="999",
+        folder="Archive",
+        raw_email="",
+    )
+    
+    assert source_id is None
+
+
+def test_process_duplicate_message(db_session, test_email_account):
+    """Test that duplicate messages are detected and not stored again."""
+    # First call should succeed and create records
+    source_id_1 = process_message(
+        account_id=test_email_account.id,
+        message_id="101",
+        folder="INBOX",
+        raw_email=SIMPLE_EMAIL_RAW,
+    )
+    
+    assert source_id_1 is not None, "First call should return a source_id"
+    
+    # Count records to verify state before second call
+    source_count_before = db_session.query(SourceItem).count()
+    message_count_before = db_session.query(MailMessage).count()
+    
+    # Second call with same email should detect duplicate and return None
+    source_id_2 = process_message(
+        account_id=test_email_account.id,
+        message_id="101",
+        folder="INBOX",
+        raw_email=SIMPLE_EMAIL_RAW,
+    )
+    
+    assert source_id_2 is None, "Second call should return None for duplicate message"
+    
+    # Verify no new records were created
+    source_count_after = db_session.query(SourceItem).count()
+    message_count_after = db_session.query(MailMessage).count()
+    
+    assert source_count_before == source_count_after, "No new SourceItem should be created"
+    assert message_count_before == message_count_after, "No new MailMessage should be created"

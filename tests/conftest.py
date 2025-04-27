@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 import subprocess
+from unittest.mock import patch
 import uuid
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def create_test_database(test_db_name: str) -> str:
 
 def drop_test_database(test_db_name: str) -> None:
     """
-    Drop the test database.
+    Drop the test database after terminating all active connections.
 
     Args:
         test_db_name: Name of the test database to drop
@@ -50,7 +51,23 @@ def drop_test_database(test_db_name: str) -> None:
 
     with admin_engine.connect() as conn:
         conn.execute(text("COMMIT"))  # Close any open transaction
+        
+        # Terminate all connections to the database
+        conn.execute(
+            text(
+                f"""
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = '{test_db_name}'
+                AND pid <> pg_backend_pid()
+                """
+            )
+        )
+        
+        # Drop the database
         conn.execute(text(f"DROP DATABASE IF EXISTS {test_db_name}"))
+    
+    admin_engine.dispose()
 
 
 def run_alembic_migrations(db_name: str) -> None:
@@ -83,7 +100,8 @@ def test_db():
         run_alembic_migrations(test_db_name)
 
         # Return the URL to the test database
-        yield test_db_url
+        with patch("memory.common.settings.DB_URL", test_db_url):
+            yield test_db_url
     finally:
         # Clean up - drop the test database
         drop_test_database(test_db_name)
@@ -173,3 +191,9 @@ def email_provider():
             ],
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def mock_file_storage(tmp_path: Path):
+    with patch("memory.common.settings.FILE_STORAGE_DIR", tmp_path):
+        yield

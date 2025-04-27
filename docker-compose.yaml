@@ -16,10 +16,12 @@ volumes:
   db_data:       {}     # Postgres
   qdrant_data:   {}     # Qdrant
   rabbitmq_data: {}     # RabbitMQ
+  file_storage:  {}     # File storage
 
 # ------------------------------ X-templates ----------------------------
 x-common-env: &env
   RABBITMQ_USER: kb
+  FILE_STORAGE_DIR: /app/memory_files
   TZ: "Etc/UTC"
 
 
@@ -42,6 +44,8 @@ x-worker-base: &worker-base
   read_only: true
   tmpfs: [/tmp,/var/tmp]
   cap_drop: [ALL]
+  volumes:
+    - file_storage:/app/memory_files:rw
   logging:
     options: {max-size: "10m", max-file: "3"}
 

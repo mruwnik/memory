@@ -34,6 +34,10 @@ def process_message(
     Returns:
         source_id if successful, None otherwise
     """
+    if not raw_email.strip():
+        logger.warning(f"Empty email message received for account {account_id}")
+        return None
+
     with make_session() as db:
         account = db.query(EmailAccount).get(account_id)
         if not account:
@@ -95,7 +99,7 @@ def sync_account(account_id: int) -> dict:
         try:
             with imap_connection(account) as conn:
                 for folder in folders_to_process:
-                    folder_stats = process_folder(conn, folder, account, since_date)
+                    folder_stats = process_folder(conn, folder, account, since_date, process_message.delay)
                     
                     messages_found += folder_stats["messages_found"]
                     new_messages += folder_stats["new_messages"]

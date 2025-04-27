@@ -3,16 +3,40 @@ import hashlib
 import imaplib
 import logging
 import re
+import uuid
+import base64
 from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Generator, Callable
+from typing import Generator, Callable, TypedDict, Literal
+import pathlib
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem
-
+from memory.common.settings import FILE_STORAGE_DIR, MAX_INLINE_ATTACHMENT_SIZE
 
 logger = logging.getLogger(__name__)
+
+
+class Attachment(TypedDict):
+    filename: str
+    content_type: str
+    size: int
+    content: bytes
+    path: pathlib.Path
+
+
+class EmailMessage(TypedDict):
+    message_id: str
+    subject: str
+    sender: str
+    recipients: list[str]
+    sent_at: datetime | None
+    body: str
+    attachments: list[Attachment]
+
+
+RawEmailResponse = tuple[Literal["OK", "ERROR"], bytes]
 
 
 def extract_recipients(msg: email.message.Message) -> list[str]:
@@ -83,7 +107,7 @@ def extract_body(msg: email.message.Message) -> str:
     return body
 
 
-def extract_attachments(msg: email.message.Message) -> list[dict]:
+def extract_attachments(msg: email.message.Message) -> list[Attachment]:
     """
     Extract attachment metadata and content from email.
     
@@ -117,6 +141,61 @@ def extract_attachments(msg: email.message.Message) -> list[dict]:
     return attachments
 
 
+def process_attachment(attachment: Attachment, message_id: str) -> Attachment | None:
+    """Process an attachment, storing large files on disk and returning metadata.
+    
+    Args:
+        attachment: Attachment dictionary with metadata and content
+        message_id: Email message ID to use in file path generation
+        
+    Returns:
+        Processed attachment dictionary with appropriate metadata
+    """
+    if attachment["size"] <= MAX_INLINE_ATTACHMENT_SIZE:
+        attachment["content"] = base64.b64encode(attachment["content"]).decode('utf-8')
+        return attachment
+
+    safe_message_id = re.sub(r'[<>\s:/\\]', '_', message_id)
+    unique_id = str(uuid.uuid4())[:8]
+    safe_filename = re.sub(r'[/\\]', '_', attachment["filename"])
+    
+    # Create user subdirectory
+    user_dir = FILE_STORAGE_DIR / safe_message_id
+    user_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Final path for the attachment
+    file_path = user_dir / f"{unique_id}_{safe_filename}"
+    
+    # Write the file
+    try:
+        file_path.write_bytes(attachment["content"])
+        attachment["path"] = file_path
+        return attachment
+    except Exception as e:
+        logger.error(f"Failed to save attachment {safe_filename} to disk: {str(e)}")
+    return None
+
+
+def process_attachments(attachments: list[Attachment], message_id: str) -> list[Attachment]:
+    """
+    Process email attachments, storing large files on disk and returning metadata.
+    
+    Args:
+        attachments: List of attachment dictionaries with metadata and content
+        message_id: Email message ID to use in file path generation
+        
+    Returns:
+        List of processed attachment dictionaries with appropriate metadata
+    """
+    if not attachments:
+        return []
+
+    return [
+        attachment
+        for a in attachments if (attachment := process_attachment(a, message_id))
+    ]
+
+
 def compute_message_hash(msg_id: str, subject: str, sender: str, body: str) -> bytes:
     """
     Compute a SHA-256 hash of message content.
@@ -134,7 +213,7 @@ def compute_message_hash(msg_id: str, subject: str, sender: str, body: str) -> b
     return hashlib.sha256(hash_content).digest()
 
 
-def parse_email_message(raw_email: str) -> dict:
+def parse_email_message(raw_email: str) -> EmailMessage:
     """
     Parse raw email into structured data.
     
@@ -146,15 +225,15 @@ def parse_email_message(raw_email: str) -> dict:
     """
     msg = email.message_from_string(raw_email)
     
-    return {
-        "message_id": msg.get("Message-ID", ""),
-        "subject": msg.get("Subject", ""),
-        "sender": msg.get("From", ""),
-        "recipients": extract_recipients(msg),
-        "sent_at": extract_date(msg),
-        "body": extract_body(msg),
-        "attachments": extract_attachments(msg)
-    }
+    return EmailMessage(
+        message_id=msg.get("Message-ID", ""),
+        subject=msg.get("Subject", ""),
+        sender=msg.get("From", ""),
+        recipients=extract_recipients(msg),
+        sent_at=extract_date(msg),
+        body=extract_body(msg),
+        attachments=extract_attachments(msg)
+    )
 
 
 def create_source_item(
@@ -191,7 +270,7 @@ def create_source_item(
 def create_mail_message(
     db_session: Session,
     source_id: int,
-    parsed_email: dict,
+    parsed_email: EmailMessage,
     folder: str,
 ) -> MailMessage:
     """
@@ -206,6 +285,12 @@ def create_mail_message(
     Returns:
         Newly created MailMessage
     """
+    processed_attachments = process_attachments(
+        parsed_email["attachments"], 
+        parsed_email["message_id"]
+    )
+    print("processed_attachments", processed_attachments)
+    
     mail_message = MailMessage(
         source_id=source_id,
         message_id=parsed_email["message_id"],
@@ -214,7 +299,7 @@ def create_mail_message(
         recipients=parsed_email["recipients"],
         sent_at=parsed_email["sent_at"],
         body_raw=parsed_email["body"],
-        attachments={"items": parsed_email["attachments"], "folder": folder}
+        attachments={"items": processed_attachments, "folder": folder}
     )
     db_session.add(mail_message)
     return mail_message
@@ -254,7 +339,7 @@ def extract_email_uid(msg_data: bytes) -> tuple[str, str]:
     return uid, raw_email
 
 
-def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> tuple[str, bytes] | None:
+def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> RawEmailResponse | None:
     try:
         status, msg_data = conn.fetch(uid, '(UID RFC822)')
         if status != 'OK' or not msg_data or not msg_data[0]:
@@ -271,7 +356,7 @@ def fetch_email_since(
     conn: imaplib.IMAP4_SSL,
     folder: str,
     since_date: datetime = datetime(1970, 1, 1)
-) -> list[tuple[str, bytes]]:
+) -> list[RawEmailResponse]:
     """
     Fetch emails from a folder since a given date.
     

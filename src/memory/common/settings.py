@@ -1,4 +1,5 @@
 import os
+import pathlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,3 +15,10 @@ def make_db_url(user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT, 
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 DB_URL = os.getenv("DATABASE_URL", make_db_url())
+
+
+FILE_STORAGE_DIR = pathlib.Path(os.getenv("FILE_STORAGE_DIR", "/tmp/memory_files"))
+FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Maximum attachment size to store directly in the database (10MB)
+MAX_INLINE_ATTACHMENT_SIZE = int(os.getenv("MAX_INLINE_ATTACHMENT_SIZE", 1 * 1024 * 1024))  
