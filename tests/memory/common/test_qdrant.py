@@ -5,12 +5,11 @@ import qdrant_client
 from qdrant_client.http import models as qdrant_models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from memory.workers.qdrant import (
+from memory.common.qdrant import (
     DEFAULT_COLLECTIONS,
     ensure_collection_exists,
     initialize_collections,
     upsert_vectors,
-    search_vectors,
     delete_vectors,
 )
 

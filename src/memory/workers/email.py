@@ -12,9 +12,9 @@ from typing import Generator, Callable, TypedDict, Literal
 import pathlib
 from sqlalchemy.orm import Session
 from collections import defaultdict
-from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
 from memory.common import settings, embedding
-from memory.workers.qdrant import get_qdrant_client, upsert_vectors
+from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
+from memory.common.qdrant import get_qdrant_client, upsert_vectors
 
 logger = logging.getLogger(__name__)
 

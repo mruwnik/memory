@@ -12,8 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
 
 from memory.common import settings
+from memory.common.qdrant import initialize_collections
 from tests.providers.email_provider import MockEmailProvider
-from memory.workers.qdrant import initialize_collections
 
 
 def get_test_db_name() -> str:
