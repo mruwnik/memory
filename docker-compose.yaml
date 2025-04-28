@@ -21,6 +21,8 @@ volumes:
 # ------------------------------ X-templates ----------------------------
 x-common-env: &env
   RABBITMQ_USER: kb
+  QDRANT_HOST: qdrant
+  DB_HOST: postgres
   FILE_STORAGE_DIR: /app/memory_files
   TZ: "Etc/UTC"
 
@@ -165,6 +167,13 @@ services:
       # - ./acme.json:/acme.json:rw
 
 # ------------------------------------------------------------ Celery workers
+  worker-email:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "email"
+    deploy: {resources: {limits: {cpus: "2", memory: 3g}}}
+
   worker-text:
     <<: *worker-base
     environment:
@@ -206,6 +215,22 @@ services:
       <<: *worker-env
       QUEUES: "docs"
     deploy: {resources: {limits: {cpus: "1", memory: 1g}}}
+
+  ingest-hub:
+    <<: *worker-base
+    build: 
+      context: .
+      dockerfile: docker/ingest_hub/Dockerfile
+    environment:
+      <<: *worker-env
+    volumes:
+      - file_storage:/app/memory_files:rw
+    tmpfs:
+      - /tmp
+      - /var/tmp
+      - /var/log/supervisor
+      - /var/run/supervisor
+    deploy: {resources: {limits: {cpus: "0.5", memory: 512m}}}
 
 # ------------------------------------------------------------ watchtower (auto-update)
   watchtower:

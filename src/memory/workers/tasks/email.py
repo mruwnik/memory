@@ -18,8 +18,12 @@ from memory.workers.email import (
 
 logger = logging.getLogger(__name__)
 
+PROCESS_EMAIL = "memory.workers.tasks.email.process_message"
+SYNC_ACCOUNT = "memory.workers.tasks.email.sync_account"
+SYNC_ALL_ACCOUNTS = "memory.workers.tasks.email.sync_all_accounts"
 
-@app.task(name="memory.email.process_message")
+
+@app.task(name=PROCESS_EMAIL)
 def process_message(
     account_id: int, message_id: str, folder: str, raw_email: str,
 ) -> int | None:
@@ -35,6 +39,7 @@ def process_message(
     Returns:
         source_id if successful, None otherwise
     """
+    logger.info(f"Processing message {message_id} for account {account_id}")
     if not raw_email.strip():
         logger.warning(f"Empty email message received for account {account_id}")
         return None
@@ -76,7 +81,7 @@ def process_message(
         return source_item.id
 
 
-@app.task(name="memory.email.sync_account")
+@app.task(name=SYNC_ACCOUNT)
 def sync_account(account_id: int) -> dict:
     """
     Synchronize emails from a specific account.
@@ -87,6 +92,7 @@ def sync_account(account_id: int) -> dict:
     Returns:
         dict with stats about the sync operation
     """
+    logger.info(f"Syncing account {account_id}")
     with make_session() as db:
         account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
         if not account or not account.active:
@@ -124,7 +130,7 @@ def sync_account(account_id: int) -> dict:
         }
 
 
-@app.task(name="memory.email.sync_all_accounts")
+@app.task(name=SYNC_ALL_ACCOUNTS)
 def sync_all_accounts() -> list[dict]:
     """
     Synchronize all active email accounts.

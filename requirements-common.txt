@@ -2,6 +2,7 @@ sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 pydantic==2.7.1
 alembic==1.13.1 
-dotenv==1.1.0
+dotenv==0.9.9
 voyageai==0.3.2
 qdrant-client==1.9.0 
+PyMuPDF==1.25.5

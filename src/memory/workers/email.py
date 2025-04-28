@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from collections import defaultdict
 from memory.common import settings, embedding
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
-from memory.common.qdrant import get_qdrant_client, upsert_vectors
+from memory.common import qdrant
 
 logger = logging.getLogger(__name__)
 
@@ -471,17 +471,18 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
 
 
 def vectorize_email(email: MailMessage) -> list[float]:
-    qdrant_client = get_qdrant_client()
+    qdrant_client = qdrant.get_qdrant_client()
 
-    chunks = embedding.embed_text(email.body_raw)
-    payloads = [email.as_payload()] * len(chunks)
-    vector_ids = [str(uuid.uuid4()) for _ in chunks]
-    upsert_vectors(
+    _, chunks = embedding.embed(
+        "text/plain", email.body_raw, metadata=email.as_payload(),
+    )
+    vector_ids, vectors, metadata = zip(*chunks)
+    qdrant.upsert_vectors(
         client=qdrant_client,
         collection_name="mail",
         ids=vector_ids,
-        vectors=chunks,
-        payloads=payloads,
+        vectors=vectors,
+        payloads=metadata,
     )
     vector_ids = [f"mail/{vector_id}" for vector_id in vector_ids]
 
@@ -491,15 +492,14 @@ def vectorize_email(email: MailMessage) -> list[float]:
             content = pathlib.Path(attachment.file_path).read_bytes()
         else:
             content = attachment.content
-        collection, vectors = embedding.embed(attachment.content_type, content)
-        attachment.source.vector_ids = vector_ids
-        embeds[collection].extend(
-            (str(uuid.uuid4()), vector, attachment.as_payload()) for vector in vectors
-        )
+        collection, chunks = embedding.embed(attachment.content_type, content, metadata=attachment.as_payload())
+        ids, vectors, metadata = zip(*chunks)
+        attachment.source.vector_ids = ids
+        embeds[collection].extend(chunks)
 
-    for collection, embeds in embeds.items():
-        ids, vectors, payloads = zip(*embeds)
-        upsert_vectors(
+    for collection, chunks in embeds.items():
+        ids, vectors, payloads = zip(*chunks)
+        qdrant.upsert_vectors(
             client=qdrant_client,
             collection_name=collection,
             ids=ids,

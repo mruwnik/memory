@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import qdrant_client
+import voyageai
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
@@ -210,3 +211,8 @@ def qdrant():
             initialize_collections(client)
             yield client
 
+
+@pytest.fixture(autouse=True)
+def mock_voyage_client():
+    with patch.object(voyageai, "Client", autospec=True) as mock_client:
+        yield mock_client()

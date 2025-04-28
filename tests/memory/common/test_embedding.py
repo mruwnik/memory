@@ -1,5 +1,19 @@
+import uuid
 import pytest
-from memory.common.embedding import yield_word_chunks, yield_spans, chunk_text, CHARS_PER_TOKEN
+from unittest.mock import Mock, patch
+from memory.common.embedding import yield_word_chunks, yield_spans, chunk_text, CHARS_PER_TOKEN, approx_token_count, get_modality, embed_text, embed_file, embed_mixed, embed_page, embed
+
+
+@pytest.fixture
+def mock_embed(mock_voyage_client):
+    vectors = ([i] for i in range(1000))
+
+    def embed(texts, model):
+        return Mock(embeddings=[next(vectors) for _ in texts])
+
+    mock_voyage_client.embed.side_effect = embed
+
+    return mock_voyage_client
 
 
 @pytest.mark.parametrize(
@@ -270,3 +284,77 @@ def test_chunk_text_very_long_sentences():
         'chunks by the function.',
     ]
 
+
+@pytest.mark.parametrize(
+    "string, expected_count",
+    [
+        ("", 0),
+        ("a" * CHARS_PER_TOKEN, 1),
+        ("a" * (CHARS_PER_TOKEN * 2), 2),
+        ("a" * (CHARS_PER_TOKEN * 2 + 1), 2),  # Truncation
+        ("a" * (CHARS_PER_TOKEN - 1), 0),  # Truncation
+    ]
+)
+def test_approx_token_count(string, expected_count):
+    assert approx_token_count(string) == expected_count
+
+
+@pytest.mark.parametrize(
+    "mime_type, expected_modality",
+    [
+        ("text/plain", "doc"),
+        ("text/html", "doc"),
+        ("image/jpeg", "photo"),
+        ("image/png", "photo"),
+        ("application/pdf", "book"),
+        ("application/epub+zip", "book"),
+        ("application/mobi", "book"),
+        ("application/x-mobipocket-ebook", "book"),
+        ("audio/mp3", "unknown"),
+        ("video/mp4", "unknown"),
+        ("text/something-new", "doc"),  # Should match by 'text/' stem
+        ("image/something-new", "photo"),  # Should match by 'image/' stem
+        ("custom/format", "unknown"),  # No matching stem
+    ]
+)
+def test_get_modality(mime_type, expected_modality):
+    assert get_modality(mime_type) == expected_modality
+
+
+def test_embed_text(mock_embed):
+    texts = ["text1 with words", "text2"]
+    assert embed_text(texts) == [[0], [1]]
+
+
+def test_embed_file(mock_embed, tmp_path):
+    mock_file = tmp_path / "test.txt"
+    mock_file.write_text("file content")
+    
+    assert embed_file(mock_file) == [[0]]
+
+
+def test_embed_mixed(mock_embed):
+    items = ["text", {"type": "image", "data": "base64"}]
+    assert embed_mixed(items) == [[0], [1]]
+
+
+def test_embed_page_text_only(mock_embed):
+    page = {"contents": ["text1", "text2"]}
+    assert embed_page(page) == [[0], [1]]
+
+
+def test_embed_page_mixed_content(mock_embed):
+    page = {"contents": ["text", {"type": "image", "data": "base64"}]}
+    assert embed_page(page) == [[0], [1]]
+
+
+def test_embed(mock_embed):
+    mime_type = "text/plain"
+    content = "sample content"
+    metadata = {"source": "test"}
+    
+    with patch.object(uuid, "uuid4", return_value="id1"):
+        modality, vectors = embed(mime_type, content, metadata)
+    
+    assert modality == "doc"
+    assert vectors == [('id1', [0], {'source': 'test'})]

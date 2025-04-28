@@ -1,7 +1,9 @@
 import pathlib
-from typing import Literal, TypedDict, Iterable
+from typing import Literal, TypedDict, Iterable, Any
 import voyageai
 import re
+import uuid
+from memory.common import extract, settings
 
 # Chunking configuration
 MAX_TOKENS = 32000  # VoyageAI max context window
@@ -11,6 +13,8 @@ CHARS_PER_TOKEN = 4
 
 DistanceType = Literal["Cosine", "Dot", "Euclidean"]
 Vector = list[float]
+Embedding = tuple[str, Vector, dict[str, Any]]
+
 
 class Collection(TypedDict):
     dimension: int
@@ -163,17 +167,48 @@ def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_T
         yield current.strip()
 
 
-def embed_text(text: str, model: str = "voyage-3-large", n_dimensions: int = 1536) -> list[Vector]:
+def embed_chunks(chunks: list[extract.MulitmodalChunk], model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
     vo = voyageai.Client()
-    return vo.embed(chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS), model=model)
+    return vo.embed(chunks, model=model).embeddings
 
 
-def embed_file(file_path: pathlib.Path, model: str = "voyage-3-large", n_dimensions: int = 1536) -> list[Vector]:
-    return embed_text(file_path.read_text(), model, n_dimensions)
+def embed_text(texts: list[str], model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
+    chunks = [c for text in texts for c in chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()]
+    return embed_chunks(chunks, model)
 
 
-def embed(mime_type: str, content: bytes | str, model: str = "voyage-3-large", n_dimensions: int = 1536) -> tuple[str, list[Vector]]:
-    if isinstance(content, bytes):
-        content = content.decode("utf-8")
+def embed_file(file_path: pathlib.Path, model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
+    return embed_text([file_path.read_text()], model)
 
-    return get_modality(mime_type), embed_text(content, model, n_dimensions)
+
+def embed_mixed(items: list[extract.MulitmodalChunk], model: str = settings.MIXED_EMBEDDING_MODEL) -> list[Vector]:
+    def to_chunks(item: extract.MulitmodalChunk) -> Iterable[str]:
+        if isinstance(item, str):
+            return [c for c in chunk_text(item, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()]
+        return [item]
+
+    chunks = [c for item in items for c in to_chunks(item)]
+    return embed_chunks(chunks, model)
+
+
+def embed_page(page: dict[str, Any]) -> list[Vector]:
+    contents = page["contents"]
+    if all(isinstance(c, str) for c in contents):
+        return embed_text(contents, model=settings.TEXT_EMBEDDING_MODEL)
+    return embed_mixed(contents, model=settings.MIXED_EMBEDDING_MODEL)
+
+
+def embed(
+    mime_type: str,
+    content: bytes | str | pathlib.Path,
+    metadata: dict[str, Any] = {},
+) -> tuple[str, list[Embedding]]:
+    modality = get_modality(mime_type)
+
+    pages = extract.extract_content(mime_type, content)
+    vectors = [
+        (str(uuid.uuid4()), vector, page.get("metadata", {}) | metadata)
+        for page in pages
+        for vector in embed_page(page)
+    ]
+    return modality, vectors
