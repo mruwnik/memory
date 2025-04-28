@@ -30,7 +30,7 @@ class SourceItem(Base):
     mime_type = Column(Text)
     
     mail_message = relationship("MailMessage", back_populates="source", uselist=False)
-    
+    attachments = relationship("EmailAttachment", back_populates="source", cascade="all, delete-orphan", uselist=False)
     # Add table-level constraint and indexes
     __table_args__ = (
         CheckConstraint("embed_status IN ('RAW','QUEUED','STORED','FAILED')"),
@@ -85,6 +85,7 @@ class EmailAttachment(Base):
     __tablename__ = 'email_attachment'
     
     id = Column(BigInteger, primary_key=True)
+    source_id = Column(BigInteger, ForeignKey('source_item.id', ondelete='CASCADE'), nullable=False)
     mail_message_id = Column(BigInteger, ForeignKey('mail_message.id', ondelete='CASCADE'), nullable=False)
     filename = Column(Text, nullable=False)
     content_type = Column(Text)
@@ -94,6 +95,7 @@ class EmailAttachment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     mail_message = relationship("MailMessage", back_populates="attachments")
+    source = relationship("SourceItem", back_populates="attachments")
     
     def as_payload(self) -> dict:
         return {

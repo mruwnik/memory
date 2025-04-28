@@ -63,8 +63,7 @@ def process_message(
             return None
         
         source_item = create_source_item(db, message_hash, account.tags, len(raw_email))
-        
-        mail_message = create_mail_message(db, source_item.id, parsed_email, folder)
+        mail_message = create_mail_message(db, source_item, parsed_email, folder)
         
         source_item.vector_ids = vectorize_email(mail_message)
         db.commit()

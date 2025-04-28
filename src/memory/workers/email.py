@@ -168,9 +168,18 @@ def process_attachment(attachment: Attachment, message: MailMessage) -> EmailAtt
             logger.error(f"Failed to save attachment {safe_filename} to disk: {str(e)}")
             return None
 
+    source_item = SourceItem(
+        modality=embedding.get_modality(attachment["content_type"]),
+        sha256=hashlib.sha256(real_content if real_content else str(attachment).encode()).digest(),
+        tags=message.source.tags,
+        byte_length=attachment["size"],
+        mime_type=attachment["content_type"],
+    )
+
     return EmailAttachment(
-        mail_message_id=message.id,
+        source=source_item,
         filename=attachment["filename"],
+        mail_message=message,
         content_type=attachment.get("content_type"),
         size=attachment.get("size"),
         content=content,
@@ -242,7 +251,9 @@ def create_source_item(
     db_session: Session,
     message_hash: bytes,
     account_tags: list[str],
-    raw_email_size: int,
+    raw_size: int,
+    modality: str = "mail",
+    mime_type: str = "message/rfc822",
 ) -> SourceItem:
     """
     Create a new source item record.
@@ -251,17 +262,17 @@ def create_source_item(
         db_session: Database session
         message_hash: SHA-256 hash of message
         account_tags: Tags from the email account
-        raw_email_size: Size of raw email in bytes
+        raw_size: Size of raw email in bytes
         
     Returns:
         Newly created SourceItem
     """
     source_item = SourceItem(
-        modality="mail",
+        modality=modality,
         sha256=message_hash,
         tags=account_tags,
-        byte_length=raw_email_size,
-        mime_type="message/rfc822",
+        byte_length=raw_size,
+        mime_type=mime_type,
         embed_status="RAW"
     )
     db_session.add(source_item)
@@ -271,7 +282,7 @@ def create_source_item(
 
 def create_mail_message(
     db_session: Session,
-    source_id: int,
+    source_item: SourceItem,
     parsed_email: EmailMessage,
     folder: str,
 ) -> MailMessage:
@@ -288,7 +299,7 @@ def create_mail_message(
         Newly created MailMessage
     """
     mail_message = MailMessage(
-        source_id=source_id,
+        source=source_item,
         message_id=parsed_email["message_id"],
         subject=parsed_email["subject"],
         sender=parsed_email["sender"],
@@ -462,15 +473,17 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
 def vectorize_email(email: MailMessage) -> list[float]:
     qdrant_client = get_qdrant_client()
 
-    vector_id = uuid.uuid4()
+    chunks = embedding.embed_text(email.body_raw)
+    payloads = [email.as_payload()] * len(chunks)
+    vector_ids = [str(uuid.uuid4()) for _ in chunks]
     upsert_vectors(
         client=qdrant_client,
         collection_name="mail",
-        ids=[str(vector_id)],
-        vectors=[embedding.embed_text(email.body_raw)],
-        payloads=[email.as_payload()],
+        ids=vector_ids,
+        vectors=chunks,
+        payloads=payloads,
     )
-    vector_ids = [f"mail/{vector_id}"]
+    vector_ids = [f"mail/{vector_id}" for vector_id in vector_ids]
 
     embeds = defaultdict(list)
     for attachment in email.attachments:
@@ -478,8 +491,11 @@ def vectorize_email(email: MailMessage) -> list[float]:
             content = pathlib.Path(attachment.file_path).read_bytes()
         else:
             content = attachment.content
-        collection, vector = embedding.embed(attachment.content_type, content)
-        embeds[collection].append((str(uuid.uuid4()), vector, attachment.as_payload()))
+        collection, vectors = embedding.embed(attachment.content_type, content)
+        attachment.source.vector_ids = vector_ids
+        embeds[collection].extend(
+            (str(uuid.uuid4()), vector, attachment.as_payload()) for vector in vectors
+        )
 
     for collection, embeds in embeds.items():
         ids, vectors, payloads = zip(*embeds)

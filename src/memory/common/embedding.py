@@ -36,7 +36,7 @@ TYPES = {
 }
 
 
-def get_type(mime_type: str) -> str:
+def get_modality(mime_type: str) -> str:
     for type, mime_types in TYPES.items():
         if mime_type in mime_types:
             return type
@@ -109,7 +109,7 @@ def yield_spans(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
                 yield chunk
 
 
-def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_TOKENS) -> list[str]:
+def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_TOKENS) -> Iterable[str]:
     """
     Split text into chunks respecting semantic boundaries while staying within token limits.
     
@@ -149,10 +149,6 @@ def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_T
             overlap_text.rfind("? ")
         )
 
-        print(f"clean_break: {clean_break}")
-        print(f"overlap_text: {overlap_text}")
-        print(f"current: {current}")
-        
         if clean_break < 0:
             yield current
             current = ""
@@ -160,18 +156,16 @@ def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_T
         
         break_offset = -overlap_chars + clean_break + 1
         chunk = current[break_offset:].strip()
-        print(f"chunk: {chunk}")
-        print(f"current: {current}")
         yield current
         current = chunk
+
     if current:
         yield current.strip()
 
 
 def embed_text(text: str, model: str = "voyage-3-large", n_dimensions: int = 1536) -> list[Vector]:
     vo = voyageai.Client()
-    chunks = chunk_text(text, MAX_TOKENS)
-    return [vo.embed(chunk, model=model) for chunk in chunks]
+    return vo.embed(chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS), model=model)
 
 
 def embed_file(file_path: pathlib.Path, model: str = "voyage-3-large", n_dimensions: int = 1536) -> list[Vector]:
@@ -182,4 +176,4 @@ def embed(mime_type: str, content: bytes | str, model: str = "voyage-3-large", n
     if isinstance(content, bytes):
         content = content.decode("utf-8")
 
-    return get_type(mime_type), embed_text(content, model, n_dimensions)
+    return get_modality(mime_type), embed_text(content, model, n_dimensions)

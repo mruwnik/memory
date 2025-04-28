@@ -1,7 +1,9 @@
+from unittest import mock
 import pytest
 from datetime import datetime, timedelta
-
+from unittest.mock import patch
 from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
+from memory.common import embedding
 from memory.workers.tasks.email import process_message
 
 
@@ -34,6 +36,12 @@ Content-Transfer-Encoding: base64
 VGhpcyBpcyBhIHRlc3QgYXR0YWNobWVudA==
 
 --boundary123--"""
+
+
+@pytest.fixture(autouse=True)
+def mock_voyage_embed_text():
+    with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
+        yield
 
 
 @pytest.fixture

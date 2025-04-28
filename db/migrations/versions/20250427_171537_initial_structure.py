@@ -172,6 +172,7 @@ def upgrade() -> None:
     op.create_table(
         "email_attachment",
         sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("source_id", sa.BigInteger(), nullable=False),
         sa.Column("mail_message_id", sa.BigInteger(), nullable=False),
         sa.Column("filename", sa.Text(), nullable=False),
         sa.Column("content_type", sa.Text(), nullable=True),
@@ -186,6 +187,9 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["mail_message_id"], ["mail_message.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_id"], ["source_item.id"], ondelete="CASCADE"
         ),
         sa.PrimaryKeyConstraint("id"),
     )

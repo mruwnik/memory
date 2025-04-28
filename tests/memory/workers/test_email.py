@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from memory.common.db.models import SourceItem, MailMessage, EmailAttachment, EmailAccount
 from memory.common import settings
+from memory.common import embedding
 from memory.workers.email import (
     compute_message_hash,
     create_source_item,
@@ -236,6 +237,7 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
     }
     message = MailMessage(
         id=1,
+        source=SourceItem(tags=["test"]),
         message_id=message_id,
         sender="sender@example.com",
         folder="INBOX",
@@ -271,6 +273,7 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
     }
     message = MailMessage(
         id=1,
+        source=SourceItem(tags=["test"]),
         message_id=message_id,
         sender="sender@example.com",
         folder="INBOX",
@@ -293,6 +296,7 @@ def test_process_attachment_write_error():
     }
     message = MailMessage(
         id=1,
+        source=SourceItem(tags=["test"]),
         message_id="<test@example.com>",
         sender="sender@example.com",
         folder="INBOX",
@@ -340,6 +344,7 @@ def test_process_attachments_mixed():
     ]
     message = MailMessage(
         id=1,
+        source=SourceItem(tags=["test"]),
         message_id="<test@example.com>",
         sender="sender@example.com",
         folder="INBOX",
@@ -458,7 +463,7 @@ def test_create_source_item(db_session):
         db_session=db_session,
         message_hash=message_hash,
         account_tags=account_tags,
-        raw_email_size=raw_email_size,
+        raw_size=raw_email_size,
     )
 
     # Verify the source item was created correctly
@@ -549,7 +554,6 @@ def test_check_message_exists(
 
 def test_create_mail_message(db_session):
     source_item = SourceItem(
-        id=1,
         modality="mail",
         sha256=b"test_hash_bytes" + bytes(28),
         tags=["test"],
@@ -557,7 +561,6 @@ def test_create_mail_message(db_session):
     )
     db_session.add(source_item)
     db_session.flush()
-    source_id = source_item.id
     parsed_email = {
         "message_id": "<test@example.com>",
         "subject": "Test Subject",
@@ -574,21 +577,22 @@ def test_create_mail_message(db_session):
     # Call function
     mail_message = create_mail_message(
         db_session=db_session,
-        source_id=source_id,
+        source_item=source_item,
         parsed_email=parsed_email,
         folder=folder,
     )
+    db_session.commit()
 
     attachments = db_session.query(EmailAttachment).filter(EmailAttachment.mail_message_id == mail_message.id).all()
 
     # Verify the mail message was created correctly
     assert isinstance(mail_message, MailMessage)
-    assert mail_message.source_id == source_id
+    assert mail_message.source_id == source_item.id
     assert mail_message.message_id == parsed_email["message_id"]
     assert mail_message.subject == parsed_email["subject"]
     assert mail_message.sender == parsed_email["sender"]
     assert mail_message.recipients == parsed_email["recipients"]
-    assert mail_message.sent_at == parsed_email["sent_at"]
+    assert mail_message.sent_at.isoformat()[:-6] == parsed_email["sent_at"].isoformat() 
     assert mail_message.body_raw == parsed_email["body"]
     assert mail_message.attachments == attachments
 
@@ -670,22 +674,15 @@ def test_process_folder_error(email_provider):
 
 
 def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
-    source_item = SourceItem(
-        id=1,
-        modality="mail",
-        sha256=b"test_hash" + bytes(24),
-        tags=["test"],
-        byte_length=100,
-        mime_type="message/rfc822",
-        embed_status="RAW",
-    )
-    db_session.add(source_item)
-    db_session.flush()
-    
-    # Create mail message
     mail_message = MailMessage(
-        id=1,
-        source_id=1,
+        source=SourceItem(
+            modality="mail",
+            sha256=b"test_hash" + bytes(24),
+            tags=["test"],
+            byte_length=100,
+            mime_type="message/rfc822",
+            embed_status="RAW",
+        ),
         message_id="<test-vector@example.com>",
         subject="Test Vectorization",
         sender="sender@example.com",
@@ -696,7 +693,7 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
     db_session.add(mail_message)
     db_session.flush()
     
-    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536):
+    with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
         vector_ids = vectorize_email(mail_message)
         
         assert len(vector_ids) == 1
@@ -704,22 +701,15 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
 
 
 def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
-    source_item = SourceItem(
-        id=2,
-        modality="mail",
-        sha256=b"test_hash2" + bytes(24),
-        tags=["test"],
-        byte_length=200,
-        mime_type="message/rfc822",
-        embed_status="RAW",
-    )
-    db_session.add(source_item)
-    db_session.flush()
-    
-    # Create mail message
     mail_message = MailMessage(
-        id=2,
-        source_id=2,
+        source=SourceItem(
+            modality="mail",
+            sha256=b"test_hash" + bytes(24),
+            tags=["test"],
+            byte_length=100,
+            mime_type="message/rfc822",
+            embed_status="RAW",
+        ),
         message_id="<test-vector-attach@example.com>",
         subject="Test Vectorization with Attachments",
         sender="sender@example.com",
@@ -732,33 +722,47 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
     
     # Add two attachments - one with content and one with file_path
     attachment1 = EmailAttachment(
-        id=1,
         mail_message_id=mail_message.id,
         filename="inline.txt",
         content_type="text/plain",
         size=100,
         content=base64.b64encode(b"This is inline content"),
         file_path=None,
+        source=SourceItem(
+            modality="doc",
+            sha256=b"test_hash1" + bytes(24),
+            tags=["test"],
+            byte_length=100,
+            mime_type="text/plain",
+            embed_status="RAW",
+        ),
     )
     
     file_path = mail_message.attachments_path / "stored.txt"
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_bytes(b"This is stored content")
     attachment2 = EmailAttachment(
-        id=2,
         mail_message_id=mail_message.id,
         filename="stored.txt",
         content_type="text/plain",
         size=200,
         content=None,
         file_path=str(file_path),
+        source=SourceItem(
+            modality="doc",
+            sha256=b"test_hash2" + bytes(24),
+            tags=["test"],
+            byte_length=100,
+            mime_type="text/plain",
+            embed_status="RAW",
+        ),
     )
     
     db_session.add_all([attachment1, attachment2])
     db_session.flush()
     
     # Mock embedding functions but use real qdrant
-    with patch("memory.common.embedding.embed_text", return_value=[0.1] * 1536):
+    with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
         # Call the function
         vector_ids = vectorize_email(mail_message)
         
