@@ -124,13 +124,14 @@ def create_mail_message(
         folder=folder,
     )
 
-    if parsed_email["attachments"]:
-        mail_message.attachments = process_attachments(
-            parsed_email["attachments"], mail_message
-        )
-
     db_session.add(mail_message)
 
+    if parsed_email["attachments"]:
+        attachments = process_attachments(parsed_email["attachments"], mail_message)
+        db_session.add_all(attachments)
+        mail_message.attachments = attachments
+
+    db_session.add(mail_message)
     return mail_message
 
 
@@ -171,13 +172,11 @@ def check_message_exists(
     account = db.query(EmailAccount).get(account_id)
     if not account:
         logger.error(f"Account {account_id} not found")
-        return None
+        return False
 
     parsed_email = parse_email_message(raw_email, message_id)
-
-    # Use server-provided message ID if missing
-    if not parsed_email["message_id"]:
-        parsed_email["message_id"] = f"generated-{message_id}"
+    if "szczepalins" in raw_email.lower():
+        print(parsed_email["message_id"])
 
     return does_message_exist(db, parsed_email["message_id"], parsed_email["hash"])
 

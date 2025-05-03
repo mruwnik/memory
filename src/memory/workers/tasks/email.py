@@ -58,6 +58,7 @@ def process_message(
             db, account.tags, folder, raw_email, message_id
         )
 
+        db.flush()
         vectorize_email(mail_message)
         db.commit()
 
@@ -65,12 +66,16 @@ def process_message(
         logger.info("Chunks:")
         for chunk in mail_message.chunks:
             logger.info(f" - {chunk.id}")
+        for attachment in mail_message.attachments:
+            logger.info(f" - Attachment {attachment.id}")
+            for chunk in attachment.chunks:
+                logger.info(f"   - {chunk.id}")
 
         return mail_message.id
 
 
 @app.task(name=SYNC_ACCOUNT)
-def sync_account(account_id: int) -> dict:
+def sync_account(account_id: int, since_date: str | None = None) -> dict:
     """
     Synchronize emails from a specific account.
 
@@ -80,7 +85,7 @@ def sync_account(account_id: int) -> dict:
     Returns:
         dict with stats about the sync operation
     """
-    logger.info(f"Syncing account {account_id}")
+    logger.info(f"Syncing account {account_id} since {since_date}")
 
     with make_session() as db:
         account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
@@ -88,8 +93,11 @@ def sync_account(account_id: int) -> dict:
             logger.warning(f"Account {account_id} not found or inactive")
             return {"error": "Account not found or inactive"}
 
-        folders_to_process = account.folders or ["INBOX"]
-        since_date = account.last_sync_at or datetime(1970, 1, 1)
+        folders_to_process: list[str] = account.folders or ["INBOX"]
+        if since_date:
+            cutoff_date = datetime.fromisoformat(since_date)
+        else:
+            cutoff_date: datetime = account.last_sync_at or datetime(1970, 1, 1)
 
         messages_found = 0
         new_messages = 0
@@ -106,7 +114,7 @@ def sync_account(account_id: int) -> dict:
             with imap_connection(account) as conn:
                 for folder in folders_to_process:
                     folder_stats = process_folder(
-                        conn, folder, account, since_date, process_message_wrapper
+                        conn, folder, account, cutoff_date, process_message_wrapper
                     )
 
                     messages_found += folder_stats["messages_found"]
@@ -121,6 +129,7 @@ def sync_account(account_id: int) -> dict:
 
         return {
             "account": account.email_address,
+            "since_date": cutoff_date.isoformat(),
             "folders_processed": len(folders_to_process),
             "messages_found": messages_found,
             "new_messages": new_messages,

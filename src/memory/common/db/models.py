@@ -113,7 +113,7 @@ class Chunk(Base):
         if self.file_path is None:
             return [self.content]
 
-        path = pathlib.Path(self.file_path)
+        path = pathlib.Path(self.file_path.replace("/app/", ""))
         if self.file_path.endswith("*"):
             files = list(path.parent.glob(path.name))
         else:
@@ -122,7 +122,8 @@ class Chunk(Base):
         items = []
         for file_path in files:
             if file_path.suffix == ".png":
-                items.append(Image.open(file_path))
+                if file_path.exists():
+                    items.append(Image.open(file_path))
             elif file_path.suffix == ".bin":
                 items.append(file_path.read_bytes())
             else:

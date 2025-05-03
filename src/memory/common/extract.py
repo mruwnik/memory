@@ -7,6 +7,9 @@ import pymupdf  # PyMuPDF
 from PIL import Image
 from typing import Any, TypedDict, Generator, Sequence
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 MulitmodalChunk = Image.Image | str
 
@@ -57,15 +60,32 @@ def docx_to_pdf(
     if output_path is None:
         output_path = docx_path.with_suffix(".pdf")
 
-    pypandoc.convert_file(str(docx_path), "pdf", outputfile=str(output_path))
+    # Now that we have all packages installed, try xelatex first as it has better Unicode support
+    try:
+        logger.info(f"Converting {docx_path} to PDF using xelatex")
+        pypandoc.convert_file(
+            str(docx_path),
+            format="docx",
+            to="pdf",
+            outputfile=str(output_path),
+            extra_args=[
+                "--pdf-engine=xelatex",
+                "--variable=geometry:margin=1in",
+                "--lua-filter=/app/unnest-table.lua",
+            ],
+        )
+        logger.info(f"Successfully converted {docx_path} to PDF")
+        return output_path
+    except Exception as e:
+        logger.error(f"Error converting document to PDF: {e}")
+        raise
 
-    return output_path
 
-
-def extract_docx(docx_path: pathlib.Path) -> list[Page]:
+def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[Page]:
     """Extract content from DOCX by converting to PDF first, then processing"""
     with as_file(docx_path) as file_path:
         pdf_path = docx_to_pdf(file_path)
+        logger.info(f"Extracted PDF from {file_path}")
         return doc_to_images(pdf_path)
 
 
@@ -89,13 +109,17 @@ def extract_text(content: bytes | str | pathlib.Path) -> list[Page]:
 
 
 def extract_content(mime_type: str, content: bytes | str | pathlib.Path) -> list[Page]:
+    logger.info(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
         return doc_to_images(content)
-    if isinstance(content, pathlib.Path) and mime_type in [
+    if mime_type in [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
     ]:
-        return extract_docx(content)
+        logger.info(f"Extracting content from {content}")
+        pages = extract_docx(content)
+        logger.info(f"Extracted {len(pages)} pages from {content}")
+        return pages
     if mime_type.startswith("text/"):
         return extract_text(content)
     if mime_type.startswith("image/"):

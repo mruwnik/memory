@@ -1,7 +1,7 @@
 import logging
 import pathlib
 import uuid
-from typing import Any, Iterable, Literal, TypedDict
+from typing import Any, Iterable, Literal, NotRequired, TypedDict
 
 import voyageai
 from PIL import Image
@@ -27,20 +27,63 @@ Embedding = tuple[str, Vector, dict[str, Any]]
 class Collection(TypedDict):
     dimension: int
     distance: DistanceType
-    on_disk: bool
-    shards: int
+    model: str
+    on_disk: NotRequired[bool]
+    shards: NotRequired[int]
 
 
 DEFAULT_COLLECTIONS: dict[str, Collection] = {
-    "mail": {"dimension": 1024, "distance": "Cosine"},
-    "chat": {"dimension": 1024, "distance": "Cosine"},
-    "git": {"dimension": 1024, "distance": "Cosine"},
-    "book": {"dimension": 1024, "distance": "Cosine"},
-    "blog": {"dimension": 1024, "distance": "Cosine"},
-    "text": {"dimension": 1024, "distance": "Cosine"},
+    "mail": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "chat": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "git": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "book": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "blog": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "text": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
     # Multimodal
-    "photo": {"dimension": 1024, "distance": "Cosine"},
-    "doc": {"dimension": 1024, "distance": "Cosine"},
+    "photo": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.MIXED_EMBEDDING_MODEL,
+    },
+    "doc": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.MIXED_EMBEDDING_MODEL,
+    },
+}
+TEXT_COLLECTIONS = {
+    coll
+    for coll, params in DEFAULT_COLLECTIONS.items()
+    if params["model"] == settings.TEXT_EMBEDDING_MODEL
+}
+MULTIMODAL_COLLECTIONS = {
+    coll
+    for coll, params in DEFAULT_COLLECTIONS.items()
+    if params["model"] == settings.MIXED_EMBEDDING_MODEL
 }
 
 TYPES = {
@@ -69,22 +112,27 @@ def get_modality(mime_type: str) -> str:
 
 
 def embed_chunks(
-    chunks: list[extract.MulitmodalChunk], model: str = settings.TEXT_EMBEDDING_MODEL
+    chunks: list[extract.MulitmodalChunk],
+    model: str = settings.TEXT_EMBEDDING_MODEL,
+    input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
     vo = voyageai.Client()
     if model == settings.MIXED_EMBEDDING_MODEL:
         return vo.multimodal_embed(
-            chunks, model=model, input_type="document"
+            chunks, model=model, input_type=input_type
         ).embeddings
-    return vo.embed(chunks, model=model, input_type="document").embeddings
+    return vo.embed(chunks, model=model, input_type=input_type).embeddings
 
 
 def embed_text(
-    texts: list[str], model: str = settings.TEXT_EMBEDDING_MODEL
+    texts: list[str],
+    model: str = settings.TEXT_EMBEDDING_MODEL,
+    input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
     chunks = [
         c
         for text in texts
+        if isinstance(text, str)
         for c in chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS)
         if c.strip()
     ]
@@ -92,7 +140,7 @@ def embed_text(
         return []
 
     try:
-        return embed_chunks(chunks, model)
+        return embed_chunks(chunks, model, input_type)
     except voyageai.error.InvalidRequestError as e:
         logger.error(f"Error embedding text: {e}")
         logger.debug(f"Text: {texts}")
@@ -106,7 +154,9 @@ def embed_file(
 
 
 def embed_mixed(
-    items: list[extract.MulitmodalChunk], model: str = settings.MIXED_EMBEDDING_MODEL
+    items: list[extract.MulitmodalChunk],
+    model: str = settings.MIXED_EMBEDDING_MODEL,
+    input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
     def to_chunks(item: extract.MulitmodalChunk) -> Iterable[str]:
         if isinstance(item, str):
@@ -116,7 +166,7 @@ def embed_mixed(
         return [item]
 
     chunks = [c for item in items for c in to_chunks(item)]
-    return embed_chunks([chunks], model)
+    return embed_chunks([chunks], model, input_type)
 
 
 def embed_page(page: dict[str, Any]) -> list[Vector]:

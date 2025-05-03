@@ -10,21 +10,28 @@ COPY src/ ./src/
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     libpq-dev gcc pandoc \
-    texlive-full texlive-fonts-recommended texlive-plain-generic \
+    texlive-xetex texlive-fonts-recommended texlive-plain-generic \
+    texlive-lang-greek texlive-lang-cyrillic texlive-lang-european \
+    texlive-luatex texlive-latex-extra texlive-latex-recommended \
+    texlive-science texlive-fonts-extra \
+    fontconfig \
     # For optional LibreOffice support (uncomment if needed)
     # libreoffice-writer \
-    && \
-    pip install -e ".[workers]" && \
-    apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+    && apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+RUN pip install -e ".[workers]"
 
 # Create and copy entrypoint script
 COPY docker/workers/entry.sh ./entry.sh
+COPY docker/workers/unnest-table.lua ./unnest-table.lua
 RUN chmod +x entry.sh
 
 RUN mkdir -p /app/memory_files
 
 # Create user and set permissions
-RUN useradd -m kb && chown -R kb /app
+RUN useradd -m kb
+RUN mkdir -p /var/cache/fontconfig /home/kb/.cache/fontconfig && \
+    chown -R kb:kb /var/cache/fontconfig /home/kb/.cache/fontconfig /app
+
 USER kb
 
 # Default queues to process
