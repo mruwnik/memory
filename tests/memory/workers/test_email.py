@@ -9,19 +9,16 @@ from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY, MagicMock, patch
 import pytest
-from memory.common.db.models import SourceItem, MailMessage, EmailAttachment, EmailAccount
+from memory.common.db.models import (
+    SourceItem,
+    MailMessage,
+    EmailAttachment,
+    EmailAccount,
+)
 from memory.common import settings
 from memory.common import embedding
 from memory.workers.email import (
-    compute_message_hash,
-    create_source_item,
-    extract_attachments,
-    extract_body,
-    extract_date,
     extract_email_uid,
-    extract_recipients,
-    parse_email_message,
-    check_message_exists,
     create_mail_message,
     fetch_email,
     fetch_email_since,
@@ -35,6 +32,7 @@ from memory.workers.email import (
 @pytest.fixture
 def mock_uuid4():
     i = 0
+
     def uuid4():
         nonlocal i
         i += 1
@@ -42,181 +40,6 @@ def mock_uuid4():
 
     with patch("uuid.uuid4", side_effect=uuid4):
         yield
-
-
-# Use a simple counter to generate unique message IDs without calling make_msgid
-_msg_id_counter = 0
-
-
-def _generate_test_message_id():
-    """Generate a simple message ID for testing without expensive calls"""
-    global _msg_id_counter
-    _msg_id_counter += 1
-    return f"<test-message-{_msg_id_counter}@example.com>"
-
-
-def create_email_message(
-    subject="Test Subject",
-    from_addr="sender@example.com",
-    to_addrs="recipient@example.com",
-    cc_addrs=None,
-    bcc_addrs=None,
-    date=None,
-    body="Test body content",
-    attachments=None,
-    multipart=True,
-    message_id=None,
-):
-    """Helper function to create email.message.Message objects for testing"""
-    if multipart:
-        msg = email.mime.multipart.MIMEMultipart()
-        msg.attach(email.mime.text.MIMEText(body))
-
-        if attachments:
-            for attachment in attachments:
-                attachment_part = email.mime.base.MIMEBase(
-                    "application", "octet-stream"
-                )
-                attachment_part.set_payload(attachment["content"])
-                attachment_part.add_header(
-                    "Content-Disposition",
-                    f"attachment; filename={attachment['filename']}",
-                )
-                msg.attach(attachment_part)
-    else:
-        msg = email.mime.text.MIMEText(body)
-
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = to_addrs
-
-    if cc_addrs:
-        msg["Cc"] = cc_addrs
-    if bcc_addrs:
-        msg["Bcc"] = bcc_addrs
-    if date:
-        msg["Date"] = formatdate(float(date.timestamp()))
-    if message_id:
-        msg["Message-ID"] = message_id
-    else:
-        msg["Message-ID"] = _generate_test_message_id()
-
-    return msg
-
-
-@pytest.mark.parametrize(
-    "to_addr, cc_addr, bcc_addr, expected",
-    [
-        # Single recipient in To field
-        ("recipient@example.com", None, None, ["recipient@example.com"]),
-        # Multiple recipients in To field
-        (
-            "recipient1@example.com, recipient2@example.com",
-            None,
-            None,
-            ["recipient1@example.com", "recipient2@example.com"],
-        ),
-        # To, Cc fields
-        (
-            "recipient@example.com",
-            "cc@example.com",
-            None,
-            ["recipient@example.com", "cc@example.com"],
-        ),
-        # To, Cc, Bcc fields
-        (
-            "recipient@example.com",
-            "cc@example.com",
-            "bcc@example.com",
-            ["recipient@example.com", "cc@example.com", "bcc@example.com"],
-        ),
-        # Empty fields
-        ("", "", "", []),
-    ],
-)
-def test_extract_recipients(to_addr, cc_addr, bcc_addr, expected):
-    msg = create_email_message(to_addrs=to_addr, cc_addrs=cc_addr, bcc_addrs=bcc_addr)
-    assert sorted(extract_recipients(msg)) == sorted(expected)
-
-
-def test_extract_date_missing():
-    msg = create_email_message(date=None)
-    assert extract_date(msg) is None
-
-
-@pytest.mark.parametrize(
-    "date_str",
-    [
-        "Invalid Date Format",
-        "2023-01-01",  # ISO format but not RFC compliant
-        "Monday, Jan 1, 2023",  # Descriptive but not RFC compliant
-        "01/01/2023",  # Common format but not RFC compliant
-        "",  # Empty string
-    ],
-)
-def test_extract_date_invalid_formats(date_str):
-    msg = create_email_message()
-    msg["Date"] = date_str
-    assert extract_date(msg) is None
-
-
-@pytest.mark.parametrize(
-    "date_str",
-    [
-        "Mon, 01 Jan 2023 12:00:00 +0000",  # RFC 5322 format
-        "01 Jan 2023 12:00:00 +0000",  # RFC 822 format
-        "Mon, 01 Jan 2023 12:00:00 GMT",  # With timezone name
-    ],
-)
-def test_extract_date(date_str):
-    msg = create_email_message()
-    msg["Date"] = date_str
-    result = extract_date(msg)
-
-    assert result is not None
-    assert result.year == 2023
-    assert result.month == 1
-    assert result.day == 1
-
-
-@pytest.mark.parametrize("multipart", [True, False])
-def test_extract_body_text_plain(multipart):
-    body_content = "This is a test email body"
-    msg = create_email_message(body=body_content, multipart=multipart)
-    extracted = extract_body(msg)
-
-    # Strip newlines for comparison since multipart emails often add them
-    assert extracted.strip() == body_content.strip()
-
-
-def test_extract_body_with_attachments():
-    body_content = "This is a test email body"
-    attachments = [{"filename": "test.txt", "content": b"attachment content"}]
-    msg = create_email_message(body=body_content, attachments=attachments)
-    assert body_content in extract_body(msg)
-
-
-def test_extract_attachments_none():
-    msg = create_email_message(multipart=True)
-    assert extract_attachments(msg) == []
-
-
-def test_extract_attachments_with_files():
-    attachments = [
-        {"filename": "test1.txt", "content": b"content1"},
-        {"filename": "test2.pdf", "content": b"content2"},
-    ]
-    msg = create_email_message(attachments=attachments)
-
-    result = extract_attachments(msg)
-    assert len(result) == 2
-    assert result[0]["filename"] == "test1.txt"
-    assert result[1]["filename"] == "test2.pdf"
-
-
-def test_extract_attachments_non_multipart():
-    msg = create_email_message(multipart=False)
-    assert extract_attachments(msg) == []
 
 
 @pytest.mark.parametrize(
@@ -237,7 +60,6 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
     }
     message = MailMessage(
         id=1,
-        source=SourceItem(tags=["test"]),
         message_id=message_id,
         sender="sender@example.com",
         folder="INBOX",
@@ -247,12 +69,8 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
         result = process_attachment(attachment, message)
 
     assert result is not None
-    # For inline attachments, content should be base64 encoded string
-    assert isinstance(result.content, bytes)
-    # Decode the base64 string and compare with the original content
-    decoded_content = base64.b64decode(result.content)
-    assert decoded_content == attachment["content"]
-    assert result.file_path is None
+    assert result.content == attachment["content"].decode("utf-8", errors="replace")
+    assert result.filename is None
 
 
 @pytest.mark.parametrize(
@@ -266,14 +84,13 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
 )
 def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
     attachment = {
-        "filename": "test.txt",
+        "filename": "test/with:special\\chars.txt",
         "content_type": "text/plain",
         "size": attachment_size,
         "content": b"a" * attachment_size,
     }
     message = MailMessage(
         id=1,
-        source=SourceItem(tags=["test"]),
         message_id=message_id,
         sender="sender@example.com",
         folder="INBOX",
@@ -283,7 +100,12 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
 
     assert result is not None
     assert not result.content
-    assert result.file_path == str(settings.FILE_STORAGE_DIR / "sender@example.com" / "INBOX" / "test.txt")
+    assert result.filename == str(
+        settings.FILE_STORAGE_DIR
+        / "sender_example_com"
+        / "INBOX"
+        / "test_with_special_chars.txt"
+    )
 
 
 def test_process_attachment_write_error():
@@ -296,7 +118,6 @@ def test_process_attachment_write_error():
     }
     message = MailMessage(
         id=1,
-        source=SourceItem(tags=["test"]),
         message_id="<test@example.com>",
         sender="sender@example.com",
         folder="INBOX",
@@ -344,7 +165,7 @@ def test_process_attachments_mixed():
     ]
     message = MailMessage(
         id=1,
-        source=SourceItem(tags=["test"]),
+        tags=["test"],
         message_id="<test@example.com>",
         sender="sender@example.com",
         folder="INBOX",
@@ -357,83 +178,13 @@ def test_process_attachments_mixed():
     # Verify we have all attachments processed
     assert len(results) == 3
 
-    # Verify small attachments are base64 encoded
-    assert isinstance(results[0].content, bytes)
-    assert isinstance(results[2].content, bytes)
+    assert results[0].content == "a" * 20
+    assert results[2].content == "c" * 30
 
     # Verify large attachment has a path
-    assert results[1].file_path is not None
-
-
-@pytest.mark.parametrize(
-    "msg_id, subject, sender, body, expected",
-    [
-        (
-            "<test@example.com>",
-            "Test Subject",
-            "sender@example.com",
-            "Test body",
-            b"\xf2\xbd",  # First two bytes of the actual hash
-        ),
-        (
-            "<different@example.com>",
-            "Test Subject",
-            "sender@example.com",
-            "Test body",
-            b"\xa4\x15",  # Will be different from the first hash
-        ),
-    ],
-)
-def test_compute_message_hash(msg_id, subject, sender, body, expected):
-    result = compute_message_hash(msg_id, subject, sender, body)
-
-    # Verify it's bytes and correct length for SHA-256 (32 bytes)
-    assert isinstance(result, bytes)
-    assert len(result) == 32
-
-    # Verify first two bytes match expected
-    assert result[:2] == expected
-
-
-def test_hash_consistency():
-    args = ("<test@example.com>", "Test Subject", "sender@example.com", "Test body")
-    assert compute_message_hash(*args) == compute_message_hash(*args)
-
-
-def test_parse_simple_email():
-    test_date = datetime(2023, 1, 1, 12, 0, 0)
-    msg_id = "<test123@example.com>"
-    msg = create_email_message(
-        subject="Test Subject",
-        from_addr="sender@example.com",
-        to_addrs="recipient@example.com",
-        date=test_date,
-        body="Test body content",
-        message_id=msg_id,
+    assert results[1].filename == str(
+        settings.FILE_STORAGE_DIR / "sender_example_com" / "INBOX" / "large.txt"
     )
-
-    result = parse_email_message(msg.as_string())
-
-    assert result == {
-        "message_id": msg_id,
-        "subject": "Test Subject",
-        "sender": "sender@example.com",
-        "recipients": ["recipient@example.com"],
-        "body": "Test body content\n",
-        "attachments": [],
-        "sent_at": ANY,
-    }
-    assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400
-
-
-def test_parse_email_with_attachments():
-    attachments = [{"filename": "test.txt", "content": b"attachment content"}]
-    msg = create_email_message(attachments=attachments)
-
-    result = parse_email_message(msg.as_string())
-
-    assert len(result["attachments"]) == 1
-    assert result["attachments"][0]["filename"] == "test.txt"
 
 
 def test_extract_email_uid_valid():
@@ -452,148 +203,55 @@ def test_extract_email_uid_no_match():
     assert raw_email == b"raw email content"
 
 
-def test_create_source_item(db_session):
-    # Mock data
-    message_hash = b"test_hash_bytes" + bytes(28)  # 32 bytes for SHA-256
-    account_tags = ["work", "important"]
-    raw_email_size = 1024
-
-    # Call function
-    source_item = create_source_item(
-        db_session=db_session,
-        message_hash=message_hash,
-        account_tags=account_tags,
-        raw_size=raw_email_size,
-    )
-
-    # Verify the source item was created correctly
-    assert isinstance(source_item, SourceItem)
-    assert source_item.id is not None
-    assert source_item.modality == "mail"
-    assert source_item.sha256 == message_hash
-    assert source_item.tags == account_tags
-    assert source_item.byte_length == raw_email_size
-    assert source_item.mime_type == "message/rfc822"
-    assert source_item.embed_status == "RAW"
-
-    # Verify it was added to the session
-    db_session.flush()
-    fetched_item = db_session.query(SourceItem).filter_by(id=source_item.id).one()
-    assert fetched_item is not None
-    assert fetched_item.sha256 == message_hash
-
-
-@pytest.mark.parametrize(
-    "setup_db, message_id, message_hash, expected_exists",
-    [
-        # Test by message ID
-        (
-            lambda db: (
-                # First create source_item to satisfy foreign key constraint
-                db.add(
-                    SourceItem(
-                        id=1,
-                        modality="mail",
-                        sha256=b"some_hash_bytes" + bytes(28),
-                        tags=["test"],
-                        byte_length=100,
-                        mime_type="message/rfc822",
-                        embed_status="RAW",
-                    )
-                ),
-                db.flush(),
-                # Then create mail_message
-                db.add(
-                    MailMessage(
-                        source_id=1,
-                        message_id="<test@example.com>",
-                        subject="Test",
-                        sender="test@example.com",
-                        recipients=["recipient@example.com"],
-                        body_raw="Test body",
-                    )
-                ),
-            ),
-            "<test@example.com>",
-            b"unmatched_hash",
-            True,
-        ),
-        # Test by non-existent message ID
-        (lambda db: None, "<nonexistent@example.com>", b"unmatched_hash", False),
-        # Test by hash
-        (
-            lambda db: db.add(
-                SourceItem(
-                    modality="mail",
-                    sha256=b"test_hash_bytes" + bytes(28),
-                    tags=["test"],
-                    byte_length=100,
-                    mime_type="message/rfc822",
-                    embed_status="RAW",
-                )
-            ),
-            "",
-            b"test_hash_bytes" + bytes(28),
-            True,
-        ),
-        # Test by non-existent hash
-        (lambda db: None, "", b"different_hash_" + bytes(28), False),
-    ],
-)
-def test_check_message_exists(
-    db_session, setup_db, message_id, message_hash, expected_exists
-):
-    # Setup test data
-    if setup_db:
-        setup_db(db_session)
-        db_session.flush()
-
-    # Test the function
-    assert check_message_exists(db_session, message_id, message_hash) == expected_exists
-
-
 def test_create_mail_message(db_session):
-    source_item = SourceItem(
-        modality="mail",
-        sha256=b"test_hash_bytes" + bytes(28),
-        tags=["test"],
-        byte_length=100,
+    raw_email = (
+        "From: sender@example.com\n"
+        "To: recipient@example.com\n"
+        "Subject: Test Subject\n"
+        "Date: Sun, 1 Jan 2023 12:00:00 +0000\n"
+        "Message-ID: 321\n"
+        "MIME-Version: 1.0\n"
+        'Content-Type: multipart/mixed; boundary="boundary"\n'
+        "\n"
+        "--boundary\n"
+        "Content-Type: text/plain\n"
+        "\n"
+        "Test body content\n"
+        "--boundary\n"
+        'Content-Disposition: attachment; filename="test.txt"\n'
+        "Content-Type: text/plain\n"
+        "Content-Transfer-Encoding: base64\n"
+        "\n"
+        "YXR0YWNobWVudCBjb250ZW50\n"
+        "--boundary--"
     )
-    db_session.add(source_item)
-    db_session.flush()
-    parsed_email = {
-        "message_id": "<test@example.com>",
-        "subject": "Test Subject",
-        "sender": "sender@example.com",
-        "recipients": ["recipient@example.com"],
-        "sent_at": datetime(2023, 1, 1, 12, 0, 0),
-        "body": "Test body content",
-        "attachments": [
-            {"filename": "test.txt", "content_type": "text/plain", "size": 100}
-        ],
-    }
     folder = "INBOX"
 
     # Call function
     mail_message = create_mail_message(
         db_session=db_session,
-        source_item=source_item,
-        parsed_email=parsed_email,
+        raw_email=raw_email,
         folder=folder,
+        tags=["test"],
+        message_id="123",
     )
     db_session.commit()
 
-    attachments = db_session.query(EmailAttachment).filter(EmailAttachment.mail_message_id == mail_message.id).all()
+    attachments = (
+        db_session.query(EmailAttachment)
+        .filter(EmailAttachment.mail_message_id == mail_message.id)
+        .all()
+    )
 
     # Verify the mail message was created correctly
     assert isinstance(mail_message, MailMessage)
-    assert mail_message.source_id == source_item.id
-    assert mail_message.message_id == parsed_email["message_id"]
-    assert mail_message.subject == parsed_email["subject"]
-    assert mail_message.sender == parsed_email["sender"]
-    assert mail_message.recipients == parsed_email["recipients"]
-    assert mail_message.sent_at.isoformat()[:-6] == parsed_email["sent_at"].isoformat() 
-    assert mail_message.body_raw == parsed_email["body"]
+    assert mail_message.message_id == "321"
+    assert mail_message.subject == "Test Subject"
+    assert mail_message.sender == "sender@example.com"
+    assert mail_message.recipients == ["recipient@example.com"]
+    assert mail_message.sent_at.isoformat()[:-6] == "2023-01-01T12:00:00"
+    assert mail_message.content == raw_email
+    assert mail_message.body == "Test body content\n"
     assert mail_message.attachments == attachments
 
 
@@ -675,99 +333,97 @@ def test_process_folder_error(email_provider):
 
 def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
     mail_message = MailMessage(
-        source=SourceItem(
-            modality="mail",
-            sha256=b"test_hash" + bytes(24),
-            tags=["test"],
-            byte_length=100,
-            mime_type="message/rfc822",
-            embed_status="RAW",
-        ),
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
         message_id="<test-vector@example.com>",
         subject="Test Vectorization",
         sender="sender@example.com",
         recipients=["recipient@example.com"],
-        body_raw="This is a test email for vectorization",
+        content="This is a test email for vectorization",
         folder="INBOX",
     )
     db_session.add(mail_message)
     db_session.flush()
-    
+
+    assert mail_message.embed_status == "RAW"
+
     with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
-        vector_ids = vectorize_email(mail_message)
-        
-        assert len(vector_ids) == 1
-        assert vector_ids[0] == "mail/00000000-0000-0000-0000-000000000001"
+        vectorize_email(mail_message)
+        assert [c.id for c in mail_message.chunks] == [
+            "00000000-0000-0000-0000-000000000001"
+        ]
+
+    db_session.commit()
+    assert mail_message.embed_status == "STORED"
 
 
 def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
     mail_message = MailMessage(
-        source=SourceItem(
-            modality="mail",
-            sha256=b"test_hash" + bytes(24),
-            tags=["test"],
-            byte_length=100,
-            mime_type="message/rfc822",
-            embed_status="RAW",
-        ),
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
         message_id="<test-vector-attach@example.com>",
         subject="Test Vectorization with Attachments",
         sender="sender@example.com",
         recipients=["recipient@example.com"],
-        body_raw="This is a test email with attachments",
+        content="This is a test email with attachments",
         folder="INBOX",
     )
     db_session.add(mail_message)
     db_session.flush()
-    
+
     # Add two attachments - one with content and one with file_path
     attachment1 = EmailAttachment(
         mail_message_id=mail_message.id,
-        filename="inline.txt",
-        content_type="text/plain",
         size=100,
         content=base64.b64encode(b"This is inline content"),
-        file_path=None,
-        source=SourceItem(
-            modality="doc",
-            sha256=b"test_hash1" + bytes(24),
-            tags=["test"],
-            byte_length=100,
-            mime_type="text/plain",
-            embed_status="RAW",
-        ),
+        filename=None,
+        modality="doc",
+        sha256=b"test_hash1" + bytes(24),
+        tags=["test"],
+        mime_type="text/plain",
+        embed_status="RAW",
     )
-    
+
     file_path = mail_message.attachments_path / "stored.txt"
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_bytes(b"This is stored content")
     attachment2 = EmailAttachment(
         mail_message_id=mail_message.id,
-        filename="stored.txt",
-        content_type="text/plain",
         size=200,
         content=None,
-        file_path=str(file_path),
-        source=SourceItem(
-            modality="doc",
-            sha256=b"test_hash2" + bytes(24),
-            tags=["test"],
-            byte_length=100,
-            mime_type="text/plain",
-            embed_status="RAW",
-        ),
+        filename=str(file_path),
+        modality="doc",
+        sha256=b"test_hash2" + bytes(24),
+        tags=["test"],
+        mime_type="text/plain",
+        embed_status="RAW",
     )
-    
+
     db_session.add_all([attachment1, attachment2])
     db_session.flush()
-    
+
     # Mock embedding functions but use real qdrant
     with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
         # Call the function
-        vector_ids = vectorize_email(mail_message)
-        
+        vectorize_email(mail_message)
+
         # Verify results
-        assert len(vector_ids) == 3
-        assert vector_ids[0] == "mail/00000000-0000-0000-0000-000000000001"
-        assert vector_ids[1] == "doc/00000000-0000-0000-0000-000000000002"
-        assert vector_ids[2] == "doc/00000000-0000-0000-0000-000000000003"
+        vector_ids = [
+            c.id for c in mail_message.chunks + attachment1.chunks + attachment2.chunks
+        ]
+        assert vector_ids == [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000003",
+        ]
+
+    db_session.commit()
+    assert mail_message.embed_status == "STORED"
+    assert attachment1.embed_status == "STORED"
+    assert attachment2.embed_status == "STORED"

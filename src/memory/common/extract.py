@@ -7,6 +7,7 @@ from PIL import Image
 from typing import Any, TypedDict, Generator
 
 
+
 MulitmodalChunk = Image.Image | str
 class Page(TypedDict):
     contents: list[MulitmodalChunk]
@@ -33,14 +34,16 @@ def page_to_image(page: pymupdf.Page) -> Image.Image:
 def doc_to_images(content: bytes | str | pathlib.Path) -> list[Page]:
     with as_file(content) as file_path:
         with pymupdf.open(file_path) as pdf:
-            return [{
-                "contents": page_to_image(page),
-                "metadata": {
-                    "page": page.number,
-                    "width": page.rect.width,
-                    "height": page.rect.height,
-                }
-            } for page in pdf.pages()]
+            return [
+                {
+                    "contents": page_to_image(page),
+                    "metadata": {
+                        "page": page.number,
+                        "width": page.rect.width,
+                        "height": page.rect.height,
+                    }
+                } for page in pdf.pages()
+            ]
 
 
 def extract_image(content: bytes | str | pathlib.Path) -> list[Page]:
@@ -50,7 +53,7 @@ def extract_image(content: bytes | str | pathlib.Path) -> list[Page]:
         image = Image.open(io.BytesIO(content))
     else:
         raise ValueError(f"Unsupported content type: {type(content)}")
-    return [{"contents": image, "metadata": {}}]
+    return [{"contents": [image], "metadata": {}}]
 
 
 def extract_text(content: bytes | str | pathlib.Path) -> list[Page]:

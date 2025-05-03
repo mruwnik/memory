@@ -70,7 +70,7 @@ def test_extract_image_with_path(tmp_path):
     img.save(img_path)
 
     page, = extract_image(img_path)
-    assert page["contents"].tobytes() == img.convert("RGB").tobytes()
+    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()
     assert page["metadata"] == {}
 
 
@@ -81,7 +81,7 @@ def test_extract_image_with_bytes():
     img_bytes = buffer.getvalue()
     
     page, = extract_image(img_bytes)
-    assert page["contents"].tobytes() == img.convert("RGB").tobytes()
+    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()
     assert page["metadata"] == {}
 
 
@@ -119,12 +119,11 @@ def test_extract_content_image(tmp_path):
     img_path = tmp_path / "test_img.png"
     img.save(img_path)
     
-    result = extract_content("image/png", img_path)
+    result, = extract_content("image/png", img_path)
     
-    assert len(result) == 1
-    assert isinstance(result[0]["contents"], Image.Image)
-    assert result[0]["contents"].size == (100, 100)
-    assert result[0]["metadata"] == {}
+    assert isinstance(result["contents"][0], Image.Image)
+    assert result["contents"][0].size == (100, 100)
+    assert result["metadata"] == {}
 
 
 def test_extract_content_unsupported_type():

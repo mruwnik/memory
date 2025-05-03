@@ -84,7 +84,9 @@ def initialize_collections(client: qdrant_client.QdrantClient, collections: dict
     if collections is None:
         collections = DEFAULT_COLLECTIONS
     
+    logger.info(f"Initializing collections:")
     for name, params in collections.items():
+        logger.info(f" - {name}")
         ensure_collection_exists(
             client,
             collection_name=name,

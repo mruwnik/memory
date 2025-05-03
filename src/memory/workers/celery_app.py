@@ -2,6 +2,7 @@ import os
 from celery import Celery
 from memory.common import settings
 
+
 def rabbit_url() -> str:
     user = os.getenv("RABBITMQ_USER", "guest")
     password = os.getenv("RABBITMQ_PASSWORD", "guest")
@@ -32,3 +33,10 @@ app.conf.update(
         "memory.workers.tasks.docs.*": {"queue": "docs"},
     },
 )
+
+
+
+@app.on_after_configure.connect
+def ensure_qdrant_initialised(sender, **_):
+    from memory.common import qdrant
+    qdrant.setup_qdrant()

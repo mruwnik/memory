@@ -1,9 +1,17 @@
+import logging
 import pathlib
-from typing import Literal, TypedDict, Iterable, Any
-import voyageai
-import re
 import uuid
+from typing import Any, Iterable, Literal, TypedDict
+
+import voyageai
+from PIL import Image
+
 from memory.common import extract, settings
+from memory.common.chunker import chunk_text
+from memory.common.db.models import Chunk
+
+logger = logging.getLogger(__name__)
+
 
 # Chunking configuration
 MAX_TOKENS = 32000  # VoyageAI max context window
@@ -27,16 +35,24 @@ DEFAULT_COLLECTIONS: dict[str, Collection] = {
     "mail": {"dimension": 1024, "distance": "Cosine"},
     "chat": {"dimension": 1024, "distance": "Cosine"},
     "git": {"dimension": 1024, "distance": "Cosine"},
-    "photo": {"dimension": 512, "distance": "Cosine"},
     "book": {"dimension": 1024, "distance": "Cosine"},
     "blog": {"dimension": 1024, "distance": "Cosine"},
+    "text": {"dimension": 1024, "distance": "Cosine"},
+    # Multimodal
+    "photo": {"dimension": 1024, "distance": "Cosine"},
     "doc": {"dimension": 1024, "distance": "Cosine"},
 }
 
 TYPES = {
-    "doc": ["text/*"],
+    "doc": ["application/pdf", "application/docx", "application/msword"],
+    "text": ["text/*"],
+    "blog": ["text/markdown", "text/html"],
     "photo": ["image/*"],
-    "book": ["application/pdf", "application/epub+zip", "application/mobi", "application/x-mobipocket-ebook"],
+    "book": [
+        "application/epub+zip",
+        "application/mobi",
+        "application/x-mobipocket-ebook",
+    ],
 }
 
 
@@ -52,143 +68,55 @@ def get_modality(mime_type: str) -> str:
     return "unknown"
 
 
-# Regex for sentence splitting
-_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def approx_token_count(s: str) -> int:
-    return len(s) // CHARS_PER_TOKEN
-
-
-def yield_word_chunks(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
-    words = text.split()
-    if not words:
-        return
-        
-    current = ""
-    for word in words:
-        new_chunk = f"{current} {word}".strip()
-        if current and approx_token_count(new_chunk) > max_tokens:
-            yield current
-            current = word
-        else:
-            current = new_chunk
-    if current:  # Only yield non-empty final chunk
-        yield current
-
-
-def yield_spans(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
-    """
-    Yield text spans in priority order: paragraphs, sentences, words.
-    Each span is guaranteed to be under max_tokens.
-    
-    Args:
-        text: The text to split
-        max_tokens: Maximum tokens per chunk
-        
-    Yields:
-        Spans of text that fit within token limits
-    """
-    # Return early for empty text
-    if not text.strip():
-        return
-        
-    for paragraph in text.split("\n\n"):
-        if not paragraph.strip():
-            continue
-            
-        if approx_token_count(paragraph) <= max_tokens:
-            yield paragraph
-            continue
-        
-        for sentence in _SENT_SPLIT_RE.split(paragraph):
-            if not sentence.strip():
-                continue
-                
-            if approx_token_count(sentence) <= max_tokens:
-                yield sentence
-                continue
-            
-            for chunk in yield_word_chunks(sentence, max_tokens):
-                yield chunk
-
-
-def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_TOKENS) -> Iterable[str]:
-    """
-    Split text into chunks respecting semantic boundaries while staying within token limits.
-    
-    Args:
-        text: The text to chunk
-        max_tokens: Maximum tokens per chunk (default: VoyageAI max context)
-        overlap: Number of tokens to overlap between chunks (default: 200)
-    
-    Returns:
-        List of text chunks
-    """
-    text = text.strip()
-    if not text:
-        return
-        
-    if approx_token_count(text) <= max_tokens:
-        yield text
-        return
-    
-    overlap_chars = overlap * CHARS_PER_TOKEN
-    current = ""
-
-    for span in yield_spans(text, max_tokens):
-        current = f"{current} {span}".strip()
-        if approx_token_count(current) < max_tokens:
-            continue
-
-        if overlap <= 0:
-            yield current
-            current = ""
-            continue
-        
-        overlap_text = current[-overlap_chars:]
-        clean_break = max(
-            overlap_text.rfind(". "), 
-            overlap_text.rfind("! "), 
-            overlap_text.rfind("? ")
-        )
-
-        if clean_break < 0:
-            yield current
-            current = ""
-            continue
-        
-        break_offset = -overlap_chars + clean_break + 1
-        chunk = current[break_offset:].strip()
-        yield current
-        current = chunk
-
-    if current:
-        yield current.strip()
-
-
-def embed_chunks(chunks: list[extract.MulitmodalChunk], model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
+def embed_chunks(
+    chunks: list[extract.MulitmodalChunk], model: str = settings.TEXT_EMBEDDING_MODEL
+) -> list[Vector]:
     vo = voyageai.Client()
-    return vo.embed(chunks, model=model).embeddings
+    if model == settings.MIXED_EMBEDDING_MODEL:
+        return vo.multimodal_embed(
+            chunks, model=model, input_type="document"
+        ).embeddings
+    return vo.embed(chunks, model=model, input_type="document").embeddings
 
 
-def embed_text(texts: list[str], model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
-    chunks = [c for text in texts for c in chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()]
-    return embed_chunks(chunks, model)
+def embed_text(
+    texts: list[str], model: str = settings.TEXT_EMBEDDING_MODEL
+) -> list[Vector]:
+    chunks = [
+        c
+        for text in texts
+        for c in chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS)
+        if c.strip()
+    ]
+    if not chunks:
+        return []
+
+    try:
+        return embed_chunks(chunks, model)
+    except voyageai.error.InvalidRequestError as e:
+        logger.error(f"Error embedding text: {e}")
+        logger.debug(f"Text: {texts}")
+        raise
 
 
-def embed_file(file_path: pathlib.Path, model: str = settings.TEXT_EMBEDDING_MODEL) -> list[Vector]:
+def embed_file(
+    file_path: pathlib.Path, model: str = settings.TEXT_EMBEDDING_MODEL
+) -> list[Vector]:
     return embed_text([file_path.read_text()], model)
 
 
-def embed_mixed(items: list[extract.MulitmodalChunk], model: str = settings.MIXED_EMBEDDING_MODEL) -> list[Vector]:
+def embed_mixed(
+    items: list[extract.MulitmodalChunk], model: str = settings.MIXED_EMBEDDING_MODEL
+) -> list[Vector]:
     def to_chunks(item: extract.MulitmodalChunk) -> Iterable[str]:
         if isinstance(item, str):
-            return [c for c in chunk_text(item, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()]
+            return [
+                c for c in chunk_text(item, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()
+            ]
         return [item]
 
     chunks = [c for item in items for c in to_chunks(item)]
-    return embed_chunks(chunks, model)
+    return embed_chunks([chunks], model)
 
 
 def embed_page(page: dict[str, Any]) -> list[Vector]:
@@ -198,17 +126,64 @@ def embed_page(page: dict[str, Any]) -> list[Vector]:
     return embed_mixed(contents, model=settings.MIXED_EMBEDDING_MODEL)
 
 
+def write_to_file(chunk_id: str, item: extract.MulitmodalChunk) -> pathlib.Path:
+    if isinstance(item, str):
+        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.txt"
+        filename.write_text(item)
+    elif isinstance(item, bytes):
+        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.bin"
+        filename.write_bytes(item)
+    elif isinstance(item, Image.Image):
+        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.png"
+        item.save(filename)
+    else:
+        raise ValueError(f"Unsupported content type: {type(item)}")
+    return filename
+
+
+def make_chunk(
+    page: extract.Page, vector: Vector, metadata: dict[str, Any] = {}
+) -> Chunk:
+    """Create a Chunk object from a page and a vector.
+
+    This is quite complex, because we need to handle the case where the page is a single string,
+    a single image, or a list of strings and images.
+    """
+    chunk_id = str(uuid.uuid4())
+    contents = page["contents"]
+    content, filename = None, None
+    if all(isinstance(c, str) for c in contents):
+        content = "\n\n".join(contents)
+        model = settings.TEXT_EMBEDDING_MODEL
+    elif len(contents) == 1:
+        filename = (write_to_file(chunk_id, contents[0]),)
+        model = settings.MIXED_EMBEDDING_MODEL
+    else:
+        for i, item in enumerate(contents):
+            write_to_file(f"{chunk_id}_{i}", item)
+        model = settings.MIXED_EMBEDDING_MODEL
+        filename = (settings.FILE_STORAGE_DIR / f"{chunk_id}_*",)
+
+    return Chunk(
+        id=chunk_id,
+        file_path=filename,
+        content=content,
+        embedding_model=model,
+        vector=vector,
+        item_metadata=metadata,
+    )
+
+
 def embed(
     mime_type: str,
     content: bytes | str | pathlib.Path,
     metadata: dict[str, Any] = {},
 ) -> tuple[str, list[Embedding]]:
     modality = get_modality(mime_type)
-
     pages = extract.extract_content(mime_type, content)
-    vectors = [
-        (str(uuid.uuid4()), vector, page.get("metadata", {}) | metadata)
+    chunks = [
+        make_chunk(page, vector, metadata)
         for page in pages
         for vector in embed_page(page)
     ]
-    return modality, vectors
+    return modality, chunks

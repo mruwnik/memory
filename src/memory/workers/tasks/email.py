@@ -6,11 +6,8 @@ from memory.common.db.models import EmailAccount
 from memory.workers.celery_app import app
 from memory.workers.email import (
     check_message_exists,
-    compute_message_hash,
     create_mail_message,
-    create_source_item,
     imap_connection,
-    parse_email_message,
     process_folder,
     vectorize_email,
 )
@@ -25,17 +22,20 @@ SYNC_ALL_ACCOUNTS = "memory.workers.tasks.email.sync_all_accounts"
 
 @app.task(name=PROCESS_EMAIL)
 def process_message(
-    account_id: int, message_id: str, folder: str, raw_email: str,
+    account_id: int,
+    message_id: str,
+    folder: str,
+    raw_email: str,
 ) -> int | None:
     """
     Process a single email message and store it in the database.
-    
+
     Args:
         account_id: ID of the EmailAccount
         message_id: UID of the message on the server
         folder: Folder name where the message is stored
         raw_email: Raw email content as string
-        
+
     Returns:
         source_id if successful, None otherwise
     """
@@ -45,88 +45,86 @@ def process_message(
         return None
 
     with make_session() as db:
+        if check_message_exists(db, account_id, message_id, raw_email):
+            logger.debug(f"Message {message_id} already exists in database")
+            return None
+
         account = db.query(EmailAccount).get(account_id)
         if not account:
             logger.error(f"Account {account_id} not found")
             return None
-        
-        parsed_email = parse_email_message(raw_email)
-        
-        # Use server-provided message ID if missing
-        if not parsed_email["message_id"]:
-            parsed_email["message_id"] = f"generated-{message_id}"
-        
-        message_hash = compute_message_hash(
-            parsed_email["message_id"], 
-            parsed_email["subject"], 
-            parsed_email["sender"], 
-            parsed_email["body"]
+
+        mail_message = create_mail_message(
+            db, account.tags, folder, raw_email, message_id
         )
-        
-        if check_message_exists(db, parsed_email["message_id"], message_hash):
-            logger.debug(f"Message {parsed_email['message_id']} already exists in database")
-            return None
-        
-        source_item = create_source_item(db, message_hash, account.tags, len(raw_email))
-        mail_message = create_mail_message(db, source_item, parsed_email, folder)
-        
-        source_item.vector_ids = vectorize_email(mail_message)
+
+        vectorize_email(mail_message)
         db.commit()
-            
-        logger.info(f"Stored embedding for message {parsed_email['message_id']}")
-        logger.info("Vector IDs:")
-        for vector_id in source_item.vector_ids:
-            logger.info(f" - {vector_id}")
-        
-        return source_item.id
+
+        logger.info(f"Stored embedding for message {mail_message.message_id}")
+        logger.info("Chunks:")
+        for chunk in mail_message.chunks:
+            logger.info(f" - {chunk.id}")
+
+        return mail_message.id
 
 
 @app.task(name=SYNC_ACCOUNT)
 def sync_account(account_id: int) -> dict:
     """
     Synchronize emails from a specific account.
-    
+
     Args:
         account_id: ID of the EmailAccount to sync
-        
+
     Returns:
         dict with stats about the sync operation
     """
     logger.info(f"Syncing account {account_id}")
+
     with make_session() as db:
         account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
         if not account or not account.active:
             logger.warning(f"Account {account_id} not found or inactive")
             return {"error": "Account not found or inactive"}
-        
+
         folders_to_process = account.folders or ["INBOX"]
         since_date = account.last_sync_at or datetime(1970, 1, 1)
 
         messages_found = 0
         new_messages = 0
         errors = 0
-        
+
+        def process_message_wrapper(
+            account_id: int, message_id: str, folder: str, raw_email: str
+        ) -> int | None:
+            if check_message_exists(db, account_id, message_id, raw_email):
+                return None
+            return process_message.delay(account_id, message_id, folder, raw_email)
+
         try:
             with imap_connection(account) as conn:
                 for folder in folders_to_process:
-                    folder_stats = process_folder(conn, folder, account, since_date, process_message.delay)
-                    
+                    folder_stats = process_folder(
+                        conn, folder, account, since_date, process_message_wrapper
+                    )
+
                     messages_found += folder_stats["messages_found"]
                     new_messages += folder_stats["new_messages"]
                     errors += folder_stats["errors"]
-                
+
                 account.last_sync_at = datetime.now()
                 db.commit()
         except Exception as e:
             logger.error(f"Error connecting to server {account.imap_server}: {str(e)}")
             return {"error": str(e)}
-        
+
         return {
             "account": account.email_address,
             "folders_processed": len(folders_to_process),
             "messages_found": messages_found,
             "new_messages": new_messages,
-            "errors": errors
+            "errors": errors,
         }
 
 
@@ -134,18 +132,18 @@ def sync_account(account_id: int) -> dict:
 def sync_all_accounts() -> list[dict]:
     """
     Synchronize all active email accounts.
-    
+
     Returns:
         List of task IDs that were scheduled
     """
     with make_session() as db:
         active_accounts = db.query(EmailAccount).filter(EmailAccount.active).all()
-        
+
         return [
             {
                 "account_id": account.id,
                 "email": account.email_address,
-                "task_id": sync_account.delay(account.id).id
+                "task_id": sync_account.delay(account.id).id,
             }
             for account in active_accounts
         ]

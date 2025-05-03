@@ -2,7 +2,12 @@ from unittest import mock
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch
-from memory.common.db.models import EmailAccount, MailMessage, SourceItem, EmailAttachment
+from memory.common.db.models import (
+    EmailAccount,
+    MailMessage,
+    SourceItem,
+    EmailAttachment,
+)
 from memory.common import embedding
 from memory.workers.tasks.email import process_message
 
@@ -57,7 +62,7 @@ def test_email_account(db_session):
         use_ssl=True,
         folders=["INBOX", "Sent", "Archive"],
         tags=["test", "integration"],
-        active=True
+        active=True,
     )
     db_session.add(account)
     db_session.commit()
@@ -66,62 +71,58 @@ def test_email_account(db_session):
 
 def test_process_simple_email(db_session, test_email_account, qdrant):
     """Test processing a simple email message."""
-    source_id = process_message(
+    mail_message_id = process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
     )
-    
-    assert source_id is not None
-    
-    # Check that the source item was created
-    source_item = db_session.query(SourceItem).filter(SourceItem.id == source_id).first()
-    assert source_item is not None
-    assert source_item.modality == "mail"
-    assert source_item.tags == test_email_account.tags
-    assert source_item.mime_type == "message/rfc822"
-    assert source_item.embed_status == "RAW"
-    
-    # Check that the mail message was created and linked to the source
-    mail_message = db_session.query(MailMessage).filter(MailMessage.source_id == source_id).first()
+
+    mail_message = (
+        db_session.query(MailMessage).filter(MailMessage.id == mail_message_id).one()
+    )
     assert mail_message is not None
+    assert mail_message.modality == "mail"
+    assert mail_message.tags == test_email_account.tags
+    assert mail_message.mime_type == "message/rfc822"
+    assert mail_message.embed_status == "STORED"
     assert mail_message.subject == "Test Email 1"
     assert mail_message.sender == "alice@example.com"
     assert "bob@example.com" in mail_message.recipients
-    assert "This is test email 1" in mail_message.body_raw
+    assert "This is test email 1" in mail_message.content
     assert mail_message.folder == "INBOX"
 
 
 def test_process_email_with_attachment(db_session, test_email_account, qdrant):
     """Test processing a message with an attachment."""
-    source_id = process_message(
+    mail_message_id = process_message(
         account_id=test_email_account.id,
         message_id="302",
         folder="Archive",
         raw_email=EMAIL_WITH_ATTACHMENT_RAW,
     )
-    
-    assert source_id is not None
-    
     # Check mail message specifics
-    mail_message = db_session.query(MailMessage).filter(MailMessage.source_id == source_id).first()
+    mail_message = (
+        db_session.query(MailMessage).filter(MailMessage.id == mail_message_id).one()
+    )
     assert mail_message is not None
     assert mail_message.subject == "Email with Attachment"
     assert mail_message.sender == "eve@example.com"
-    assert "This email has an attachment" in mail_message.body_raw
+    assert "This email has an attachment" in mail_message.content
     assert mail_message.folder == "Archive"
-    
+
     # Check attachments were processed and stored in the EmailAttachment table
-    attachments = db_session.query(EmailAttachment).filter(
-        EmailAttachment.mail_message_id == mail_message.id
-    ).all()
-    
-    assert len(attachments) > 0
-    assert attachments[0].filename == "test.txt"
-    assert attachments[0].content_type == "text/plain"
-    # Either content or file_path should be set
-    assert attachments[0].content is not None or attachments[0].file_path is not None
+    attachments = (
+        db_session.query(
+            EmailAttachment.filename,
+            EmailAttachment.content,
+            EmailAttachment.mime_type,
+        )
+        .filter(EmailAttachment.mail_message_id == mail_message.id)
+        .all()
+    )
+
+    assert attachments == [(None, "This is a test attachment", "text/plain")]
 
 
 def test_process_empty_message(db_session, test_email_account, qdrant):
@@ -132,7 +133,7 @@ def test_process_empty_message(db_session, test_email_account, qdrant):
         folder="Archive",
         raw_email="",
     )
-    
+
     assert source_id is None
 
 
@@ -145,13 +146,13 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
     )
-    
+
     assert source_id_1 is not None, "First call should return a source_id"
-    
+
     # Count records to verify state before second call
     source_count_before = db_session.query(SourceItem).count()
     message_count_before = db_session.query(MailMessage).count()
-    
+
     # Second call with same email should detect duplicate and return None
     source_id_2 = process_message(
         account_id=test_email_account.id,
@@ -159,12 +160,16 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
     )
-    
+
     assert source_id_2 is None, "Second call should return None for duplicate message"
-    
+
     # Verify no new records were created
     source_count_after = db_session.query(SourceItem).count()
     message_count_after = db_session.query(MailMessage).count()
-    
-    assert source_count_before == source_count_after, "No new SourceItem should be created"
-    assert message_count_before == message_count_after, "No new MailMessage should be created"
+
+    assert source_count_before == source_count_after, (
+        "No new SourceItem should be created"
+    )
+    assert message_count_before == message_count_after, (
+        "No new MailMessage should be created"
+    )
