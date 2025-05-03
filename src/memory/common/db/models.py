@@ -22,16 +22,61 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    event,
     func,
 )
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Session
 
 from memory.common import settings
 from memory.common.parsers.email import parse_email_message
 
 Base = declarative_base()
+
+
+@event.listens_for(Session, "before_flush")
+def handle_duplicate_sha256(session, flush_context, instances):
+    """
+    Event listener that efficiently checks for duplicate sha256 values before flush
+    and removes items with duplicate sha256 from the session.
+
+    Uses a single query to identify all duplicates rather than querying for each item.
+    """
+    # Find all SourceItem objects being added
+    new_items = [obj for obj in session.new if isinstance(obj, SourceItem)]
+    if not new_items:
+        return
+
+    items = {}
+    for item in new_items:
+        try:
+            if (sha256 := item.sha256) is None:
+                continue
+
+            if sha256 in items:
+                session.expunge(item)
+                continue
+
+            items[sha256] = item
+        except (AttributeError, TypeError):
+            continue
+
+    if not new_items:
+        return
+
+    # Query database for existing items with these sha256 values in a single query
+    existing_sha256s = set(
+        row[0]
+        for row in session.query(SourceItem.sha256).filter(
+            SourceItem.sha256.in_(items.keys())
+        )
+    )
+
+    # Remove objects with duplicate sha256 values from the session
+    for sha256 in existing_sha256s:
+        if sha256 in items:
+            session.expunge(items[sha256])
 
 
 def clean_filename(filename: str) -> str:
@@ -65,7 +110,7 @@ class Chunk(Base):
 
     @property
     def data(self) -> list[bytes | str | Image.Image]:
-        if not self.file_path:
+        if self.file_path is None:
             return [self.content]
 
         path = pathlib.Path(self.file_path)
@@ -178,7 +223,7 @@ class MailMessage(SourceItem):
             "sender": self.sender,
             "recipients": self.recipients,
             "folder": self.folder,
-            "tags": self.tags,
+            "tags": self.tags + [self.sender] + self.recipients,
             "date": self.sent_at and self.sent_at.isoformat() or None,
         }
 

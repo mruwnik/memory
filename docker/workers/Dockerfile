@@ -9,7 +9,11 @@ COPY src/ ./src/
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
-        libpq-dev gcc && \
+    libpq-dev gcc pandoc \
+    texlive-full texlive-fonts-recommended texlive-plain-generic \
+    # For optional LibreOffice support (uncomment if needed)
+    # libreoffice-writer \
+    && \
     pip install -e ".[workers]" && \
     apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
