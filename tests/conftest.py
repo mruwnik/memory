@@ -55,7 +55,7 @@ def drop_test_database(test_db_name: str) -> None:
 
     with admin_engine.connect() as conn:
         conn.execute(text("COMMIT"))  # Close any open transaction
-        
+
         # Terminate all connections to the database
         conn.execute(
             text(
@@ -67,10 +67,10 @@ def drop_test_database(test_db_name: str) -> None:
                 """
             )
         )
-        
+
         # Drop the database
         conn.execute(text(f"DROP DATABASE IF EXISTS {test_db_name}"))
-    
+
     admin_engine.dispose()
 
 
@@ -199,8 +199,11 @@ def email_provider():
 
 @pytest.fixture(autouse=True)
 def mock_file_storage(tmp_path: Path):
+    chunk_storage_dir = tmp_path / "chunks"
+    chunk_storage_dir.mkdir(parents=True, exist_ok=True)
     with patch("memory.common.settings.FILE_STORAGE_DIR", tmp_path):
-        yield
+        with patch("memory.common.settings.CHUNK_STORAGE_DIR", chunk_storage_dir):
+            yield
 
 
 @pytest.fixture

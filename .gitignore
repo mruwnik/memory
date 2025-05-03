@@ -1,3 +1,4 @@
+memory_files
 .env
 .DS_Store
 secrets/

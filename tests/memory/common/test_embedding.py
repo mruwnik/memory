@@ -1,18 +1,20 @@
-import uuid
-import pytest
-from unittest.mock import Mock, patch
-from PIL import Image
 import pathlib
+import uuid
+from unittest.mock import Mock, patch
+
+import pytest
+from PIL import Image
+
 from memory.common import settings
 from memory.common.embedding import (
-    get_modality,
-    embed_text,
+    embed,
     embed_file,
     embed_mixed,
     embed_page,
-    embed,
-    write_to_file,
+    embed_text,
+    get_modality,
     make_chunk,
+    write_to_file,
 )
 
 
@@ -116,7 +118,7 @@ def test_write_to_file_text(mock_file_storage):
 
     file_path = write_to_file(chunk_id, content)
 
-    assert file_path == settings.FILE_STORAGE_DIR / f"{chunk_id}.txt"
+    assert file_path == settings.CHUNK_STORAGE_DIR / f"{chunk_id}.txt"
     assert file_path.exists()
     assert file_path.read_text() == content
 
@@ -128,7 +130,7 @@ def test_write_to_file_bytes(mock_file_storage):
 
     file_path = write_to_file(chunk_id, content)
 
-    assert file_path == settings.FILE_STORAGE_DIR / f"{chunk_id}.bin"
+    assert file_path == settings.CHUNK_STORAGE_DIR / f"{chunk_id}.bin"
     assert file_path.exists()
     assert file_path.read_bytes() == content
 
@@ -140,7 +142,7 @@ def test_write_to_file_image(mock_file_storage):
 
     file_path = write_to_file(chunk_id, img)
 
-    assert file_path == settings.FILE_STORAGE_DIR / f"{chunk_id}.png"
+    assert file_path == settings.CHUNK_STORAGE_DIR / f"{chunk_id}.png"
     assert file_path.exists()
     # Verify it's a valid image file by opening it
     image = Image.open(file_path)
@@ -192,8 +194,8 @@ def test_make_chunk_single_image(mock_file_storage, db_session):
 
     assert chunk.id == "00000000-0000-0000-0000-000000000002"
     assert chunk.content is None
-    assert chunk.file_path == (
-        settings.FILE_STORAGE_DIR / "00000000-0000-0000-0000-000000000002.png",
+    assert chunk.file_path == str(
+        settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000002.png",
     )
     assert chunk.embedding_model == settings.MIXED_EMBEDDING_MODEL
     assert chunk.vector == vector
@@ -217,8 +219,8 @@ def test_make_chunk_mixed_content(mock_file_storage, db_session):
 
     assert chunk.id == "00000000-0000-0000-0000-000000000003"
     assert chunk.content is None
-    assert chunk.file_path == (
-        settings.FILE_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_*",
+    assert chunk.file_path == str(
+        settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_*",
     )
     assert chunk.embedding_model == settings.MIXED_EMBEDDING_MODEL
     assert chunk.vector == vector
@@ -226,8 +228,8 @@ def test_make_chunk_mixed_content(mock_file_storage, db_session):
 
     # Verify the files exist
     assert (
-        settings.FILE_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_0.txt"
+        settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_0.txt"
     ).exists()
     assert (
-        settings.FILE_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_1.png"
+        settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_1.png"
     ).exists()

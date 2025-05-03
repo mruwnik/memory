@@ -21,8 +21,11 @@ RUN chmod +x entry.sh
 # Create required tmpfs directories for supervisor
 RUN mkdir -p /var/log/supervisor /var/run/supervisor
 
+# Create storage directory
+RUN mkdir -p /app/memory_files
+
 # Create user and set permissions
-RUN useradd -m kb && chown -R kb /app /var/log/supervisor /var/run/supervisor
+RUN useradd -m kb && chown -R kb /app /var/log/supervisor /var/run/supervisor /app/memory_files
 USER kb
 
 # Default queues to process

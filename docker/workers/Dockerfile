@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
 COPY docker/workers/entry.sh ./entry.sh
 RUN chmod +x entry.sh
 
+RUN mkdir -p /app/memory_files
+
 # Create user and set permissions
 RUN useradd -m kb && chown -R kb /app
 USER kb

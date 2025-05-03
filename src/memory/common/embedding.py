@@ -128,13 +128,13 @@ def embed_page(page: dict[str, Any]) -> list[Vector]:
 
 def write_to_file(chunk_id: str, item: extract.MulitmodalChunk) -> pathlib.Path:
     if isinstance(item, str):
-        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.txt"
+        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.txt"
         filename.write_text(item)
     elif isinstance(item, bytes):
-        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.bin"
+        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.bin"
         filename.write_bytes(item)
     elif isinstance(item, Image.Image):
-        filename = settings.FILE_STORAGE_DIR / f"{chunk_id}.png"
+        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.png"
         item.save(filename)
     else:
         raise ValueError(f"Unsupported content type: {type(item)}")
@@ -156,13 +156,13 @@ def make_chunk(
         content = "\n\n".join(contents)
         model = settings.TEXT_EMBEDDING_MODEL
     elif len(contents) == 1:
-        filename = (write_to_file(chunk_id, contents[0]),)
+        filename = write_to_file(chunk_id, contents[0]).absolute().as_posix()
         model = settings.MIXED_EMBEDDING_MODEL
     else:
         for i, item in enumerate(contents):
             write_to_file(f"{chunk_id}_{i}", item)
         model = settings.MIXED_EMBEDDING_MODEL
-        filename = (settings.FILE_STORAGE_DIR / f"{chunk_id}_*",)
+        filename = (settings.CHUNK_STORAGE_DIR / f"{chunk_id}_*").absolute().as_posix()
 
     return Chunk(
         id=chunk_id,
