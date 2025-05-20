@@ -101,7 +101,7 @@ def group_chunks(chunks: list[tuple[SourceItem, AnnotatedChunk]]) -> list[Search
             and source.filename.replace(
                 str(settings.FILE_STORAGE_DIR).lstrip("/"), "/files"
             ),
-            content=source.content,
+            content=source.display_contents,
             chunks=sorted(chunks, key=lambda x: x.score, reverse=True),
         )
         for source, chunks in items.items()
@@ -143,7 +143,7 @@ def query_chunks(
             )
             if r.score >= min_score
         ]
-        for collection in embedding.DEFAULT_COLLECTIONS
+        for collection in embedding.ALL_COLLECTIONS
     }
 
 
@@ -164,7 +164,7 @@ async def search(
     modalities: Annotated[list[str], Query()] = [],
     files: list[UploadFile] = File([]),
     limit: int = Query(10, ge=1, le=100),
-    min_text_score: float = Query(0.5, ge=0.0, le=1.0),
+    min_text_score: float = Query(0.3, ge=0.0, le=1.0),
     min_multimodal_score: float = Query(0.3, ge=0.0, le=1.0),
 ):
     """
@@ -181,11 +181,11 @@ async def search(
     """
     upload_data = [await input_type(item) for item in [query, *files]]
     logger.error(
-        f"Querying chunks for {modalities}, query: {query}, previews: {previews}"
+        f"Querying chunks for {modalities}, query: {query}, previews: {previews}, upload_data: {upload_data}"
     )
 
     client = qdrant.get_qdrant_client()
-    allowed_modalities = set(modalities or embedding.DEFAULT_COLLECTIONS.keys())
+    allowed_modalities = set(modalities or embedding.ALL_COLLECTIONS.keys())
     text_results = query_chunks(
         client,
         upload_data,

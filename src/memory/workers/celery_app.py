@@ -1,18 +1,15 @@
-import os
 from celery import Celery
 from memory.common import settings
 
 
 def rabbit_url() -> str:
-    user = os.getenv("RABBITMQ_USER", "guest")
-    password = os.getenv("RABBITMQ_PASSWORD", "guest")
-    return f"amqp://{user}:{password}@rabbitmq:5672//"
+    return f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}@{settings.RABBITMQ_HOST}:5672//"
 
 
 app = Celery(
     "memory",
     broker=rabbit_url(),
-    backend=os.getenv("CELERY_RESULT_BACKEND", f"db+{settings.DB_URL}")
+    backend=settings.CELERY_RESULT_BACKEND,
 )
 
 
@@ -27,16 +24,15 @@ app.conf.update(
         "memory.workers.tasks.text.*": {"queue": "medium_embed"},
         "memory.workers.tasks.email.*": {"queue": "email"},
         "memory.workers.tasks.photo.*": {"queue": "photo_embed"},
-        "memory.workers.tasks.ocr.*": {"queue": "low_ocr"},
-        "memory.workers.tasks.git.*": {"queue": "git_summary"},
-        "memory.workers.tasks.rss.*": {"queue": "rss"},
+        "memory.workers.tasks.comic.*": {"queue": "comic"},
         "memory.workers.tasks.docs.*": {"queue": "docs"},
+        "memory.workers.tasks.maintenance.*": {"queue": "maintenance"},
     },
 )
-
 
 
 @app.on_after_configure.connect
 def ensure_qdrant_initialised(sender, **_):
     from memory.common import qdrant
+
     qdrant.setup_qdrant()

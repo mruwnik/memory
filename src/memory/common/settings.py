@@ -29,13 +29,27 @@ def make_db_url(
 
 DB_URL = os.getenv("DATABASE_URL", make_db_url())
 
+# Celery settings
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kb")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "kb")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
+
+
+# File storage settings
 FILE_STORAGE_DIR = pathlib.Path(os.getenv("FILE_STORAGE_DIR", "/tmp/memory_files"))
 FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 CHUNK_STORAGE_DIR = pathlib.Path(
     os.getenv("CHUNK_STORAGE_DIR", FILE_STORAGE_DIR / "chunks")
 )
 CHUNK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+COMIC_STORAGE_DIR = pathlib.Path(
+    os.getenv("COMIC_STORAGE_DIR", FILE_STORAGE_DIR / "comics")
+)
+COMIC_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
 # Maximum attachment size to store directly in the database (10MB)
 MAX_INLINE_ATTACHMENT_SIZE = int(
     os.getenv("MAX_INLINE_ATTACHMENT_SIZE", 1 * 1024 * 1024)
@@ -51,8 +65,12 @@ QDRANT_TIMEOUT = int(os.getenv("QDRANT_TIMEOUT", "60"))
 
 
 # Worker settings
+# Intervals are in seconds
 EMAIL_SYNC_INTERVAL = int(os.getenv("EMAIL_SYNC_INTERVAL", 3600))
+CLEAN_COLLECTION_INTERVAL = int(os.getenv("CLEAN_COLLECTION_INTERVAL", 86400))
+CHUNK_REINGEST_INTERVAL = int(os.getenv("CHUNK_REINGEST_INTERVAL", 3600))
 
+CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 * 24))
 
 # Embedding settings
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")

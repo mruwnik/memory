@@ -1,5 +1,5 @@
 import logging
-from typing import Any, cast
+from typing import Any, cast, Iterator, Sequence
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
@@ -7,7 +7,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from memory.common import settings
 from memory.common.embedding import (
     Collection,
-    DEFAULT_COLLECTIONS,
+    ALL_COLLECTIONS,
     DistanceType,
     Vector,
 )
@@ -91,7 +91,7 @@ def initialize_collections(
                     If None, defaults to the DEFAULT_COLLECTIONS.
     """
     if collections is None:
-        collections = DEFAULT_COLLECTIONS
+        collections = ALL_COLLECTIONS
 
     logger.info(f"Initializing collections:")
     for name, params in collections.items():
@@ -184,13 +184,13 @@ def search_vectors(
     )
 
 
-def delete_vectors(
+def delete_points(
     client: qdrant_client.QdrantClient,
     collection_name: str,
     ids: list[str],
 ) -> None:
     """
-    Delete vectors from a collection.
+    Delete points from a collection.
 
     Args:
         client: Qdrant client
@@ -222,3 +222,30 @@ def get_collection_info(
     """
     info = client.get_collection(collection_name)
     return info.model_dump()
+
+
+def batch_ids(
+    client: qdrant_client.QdrantClient, collection_name: str, batch_size: int = 1000
+) -> Iterator[list[str]]:
+    """Iterate over all IDs in a collection."""
+    offset = None
+    while resp := client.scroll(
+        collection_name=collection_name,
+        with_vectors=False,
+        offset=offset,
+        limit=batch_size,
+    ):
+        points, offset = resp
+        yield [point.id for point in points]
+
+        if not offset:
+            return
+
+
+def find_missing_points(
+    client: qdrant_client.QdrantClient, collection_name: str, ids: Sequence[str]
+) -> set[str]:
+    found = client.retrieve(
+        collection_name, ids=ids, with_payload=False, with_vectors=False
+    )
+    return set(ids) - {str(r.id) for r in found}

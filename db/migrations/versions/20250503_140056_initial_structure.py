@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    op.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+    op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
     op.create_table(
         "email_accounts",
         sa.Column("id", sa.BigInteger(), nullable=False),
@@ -78,12 +78,6 @@ def upgrade() -> None:
         sa.Column("active", sa.Boolean(), server_default="true", nullable=False),
         sa.Column(
             "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
@@ -269,7 +263,7 @@ def upgrade() -> None:
         "misc_doc",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("path", sa.Text(), nullable=True),
-        sa.Column("mime_type", sa.Text(), nullable=True),
+        sa.Column("mime_type", sa.TEXT(), autoincrement=False, nullable=True),
         sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )

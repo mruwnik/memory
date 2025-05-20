@@ -35,7 +35,7 @@ RUN mkdir -p /var/cache/fontconfig /home/kb/.cache/fontconfig && \
 USER kb
 
 # Default queues to process
-ENV QUEUES="medium_embed,photo_embed,low_ocr,git_summary,rss,docs,email"
+ENV QUEUES="docs,email,maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["./entry.sh"] 

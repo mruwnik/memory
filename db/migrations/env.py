@@ -1,6 +1,7 @@
 """
 Alembic environment configuration.
 """
+
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -29,16 +30,28 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 
+# Tables to exclude from auto-generation - these are managed by Celery
+excluded_tables = {
+    "celery_taskmeta",
+    "celery_tasksetmeta",
+}
+
+
+def include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table" and name in excluded_tables:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     """
     Run migrations in 'offline' mode - creates SQL scripts.
-    
+
     This configures the context with just a URL
     and not an Engine, though an Engine is acceptable
     here as well.  By skipping the Engine creation
     we don't even need a DBAPI to be available.
-    
+
     Calls to context.execute() here emit the given string to the
     script output.
     """
@@ -48,6 +61,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -57,7 +71,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """
     Run migrations in 'online' mode - directly to the database.
-    
+
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
@@ -69,7 +83,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():
@@ -79,4 +95,4 @@ def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online() 
+    run_migrations_online()

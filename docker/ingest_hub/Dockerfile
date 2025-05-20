@@ -9,7 +9,7 @@ COPY src/ ./src/
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
-        libpq-dev gcc supervisor && \
+    libpq-dev gcc supervisor && \
     pip install -e ".[workers]" && \
     apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
@@ -28,8 +28,7 @@ RUN mkdir -p /app/memory_files
 RUN useradd -m kb && chown -R kb /app /var/log/supervisor /var/run/supervisor /app/memory_files
 USER kb
 
-# Default queues to process
-ENV QUEUES="medium_embed,photo_embed,low_ocr,git_summary,rss,docs,email"
+ENV QUEUES="docs,email,maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisor.conf"]

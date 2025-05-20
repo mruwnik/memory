@@ -2,3 +2,5 @@ celery==5.3.6
 openai==1.25.0
 pillow==10.3.0
 pypandoc==1.15.0
+beautifulsoup4==4.13.4
+feedparser==6.0.10

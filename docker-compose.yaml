@@ -21,6 +21,7 @@ volumes:
 # ------------------------------ X-templates ----------------------------
 x-common-env: &env
   RABBITMQ_USER: kb
+  RABBITMQ_HOST: rabbitmq
   QDRANT_HOST: qdrant
   DB_HOST: postgres
   FILE_STORAGE_DIR: /app/memory_files
@@ -173,49 +174,28 @@ services:
     environment:
       <<: *worker-env
       QUEUES: "email"
-    deploy: { resources: { limits: { cpus: "2", memory: 3g } } }
+    # deploy: { resources: { limits: { cpus: "2", memory: 3g } } }
 
   worker-text:
     <<: *worker-base
     environment:
       <<: *worker-env
       QUEUES: "medium_embed"
-    deploy: { resources: { limits: { cpus: "2", memory: 3g } } }
+    # deploy: { resources: { limits: { cpus: "2", memory: 3g } } }
 
   worker-photo:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "photo_embed"
-    deploy: { resources: { limits: { cpus: "4", memory: 4g } } }
+      QUEUES: "photo_embed,comic"
+    # deploy: { resources: { limits: { cpus: "4", memory: 4g } } }
 
-  worker-ocr:
+  worker-maintenance:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "low_ocr"
-    deploy: { resources: { limits: { cpus: "4", memory: 4g } } }
-
-  worker-git:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      QUEUES: "git_summary"
-    deploy: { resources: { limits: { cpus: "1", memory: 1g } } }
-
-  worker-rss:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      QUEUES: "rss"
-    deploy: { resources: { limits: { cpus: "0.5", memory: 512m } } }
-
-  worker-docs:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      QUEUES: "docs"
-    deploy: { resources: { limits: { cpus: "1", memory: 1g } } }
+      QUEUES: "maintenance"
+    # deploy: { resources: { limits: { cpus: "0.5", memory: 512m } } }
 
   ingest-hub:
     <<: *worker-base

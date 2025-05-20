@@ -32,7 +32,7 @@ class Collection(TypedDict):
     shards: NotRequired[int]
 
 
-DEFAULT_COLLECTIONS: dict[str, Collection] = {
+ALL_COLLECTIONS: dict[str, Collection] = {
     "mail": {
         "dimension": 1024,
         "distance": "Cosine",
@@ -69,6 +69,11 @@ DEFAULT_COLLECTIONS: dict[str, Collection] = {
         "distance": "Cosine",
         "model": settings.MIXED_EMBEDDING_MODEL,
     },
+    "comic": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.MIXED_EMBEDDING_MODEL,
+    },
     "doc": {
         "dimension": 1024,
         "distance": "Cosine",
@@ -77,12 +82,12 @@ DEFAULT_COLLECTIONS: dict[str, Collection] = {
 }
 TEXT_COLLECTIONS = {
     coll
-    for coll, params in DEFAULT_COLLECTIONS.items()
+    for coll, params in ALL_COLLECTIONS.items()
     if params["model"] == settings.TEXT_EMBEDDING_MODEL
 }
 MULTIMODAL_COLLECTIONS = {
     coll
-    for coll, params in DEFAULT_COLLECTIONS.items()
+    for coll, params in ALL_COLLECTIONS.items()
     if params["model"] == settings.MIXED_EMBEDDING_MODEL
 }
 
@@ -97,6 +102,22 @@ TYPES = {
         "application/x-mobipocket-ebook",
     ],
 }
+
+
+def get_mimetype(image: Image.Image) -> str | None:
+    format_to_mime = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "GIF": "image/gif",
+        "BMP": "image/bmp",
+        "TIFF": "image/tiff",
+        "WEBP": "image/webp",
+    }
+
+    if not image.format:
+        return None
+
+    return format_to_mime.get(image.format.upper(), f"image/{image.format.lower()}")
 
 
 def get_modality(mime_type: str) -> str:
@@ -237,3 +258,20 @@ def embed(
         for vector in embed_page(page)
     ]
     return modality, chunks
+
+
+def embed_image(file_path: pathlib.Path, texts: list[str]) -> Chunk:
+    image = Image.open(file_path)
+    mime_type = get_mimetype(image)
+    if mime_type is None:
+        raise ValueError("Unsupported image format")
+
+    vector = embed_mixed([image] + texts)[0]
+
+    return Chunk(
+        id=str(uuid.uuid4()),
+        file_path=file_path.absolute().as_posix(),
+        content=None,
+        embedding_model=settings.MIXED_EMBEDDING_MODEL,
+        vector=vector,
+    )
