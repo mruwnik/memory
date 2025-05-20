@@ -93,7 +93,7 @@ def initialize_collections(
     if collections is None:
         collections = ALL_COLLECTIONS
 
-    logger.info(f"Initializing collections:")
+    logger.info("Initializing collections:")
     for name, params in collections.items():
         logger.info(f" - {name}")
         ensure_collection_exists(

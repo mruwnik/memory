@@ -1,16 +1,10 @@
-import email
-import email.mime.multipart
-import email.mime.text
-import email.mime.base
 import base64
 import pathlib
 
 from datetime import datetime
-from email.utils import formatdate
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 import pytest
 from memory.common.db.models import (
-    SourceItem,
     MailMessage,
     EmailAttachment,
     EmailAccount,

@@ -5,7 +5,7 @@ import email.mime.base
 
 from datetime import datetime
 from email.utils import formatdate
-from unittest.mock import ANY, patch
+from unittest.mock import ANY
 import pytest
 from memory.common.parsers.email import (
     compute_message_hash,

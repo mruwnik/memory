@@ -8,7 +8,6 @@ from memory.common.extract import (
     as_file,
     extract_text,
     extract_content,
-    Page,
     doc_to_images,
     extract_image,
     docx_to_pdf,
