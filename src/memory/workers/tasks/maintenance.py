@@ -48,7 +48,7 @@ def clean_collection(collection: str) -> dict[str, int]:
 def clean_all_collections():
     logger.info("Cleaning all collections")
     for collection in embedding.ALL_COLLECTIONS:
-        clean_collection.delay(collection)
+        clean_collection.delay(collection)  # type: ignore
 
 
 @app.task(name=REINGEST_CHUNK)
@@ -97,7 +97,7 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
 
         for chunk in chunks:
             if str(chunk.id) in missing:
-                reingest_chunk.delay(str(chunk.id), collection)
+                reingest_chunk.delay(str(chunk.id), collection)  # type: ignore
             else:
                 chunk.checked_at = datetime.now()
 
@@ -132,7 +132,9 @@ def reingest_missing_chunks(batch_size: int = 1000):
                 .filter(Chunk.checked_at < since)
                 .options(
                     contains_eager(Chunk.source).load_only(
-                        SourceItem.id, SourceItem.modality, SourceItem.tags
+                        SourceItem.id,  # type: ignore
+                        SourceItem.modality,  # type: ignore
+                        SourceItem.tags,  # type: ignore
                     )
                 )
                 .order_by(Chunk.id)

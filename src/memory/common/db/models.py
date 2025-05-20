@@ -4,10 +4,9 @@ Database models for the knowledge base system.
 
 import pathlib
 import re
-from email.message import EmailMessage
 from pathlib import Path
 import textwrap
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from PIL import Image
 from sqlalchemy import (
     ARRAY,
@@ -31,7 +30,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, Session
 
 from memory.common import settings
-from memory.common.parsers.email import parse_email_message
+from memory.common.parsers.email import parse_email_message, EmailMessage
 
 Base = declarative_base()
 
@@ -113,10 +112,10 @@ class Chunk(Base):
     @property
     def data(self) -> list[bytes | str | Image.Image]:
         if self.file_path is None:
-            return [self.content]
+            return [cast(str, self.content)]
 
         path = pathlib.Path(self.file_path.replace("/app/", ""))
-        if self.file_path.endswith("*"):
+        if cast(str, self.file_path).endswith("*"):
             files = list(path.parent.glob(path.name))
         else:
             files = [path]
@@ -182,7 +181,7 @@ class SourceItem(Base):
 
     @property
     def display_contents(self) -> str | None:
-        return self.content or self.filename
+        return cast(str | None, self.content) or cast(str | None, self.filename)
 
 
 class MailMessage(SourceItem):
@@ -217,8 +216,8 @@ class MailMessage(SourceItem):
 
     @property
     def attachments_path(self) -> Path:
-        clean_sender = clean_filename(self.sender)
-        clean_folder = clean_filename(self.folder or "INBOX")
+        clean_sender = clean_filename(cast(str, self.sender))
+        clean_folder = clean_filename(cast(str | None, self.folder) or "INBOX")
         return Path(settings.FILE_STORAGE_DIR) / clean_sender / clean_folder
 
     def safe_filename(self, filename: str) -> Path:
@@ -237,12 +236,12 @@ class MailMessage(SourceItem):
             "recipients": self.recipients,
             "folder": self.folder,
             "tags": self.tags + [self.sender] + self.recipients,
-            "date": self.sent_at and self.sent_at.isoformat() or None,
+            "date": (self.sent_at and self.sent_at.isoformat() or None),  # type: ignore
         }
 
     @property
     def parsed_content(self) -> EmailMessage:
-        return parse_email_message(self.content, self.message_id)
+        return parse_email_message(cast(str, self.content), cast(str, self.message_id))
 
     @property
     def body(self) -> str:
@@ -300,7 +299,7 @@ class EmailAttachment(SourceItem):
             "filename": self.filename,
             "content_type": self.mime_type,
             "size": self.size,
-            "created_at": self.created_at and self.created_at.isoformat() or None,
+            "created_at": (self.created_at and self.created_at.isoformat() or None),  # type: ignore
             "mail_message_id": self.mail_message_id,
             "source_id": self.id,
             "tags": self.tags,

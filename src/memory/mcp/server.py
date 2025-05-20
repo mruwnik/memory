@@ -21,7 +21,11 @@ async def make_request(
 ) -> httpx.Response:
     async with httpx.AsyncClient() as client:
         return await client.request(
-            method, f"{SERVER}/{path}", data=data, json=json, files=files
+            method,
+            f"{SERVER}/{path}",
+            data=data,
+            json=json,
+            files=files,  # type: ignore
         )
 
 

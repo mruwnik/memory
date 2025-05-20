@@ -87,7 +87,7 @@ def test_extract_image_with_path(tmp_path):
     img.save(img_path)
 
     (page,) = extract_image(img_path)
-    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()
+    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
     assert page["metadata"] == {}
 
 
@@ -98,7 +98,7 @@ def test_extract_image_with_bytes():
     img_bytes = buffer.getvalue()
 
     (page,) = extract_image(img_bytes)
-    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()
+    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
     assert page["metadata"] == {}
 
 

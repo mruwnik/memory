@@ -1,24 +1,26 @@
 import base64
 import pathlib
-
 from datetime import datetime
+from typing import cast
 from unittest.mock import MagicMock, patch
+
 import pytest
+
+from memory.common import embedding, settings
 from memory.common.db.models import (
-    MailMessage,
-    EmailAttachment,
     EmailAccount,
+    EmailAttachment,
+    MailMessage,
 )
-from memory.common import settings
-from memory.common import embedding
+from memory.common.parsers.email import Attachment
 from memory.workers.email import (
-    extract_email_uid,
     create_mail_message,
+    extract_email_uid,
     fetch_email,
     fetch_email_since,
-    process_folder,
     process_attachment,
     process_attachments,
+    process_folder,
     vectorize_email,
 )
 
@@ -45,7 +47,9 @@ def mock_uuid4():
         (100, 100, "<test@example.com>"),
     ],
 )
-def test_process_attachment_inline(attachment_size, max_inline_size, message_id):
+def test_process_attachment_inline(
+    attachment_size: int, max_inline_size: int, message_id: str
+):
     attachment = {
         "filename": "test.txt",
         "content_type": "text/plain",
@@ -60,10 +64,12 @@ def test_process_attachment_inline(attachment_size, max_inline_size, message_id)
     )
 
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", max_inline_size):
-        result = process_attachment(attachment, message)
+        result = process_attachment(cast(Attachment, attachment), message)
 
     assert result is not None
-    assert result.content == attachment["content"].decode("utf-8", errors="replace")
+    assert cast(str, result.content) == attachment["content"].decode(
+        "utf-8", errors="replace"
+    )
     assert result.filename is None
 
 
@@ -90,11 +96,11 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
         folder="INBOX",
     )
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", max_inline_size):
-        result = process_attachment(attachment, message)
+        result = process_attachment(cast(Attachment, attachment), message)
 
     assert result is not None
-    assert not result.content
-    assert result.filename == str(
+    assert not cast(str, result.content)
+    assert cast(str, result.filename) == str(
         settings.FILE_STORAGE_DIR
         / "sender_example_com"
         / "INBOX"
@@ -125,11 +131,11 @@ def test_process_attachment_write_error():
         patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", 10),
         patch.object(pathlib.Path, "write_bytes", mock_write_bytes),
     ):
-        assert process_attachment(attachment, message) is None
+        assert process_attachment(cast(Attachment, attachment), message) is None
 
 
 def test_process_attachments_empty():
-    assert process_attachments([], "<test@example.com>") == []
+    assert process_attachments([], MagicMock()) == []
 
 
 def test_process_attachments_mixed():
@@ -167,16 +173,16 @@ def test_process_attachments_mixed():
 
     with patch.object(settings, "MAX_INLINE_ATTACHMENT_SIZE", 50):
         # Process attachments
-        results = process_attachments(attachments, message)
+        results = process_attachments(cast(list[Attachment], attachments), message)
 
     # Verify we have all attachments processed
     assert len(results) == 3
 
-    assert results[0].content == "a" * 20
-    assert results[2].content == "c" * 30
+    assert cast(str, results[0].content) == "a" * 20
+    assert cast(str, results[2].content) == "c" * 30
 
     # Verify large attachment has a path
-    assert results[1].filename == str(
+    assert cast(str, results[1].filename) == str(
         settings.FILE_STORAGE_DIR / "sender_example_com" / "INBOX" / "large.txt"
     )
 
@@ -239,12 +245,12 @@ def test_create_mail_message(db_session):
 
     # Verify the mail message was created correctly
     assert isinstance(mail_message, MailMessage)
-    assert mail_message.message_id == "321"
-    assert mail_message.subject == "Test Subject"
-    assert mail_message.sender == "sender@example.com"
-    assert mail_message.recipients == ["recipient@example.com"]
+    assert cast(str, mail_message.message_id) == "321"
+    assert cast(str, mail_message.subject) == "Test Subject"
+    assert cast(str, mail_message.sender) == "sender@example.com"
+    assert cast(list[str], mail_message.recipients) == ["recipient@example.com"]
     assert mail_message.sent_at.isoformat()[:-6] == "2023-01-01T12:00:00"
-    assert mail_message.content == raw_email
+    assert cast(str, mail_message.content) == raw_email
     assert mail_message.body == "Test body content\n"
     assert mail_message.attachments == attachments
 
@@ -275,7 +281,7 @@ def test_fetch_email_since(email_provider):
     assert len(result) == 2
 
     # Verify content of fetched emails
-    uids = sorted([uid for uid, _ in result])
+    uids = sorted([uid or "" for uid, _ in result])
     assert uids == ["101", "102"]
 
     # Test with a folder that doesn't exist
@@ -342,7 +348,7 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
     db_session.add(mail_message)
     db_session.flush()
 
-    assert mail_message.embed_status == "RAW"
+    assert cast(str, mail_message.embed_status) == "RAW"
 
     with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
         vectorize_email(mail_message)
@@ -351,7 +357,7 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
         ]
 
     db_session.commit()
-    assert mail_message.embed_status == "STORED"
+    assert cast(str, mail_message.embed_status) == "STORED"
 
 
 def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
@@ -418,6 +424,6 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         ]
 
     db_session.commit()
-    assert mail_message.embed_status == "STORED"
-    assert attachment1.embed_status == "STORED"
-    assert attachment2.embed_status == "STORED"
+    assert cast(str, mail_message.embed_status) == "STORED"
+    assert cast(str, attachment1.embed_status) == "STORED"
+    assert cast(str, attachment2.embed_status) == "STORED"

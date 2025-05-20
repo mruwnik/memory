@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-
+from typing import cast
 from memory.common.db.connection import make_session
 from memory.common.db.models import EmailAccount
 from memory.workers.celery_app import app
@@ -71,7 +71,7 @@ def process_message(
             for chunk in attachment.chunks:
                 logger.info(f"   - {chunk.id}")
 
-        return mail_message.id
+        return cast(int, mail_message.id)
 
 
 @app.task(name=SYNC_ACCOUNT)
@@ -89,15 +89,17 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
 
     with make_session() as db:
         account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
-        if not account or not account.active:
+        if not account or not cast(bool, account.active):
             logger.warning(f"Account {account_id} not found or inactive")
             return {"error": "Account not found or inactive"}
 
-        folders_to_process: list[str] = account.folders or ["INBOX"]
+        folders_to_process: list[str] = cast(list[str], account.folders) or ["INBOX"]
         if since_date:
             cutoff_date = datetime.fromisoformat(since_date)
         else:
-            cutoff_date: datetime = account.last_sync_at or datetime(1970, 1, 1)
+            cutoff_date: datetime = cast(datetime, account.last_sync_at) or datetime(
+                1970, 1, 1
+            )
 
         messages_found = 0
         new_messages = 0
@@ -106,9 +108,9 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
         def process_message_wrapper(
             account_id: int, message_id: str, folder: str, raw_email: str
         ) -> int | None:
-            if check_message_exists(db, account_id, message_id, raw_email):
+            if check_message_exists(db, account_id, message_id, raw_email):  # type: ignore
                 return None
-            return process_message.delay(account_id, message_id, folder, raw_email)
+            return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
 
         try:
             with imap_connection(account) as conn:
@@ -121,7 +123,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                     new_messages += folder_stats["new_messages"]
                     errors += folder_stats["errors"]
 
-                account.last_sync_at = datetime.now()
+                account.last_sync_at = datetime.now()  # type: ignore
                 db.commit()
         except Exception as e:
             logger.error(f"Error connecting to server {account.imap_server}: {str(e)}")
@@ -152,7 +154,7 @@ def sync_all_accounts() -> list[dict]:
             {
                 "account_id": account.id,
                 "email": account.email_address,
-                "task_id": sync_account.delay(account.id).id,
+                "task_id": sync_account.delay(account.id).id,  # type: ignore
             }
             for account in active_accounts
         ]

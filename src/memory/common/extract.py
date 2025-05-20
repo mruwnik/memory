@@ -1,13 +1,13 @@
-from contextlib import contextmanager
 import io
+import logging
 import pathlib
 import tempfile
-import pypandoc
-import pymupdf  # PyMuPDF
-from PIL import Image
-from typing import Any, TypedDict, Generator, Sequence
+from contextlib import contextmanager
+from typing import Any, Generator, Sequence, TypedDict, cast
 
-import logging
+import pymupdf  # PyMuPDF
+import pypandoc
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def extract_text(content: bytes | str | pathlib.Path) -> list[Page]:
     if isinstance(content, bytes):
         content = content.decode("utf-8")
 
-    return [{"contents": [content], "metadata": {}}]
+    return [{"contents": [cast(str, content)], "metadata": {}}]
 
 
 def extract_content(mime_type: str, content: bytes | str | pathlib.Path) -> list[Page]:

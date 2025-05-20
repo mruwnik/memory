@@ -252,7 +252,7 @@ def test_parse_simple_email():
         "hash": b"\xed\xa0\x9b\xd4\t4\x06\xb9l\xa4\xb3*\xe4NpZ\x19\xc2\x9b\x87"
         + b"\xa6\x12\r\x7fS\xb6\xf1\xbe\x95\x9c\x99\xf1",
     }
-    assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400
+    assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400  # type: ignore
 
 
 def test_parse_email_with_attachments():

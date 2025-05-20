@@ -4,19 +4,19 @@ from setuptools import setup, find_namespace_packages
 
 def read_requirements(filename: str) -> list[str]:
     """Read requirements from file, ignoring comments and -r directives."""
-    filename = pathlib.Path(filename)
+    path = pathlib.Path(filename)
     return [
         line.strip()
-        for line in filename.read_text().splitlines()
-        if line.strip() and not line.strip().startswith(('#', '-r'))
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.strip().startswith(("#", "-r"))
     ]
 
 
 # Read requirements files
-common_requires = read_requirements('requirements-common.txt')
-api_requires = read_requirements('requirements-api.txt')
-workers_requires = read_requirements('requirements-workers.txt')
-dev_requires = read_requirements('requirements-dev.txt')
+common_requires = read_requirements("requirements-common.txt")
+api_requires = read_requirements("requirements-api.txt")
+workers_requires = read_requirements("requirements-workers.txt")
+dev_requires = read_requirements("requirements-dev.txt")
 
 setup(
     name="memory",
@@ -31,4 +31,4 @@ setup(
         "dev": dev_requires,
         "all": api_requires + workers_requires + common_requires + dev_requires,
     },
-) 
+)

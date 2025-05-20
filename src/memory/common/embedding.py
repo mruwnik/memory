@@ -1,7 +1,7 @@
 import logging
 import pathlib
 import uuid
-from typing import Any, Iterable, Literal, NotRequired, TypedDict
+from typing import Any, Iterable, Literal, NotRequired, TypedDict, cast
 
 import voyageai
 from PIL import Image
@@ -21,7 +21,6 @@ CHARS_PER_TOKEN = 4
 
 DistanceType = Literal["Cosine", "Dot", "Euclidean"]
 Vector = list[float]
-Embedding = tuple[str, Vector, dict[str, Any]]
 
 
 class Collection(TypedDict):
@@ -133,16 +132,18 @@ def get_modality(mime_type: str) -> str:
 
 
 def embed_chunks(
-    chunks: list[extract.MulitmodalChunk],
+    chunks: list[str] | list[list[extract.MulitmodalChunk]],
     model: str = settings.TEXT_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
-    vo = voyageai.Client()
+    vo = voyageai.Client()  # type: ignore
     if model == settings.MIXED_EMBEDDING_MODEL:
         return vo.multimodal_embed(
-            chunks, model=model, input_type=input_type
+            chunks,  # type: ignore
+            model=model,
+            input_type=input_type,
         ).embeddings
-    return vo.embed(chunks, model=model, input_type=input_type).embeddings
+    return vo.embed(chunks, model=model, input_type=input_type).embeddings  # type: ignore
 
 
 def embed_text(
@@ -162,7 +163,7 @@ def embed_text(
 
     try:
         return embed_chunks(chunks, model, input_type)
-    except voyageai.error.InvalidRequestError as e:
+    except voyageai.error.InvalidRequestError as e:  # type: ignore
         logger.error(f"Error embedding text: {e}")
         logger.debug(f"Text: {texts}")
         raise
@@ -179,7 +180,7 @@ def embed_mixed(
     model: str = settings.MIXED_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
-    def to_chunks(item: extract.MulitmodalChunk) -> Iterable[str]:
+    def to_chunks(item: extract.MulitmodalChunk) -> Iterable[extract.MulitmodalChunk]:
         if isinstance(item, str):
             return [
                 c for c in chunk_text(item, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()
@@ -190,11 +191,16 @@ def embed_mixed(
     return embed_chunks([chunks], model, input_type)
 
 
-def embed_page(page: dict[str, Any]) -> list[Vector]:
+def embed_page(page: extract.Page) -> list[Vector]:
     contents = page["contents"]
     if all(isinstance(c, str) for c in contents):
-        return embed_text(contents, model=settings.TEXT_EMBEDDING_MODEL)
-    return embed_mixed(contents, model=settings.MIXED_EMBEDDING_MODEL)
+        return embed_text(
+            cast(list[str], contents), model=settings.TEXT_EMBEDDING_MODEL
+        )
+    return embed_mixed(
+        cast(list[extract.MulitmodalChunk], contents),
+        model=settings.MIXED_EMBEDDING_MODEL,
+    )
 
 
 def write_to_file(chunk_id: str, item: extract.MulitmodalChunk) -> pathlib.Path:
@@ -224,7 +230,7 @@ def make_chunk(
     contents = page["contents"]
     content, filename = None, None
     if all(isinstance(c, str) for c in contents):
-        content = "\n\n".join(contents)
+        content = "\n\n".join(cast(list[str], contents))
         model = settings.TEXT_EMBEDDING_MODEL
     elif len(contents) == 1:
         filename = write_to_file(chunk_id, contents[0]).absolute().as_posix()
@@ -249,7 +255,7 @@ def embed(
     mime_type: str,
     content: bytes | str | pathlib.Path,
     metadata: dict[str, Any] = {},
-) -> tuple[str, list[Embedding]]:
+) -> tuple[str, list[Chunk]]:
     modality = get_modality(mime_type)
     pages = extract.extract_content(mime_type, content)
     chunks = [

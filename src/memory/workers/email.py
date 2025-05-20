@@ -1,24 +1,26 @@
 import hashlib
 import imaplib
 import logging
+import pathlib
 import re
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Generator, Callable
-import pathlib
-from sqlalchemy.orm import Session
-from collections import defaultdict
-from memory.common import settings, embedding, qdrant
+from typing import Callable, Generator, Sequence, cast
+
+from sqlalchemy.orm import Session, scoped_session
+
+from memory.common import embedding, qdrant, settings
 from memory.common.db.models import (
     EmailAccount,
+    EmailAttachment,
     MailMessage,
     SourceItem,
-    EmailAttachment,
 )
 from memory.common.parsers.email import (
     Attachment,
-    parse_email_message,
     RawEmailResponse,
+    parse_email_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,7 +91,7 @@ def process_attachments(
 
 
 def create_mail_message(
-    db_session: Session,
+    db_session: Session | scoped_session,
     tags: list[str],
     folder: str,
     raw_email: str,
@@ -136,7 +138,7 @@ def create_mail_message(
 
 
 def does_message_exist(
-    db_session: Session, message_id: str, message_hash: bytes
+    db_session: Session | scoped_session, message_id: str, message_hash: bytes
 ) -> bool:
     """
     Check if a message already exists in the database.
@@ -167,7 +169,7 @@ def does_message_exist(
 
 
 def check_message_exists(
-    db: Session, account_id: int, message_id: str, raw_email: str
+    db: Session | scoped_session, account_id: int, message_id: str, raw_email: str
 ) -> bool:
     account = db.query(EmailAccount).get(account_id)
     if not account:
@@ -181,7 +183,9 @@ def check_message_exists(
     return does_message_exist(db, parsed_email["message_id"], parsed_email["hash"])
 
 
-def extract_email_uid(msg_data: bytes) -> tuple[str, str]:
+def extract_email_uid(
+    msg_data: Sequence[tuple[bytes, bytes]],
+) -> tuple[str | None, bytes]:
     """
     Extract the UID and raw email data from the message data.
     """
@@ -199,7 +203,7 @@ def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> RawEmailResponse | None:
             logger.error(f"Error fetching message {uid}")
             return None
 
-        return extract_email_uid(msg_data)
+        return extract_email_uid(msg_data)  # type: ignore
     except Exception as e:
         logger.error(f"Error processing message {uid}: {str(e)}")
         return None
@@ -248,7 +252,7 @@ def process_folder(
     folder: str,
     account: EmailAccount,
     since_date: datetime,
-    processor: Callable[[int, str, str, bytes], int | None],
+    processor: Callable[[int, str, str, str], int | None],
 ) -> dict:
     """
     Process a single folder from an email account.
@@ -272,7 +276,7 @@ def process_folder(
         for uid, raw_email in emails:
             try:
                 task = processor(
-                    account_id=account.id,
+                    account_id=account.id,  # type: ignore
                     message_id=uid,
                     folder=folder,
                     raw_email=raw_email.decode("utf-8", errors="replace"),
@@ -296,9 +300,11 @@ def process_folder(
 
 @contextmanager
 def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None, None]:
-    conn = imaplib.IMAP4_SSL(host=account.imap_server, port=account.imap_port)
+    conn = imaplib.IMAP4_SSL(
+        host=cast(str, account.imap_server), port=cast(int, account.imap_port)
+    )
     try:
-        conn.login(account.username, account.password)
+        conn.login(cast(str, account.username), cast(str, account.password))
         yield conn
     finally:
         # Always try to logout and close the connection
@@ -318,15 +324,15 @@ def vectorize_email(email: MailMessage):
     )
     email.chunks = chunks
     if chunks:
-        vector_ids = [c.id for c in chunks]
+        vector_ids = [cast(str, c.id) for c in chunks]
         vectors = [c.vector for c in chunks]
         metadata = [c.item_metadata for c in chunks]
         qdrant.upsert_vectors(
             client=qdrant_client,
             collection_name="mail",
             ids=vector_ids,
-            vectors=vectors,
-            payloads=metadata,
+            vectors=vectors,  # type: ignore
+            payloads=metadata,  # type: ignore
         )
 
     embeds = defaultdict(list)
@@ -356,7 +362,7 @@ def vectorize_email(email: MailMessage):
             payloads=metadata,
         )
 
-    email.embed_status = "STORED"
+    email.embed_status = "STORED"  # type: ignore
     for attachment in email.attachments:
         attachment.embed_status = "STORED"
 

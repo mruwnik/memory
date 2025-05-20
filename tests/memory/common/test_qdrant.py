@@ -33,7 +33,10 @@ def test_ensure_collection_exists_existing(mock_qdrant_client):
 
 def test_ensure_collection_exists_new(mock_qdrant_client):
     mock_qdrant_client.get_collection.side_effect = UnexpectedResponse(
-        status_code=404, reason_phrase="asd", content=b"asd", headers=None
+        status_code=404,
+        reason_phrase="asd",
+        content=b"asd",
+        headers=None,  # type: ignore
     )
 
     assert ensure_collection_exists(mock_qdrant_client, "test_collection", 128)

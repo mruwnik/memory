@@ -1,5 +1,5 @@
 import logging
-from typing import TypedDict, NotRequired
+from typing import TypedDict, NotRequired, cast
 
 from bs4 import BeautifulSoup, Tag
 import requests
@@ -59,7 +59,7 @@ def extract_smbc(url: str) -> ComicInfo:
         "title": title,
         "image_url": image_url,
         "published_date": published_date,
-        "url": comic_url or url,
+        "url": cast(str, comic_url or url),
     }
 
 

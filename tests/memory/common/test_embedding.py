@@ -1,7 +1,7 @@
 import pathlib
 import uuid
 from unittest.mock import Mock, patch
-
+from typing import cast
 import pytest
 from PIL import Image
 
@@ -72,12 +72,12 @@ def test_embed_mixed(mock_embed):
 
 def test_embed_page_text_only(mock_embed):
     page = {"contents": ["text1", "text2"]}
-    assert embed_page(page) == [[0], [1]]
+    assert embed_page(page) == [[0], [1]]  # type: ignore
 
 
 def test_embed_page_mixed_content(mock_embed):
     page = {"contents": ["text", {"type": "image", "data": "base64"}]}
-    assert embed_page(page) == [[0]]
+    assert embed_page(page) == [[0]]  # type: ignore
 
 
 def test_embed(mock_embed):
@@ -91,12 +91,12 @@ def test_embed(mock_embed):
     assert modality == "text"
     assert [
         {
-            "id": c.id,
-            "file_path": c.file_path,
-            "content": c.content,
-            "embedding_model": c.embedding_model,
-            "vector": c.vector,
-            "item_metadata": c.item_metadata,
+            "id": c.id,  # type: ignore
+            "file_path": c.file_path,  # type: ignore
+            "content": c.content,  # type: ignore
+            "embedding_model": c.embedding_model,  # type: ignore
+            "vector": c.vector,  # type: ignore
+            "item_metadata": c.item_metadata,  # type: ignore
         }
         for c in chunks
     ] == [
@@ -128,7 +128,7 @@ def test_write_to_file_bytes(mock_file_storage):
     chunk_id = "test-chunk-id"
     content = b"These are test bytes"
 
-    file_path = write_to_file(chunk_id, content)
+    file_path = write_to_file(chunk_id, content)  # type: ignore
 
     assert file_path == settings.CHUNK_STORAGE_DIR / f"{chunk_id}.bin"
     assert file_path.exists()
@@ -140,7 +140,7 @@ def test_write_to_file_image(mock_file_storage):
     img = Image.new("RGB", (100, 100), color=(73, 109, 137))
     chunk_id = "test-chunk-id"
 
-    file_path = write_to_file(chunk_id, img)
+    file_path = write_to_file(chunk_id, img)  # type: ignore
 
     assert file_path == settings.CHUNK_STORAGE_DIR / f"{chunk_id}.png"
     assert file_path.exists()
@@ -155,7 +155,7 @@ def test_write_to_file_unsupported_type(mock_file_storage):
     content = 123  # Integer is not a supported type
 
     with pytest.raises(ValueError, match="Unsupported content type"):
-        write_to_file(chunk_id, content)
+        write_to_file(chunk_id, content)  # type: ignore
 
 
 def test_make_chunk_text_only(mock_file_storage, db_session):
@@ -170,12 +170,12 @@ def test_make_chunk_text_only(mock_file_storage, db_session):
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000001")
     ):
-        chunk = make_chunk(page, vector, metadata)
+        chunk = make_chunk(page, vector, metadata)  # type: ignore
 
-    assert chunk.id == "00000000-0000-0000-0000-000000000001"
-    assert chunk.content == "text content 1\n\ntext content 2"
+    assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000001"
+    assert cast(str, chunk.content) == "text content 1\n\ntext content 2"
     assert chunk.file_path is None
-    assert chunk.embedding_model == settings.TEXT_EMBEDDING_MODEL
+    assert cast(str, chunk.embedding_model) == settings.TEXT_EMBEDDING_MODEL
     assert chunk.vector == vector
     assert chunk.item_metadata == metadata
 
@@ -190,19 +190,19 @@ def test_make_chunk_single_image(mock_file_storage, db_session):
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000002")
     ):
-        chunk = make_chunk(page, vector, metadata)
+        chunk = make_chunk(page, vector, metadata)  # type: ignore
 
-    assert chunk.id == "00000000-0000-0000-0000-000000000002"
+    assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000002"
     assert chunk.content is None
-    assert chunk.file_path == str(
+    assert cast(str, chunk.file_path) == str(
         settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000002.png",
     )
-    assert chunk.embedding_model == settings.MIXED_EMBEDDING_MODEL
+    assert cast(str, chunk.embedding_model) == settings.MIXED_EMBEDDING_MODEL
     assert chunk.vector == vector
     assert chunk.item_metadata == metadata
 
     # Verify the file exists
-    assert pathlib.Path(chunk.file_path[0]).exists()
+    assert pathlib.Path(cast(str, chunk.file_path)).exists()
 
 
 def test_make_chunk_mixed_content(mock_file_storage, db_session):
@@ -215,14 +215,14 @@ def test_make_chunk_mixed_content(mock_file_storage, db_session):
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000003")
     ):
-        chunk = make_chunk(page, vector, metadata)
+        chunk = make_chunk(page, vector, metadata)  # type: ignore
 
-    assert chunk.id == "00000000-0000-0000-0000-000000000003"
+    assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000003"
     assert chunk.content is None
-    assert chunk.file_path == str(
+    assert cast(str, chunk.file_path) == str(
         settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_*",
     )
-    assert chunk.embedding_model == settings.MIXED_EMBEDDING_MODEL
+    assert cast(str, chunk.embedding_model) == settings.MIXED_EMBEDDING_MODEL
     assert chunk.vector == vector
     assert chunk.item_metadata == metadata
 

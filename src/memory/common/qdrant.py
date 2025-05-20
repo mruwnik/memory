@@ -1,5 +1,5 @@
 import logging
-from typing import Any, cast, Iterator, Sequence
+from typing import Any, cast, Generator, Sequence
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
@@ -24,7 +24,7 @@ def get_qdrant_client() -> qdrant_client.QdrantClient:
     return qdrant_client.QdrantClient(
         host=settings.QDRANT_HOST,
         port=settings.QDRANT_PORT,
-        grpc_port=settings.QDRANT_GRPC_PORT if settings.QDRANT_PREFER_GRPC else None,
+        grpc_port=settings.QDRANT_GRPC_PORT or 6334,
         prefer_grpc=settings.QDRANT_PREFER_GRPC,
         api_key=settings.QDRANT_API_KEY,
         timeout=settings.QDRANT_TIMEOUT,
@@ -80,7 +80,8 @@ def ensure_collection_exists(
 
 
 def initialize_collections(
-    client: qdrant_client.QdrantClient, collections: dict[str, Collection] = None
+    client: qdrant_client.QdrantClient,
+    collections: dict[str, Collection] | None = None,
 ) -> None:
     """
     Initialize all required collections in Qdrant.
@@ -122,7 +123,7 @@ def upsert_vectors(
     collection_name: str,
     ids: list[str],
     vectors: list[Vector],
-    payloads: list[dict[str, Any]] = None,
+    payloads: list[dict[str, Any]] | None = None,
 ) -> None:
     """Upsert vectors into a collection.
 
@@ -147,7 +148,7 @@ def upsert_vectors(
 
     client.upsert(
         collection_name=collection_name,
-        points=points,
+        points=points,  # type: ignore
     )
 
     logger.debug(f"Upserted {len(ids)} vectors into {collection_name}")
@@ -157,7 +158,7 @@ def search_vectors(
     client: qdrant_client.QdrantClient,
     collection_name: str,
     query_vector: Vector,
-    filter_params: dict = None,
+    filter_params: dict | None = None,
     limit: int = 10,
 ) -> list[qdrant_models.ScoredPoint]:
     """Search for similar vectors in a collection.
@@ -200,7 +201,7 @@ def delete_points(
     client.delete(
         collection_name=collection_name,
         points_selector=qdrant_models.PointIdsList(
-            points=ids,
+            points=ids,  # type: ignore
         ),
     )
 
@@ -226,7 +227,7 @@ def get_collection_info(
 
 def batch_ids(
     client: qdrant_client.QdrantClient, collection_name: str, batch_size: int = 1000
-) -> Iterator[list[str]]:
+) -> Generator[list[str], None, None]:
     """Iterate over all IDs in a collection."""
     offset = None
     while resp := client.scroll(
@@ -236,7 +237,7 @@ def batch_ids(
         limit=batch_size,
     ):
         points, offset = resp
-        yield [point.id for point in points]
+        yield [cast(str, point.id) for point in points]
 
         if not offset:
             return

@@ -31,7 +31,7 @@ app.conf.update(
 )
 
 
-@app.on_after_configure.connect
+@app.on_after_configure.connect  # type: ignore
 def ensure_qdrant_initialised(sender, **_):
     from memory.common import qdrant
 

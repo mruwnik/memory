@@ -1,7 +1,7 @@
 import hashlib
 import logging
 from datetime import datetime
-from typing import Callable
+from typing import Callable, cast
 
 import feedparser
 import requests
@@ -35,7 +35,7 @@ def find_new_urls(base_url: str, rss_url: str) -> set[str]:
         logger.error(f"Failed to fetch or parse {rss_url}: {e}")
         return set()
 
-    urls = {item.get("link") or item.get("id") for item in feed.entries}
+    urls = {cast(str, item.get("link") or item.get("id")) for item in feed.entries}
 
     with make_session() as session:
         known = {
@@ -46,7 +46,7 @@ def find_new_urls(base_url: str, rss_url: str) -> set[str]:
             )
         }
 
-    return urls - known
+    return cast(set[str], urls - known)
 
 
 def fetch_new_comics(
@@ -56,7 +56,7 @@ def fetch_new_comics(
 
     for url in new_urls:
         data = parser(url) | {"author": base_url, "url": url}
-        sync_comic.delay(**data)
+        sync_comic.delay(**data)  # type: ignore
     return new_urls
 
 
@@ -108,7 +108,7 @@ def sync_comic(
             client=qdrant.get_qdrant_client(),
             collection_name="comic",
             ids=[str(chunk.id)],
-            vectors=[chunk.vector],
+            vectors=[chunk.vector],  # type: ignore
             payloads=[comic.as_payload()],
         )
 
@@ -130,8 +130,8 @@ def sync_xkcd() -> set[str]:
 @app.task(name=SYNC_ALL_COMICS)
 def sync_all_comics():
     """Synchronize all active comics."""
-    sync_smbc.delay()
-    sync_xkcd.delay()
+    sync_smbc.delay()  # type: ignore
+    sync_xkcd.delay()  # type: ignore
 
 
 @app.task(name="memory.workers.tasks.comic.full_sync_comic")
@@ -141,8 +141,8 @@ def trigger_comic_sync():
 
         response = requests.get(url)
         soup = BeautifulSoup(response.text, "html.parser")
-        if link := soup.find("a", attrs={"class", "cc-prev"}):
-            return link.attrs["href"]
+        if link := soup.find("a", attrs={"class": "cc-prev"}):
+            return link.attrs["href"]  # type: ignore
         return None
 
     next_url = "https://www.smbc-comics.com"
@@ -155,7 +155,7 @@ def trigger_comic_sync():
             data = comics.extract_smbc(next_url) | {
                 "author": "https://www.smbc-comics.com/"
             }
-            sync_comic.delay(**data)
+            sync_comic.delay(**data)  # type: ignore
         except Exception as e:
             logger.error(f"failed to sync {next_url}: {e}")
         urls.append(next_url)
@@ -167,6 +167,6 @@ def trigger_comic_sync():
         url = f"{BASE_XKCD_URL}/{i}"
         try:
             data = comics.extract_xkcd(url) | {"author": "https://xkcd.com/"}
-            sync_comic.delay(**data)
+            sync_comic.delay(**data)  # type: ignore
         except Exception as e:
             logger.error(f"failed to sync {url}: {e}")

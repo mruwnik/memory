@@ -28,10 +28,10 @@ class EmailMessage(TypedDict):
     hash: bytes
 
 
-RawEmailResponse = tuple[Literal["OK", "ERROR"], bytes]
+RawEmailResponse = tuple[str | None, bytes]
 
 
-def extract_recipients(msg: email.message.Message) -> list[str]:
+def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     """
     Extract email recipients from message headers.
 
@@ -50,7 +50,7 @@ def extract_recipients(msg: email.message.Message) -> list[str]:
     ]
 
 
-def extract_date(msg: email.message.Message) -> datetime | None:
+def extract_date(msg: email.message.Message) -> datetime | None:  # type: ignore
     """
     Parse date from email header.
 
@@ -68,7 +68,7 @@ def extract_date(msg: email.message.Message) -> datetime | None:
     return None
 
 
-def extract_body(msg: email.message.Message) -> str:
+def extract_body(msg: email.message.Message) -> str:  # type: ignore
     """
     Extract plain text body from email message.
 
@@ -99,7 +99,7 @@ def extract_body(msg: email.message.Message) -> str:
     return body
 
 
-def extract_attachments(msg: email.message.Message) -> list[Attachment]:
+def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type: ignore
     """
     Extract attachment metadata and content from email.
 
