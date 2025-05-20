@@ -5,7 +5,7 @@ import email.mime.base
 
 from datetime import datetime
 from email.utils import formatdate
-from unittest.mock import ANY, patch
+from unittest.mock import ANY
 import pytest
 from memory.common.parsers.email import (
     compute_message_hash,
@@ -17,9 +17,10 @@ from memory.common.parsers.email import (
 )
 
 
-
 # Use a simple counter to generate unique message IDs without calling make_msgid
 _msg_id_counter = 0
+
+
 def _generate_test_message_id():
     """Generate a simple message ID for testing without expensive calls"""
     global _msg_id_counter
@@ -248,8 +249,8 @@ def test_parse_simple_email():
         "body": "Test body content\n",
         "attachments": [],
         "sent_at": ANY,
-        "hash": b'\xed\xa0\x9b\xd4\t4\x06\xb9l\xa4\xb3*\xe4NpZ\x19\xc2\x9b\x87'
-              + b'\xa6\x12\r\x7fS\xb6\xf1\xbe\x95\x9c\x99\xf1',
+        "hash": b"\xed\xa0\x9b\xd4\t4\x06\xb9l\xa4\xb3*\xe4NpZ\x19\xc2\x9b\x87"
+        + b"\xa6\x12\r\x7fS\xb6\xf1\xbe\x95\x9c\x99\xf1",
     }
     assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400
 
