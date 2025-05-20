@@ -3,7 +3,7 @@ import hashlib
 import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import TypedDict, Literal
+from typing import TypedDict
 import pathlib
 
 logger = logging.getLogger(__name__)
