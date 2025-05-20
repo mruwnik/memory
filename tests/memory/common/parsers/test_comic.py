@@ -1,8 +1,6 @@
-import textwrap
 from memory.common.parsers.comics import extract_smbc, extract_xkcd
 import pytest
-from unittest.mock import patch, Mock
-import requests
+from unittest.mock import patch
 
 
 MOCK_SMBC_HTML = """
