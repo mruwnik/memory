@@ -9,6 +9,7 @@ import pytest
 import qdrant_client
 import voyageai
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
 
@@ -98,7 +99,10 @@ def test_db():
     test_db_name = get_test_db_name()
 
     # Create test database
-    test_db_url = create_test_database(test_db_name)
+    try:
+        test_db_url = create_test_database(test_db_name)
+    except OperationalError as e:
+        pytest.skip(f"Failed to create test database: {e}")
 
     try:
         run_alembic_migrations(test_db_name)
