@@ -13,6 +13,9 @@ echo -e "${GREEN}Starting development environment for Memory Knowledge Base...${
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+docker volume create memory_file_storage
+docker run --rm -v memory_file_storage:/data busybox chown -R 1000:1000 /data
+
 # Create a temporary docker-compose override file to expose PostgreSQL
 echo -e "${YELLOW}Creating docker-compose override to expose PostgreSQL...${NC}"
 if [ ! -f docker-compose.override.yml ]; then

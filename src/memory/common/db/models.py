@@ -407,20 +407,99 @@ class Comic(SourceItem):
         return {k: v for k, v in payload.items() if v is not None}
 
 
-class BookDoc(SourceItem):
-    __tablename__ = "book_doc"
+class Book(Base):
+    """Book-level metadata table"""
+
+    __tablename__ = "book"
+
+    id = Column(BigInteger, primary_key=True)
+    isbn = Column(Text, unique=True)
+    title = Column(Text, nullable=False)
+    author = Column(Text)
+    publisher = Column(Text)
+    published = Column(DateTime(timezone=True))
+    language = Column(Text)
+    edition = Column(Text)
+    series = Column(Text)
+    series_number = Column(Integer)
+    total_pages = Column(Integer)
+    file_path = Column(Text)
+    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+
+    # Metadata from ebook parser
+    book_metadata = Column(JSONB, name="metadata")
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("book_isbn_idx", "isbn"),
+        Index("book_author_idx", "author"),
+        Index("book_title_idx", "title"),
+    )
+
+    def as_payload(self) -> dict:
+        return {
+            "source_id": self.id,
+            "isbn": self.isbn,
+            "title": self.title,
+            "author": self.author,
+            "publisher": self.publisher,
+            "published": self.published,
+            "language": self.language,
+            "edition": self.edition,
+            "series": self.series,
+            "series_number": self.series_number,
+            "tags": self.tags,
+        } | (cast(dict, self.book_metadata) or {})
+
+
+class BookSection(SourceItem):
+    """Individual sections/chapters of books"""
+
+    __tablename__ = "book_section"
 
     id = Column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    title = Column(Text)
-    author = Column(Text)
-    chapter = Column(Text)
-    published = Column(DateTime(timezone=True))
+    book_id = Column(
+        BigInteger, ForeignKey("book.id", ondelete="CASCADE"), nullable=False
+    )
 
-    __mapper_args__ = {
-        "polymorphic_identity": "book_doc",
-    }
+    section_title = Column(Text)
+    section_number = Column(Integer)
+    section_level = Column(Integer)  # 1=chapter, 2=section, 3=subsection
+    start_page = Column(Integer)
+    end_page = Column(Integer)
+
+    # Parent-child relationships for nested sections
+    parent_section_id = Column(BigInteger, ForeignKey("book_section.id"))
+
+    book = relationship("Book", backref="sections")
+    parent = relationship(
+        "BookSection",
+        remote_side=[id],
+        backref="children",
+        foreign_keys=[parent_section_id],
+    )
+
+    __mapper_args__ = {"polymorphic_identity": "book_section"}
+    __table_args__ = (
+        Index("book_section_book_idx", "book_id"),
+        Index("book_section_parent_idx", "parent_section_id"),
+        Index("book_section_level_idx", "section_level", "section_number"),
+    )
+
+    def as_payload(self) -> dict:
+        return {
+            "source_id": self.id,
+            "book_id": self.book_id,
+            "section_title": self.section_title,
+            "section_number": self.section_number,
+            "section_level": self.section_level,
+            "start_page": self.start_page,
+            "end_page": self.end_page,
+            "tags": self.tags,
+        }
 
 
 class BlogPost(SourceItem):

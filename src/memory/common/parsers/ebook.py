@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, cast
+from typing import Any, cast
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -14,9 +14,9 @@ class Section:
 
     title: str
     content: str
-    number: Optional[int] = None
-    start_page: Optional[int] = None
-    end_page: Optional[int] = None
+    number: int | None = None
+    start_page: int | None = None
+    end_page: int | None = None
     children: list["Section"] = field(default_factory=list)
 
 
@@ -26,11 +26,12 @@ class Ebook:
 
     title: str
     author: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    sections: List[Section] = field(default_factory=list)
+    file_path: Path
+    metadata: dict[str, Any] = field(default_factory=dict)
+    sections: list[Section] = field(default_factory=list)
     full_content: str = ""
-    file_path: Optional[Path] = None
     file_type: str = ""
+    n_pages: int = 0
 
 
 class Peekable:
@@ -65,7 +66,7 @@ class Peekable:
 TOCItem = tuple[int, str, int]
 
 
-def extract_epub_metadata(doc) -> Dict[str, Any]:
+def extract_epub_metadata(doc) -> dict[str, Any]:
     """Extract metadata from a PyMuPDF document (EPUB)."""
     if not doc.metadata:
         return {}
@@ -117,7 +118,7 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     )
 
 
-def extract_sections(doc) -> List[Section]:
+def extract_sections(doc) -> list[Section]:
     """Extract all sections from a PyMuPDF document."""
     toc = doc.get_toc()
     if not toc:
@@ -178,4 +179,5 @@ def parse_ebook(file_path: str | Path) -> Ebook:
         full_content=full_content,
         file_path=path,
         file_type=path.suffix.lower()[1:],
+        n_pages=doc.page_count,
     )
