@@ -39,16 +39,24 @@ CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
 
 # File storage settings
 FILE_STORAGE_DIR = pathlib.Path(os.getenv("FILE_STORAGE_DIR", "/tmp/memory_files"))
-FILE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 CHUNK_STORAGE_DIR = pathlib.Path(
     os.getenv("CHUNK_STORAGE_DIR", FILE_STORAGE_DIR / "chunks")
 )
-CHUNK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-
 COMIC_STORAGE_DIR = pathlib.Path(
     os.getenv("COMIC_STORAGE_DIR", FILE_STORAGE_DIR / "comics")
 )
-COMIC_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+WEBPAGE_STORAGE_DIR = pathlib.Path(
+    os.getenv("WEBPAGE_STORAGE_DIR", FILE_STORAGE_DIR / "webpages")
+)
+
+storage_dirs = [
+    FILE_STORAGE_DIR,
+    CHUNK_STORAGE_DIR,
+    COMIC_STORAGE_DIR,
+    WEBPAGE_STORAGE_DIR,
+]
+for dir in storage_dirs:
+    dir.mkdir(parents=True, exist_ok=True)
 
 # Maximum attachment size to store directly in the database (10MB)
 MAX_INLINE_ATTACHMENT_SIZE = int(
