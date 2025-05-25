@@ -4,9 +4,10 @@ Database models for the knowledge base system.
 
 import pathlib
 import re
-from pathlib import Path
 import textwrap
+from datetime import datetime
 from typing import Any, ClassVar, cast
+
 from PIL import Image
 from sqlalchemy import (
     ARRAY,
@@ -27,10 +28,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, Session
+from sqlalchemy.orm import Session, relationship
 
 from memory.common import settings
-from memory.common.parsers.email import parse_email_message, EmailMessage
+from memory.common.parsers.email import EmailMessage, parse_email_message
 
 Base = declarative_base()
 
@@ -215,13 +216,13 @@ class MailMessage(SourceItem):
     }
 
     @property
-    def attachments_path(self) -> Path:
+    def attachments_path(self) -> pathlib.Path:
         clean_sender = clean_filename(cast(str, self.sender))
         clean_folder = clean_filename(cast(str | None, self.folder) or "INBOX")
-        return Path(settings.FILE_STORAGE_DIR) / clean_sender / clean_folder
+        return pathlib.Path(settings.FILE_STORAGE_DIR) / clean_sender / clean_folder
 
-    def safe_filename(self, filename: str) -> Path:
-        suffix = Path(filename).suffix
+    def safe_filename(self, filename: str) -> pathlib.Path:
+        suffix = pathlib.Path(filename).suffix
         name = clean_filename(filename.removesuffix(suffix)) + suffix
         path = self.attachments_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -511,11 +512,45 @@ class BlogPost(SourceItem):
     )
     url = Column(Text, unique=True)
     title = Column(Text)
-    published = Column(DateTime(timezone=True))
+    author = Column(Text, nullable=True)
+    published = Column(DateTime(timezone=True), nullable=True)
+
+    # Additional metadata from webpage parsing
+    description = Column(Text, nullable=True)  # Meta description or excerpt
+    domain = Column(Text, nullable=True)  # Domain of the source website
+    word_count = Column(Integer, nullable=True)  # Approximate word count
+
+    # Store original metadata from parser
+    webpage_metadata = Column(JSONB, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "blog_post",
     }
+
+    __table_args__ = (
+        Index("blog_post_author_idx", "author"),
+        Index("blog_post_domain_idx", "domain"),
+        Index("blog_post_published_idx", "published"),
+        Index("blog_post_word_count_idx", "word_count"),
+    )
+
+    def as_payload(self) -> dict:
+        published_date = cast(datetime | None, self.published)
+        metadata = cast(dict | None, self.webpage_metadata) or {}
+
+        payload = {
+            "source_id": self.id,
+            "url": self.url,
+            "title": self.title,
+            "author": self.author,
+            "published": published_date and published_date.isoformat(),
+            "description": self.description,
+            "domain": self.domain,
+            "word_count": self.word_count,
+            "tags": self.tags,
+            **metadata,
+        }
+        return {k: v for k, v in payload.items() if v}
 
 
 class MiscDoc(SourceItem):

@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 from urllib.parse import urlparse
 
 import requests
@@ -277,7 +278,7 @@ class ExUrbeParser(BaseHTMLParser):
         ".tags",
     ]
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract date, handling ordinal formats like 'Mar 5th, 2025'."""
         date = soup.select_one(".published")
         if date:
@@ -335,14 +336,14 @@ class RiftersParser(BaseHTMLParser):
         ".rss-links",
     ]
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract date, handling ordinal formats like 'Mar 5th, 2025'."""
         date = soup.select_one(".entry-date")
         if not date:
             return None
         date_str = date.text.replace("\n", " ").strip()
         if date := parse_date(date_str, "%d %b %Y"):
-            return date.isoformat()
+            return date
         return None
 
 
@@ -379,7 +380,7 @@ class PaulGrahamParser(BaseHTMLParser):
         # Fallback to standard title extraction
         return extract_title(soup, self.title_selector)
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract date from essay content."""
         # Look for date patterns in the text content (often at the beginning)
         text_content = soup.get_text()
@@ -389,7 +390,7 @@ class PaulGrahamParser(BaseHTMLParser):
         if date_match:
             date_str = date_match.group(1)
             if date := parse_date(date_str, self.date_format):
-                return date.isoformat()
+                return date
 
         return extract_date(soup, self.date_selector, self.date_format)
 
@@ -450,7 +451,7 @@ class TheRedHandFilesParser(BaseHTMLParser):
         ".privacy-policy",
     ]
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract date from issue header."""
         # Look for issue date pattern like "Issue #325 / May 2025"
         text_content = soup.get_text()
@@ -460,7 +461,7 @@ class TheRedHandFilesParser(BaseHTMLParser):
         if date_match:
             date_str = date_match.group(1)
             if date := parse_date(date_str, self.date_format):
-                return date.isoformat()
+                return date
 
         # Fallback to parent method
         return extract_date(soup, self.date_selector, self.date_format)
@@ -485,7 +486,7 @@ class RachelByTheBayParser(BaseHTMLParser):
         ".comments",
     ]
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract date from URL structure if available."""
         # Try to get current URL from canonical link or other sources
         canonical = soup.find("link", rel="canonical")
@@ -498,7 +499,7 @@ class RachelByTheBayParser(BaseHTMLParser):
                     year, month, day = date_match.groups()
                     date_str = f"{year}/{month}/{day}"
                     if date := parse_date(date_str, self.date_format):
-                        return date.isoformat()
+                        return date
 
         # Fallback to parent method
         return extract_date(soup, self.date_selector, self.date_format)

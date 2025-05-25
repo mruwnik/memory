@@ -24,9 +24,9 @@ class Article:
     title: str
     content: str  # Markdown content
     author: str | None = None
-    published_date: str | None = None
+    published_date: datetime | None = None
     url: str = ""
-    images: list[PILImage.Image] = field(default_factory=list)
+    images: dict[str, PILImage.Image] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -87,7 +87,7 @@ def parse_date(text: str, date_format: str = "%Y-%m-%d") -> datetime | None:
 
 def extract_date(
     soup: BeautifulSoup, date_selector: str, date_format: str = "%Y-%m-%d"
-) -> str | None:
+) -> datetime | None:
     """Extract publication date."""
     for selector in date_selector.split(","):
         element = soup.select_one(selector.strip())
@@ -98,12 +98,11 @@ def extract_date(
         if datetime_attr:
             date_str = str(datetime_attr)
             if date := parse_date(date_str, date_format):
-                return date.isoformat()
-            return date_str
+                return date
 
         for text in element.find_all(string=True):
             if text and (date := parse_date(str(text).strip(), date_format)):
-                return date.isoformat()
+                return date
 
     return None
 
@@ -149,7 +148,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
 
 def process_images(
     content: Tag | None, base_url: str, image_dir: pathlib.Path
-) -> tuple[Tag | None, list[PILImage.Image]]:
+) -> tuple[Tag | None, dict[str, PILImage.Image]]:
     """
     Process all images in content: download them, update URLs, and return PIL Images.
 
@@ -159,7 +158,7 @@ def process_images(
     if not content:
         return content, []
 
-    images = []
+    images = {}
 
     for img_tag in content.find_all("img"):
         if not isinstance(img_tag, Tag):
@@ -180,7 +179,7 @@ def process_images(
 
             path = pathlib.Path(image.filename)  # type: ignore
             img_tag["src"] = str(path.relative_to(FILE_STORAGE_DIR.resolve()))
-            images.append(image)
+            images[img_tag["src"]] = image
         except Exception as e:
             logger.warning(f"Failed to process image {src}: {e}")
             continue
@@ -337,7 +336,7 @@ class BaseHTMLParser:
         """Extract article author."""
         return extract_author(soup, self.author_selector)
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
+    def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
         """Extract publication date."""
         return extract_date(soup, self.date_selector, self.date_format)
 
@@ -349,7 +348,7 @@ class BaseHTMLParser:
 
     def _process_images(
         self, content: Tag | None, base_url: str
-    ) -> tuple[Tag | None, list[PILImage.Image]]:
+    ) -> tuple[Tag | None, dict[str, PILImage.Image]]:
         """Process all images: download, update URLs, return PIL Images."""
         return process_images(content, base_url, self.image_dir)
 

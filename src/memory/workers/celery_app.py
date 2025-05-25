@@ -25,6 +25,7 @@ app.conf.update(
         "memory.workers.tasks.email.*": {"queue": "email"},
         "memory.workers.tasks.photo.*": {"queue": "photo_embed"},
         "memory.workers.tasks.comic.*": {"queue": "comic"},
+        "memory.workers.tasks.blogs.*": {"queue": "blogs"},
         "memory.workers.tasks.docs.*": {"queue": "docs"},
         "memory.workers.tasks.maintenance.*": {"queue": "maintenance"},
     },
