@@ -6,8 +6,9 @@ logger = logging.getLogger(__name__)
 
 
 # Chunking configuration
-MAX_TOKENS = 32000  # VoyageAI max context window
-OVERLAP_TOKENS = 200  # Default overlap between chunks
+EMBEDDING_MAX_TOKENS = 32000  # VoyageAI max context window
+DEFAULT_CHUNK_TOKENS = 512  # Optimal chunk size for semantic search
+OVERLAP_TOKENS = 50  # Default overlap between chunks (10% of chunk size)
 CHARS_PER_TOKEN = 4
 
 
@@ -23,11 +24,13 @@ def approx_token_count(s: str) -> int:
     return len(s) // CHARS_PER_TOKEN
 
 
-def yield_word_chunks(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
+def yield_word_chunks(
+    text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS
+) -> Iterable[str]:
     words = text.split()
     if not words:
         return
-        
+
     current = ""
     for word in words:
         new_chunk = f"{current} {word}".strip()
@@ -40,62 +43,64 @@ def yield_word_chunks(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
         yield current
 
 
-def yield_spans(text: str, max_tokens: int = MAX_TOKENS) -> Iterable[str]:
+def yield_spans(text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS) -> Iterable[str]:
     """
     Yield text spans in priority order: paragraphs, sentences, words.
     Each span is guaranteed to be under max_tokens.
-    
+
     Args:
         text: The text to split
         max_tokens: Maximum tokens per chunk
-        
+
     Yields:
         Spans of text that fit within token limits
     """
     # Return early for empty text
     if not text.strip():
         return
-        
+
     for paragraph in text.split("\n\n"):
         if not paragraph.strip():
             continue
-            
+
         if approx_token_count(paragraph) <= max_tokens:
             yield paragraph
             continue
-        
+
         for sentence in _SENT_SPLIT_RE.split(paragraph):
             if not sentence.strip():
                 continue
-                
+
             if approx_token_count(sentence) <= max_tokens:
                 yield sentence
                 continue
-            
+
             for chunk in yield_word_chunks(sentence, max_tokens):
                 yield chunk
 
 
-def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_TOKENS) -> Iterable[str]:
+def chunk_text(
+    text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS, overlap: int = OVERLAP_TOKENS
+) -> Iterable[str]:
     """
     Split text into chunks respecting semantic boundaries while staying within token limits.
-    
+
     Args:
         text: The text to chunk
-        max_tokens: Maximum tokens per chunk (default: VoyageAI max context)
-        overlap: Number of tokens to overlap between chunks (default: 200)
-    
+        max_tokens: Maximum tokens per chunk (default: 512 for optimal semantic search)
+        overlap: Number of tokens to overlap between chunks (default: 50)
+
     Returns:
         List of text chunks
     """
     text = text.strip()
     if not text:
         return
-        
+
     if approx_token_count(text) <= max_tokens:
         yield text
         return
-    
+
     overlap_chars = overlap * CHARS_PER_TOKEN
     current = ""
 
@@ -108,19 +113,17 @@ def chunk_text(text: str, max_tokens: int = MAX_TOKENS, overlap: int = OVERLAP_T
             yield current
             current = ""
             continue
-        
+
         overlap_text = current[-overlap_chars:]
         clean_break = max(
-            overlap_text.rfind(". "), 
-            overlap_text.rfind("! "), 
-            overlap_text.rfind("? ")
+            overlap_text.rfind(". "), overlap_text.rfind("! "), overlap_text.rfind("? ")
         )
 
         if clean_break < 0:
             yield current
             current = ""
             continue
-        
+
         break_offset = -overlap_chars + clean_break + 1
         chunk = current[break_offset:].strip()
         yield current

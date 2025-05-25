@@ -3,7 +3,7 @@ import logging
 import pathlib
 import tempfile
 from contextlib import contextmanager
-from typing import Any, Generator, Sequence, TypedDict, cast
+from typing import Any, Generator, NotRequired, Sequence, TypedDict, cast
 
 import pymupdf  # PyMuPDF
 import pypandoc
@@ -17,6 +17,8 @@ MulitmodalChunk = Image.Image | str
 class Page(TypedDict):
     contents: Sequence[MulitmodalChunk]
     metadata: dict[str, Any]
+    # This is used to override the default chunk size for the page
+    chunk_size: NotRequired[int]
 
 
 @contextmanager
@@ -108,22 +110,28 @@ def extract_text(content: bytes | str | pathlib.Path) -> list[Page]:
     return [{"contents": [cast(str, content)], "metadata": {}}]
 
 
-def extract_content(mime_type: str, content: bytes | str | pathlib.Path) -> list[Page]:
+def extract_content(
+    mime_type: str,
+    content: bytes | str | pathlib.Path,
+    chunk_size: int | None = None,
+) -> list[Page]:
+    pages = []
     logger.info(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
-        return doc_to_images(content)
-    if mime_type in [
+        pages = doc_to_images(content)
+    elif mime_type in [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
     ]:
         logger.info(f"Extracting content from {content}")
         pages = extract_docx(content)
         logger.info(f"Extracted {len(pages)} pages from {content}")
-        return pages
-    if mime_type.startswith("text/"):
-        return extract_text(content)
-    if mime_type.startswith("image/"):
-        return extract_image(content)
+    elif mime_type.startswith("text/"):
+        pages = extract_text(content)
+    elif mime_type.startswith("image/"):
+        pages = extract_image(content)
 
-    # Return empty list for unknown mime types
-    return []
+    if chunk_size:
+        pages: list[Page] = [{**page, "chunk_size": chunk_size} for page in pages]
+
+    return pages

@@ -222,4 +222,7 @@ def qdrant():
 @pytest.fixture(autouse=True)
 def mock_voyage_client():
     with patch.object(voyageai, "Client", autospec=True) as mock_client:
-        yield mock_client()
+        client = mock_client()
+        client.embed.return_value.embeddings = [[0.1] * 1024]
+        client.multimodal_embed.return_value.embeddings = [[0.1] * 1024]
+        yield client

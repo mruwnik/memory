@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Iterable, cast
 
-from memory.common import embedding, qdrant, settings
+from memory.common import chunker, embedding, qdrant
 from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection
 from memory.common.parsers.ebook import Ebook, parse_ebook, Section
@@ -44,7 +44,8 @@ def section_processor(
         level: int = 1,
         parent_key: tuple[int, int | None] | None = None,
     ):
-        if len(section.content.strip()) >= MIN_SECTION_LENGTH:
+        content = "\n\n".join(section.pages).strip()
+        if len(content) >= MIN_SECTION_LENGTH:
             sha256 = hashlib.sha256(
                 f"{book.id}:{section.title}:{section.start_page}".encode()
             ).digest()
@@ -57,10 +58,11 @@ def section_processor(
                 start_page=section.start_page,
                 end_page=section.end_page,
                 parent_section_id=None,  # Will be set after flush
-                content=section.content,
+                content=content,
                 sha256=sha256,
                 modality="book",
                 tags=book.tags,
+                pages=section.pages,
             )
 
             all_sections.append(book_section)
@@ -127,13 +129,28 @@ def embed_sections(all_sections: list[BookSection]) -> int:
     """Embed all sections and return count of successfully embedded sections."""
     embedded_count = 0
 
+    def embed_text(text: str, metadata: dict) -> list[embedding.Chunk]:
+        _, chunks = embedding.embed(
+            "text/plain",
+            text,
+            metadata=metadata,
+            chunk_size=chunker.EMBEDDING_MAX_TOKENS,
+        )
+        return chunks
+
     for section in all_sections:
         try:
-            _, chunks = embedding.embed(
-                "text/plain",
-                cast(str, section.content),
-                metadata=section.as_payload(),
+            section_chunks = embed_text(
+                cast(str, section.content), section.as_payload()
             )
+            page_chunks = [
+                chunk
+                for i, page in enumerate(section.pages)
+                for chunk in embed_text(
+                    page, section.as_payload() | {"page_number": i + section.start_page}
+                )
+            ]
+            chunks = section_chunks + page_chunks
 
             if chunks:
                 section.chunks = chunks

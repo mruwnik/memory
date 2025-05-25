@@ -83,20 +83,20 @@ def test_extract_epub_metadata(metadata_input, expected):
 @pytest.mark.parametrize(
     "start_page,end_page,expected_content",
     [
-        (0, 2, "Content of page 0\nContent of page 1\nContent of page 2"),
-        (3, 4, "Content of page 3\nContent of page 4"),
-        (4, 4, "Content of page 4"),
+        (0, 2, ["Content of page 0", "Content of page 1", "Content of page 2"]),
+        (3, 4, ["Content of page 3", "Content of page 4"]),
+        (4, 4, ["Content of page 4"]),
         (
             0,
             10,
-            "Content of page 0\nContent of page 1\nContent of page 2\nContent of page 3\nContent of page 4",
+            [f"Content of page {i}" for i in range(5)],
         ),  # Out of range
-        (5, 10, ""),  # Completely out of range
-        (3, 2, ""),  # Invalid range (start > end)
+        (5, 10, []),  # Completely out of range
+        (3, 2, []),  # Invalid range (start > end)
         (
             -1,
             2,
-            "Content of page 0\nContent of page 1\nContent of page 2",
+            [f"Content of page {i}" for i in range(3)],
         ),  # Negative start
     ],
 )
@@ -121,21 +121,21 @@ def test_extract_section_pages(mock_doc, mock_toc_items):
         number=1,
         start_page=0,
         end_page=2,
-        content="Content of page 0\nContent of page 1\nContent of page 2",
+        pages=["Content of page 0", "Content of page 1", "Content of page 2"],
         children=[
             Section(
                 title="Section 1.1",
                 number=1,
                 start_page=1,
                 end_page=1,
-                content="Content of page 1",
+                pages=["Content of page 1"],
             ),
             Section(
                 title="Section 1.2",
                 number=2,
                 start_page=2,
                 end_page=2,
-                content="Content of page 2",
+                pages=["Content of page 2"],
             ),
         ],
     )
@@ -148,21 +148,21 @@ def test_extract_sections(mock_doc):
             number=1,
             start_page=0,
             end_page=2,
-            content="Content of page 0\nContent of page 1\nContent of page 2",
+            pages=["Content of page 0", "Content of page 1", "Content of page 2"],
             children=[
                 Section(
                     title="Section 1.1",
                     number=1,
                     start_page=1,
                     end_page=1,
-                    content="Content of page 1",
+                    pages=["Content of page 1"],
                 ),
                 Section(
                     title="Section 1.2",
                     number=2,
                     start_page=2,
                     end_page=2,
-                    content="Content of page 2",
+                    pages=["Content of page 2"],
                 ),
             ],
         ),
@@ -171,14 +171,14 @@ def test_extract_sections(mock_doc):
             number=2,
             start_page=3,
             end_page=5,
-            content="Content of page 3\nContent of page 4",
+            pages=["Content of page 3", "Content of page 4"],
             children=[
                 Section(
                     title="Section 2.1",
                     number=1,
                     start_page=4,
                     end_page=5,
-                    content="Content of page 4",
+                    pages=["Content of page 4"],
                 ),
             ],
         ),
@@ -195,7 +195,7 @@ def test_extract_sections_no_toc(mock_doc):
             number=1,
             start_page=0,
             end_page=5,
-            content="Full document content",
+            pages=[f"Content of page {i}" for i in range(5)],
             children=[],
         ),
     ]
@@ -376,9 +376,9 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
 
     # Create sections with specific content
     section1 = MagicMock()
-    section1.content = "Content of section 1"
+    section1.pages = ["Content of section 1"]
     section2 = MagicMock()
-    section2.content = "Content of section 2"
+    section2.pages = ["Content of section 2"]
 
     # Mock extract_sections to return our sections
     with patch("memory.common.parsers.ebook.extract_sections") as mock_extract:
@@ -391,4 +391,4 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
         ebook = parse_ebook(test_file)
 
         # Check the full content is concatenated correctly
-        assert ebook.full_content == "Content of section 1Content of section 2"
+        assert ebook.full_content == "Content of section 1\n\nContent of section 2"

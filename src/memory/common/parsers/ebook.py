@@ -13,7 +13,7 @@ class Section:
     """Represents a chapter or section in an ebook."""
 
     title: str
-    content: str
+    pages: list[str]
     number: int | None = None
     start_page: int | None = None
     end_page: int | None = None
@@ -74,13 +74,13 @@ def extract_epub_metadata(doc) -> dict[str, Any]:
     return {key: value for key, value in doc.metadata.items() if value}
 
 
-def get_pages(doc, start_page: int, end_page: int) -> str:
+def get_pages(doc, start_page: int, end_page: int) -> list[str]:
     pages = [
         doc[page_num].get_text()
         for page_num in range(start_page, end_page + 1)
         if 0 <= page_num < doc.page_count
     ]
-    return "\n".join(pages)
+    return pages
 
 
 def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section | None:
@@ -96,7 +96,7 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     if not next_item:
         return Section(
             title=name,
-            content=get_pages(doc, page, doc.page_count),
+            pages=get_pages(doc, page, doc.page_count),
             number=section_num,
             start_page=page,
             end_page=doc.page_count,
@@ -110,7 +110,7 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     last_page = next_item[2] - 1 if next_item else doc.page_count
     return Section(
         title=name,
-        content=get_pages(doc, page, last_page),
+        pages=get_pages(doc, page, last_page),
         number=section_num,
         start_page=page,
         end_page=last_page,
@@ -125,7 +125,7 @@ def extract_sections(doc) -> list[Section]:
         return [
             Section(
                 title="Content",
-                content=doc.get_text(),
+                pages=get_pages(doc, 0, doc.page_count),
                 number=1,
                 start_page=0,
                 end_page=doc.page_count,
@@ -169,7 +169,9 @@ def parse_ebook(file_path: str | Path) -> Ebook:
     sections = extract_sections(doc)
     full_content = ""
     if sections:
-        full_content = "".join(section.content for section in sections)
+        full_content = "\n\n".join(
+            page for section in sections for page in section.pages
+        )
 
     return Ebook(
         title=title,

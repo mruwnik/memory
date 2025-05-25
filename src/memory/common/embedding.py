@@ -7,16 +7,10 @@ import voyageai
 from PIL import Image
 
 from memory.common import extract, settings
-from memory.common.chunker import chunk_text
+from memory.common.chunker import chunk_text, DEFAULT_CHUNK_TOKENS, OVERLAP_TOKENS
 from memory.common.db.models import Chunk
 
 logger = logging.getLogger(__name__)
-
-
-# Chunking configuration
-MAX_TOKENS = 32000  # VoyageAI max context window
-OVERLAP_TOKENS = 200  # Default overlap between chunks
-CHARS_PER_TOKEN = 4
 
 
 DistanceType = Literal["Cosine", "Dot", "Euclidean"]
@@ -150,12 +144,13 @@ def embed_text(
     texts: list[str],
     model: str = settings.TEXT_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
+    chunk_size: int = DEFAULT_CHUNK_TOKENS,
 ) -> list[Vector]:
     chunks = [
         c
         for text in texts
         if isinstance(text, str)
-        for c in chunk_text(text, MAX_TOKENS, OVERLAP_TOKENS)
+        for c in chunk_text(text, chunk_size, OVERLAP_TOKENS)
         if c.strip()
     ]
     if not chunks:
@@ -179,11 +174,12 @@ def embed_mixed(
     items: list[extract.MulitmodalChunk],
     model: str = settings.MIXED_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
+    chunk_size: int = DEFAULT_CHUNK_TOKENS,
 ) -> list[Vector]:
     def to_chunks(item: extract.MulitmodalChunk) -> Iterable[extract.MulitmodalChunk]:
         if isinstance(item, str):
             return [
-                c for c in chunk_text(item, MAX_TOKENS, OVERLAP_TOKENS) if c.strip()
+                c for c in chunk_text(item, chunk_size, OVERLAP_TOKENS) if c.strip()
             ]
         return [item]
 
@@ -193,13 +189,17 @@ def embed_mixed(
 
 def embed_page(page: extract.Page) -> list[Vector]:
     contents = page["contents"]
+    chunk_size = page.get("chunk_size", DEFAULT_CHUNK_TOKENS)
     if all(isinstance(c, str) for c in contents):
         return embed_text(
-            cast(list[str], contents), model=settings.TEXT_EMBEDDING_MODEL
+            cast(list[str], contents),
+            model=settings.TEXT_EMBEDDING_MODEL,
+            chunk_size=chunk_size,
         )
     return embed_mixed(
         cast(list[extract.MulitmodalChunk], contents),
         model=settings.MIXED_EMBEDDING_MODEL,
+        chunk_size=chunk_size,
     )
 
 
@@ -255,9 +255,10 @@ def embed(
     mime_type: str,
     content: bytes | str | pathlib.Path,
     metadata: dict[str, Any] = {},
+    chunk_size: int | None = None,
 ) -> tuple[str, list[Chunk]]:
     modality = get_modality(mime_type)
-    pages = extract.extract_content(mime_type, content)
+    pages = extract.extract_content(mime_type, content, chunk_size=chunk_size)
     chunks = [
         make_chunk(page, vector, metadata)
         for page in pages
@@ -266,13 +267,17 @@ def embed(
     return modality, chunks
 
 
-def embed_image(file_path: pathlib.Path, texts: list[str]) -> Chunk:
+def embed_image(
+    file_path: pathlib.Path, texts: list[str], chunk_size: int | None = None
+) -> Chunk:
     image = Image.open(file_path)
     mime_type = get_mimetype(image)
     if mime_type is None:
         raise ValueError("Unsupported image format")
 
-    vector = embed_mixed([image] + texts)[0]
+    vector = embed_mixed(
+        [image] + texts, chunk_size=chunk_size or DEFAULT_CHUNK_TOKENS
+    )[0]
 
     return Chunk(
         id=str(uuid.uuid4()),

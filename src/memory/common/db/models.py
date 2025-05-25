@@ -481,6 +481,7 @@ class BookSection(SourceItem):
         backref="children",
         foreign_keys=[parent_section_id],
     )
+    pages: list[str] = []
 
     __mapper_args__ = {"polymorphic_identity": "book_section"}
     __table_args__ = (

@@ -17,22 +17,21 @@ def mock_ebook():
         sections=[
             Section(
                 title="Chapter 1",
-                content="This is the content of chapter 1. "
-                * 20,  # Make it long enough
+                pages=["This is the content of chapter 1. " * 20],
                 number=1,
                 start_page=1,
                 end_page=10,
                 children=[
                     Section(
                         title="Section 1.1",
-                        content="This is section 1.1 content. " * 15,
+                        pages=["This is section 1.1 content. " * 15],
                         number=1,
                         start_page=1,
                         end_page=5,
                     ),
                     Section(
                         title="Section 1.2",
-                        content="This is section 1.2 content. " * 15,
+                        pages=["This is section 1.2 content. " * 15],
                         number=2,
                         start_page=6,
                         end_page=10,
@@ -41,7 +40,7 @@ def mock_ebook():
             ),
             Section(
                 title="Chapter 2",
-                content="This is the content of chapter 2. " * 20,
+                pages=["This is the content of chapter 2. " * 20],
                 number=2,
                 start_page=11,
                 end_page=20,
@@ -52,7 +51,7 @@ def mock_ebook():
     )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_embedding():
     """Mock the embedding function to return dummy vectors."""
     with patch("memory.workers.tasks.ebook.embedding.embed") as mock:
@@ -316,3 +315,55 @@ def test_sync_book_file_not_found():
     """Test handling of missing files."""
     with pytest.raises(FileNotFoundError):
         ebook.sync_book("/nonexistent/file.epub")
+
+
+def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):
+    """Test that book sections with large pages are passed whole to the embedding function."""
+    # Create a test book first
+    book = Book(
+        title="Test Book",
+        author="Test Author",
+        file_path="/test/path",
+    )
+    db_session.add(book)
+    db_session.flush()
+
+    # Create large content that exceeds 1000 tokens (4000+ characters)
+    large_section_content = "This is a very long section content. " * 120  # ~4440 chars
+    large_page_1 = "This is page 1 with lots of content. " * 120  # ~4440 chars
+    large_page_2 = "This is page 2 with lots of content. " * 120  # ~4440 chars
+
+    # Create test sections with large content and pages
+    sections = [
+        BookSection(
+            book_id=book.id,
+            section_title="Test Section",
+            section_number=1,
+            section_level=1,
+            start_page=1,
+            end_page=10,
+            content=large_section_content,
+            sha256=b"test_hash",
+            modality="book",
+            tags=["book"],
+            pages=[large_page_1, large_page_2],
+        )
+    ]
+
+    db_session.add_all(sections)
+    db_session.flush()
+
+    ebook.embed_sections(sections)
+
+    # Verify that the voyage client was called with the full large content
+    # Should be called 3 times: once for section content, twice for pages
+    assert mock_voyage_client.embed.call_count == 3
+
+    # Check that the full content was passed to the embedding function
+    calls = mock_voyage_client.embed.call_args_list
+    texts = [c[0][0] for c in calls]
+    assert texts == [
+        [large_section_content.strip()],
+        [large_page_1.strip()],
+        [large_page_2.strip()],
+    ]
