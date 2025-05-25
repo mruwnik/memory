@@ -5,14 +5,10 @@ from typing import cast
 import pytest
 from PIL import Image
 
-from memory.common import settings
+from memory.common import settings, collections
 from memory.common.embedding import (
-    embed,
-    embed_file,
     embed_mixed,
-    embed_page,
     embed_text,
-    get_modality,
     make_chunk,
     write_to_file,
 )
@@ -50,7 +46,7 @@ def mock_embed(mock_voyage_client):
     ],
 )
 def test_get_modality(mime_type, expected_modality):
-    assert get_modality(mime_type) == expected_modality
+    assert collections.get_modality(mime_type) == expected_modality
 
 
 def test_embed_text(mock_embed):
@@ -58,57 +54,9 @@ def test_embed_text(mock_embed):
     assert embed_text(texts) == [[0], [1]]
 
 
-def test_embed_file(mock_embed, tmp_path):
-    mock_file = tmp_path / "test.txt"
-    mock_file.write_text("file content")
-
-    assert embed_file(mock_file) == [[0]]
-
-
 def test_embed_mixed(mock_embed):
     items = ["text", {"type": "image", "data": "base64"}]
     assert embed_mixed(items) == [[0]]
-
-
-def test_embed_page_text_only(mock_embed):
-    page = {"contents": ["text1", "text2"]}
-    assert embed_page(page) == [[0], [1]]  # type: ignore
-
-
-def test_embed_page_mixed_content(mock_embed):
-    page = {"contents": ["text", {"type": "image", "data": "base64"}]}
-    assert embed_page(page) == [[0]]  # type: ignore
-
-
-def test_embed(mock_embed):
-    mime_type = "text/plain"
-    content = "sample content"
-    metadata = {"source": "test"}
-
-    with patch.object(uuid, "uuid4", return_value="id1"):
-        modality, chunks = embed(mime_type, content, metadata)
-
-    assert modality == "text"
-    assert [
-        {
-            "id": c.id,  # type: ignore
-            "file_path": c.file_path,  # type: ignore
-            "content": c.content,  # type: ignore
-            "embedding_model": c.embedding_model,  # type: ignore
-            "vector": c.vector,  # type: ignore
-            "item_metadata": c.item_metadata,  # type: ignore
-        }
-        for c in chunks
-    ] == [
-        {
-            "content": "sample content",
-            "embedding_model": "voyage-3-large",
-            "file_path": None,
-            "id": "id1",
-            "item_metadata": {"source": "test"},
-            "vector": [0],
-        },
-    ]
 
 
 def test_write_to_file_text(mock_file_storage):
@@ -160,17 +108,14 @@ def test_write_to_file_unsupported_type(mock_file_storage):
 
 def test_make_chunk_text_only(mock_file_storage, db_session):
     """Test creating a chunk from string content."""
-    page = {
-        "contents": ["text content 1", "text content 2"],
-        "metadata": {"source": "test"},
-    }
+    contents = ["text content 1", "text content 2"]
     vector = [0.1, 0.2, 0.3]
     metadata = {"doc_type": "test", "source": "unit-test"}
 
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000001")
     ):
-        chunk = make_chunk(page, vector, metadata)  # type: ignore
+        chunk = make_chunk(contents, vector, metadata)  # type: ignore
 
     assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000001"
     assert cast(str, chunk.content) == "text content 1\n\ntext content 2"
@@ -183,14 +128,14 @@ def test_make_chunk_text_only(mock_file_storage, db_session):
 def test_make_chunk_single_image(mock_file_storage, db_session):
     """Test creating a chunk from a single image."""
     img = Image.new("RGB", (100, 100), color=(73, 109, 137))
-    page = {"contents": [img], "metadata": {"source": "test"}}
+    contents = [img]
     vector = [0.1, 0.2, 0.3]
     metadata = {"doc_type": "test", "source": "unit-test"}
 
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000002")
     ):
-        chunk = make_chunk(page, vector, metadata)  # type: ignore
+        chunk = make_chunk(contents, vector, metadata)  # type: ignore
 
     assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000002"
     assert chunk.content is None
@@ -208,14 +153,14 @@ def test_make_chunk_single_image(mock_file_storage, db_session):
 def test_make_chunk_mixed_content(mock_file_storage, db_session):
     """Test creating a chunk from mixed content (string and image)."""
     img = Image.new("RGB", (100, 100), color=(73, 109, 137))
-    page = {"contents": ["text content", img], "metadata": {"source": "test"}}
+    contents = ["text content", img]
     vector = [0.1, 0.2, 0.3]
     metadata = {"doc_type": "test", "source": "unit-test"}
 
     with patch.object(
         uuid, "uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000003")
     ):
-        chunk = make_chunk(page, vector, metadata)  # type: ignore
+        chunk = make_chunk(contents, vector, metadata)  # type: ignore
 
     assert cast(str, chunk.id) == "00000000-0000-0000-0000-000000000003"
     assert chunk.content is None
@@ -233,3 +178,181 @@ def test_make_chunk_mixed_content(mock_file_storage, db_session):
     assert (
         settings.CHUNK_STORAGE_DIR / "00000000-0000-0000-0000-000000000003_1.png"
     ).exists()
+
+
+@pytest.mark.parametrize(
+    "data,embedding_model,collection,expected_model,expected_count,expected_has_content",
+    [
+        # Text-only with default model
+        (
+            ["text content 1", "text content 2"],
+            None,
+            None,
+            settings.TEXT_EMBEDDING_MODEL,
+            2,
+            True,
+        ),
+        # Text with explicit mixed model - but make_chunk still uses TEXT_EMBEDDING_MODEL for text-only content
+        (
+            ["text content"],
+            settings.MIXED_EMBEDDING_MODEL,
+            None,
+            settings.TEXT_EMBEDDING_MODEL,
+            1,
+            True,
+        ),
+        # Text collection model selection - make_chunk uses TEXT_EMBEDDING_MODEL for text-only content
+        (["text content"], None, "mail", settings.TEXT_EMBEDDING_MODEL, 1, True),
+        (["text content"], None, "photo", settings.TEXT_EMBEDDING_MODEL, 1, True),
+        (["text content"], None, "doc", settings.TEXT_EMBEDDING_MODEL, 1, True),
+        # Unknown collection falls back to default
+        (["text content"], None, "unknown", settings.TEXT_EMBEDDING_MODEL, 1, True),
+        # Explicit model takes precedence over collection
+        (
+            ["text content"],
+            settings.TEXT_EMBEDDING_MODEL,
+            "photo",
+            settings.TEXT_EMBEDDING_MODEL,
+            1,
+            True,
+        ),
+    ],
+)
+def test_embed_data_chunk_scenarios(
+    data,
+    embedding_model,
+    collection,
+    expected_model,
+    expected_count,
+    expected_has_content,
+    mock_embed,
+    mock_file_storage,
+):
+    """Test various embedding scenarios for data chunks."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    chunk = DataChunk(
+        data=data,
+        embedding_model=embedding_model,
+        collection=collection,
+        metadata={"source": "test"},
+    )
+
+    result = embed_data_chunk(chunk, {"doc_type": "test"})
+
+    assert len(result) == expected_count
+    assert all(cast(str, c.embedding_model) == expected_model for c in result)
+    if expected_has_content:
+        assert all(c.content is not None for c in result)
+        assert all(c.file_path is None for c in result)
+    else:
+        assert all(c.content is None for c in result)
+        assert all(c.file_path is not None for c in result)
+    assert all(
+        c.item_metadata == {"source": "test", "doc_type": "test"} for c in result
+    )
+
+
+def test_embed_data_chunk_mixed_content(mock_embed, mock_file_storage):
+    """Test embedding mixed content (text and images)."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    img = Image.new("RGB", (100, 100), color=(73, 109, 137))
+    chunk = DataChunk(
+        data=["text content", img],
+        embedding_model=settings.MIXED_EMBEDDING_MODEL,
+        metadata={"source": "test"},
+    )
+
+    result = embed_data_chunk(chunk)
+
+    assert len(result) == 1  # Mixed content returns single vector
+    assert result[0].content is None  # Mixed content stored in files
+    assert result[0].file_path is not None
+    assert cast(str, result[0].embedding_model) == settings.MIXED_EMBEDDING_MODEL
+
+
+@pytest.mark.parametrize(
+    "chunk_max_size,chunk_size_param,expected_chunk_size",
+    [
+        (512, 1024, 512),  # chunk.max_size takes precedence
+        (None, 2048, 2048),  # chunk_size parameter used when max_size is None
+        (256, None, 256),  # chunk.max_size used when parameter is None
+    ],
+)
+def test_embed_data_chunk_chunk_size_handling(
+    chunk_max_size, chunk_size_param, expected_chunk_size, mock_embed, mock_file_storage
+):
+    """Test chunk size parameter handling."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    chunk = DataChunk(
+        data=["text content"], max_size=chunk_max_size, metadata={"source": "test"}
+    )
+
+    with patch("memory.common.embedding.embed_text") as mock_embed_text:
+        mock_embed_text.return_value = [[0.1, 0.2, 0.3]]
+
+        result = embed_data_chunk(chunk, chunk_size=chunk_size_param)
+
+        mock_embed_text.assert_called_once()
+        args, kwargs = mock_embed_text.call_args
+        assert kwargs["chunk_size"] == expected_chunk_size
+
+
+def test_embed_data_chunk_metadata_merging(mock_embed, mock_file_storage):
+    """Test that chunk metadata and parameter metadata are properly merged."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    chunk = DataChunk(
+        data=["text content"], metadata={"source": "test", "type": "chunk"}
+    )
+    metadata = {
+        "doc_type": "test",
+        "source": "override",
+    }  # chunk.metadata takes precedence over parameter metadata
+
+    result = embed_data_chunk(chunk, metadata)
+
+    assert len(result) == 1
+    expected_metadata = {
+        "source": "test",
+        "type": "chunk",
+        "doc_type": "test",
+    }  # chunk source wins
+    assert result[0].item_metadata == expected_metadata
+
+
+def test_embed_data_chunk_unsupported_model(mock_embed, mock_file_storage):
+    """Test error handling for unsupported embedding model."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    chunk = DataChunk(
+        data=["text content"],
+        embedding_model="unsupported-model",
+        metadata={"source": "test"},
+    )
+
+    with pytest.raises(ValueError, match="Unsupported model: unsupported-model"):
+        embed_data_chunk(chunk)
+
+
+def test_embed_data_chunk_empty_data(mock_embed, mock_file_storage):
+    """Test handling of empty data."""
+    from memory.common.extract import DataChunk
+    from memory.common.embedding import embed_data_chunk
+
+    chunk = DataChunk(data=[], metadata={"source": "test"})
+
+    # Should handle empty data gracefully
+    with patch("memory.common.embedding.embed_text") as mock_embed_text:
+        mock_embed_text.return_value = []
+
+        result = embed_data_chunk(chunk)
+
+        assert result == []

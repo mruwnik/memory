@@ -52,24 +52,6 @@ def mock_ebook():
 
 
 @pytest.fixture
-def mock_embedding():
-    """Mock the embedding function to return dummy vectors."""
-    with patch("memory.workers.tasks.ebook.embedding.embed") as mock:
-        mock.return_value = (
-            "book",
-            [
-                Chunk(
-                    vector=[0.1] * 1024,
-                    item_metadata={"test": "data"},
-                    content="Test content",
-                    embedding_model="model",
-                )
-            ],
-        )
-        yield mock
-
-
-@pytest.fixture
 def mock_qdrant():
     """Mock Qdrant operations."""
     with (
@@ -151,7 +133,7 @@ def test_create_book_and_sections(mock_ebook, db_session):
     assert getattr(chapter1, "parent_section_id") is None
 
 
-def test_embed_sections(db_session, mock_embedding):
+def test_embed_sections(db_session):
     """Test basic embedding sections workflow."""
     # Create a test book first
     book = Book(
@@ -187,31 +169,6 @@ def test_embed_sections(db_session, mock_embedding):
     assert hasattr(sections[0], "embed_status")
 
 
-def test_push_to_qdrant(qdrant):
-    """Test pushing embeddings to Qdrant."""
-    # Create test sections with chunks
-    mock_chunk = Mock(
-        id="00000000-0000-0000-0000-000000000000",
-        vector=[0.1] * 1024,
-        item_metadata={"test": "data"},
-    )
-
-    mock_section = Mock(spec=BookSection)
-    mock_section.embed_status = "QUEUED"
-    mock_section.chunks = [mock_chunk]
-
-    sections = [mock_section]
-
-    ebook.push_to_qdrant(sections)  # type: ignore
-
-    assert {r.id: r.payload for r in qdrant.scroll(collection_name="book")[0]} == {
-        "00000000-0000-0000-0000-000000000000": {
-            "test": "data",
-        }
-    }
-    assert mock_section.embed_status == "STORED"
-
-
 @patch("memory.workers.tasks.ebook.parse_ebook")
 def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path):
     """Test successful book synchronization."""
@@ -229,7 +186,7 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path):
         "author": "Test Author",
         "status": "processed",
         "total_sections": 4,
-        "sections_embedded": 4,
+        "sections_embedded": 8,
     }
 
     book = db_session.query(Book).filter(Book.title == "Test Book").first()
@@ -270,8 +227,9 @@ def test_sync_book_already_exists(mock_parse, mock_ebook, db_session, tmp_path):
 
 
 @patch("memory.workers.tasks.ebook.parse_ebook")
+@patch("memory.common.embedding.embed_source_item")
 def test_sync_book_embedding_failure(
-    mock_parse, mock_ebook, db_session, tmp_path, mock_embedding
+    mock_embedding, mock_parse, mock_ebook, db_session, tmp_path
 ):
     """Test handling of embedding failures."""
     book_file = tmp_path / "test.epub"
@@ -307,14 +265,18 @@ def test_sync_book_qdrant_failure(mock_parse, mock_ebook, db_session, tmp_path):
     # Since embedding is already failing, this test will complete without hitting Qdrant
     # So let's just verify that the function completes without raising an exception
     with patch.object(ebook, "push_to_qdrant", side_effect=Exception("Qdrant failed")):
-        with pytest.raises(Exception, match="Qdrant failed"):
-            ebook.sync_book(str(book_file))
+        assert ebook.sync_book(str(book_file)) == {
+            "status": "error",
+            "error": "Qdrant failed",
+        }
 
 
 def test_sync_book_file_not_found():
     """Test handling of missing files."""
-    with pytest.raises(FileNotFoundError):
-        ebook.sync_book("/nonexistent/file.epub")
+    assert ebook.sync_book("/nonexistent/file.epub") == {
+        "status": "error",
+        "error": "Book file not found: /nonexistent/file.epub",
+    }
 
 
 def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):
@@ -363,7 +325,7 @@ def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):
     calls = mock_voyage_client.embed.call_args_list
     texts = [c[0][0] for c in calls]
     assert texts == [
-        [large_section_content.strip()],
         [large_page_1.strip()],
         [large_page_2.strip()],
+        [large_section_content.strip()],
     ]

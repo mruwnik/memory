@@ -69,13 +69,21 @@ def test_email_account(db_session):
 
 def test_process_simple_email(db_session, test_email_account, qdrant):
     """Test processing a simple email message."""
-    mail_message_id = process_message(
+    res = process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
     )
 
+    mail_message_id = res["mail_message_id"]
+    assert res == {
+        "status": "processed",
+        "mail_message_id": mail_message_id,
+        "message_id": "101",
+        "chunks_count": 1,
+        "attachments_count": 0,
+    }
     mail_message = (
         db_session.query(MailMessage).filter(MailMessage.id == mail_message_id).one()
     )
@@ -98,7 +106,7 @@ def test_process_email_with_attachment(db_session, test_email_account, qdrant):
         message_id="302",
         folder="Archive",
         raw_email=EMAIL_WITH_ATTACHMENT_RAW,
-    )
+    )["mail_message_id"]
     # Check mail message specifics
     mail_message = (
         db_session.query(MailMessage).filter(MailMessage.id == mail_message_id).one()
@@ -125,25 +133,25 @@ def test_process_email_with_attachment(db_session, test_email_account, qdrant):
 
 def test_process_empty_message(db_session, test_email_account, qdrant):
     """Test processing an empty/invalid message."""
-    source_id = process_message(
+    res = process_message(
         account_id=test_email_account.id,
         message_id="999",
         folder="Archive",
         raw_email="",
     )
-
-    assert source_id is None
+    assert res == {"reason": "empty_content", "status": "skipped"}
 
 
 def test_process_duplicate_message(db_session, test_email_account, qdrant):
     """Test that duplicate messages are detected and not stored again."""
     # First call should succeed and create records
-    source_id_1 = process_message(
+    res = process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
     )
+    source_id_1 = res.get("mail_message_id")
 
     assert source_id_1 is not None, "First call should return a source_id"
 
@@ -157,7 +165,7 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
         message_id="101",
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
-    )
+    ).get("mail_message_id")
 
     assert source_id_2 is None, "Second call should return None for duplicate message"
 

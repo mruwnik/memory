@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 import io
 import logging
 import pathlib
@@ -19,6 +20,15 @@ class Page(TypedDict):
     metadata: dict[str, Any]
     # This is used to override the default chunk size for the page
     chunk_size: NotRequired[int]
+
+
+@dataclass
+class DataChunk:
+    data: Sequence[MulitmodalChunk]
+    collection: str | None = None
+    embedding_model: str | None = None
+    max_size: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @contextmanager
@@ -110,11 +120,13 @@ def extract_text(content: bytes | str | pathlib.Path) -> list[Page]:
     return [{"contents": [cast(str, content)], "metadata": {}}]
 
 
-def extract_content(
+def extract_data_chunks(
     mime_type: str,
     content: bytes | str | pathlib.Path,
+    collection: str | None = None,
+    embedding_model: str | None = None,
     chunk_size: int | None = None,
-) -> list[Page]:
+) -> list[DataChunk]:
     pages = []
     logger.info(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
@@ -134,4 +146,12 @@ def extract_content(
     if chunk_size:
         pages: list[Page] = [{**page, "chunk_size": chunk_size} for page in pages]
 
-    return pages
+    return [
+        DataChunk(
+            data=page["contents"],
+            collection=collection,
+            embedding_model=embedding_model,
+            max_size=chunk_size,
+        )
+        for page in pages
+    ]

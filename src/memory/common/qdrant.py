@@ -5,12 +5,7 @@ import qdrant_client
 from qdrant_client.http import models as qdrant_models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from memory.common import settings
-from memory.common.embedding import (
-    Collection,
-    ALL_COLLECTIONS,
-    DistanceType,
-    Vector,
-)
+from memory.common.collections import ALL_COLLECTIONS, Collection, DistanceType, Vector
 
 logger = logging.getLogger(__name__)
 

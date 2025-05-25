@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as md
 from PIL import Image as PILImage
 
-from memory.common.settings import FILE_STORAGE_DIR, WEBPAGE_STORAGE_DIR
+from memory.common import settings
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +96,9 @@ def extract_date(
 
         datetime_attr = element.get("datetime")
         if datetime_attr:
-            date_str = str(datetime_attr)
-            if date := parse_date(date_str, date_format):
-                return date
+            for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", date_format]:
+                if date := parse_date(str(datetime_attr), format):
+                    return date
 
         for text in element.find_all(string=True):
             if text and (date := parse_date(str(text).strip(), date_format)):
@@ -178,7 +178,7 @@ def process_images(
                 continue
 
             path = pathlib.Path(image.filename)  # type: ignore
-            img_tag["src"] = str(path.relative_to(FILE_STORAGE_DIR.resolve()))
+            img_tag["src"] = str(path.relative_to(settings.FILE_STORAGE_DIR.resolve()))
             images[img_tag["src"]] = image
         except Exception as e:
             logger.warning(f"Failed to process image {src}: {e}")
@@ -291,7 +291,7 @@ class BaseHTMLParser:
 
     def __init__(self, base_url: str | None = None):
         self.base_url = base_url
-        self.image_dir = WEBPAGE_STORAGE_DIR / str(urlparse(base_url).netloc)
+        self.image_dir = settings.WEBPAGE_STORAGE_DIR / str(urlparse(base_url).netloc)
         self.image_dir.mkdir(parents=True, exist_ok=True)
 
     def parse(self, html: str, url: str) -> Article:

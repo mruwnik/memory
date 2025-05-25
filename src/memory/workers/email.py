@@ -10,17 +10,16 @@ from typing import Callable, Generator, Sequence, cast
 
 from sqlalchemy.orm import Session, scoped_session
 
-from memory.common import embedding, qdrant, settings
+from memory.common import embedding, qdrant, settings, collections
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
     MailMessage,
-    SourceItem,
 )
 from memory.common.parsers.email import (
     Attachment,
+    EmailMessage,
     RawEmailResponse,
-    parse_email_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +53,7 @@ def process_attachment(
             return None
 
     return EmailAttachment(
-        modality=embedding.get_modality(attachment["content_type"]),
+        modality=collections.get_modality(attachment["content_type"]),
         sha256=hashlib.sha256(
             real_content if real_content else str(attachment).encode()
         ).digest(),
@@ -94,8 +93,7 @@ def create_mail_message(
     db_session: Session | scoped_session,
     tags: list[str],
     folder: str,
-    raw_email: str,
-    message_id: str,
+    parsed_email: EmailMessage,
 ) -> MailMessage:
     """
     Create a new mail message record and associated attachments.
@@ -109,7 +107,7 @@ def create_mail_message(
     Returns:
         Newly created MailMessage
     """
-    parsed_email = parse_email_message(raw_email, message_id)
+    raw_email = parsed_email["raw_email"]
     mail_message = MailMessage(
         modality="mail",
         sha256=parsed_email["hash"],
@@ -135,52 +133,6 @@ def create_mail_message(
 
     db_session.add(mail_message)
     return mail_message
-
-
-def does_message_exist(
-    db_session: Session | scoped_session, message_id: str, message_hash: bytes
-) -> bool:
-    """
-    Check if a message already exists in the database.
-
-    Args:
-        db_session: Database session
-        message_id: Email message ID
-        message_hash: SHA-256 hash of message
-
-    Returns:
-        True if message exists, False otherwise
-    """
-    # Check by message_id first (faster)
-    if message_id:
-        mail_message = (
-            db_session.query(MailMessage)
-            .filter(MailMessage.message_id == message_id)
-            .first()
-        )
-        if mail_message is not None:
-            return True
-
-    # Then check by message_hash
-    source_item = (
-        db_session.query(SourceItem).filter(SourceItem.sha256 == message_hash).first()
-    )
-    return source_item is not None
-
-
-def check_message_exists(
-    db: Session | scoped_session, account_id: int, message_id: str, raw_email: str
-) -> bool:
-    account = db.query(EmailAccount).get(account_id)
-    if not account:
-        logger.error(f"Account {account_id} not found")
-        return False
-
-    parsed_email = parse_email_message(raw_email, message_id)
-    if "szczepalins" in raw_email.lower():
-        print(parsed_email["message_id"])
-
-    return does_message_exist(db, parsed_email["message_id"], parsed_email["hash"])
 
 
 def extract_email_uid(
@@ -317,11 +269,7 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
 def vectorize_email(email: MailMessage):
     qdrant_client = qdrant.get_qdrant_client()
 
-    _, chunks = embedding.embed(
-        "text/plain",
-        email.body,
-        metadata=email.as_payload(),
-    )
+    chunks = embedding.embed_source_item(email)
     email.chunks = chunks
     if chunks:
         vector_ids = [cast(str, c.id) for c in chunks]
@@ -329,7 +277,7 @@ def vectorize_email(email: MailMessage):
         metadata = [c.item_metadata for c in chunks]
         qdrant.upsert_vectors(
             client=qdrant_client,
-            collection_name="mail",
+            collection_name=cast(str, email.modality),
             ids=vector_ids,
             vectors=vectors,  # type: ignore
             payloads=metadata,  # type: ignore
@@ -337,18 +285,12 @@ def vectorize_email(email: MailMessage):
 
     embeds = defaultdict(list)
     for attachment in email.attachments:
-        if attachment.filename:
-            content = pathlib.Path(attachment.filename).read_bytes()
-        else:
-            content = attachment.content
-        collection, chunks = embedding.embed(
-            attachment.mime_type, content, metadata=attachment.as_payload()
-        )
+        chunks = embedding.embed_source_item(attachment)
         if not chunks:
             continue
 
         attachment.chunks = chunks
-        embeds[collection].extend(chunks)
+        embeds[attachment.modality].extend(chunks)
 
     for collection, chunks in embeds.items():
         ids = [c.id for c in chunks]

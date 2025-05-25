@@ -26,6 +26,7 @@ class EmailMessage(TypedDict):
     body: str
     attachments: list[Attachment]
     hash: bytes
+    raw_email: str
 
 
 RawEmailResponse = tuple[str | None, bytes]
@@ -171,6 +172,7 @@ def parse_email_message(raw_email: str, message_id: str) -> EmailMessage:
     body = extract_body(msg)
 
     return EmailMessage(
+        raw_email=raw_email,
         message_id=message_id,
         subject=subject,
         sender=from_,

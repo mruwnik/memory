@@ -6,7 +6,7 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
 
-from memory.common import embedding, qdrant, settings
+from memory.common import collections, embedding, qdrant, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.workers.celery_app import app
@@ -60,11 +60,11 @@ def reingest_chunk(chunk_id: str, collection: str):
             logger.error(f"Chunk {chunk_id} not found")
             return
 
-        if collection not in embedding.ALL_COLLECTIONS:
+        if collection not in collections.ALL_COLLECTIONS:
             raise ValueError(f"Unsupported collection {collection}")
 
         data = chunk.data
-        if collection in embedding.MULTIMODAL_COLLECTIONS:
+        if collection in collections.MULTIMODAL_COLLECTIONS:
             vector = embedding.embed_mixed(data)[0]
         elif len(data) == 1 and isinstance(data[0], str):
             vector = embedding.embed_text([data[0]])[0]

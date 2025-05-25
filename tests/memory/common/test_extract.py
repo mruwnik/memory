@@ -7,7 +7,6 @@ import shutil
 from memory.common.extract import (
     as_file,
     extract_text,
-    extract_content,
     doc_to_images,
     extract_image,
     docx_to_pdf,
@@ -105,52 +104,6 @@ def test_extract_image_with_bytes():
 def test_extract_image_with_str():
     with pytest.raises(ValueError):
         extract_image("test")
-
-
-@pytest.mark.parametrize(
-    "mime_type,content",
-    [
-        ("text/plain", "Text content"),
-        ("text/html", "<html>content</html>"),
-        ("text/markdown", "# Heading"),
-        ("text/csv", "a,b,c"),
-    ],
-)
-def test_extract_content_different_text_types(mime_type, content):
-    assert extract_content(mime_type, content) == [
-        {"contents": [content], "metadata": {}}
-    ]
-
-
-def test_extract_content_pdf():
-    result = extract_content("application/pdf", REGULAMIN)
-
-    assert len(result) == 2
-    assert all(
-        isinstance(page["contents"], list)
-        and all(isinstance(c, Image.Image) for c in page["contents"])
-        for page in result
-    )
-    assert all("page" in page["metadata"] for page in result)
-    assert all("width" in page["metadata"] for page in result)
-    assert all("height" in page["metadata"] for page in result)
-
-
-def test_extract_content_image(tmp_path):
-    # Create a test image
-    img = Image.new("RGB", (100, 100), color="red")
-    img_path = tmp_path / "test_img.png"
-    img.save(img_path)
-
-    (result,) = extract_content("image/png", img_path)
-
-    assert isinstance(result["contents"][0], Image.Image)
-    assert result["contents"][0].size == (100, 100)
-    assert result["metadata"] == {}
-
-
-def test_extract_content_unsupported_type():
-    assert extract_content("unsupported/type", "content") == []
 
 
 @pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")

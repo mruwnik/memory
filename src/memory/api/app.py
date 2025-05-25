@@ -15,7 +15,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from memory.common import embedding, qdrant, extract, settings
-from memory.common.embedding import get_modality
+from memory.common.collections import get_modality, TEXT_COLLECTIONS
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 
@@ -189,7 +189,7 @@ async def search(
     text_results = query_chunks(
         client,
         upload_data,
-        allowed_modalities & embedding.TEXT_COLLECTIONS,
+        allowed_modalities & TEXT_COLLECTIONS,
         embedding.embed_text,
         min_score=min_text_score,
         limit=limit,

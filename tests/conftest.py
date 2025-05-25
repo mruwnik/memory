@@ -205,9 +205,14 @@ def email_provider():
 def mock_file_storage(tmp_path: Path):
     chunk_storage_dir = tmp_path / "chunks"
     chunk_storage_dir.mkdir(parents=True, exist_ok=True)
-    with patch("memory.common.settings.FILE_STORAGE_DIR", tmp_path):
-        with patch("memory.common.settings.CHUNK_STORAGE_DIR", chunk_storage_dir):
-            yield
+    image_storage_dir = tmp_path / "images"
+    image_storage_dir.mkdir(parents=True, exist_ok=True)
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "CHUNK_STORAGE_DIR", chunk_storage_dir),
+        patch.object(settings, "WEBPAGE_STORAGE_DIR", image_storage_dir),
+    ):
+        yield
 
 
 @pytest.fixture

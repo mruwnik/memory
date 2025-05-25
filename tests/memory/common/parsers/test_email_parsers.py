@@ -249,6 +249,7 @@ def test_parse_simple_email():
         "body": "Test body content\n",
         "attachments": [],
         "sent_at": ANY,
+        "raw_email": msg.as_string(),
         "hash": b"\xed\xa0\x9b\xd4\t4\x06\xb9l\xa4\xb3*\xe4NpZ\x19\xc2\x9b\x87"
         + b"\xa6\x12\r\x7fS\xb6\xf1\xbe\x95\x9c\x99\xf1",
     }

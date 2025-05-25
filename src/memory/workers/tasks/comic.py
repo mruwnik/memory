@@ -1,4 +1,3 @@
-import hashlib
 import logging
 from datetime import datetime
 from typing import Callable, cast
@@ -6,20 +5,24 @@ from typing import Callable, cast
 import feedparser
 import requests
 
-from memory.common import embedding, qdrant, settings
+from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Comic, clean_filename
 from memory.common.parsers import comics
 from memory.workers.celery_app import app
+from memory.workers.tasks.content_processing import (
+    check_content_exists,
+    create_content_hash,
+    process_content_item,
+    safe_task_execution,
+)
 
 logger = logging.getLogger(__name__)
-
 
 SYNC_ALL_COMICS = "memory.workers.tasks.comic.sync_all_comics"
 SYNC_SMBC = "memory.workers.tasks.comic.sync_smbc"
 SYNC_XKCD = "memory.workers.tasks.comic.sync_xkcd"
 SYNC_COMIC = "memory.workers.tasks.comic.sync_comic"
-
 
 BASE_SMBC_URL = "https://www.smbc-comics.com/"
 SMBC_RSS_URL = "https://www.smbc-comics.com/comic/rss"
@@ -36,6 +39,7 @@ def find_new_urls(base_url: str, rss_url: str) -> set[str]:
         return set()
 
     urls = {cast(str, item.get("link") or item.get("id")) for item in feed.entries}
+    urls = {url for url in urls if url}
 
     with make_session() as session:
         known = {
@@ -61,6 +65,7 @@ def fetch_new_comics(
 
 
 @app.task(name=SYNC_COMIC)
+@safe_task_execution
 def sync_comic(
     url: str,
     image_url: str,
@@ -70,20 +75,26 @@ def sync_comic(
 ):
     """Synchronize a comic from a URL."""
     with make_session() as session:
-        if session.query(Comic).filter(Comic.url == url).first():
-            return
+        existing_comic = check_content_exists(session, Comic, url=url)
+        if existing_comic:
+            return {"status": "already_exists", "comic_id": existing_comic.id}
 
     response = requests.get(image_url)
+    if response.status_code != 200:
+        return {
+            "status": "failed",
+            "error": f"Failed to download image: {response.status_code}",
+        }
+
     file_type = image_url.split(".")[-1]
     mime_type = f"image/{file_type}"
     filename = (
         settings.COMIC_STORAGE_DIR / clean_filename(author) / f"{title}.{file_type}"
     )
-    if response.status_code == 200:
-        filename.parent.mkdir(parents=True, exist_ok=True)
-        filename.write_bytes(response.content)
 
-    sha256 = hashlib.sha256(f"{image_url}{published_date}".encode()).digest()
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    filename.write_bytes(response.content)
+
     comic = Comic(
         title=title,
         url=url,
@@ -92,27 +103,13 @@ def sync_comic(
         filename=filename.resolve().as_posix(),
         mime_type=mime_type,
         size=len(response.content),
-        sha256=sha256,
+        sha256=create_content_hash(f"{image_url}{published_date}"),
         tags={"comic", author},
         modality="comic",
     )
-    chunk = embedding.embed_image(filename, [title, author])
-    comic.chunks = [chunk]
 
     with make_session() as session:
-        session.add(comic)
-        session.add(chunk)
-        session.flush()
-
-        qdrant.upsert_vectors(
-            client=qdrant.get_qdrant_client(),
-            collection_name="comic",
-            ids=[str(chunk.id)],
-            vectors=[chunk.vector],  # type: ignore
-            payloads=[comic.as_payload()],
-        )
-
-        session.commit()
+        return process_content_item(comic, "comic", session)
 
 
 @app.task(name=SYNC_SMBC)

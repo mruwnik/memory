@@ -1,16 +1,20 @@
-import hashlib
 import logging
 from pathlib import Path
 from typing import Iterable, cast
 
-from memory.common import chunker, embedding, qdrant
-from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection
 from memory.common.parsers.ebook import Ebook, parse_ebook, Section
+from memory.common.db.connection import make_session
 from memory.workers.celery_app import app
+from memory.workers.tasks.content_processing import (
+    check_content_exists,
+    create_content_hash,
+    embed_source_item,
+    push_to_qdrant,
+    safe_task_execution,
+)
 
 logger = logging.getLogger(__name__)
-
 
 SYNC_BOOK = "memory.workers.tasks.book.sync_book"
 
@@ -46,10 +50,6 @@ def section_processor(
     ):
         content = "\n\n".join(section.pages).strip()
         if len(content) >= MIN_SECTION_LENGTH:
-            sha256 = hashlib.sha256(
-                f"{book.id}:{section.title}:{section.start_page}".encode()
-            ).digest()
-
             book_section = BookSection(
                 book_id=book.id,
                 section_title=section.title,
@@ -59,7 +59,9 @@ def section_processor(
                 end_page=section.end_page,
                 parent_section_id=None,  # Will be set after flush
                 content=content,
-                sha256=sha256,
+                sha256=create_content_hash(
+                    f"{book.id}:{section.title}:{section.start_page}"
+                ),
                 modality="book",
                 tags=book.tags,
                 pages=section.pages,
@@ -127,76 +129,11 @@ def create_book_and_sections(
 
 def embed_sections(all_sections: list[BookSection]) -> int:
     """Embed all sections and return count of successfully embedded sections."""
-    embedded_count = 0
-
-    def embed_text(text: str, metadata: dict) -> list[embedding.Chunk]:
-        _, chunks = embedding.embed(
-            "text/plain",
-            text,
-            metadata=metadata,
-            chunk_size=chunker.EMBEDDING_MAX_TOKENS,
-        )
-        return chunks
-
-    for section in all_sections:
-        try:
-            section_chunks = embed_text(
-                cast(str, section.content), section.as_payload()
-            )
-            page_chunks = [
-                chunk
-                for i, page in enumerate(section.pages)
-                for chunk in embed_text(
-                    page, section.as_payload() | {"page_number": i + section.start_page}
-                )
-            ]
-            chunks = section_chunks + page_chunks
-
-            if chunks:
-                section.chunks = chunks
-                section.embed_status = "QUEUED"  # type: ignore
-                embedded_count += 1
-            else:
-                section.embed_status = "FAILED"  # type: ignore
-                logger.warning(
-                    f"No chunks generated for section: {section.section_title}"
-                )
-
-        except IOError as e:
-            section.embed_status = "FAILED"  # type: ignore
-            logger.error(f"Failed to embed section {section.section_title}: {e}")
-
-    return embedded_count
-
-
-def push_to_qdrant(all_sections: list[BookSection]):
-    """Push embeddings to Qdrant for all successfully embedded sections."""
-    vector_ids = []
-    vectors = []
-    payloads = []
-
-    to_process = [s for s in all_sections if cast(str, s.embed_status) == "QUEUED"]
-    all_chunks = [chunk for section in to_process for chunk in section.chunks]
-    if not all_chunks:
-        return
-
-    vector_ids = [str(chunk.id) for chunk in all_chunks]
-    vectors = [chunk.vector for chunk in all_chunks]
-    payloads = [chunk.item_metadata for chunk in all_chunks]
-
-    qdrant.upsert_vectors(
-        client=qdrant.get_qdrant_client(),
-        collection_name="book",
-        ids=vector_ids,
-        vectors=vectors,
-        payloads=payloads,
-    )
-
-    for section in to_process:
-        section.embed_status = "STORED"  # type: ignore
+    return sum(embed_source_item(section) for section in all_sections)
 
 
 @app.task(name=SYNC_BOOK)
+@safe_task_execution
 def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
     """
     Synchronize a book from a file path.
@@ -211,10 +148,8 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
 
     with make_session() as session:
         # Check for existing book
-        existing_book = (
-            session.query(Book)
-            .filter(Book.file_path == ebook.file_path.as_posix())
-            .first()
+        existing_book = check_content_exists(
+            session, Book, file_path=ebook.file_path.as_posix()
         )
         if existing_book:
             logger.info(f"Book already exists: {existing_book.title}")
@@ -230,19 +165,10 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
         book, all_sections = create_book_and_sections(ebook, session, tags)
 
         # Embed sections
-        embedded_count = embed_sections(all_sections)
+        embedded_count = sum(embed_source_item(section) for section in all_sections)
         session.flush()
 
-        # Push to Qdrant
-        try:
-            push_to_qdrant(all_sections)
-        except Exception as e:
-            logger.error(f"Failed to push embeddings to Qdrant: {e}")
-            # Mark sections as failed
-            for section in all_sections:
-                if getattr(section, "embed_status") == "STORED":
-                    section.embed_status = "FAILED"  # type: ignore
-            raise
+        push_to_qdrant(all_sections, "book")
 
         session.commit()
 

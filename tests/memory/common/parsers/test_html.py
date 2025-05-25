@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup, Tag
 from PIL import Image as PILImage
 
+from memory.common import settings
 from memory.common.parsers.html import (
     Article,
     BaseHTMLParser,
@@ -164,27 +165,28 @@ def test_parse_date(text, date_format, expected):
     assert parse_date(text, date_format) == expected
 
 
-def test_extract_date():
+@pytest.mark.parametrize(
+    "selector, date_format, expected",
+    [
+        ("time", "%B %d, %Y", datetime.fromisoformat("2023-01-15T10:30:00")),
+        (".named-date", "%B %d, %Y", datetime.fromisoformat("2023-01-15")),
+        (".date", "%Y-%m-%d", datetime.fromisoformat("2023-02-20")),
+        (".nonexistent", None, None),
+    ],
+)
+def test_extract_date(selector, date_format, expected):
     html = """
     <div>
         <time datetime="2023-01-15T10:30:00">January 15, 2023</time>
+        <span class="named-date">January 15, 2023</span>
         <span class="date">2023-02-20</span>
         <div class="published">March 10, 2023</div>
     </div>
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # Should extract datetime attribute from time tag
-    result = extract_date(soup, "time", "%Y-%m-%d")
-    assert result == "2023-01-15T10:30:00"
-
-    # Should extract from text content
-    result = extract_date(soup, ".date", "%Y-%m-%d")
-    assert result == "2023-02-20T00:00:00"
-
-    # No matching element
-    result = extract_date(soup, ".nonexistent", "%Y-%m-%d")
-    assert result is None
+    result = extract_date(soup, selector, date_format)
+    assert result == expected
 
 
 def test_extract_content_element():
@@ -393,8 +395,7 @@ def test_process_image_cached(mock_pil_open, mock_requests_get):
 
 
 @patch("memory.common.parsers.html.process_image")
-@patch("memory.common.parsers.html.FILE_STORAGE_DIR")
-def test_process_images_basic(mock_file_storage_dir, mock_process_image):
+def test_process_images_basic(mock_process_image):
     html = """
     <div>
         <p>Text content</p>
@@ -409,40 +410,37 @@ def test_process_images_basic(mock_file_storage_dir, mock_process_image):
     content = cast(Tag, soup.find("div"))
     base_url = "https://example.com"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        image_dir = pathlib.Path(temp_dir)
-        mock_file_storage_dir.resolve.return_value = pathlib.Path(temp_dir)
+    # Mock successful image processing with proper filenames
+    mock_images = []
+    for i in range(3):
+        mock_img = MagicMock(spec=PILImage.Image)
+        mock_img.filename = str(settings.WEBPAGE_STORAGE_DIR / f"image{i + 1}.jpg")
+        mock_images.append(mock_img)
 
-        # Mock successful image processing with proper filenames
-        mock_images = []
-        for i in range(3):
-            mock_img = MagicMock(spec=PILImage.Image)
-            mock_img.filename = str(pathlib.Path(temp_dir) / f"image{i + 1}.jpg")
-            mock_images.append(mock_img)
+    mock_process_image.side_effect = mock_images
 
-        mock_process_image.side_effect = mock_images
+    updated_content, images = process_images(
+        content, base_url, settings.WEBPAGE_STORAGE_DIR
+    )
 
-        updated_content, images = process_images(content, base_url, image_dir)
-
-        # Should have processed 3 images (skipping the one without src)
-        assert len(images) == 3
-        assert mock_process_image.call_count == 3
-
-        # Check that img src attributes were updated to relative paths
-        img_tags = [
-            tag
-            for tag in (updated_content.find_all("img") if updated_content else [])
-            if isinstance(tag, Tag)
-        ]
-        src_values = []
-        for img in img_tags:
-            src = img.get("src")
-            if src and isinstance(src, str):
-                src_values.append(src)
-
-        # Should have relative paths to the processed images
-        for src in src_values[:3]:  # First 3 have src
-            assert not src.startswith("http")  # Should be relative paths
+    expected = BeautifulSoup(
+        """<div>
+                <p>Text content</p>
+                    <img alt="Image 1" src="images/image1.jpg"/>
+                    <img alt="Image 2" src="images/image2.jpg"/>
+                    <img alt="Image 3" src="images/image3.jpg"/>
+                    <img alt="No src"/>
+                <p>More text</p>
+            </div>
+        """,
+        "html.parser",
+    )
+    assert updated_content.prettify() == expected.prettify()  # type: ignore
+    assert images == {
+        "images/image1.jpg": mock_images[0],
+        "images/image2.jpg": mock_images[1],
+        "images/image3.jpg": mock_images[2],
+    }
 
 
 def test_process_images_empty():
@@ -454,8 +452,7 @@ def test_process_images_empty():
 
 
 @patch("memory.common.parsers.html.process_image")
-@patch("memory.common.parsers.html.FILE_STORAGE_DIR")
-def test_process_images_with_failures(mock_file_storage_dir, mock_process_image):
+def test_process_images_with_failures(mock_process_image):
     html = """
     <div>
         <img src="good.jpg" alt="Good image">
@@ -465,22 +462,20 @@ def test_process_images_with_failures(mock_file_storage_dir, mock_process_image)
     soup = BeautifulSoup(html, "html.parser")
     content = cast(Tag, soup.find("div"))
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        image_dir = pathlib.Path(temp_dir)
-        mock_file_storage_dir.resolve.return_value = pathlib.Path(temp_dir)
+    # First image succeeds, second fails
+    mock_good_image = MagicMock(spec=PILImage.Image)
+    mock_good_image.filename = settings.WEBPAGE_STORAGE_DIR / "good.jpg"
+    mock_process_image.side_effect = [mock_good_image, None]
 
-        # First image succeeds, second fails
-        mock_good_image = MagicMock(spec=PILImage.Image)
-        mock_good_image.filename = str(pathlib.Path(temp_dir) / "good.jpg")
-        mock_process_image.side_effect = [mock_good_image, None]
+    updated_content, images = process_images(
+        content, "https://example.com", settings.WEBPAGE_STORAGE_DIR
+    )
 
-        updated_content, images = process_images(
-            content, "https://example.com", image_dir
-        )
-
-        # Should only return successful image
-        assert len(images) == 1
-        assert images[0] == mock_good_image
+    expected = BeautifulSoup(
+        html.replace("good.jpg", "images/good.jpg"), "html.parser"
+    ).prettify()
+    assert updated_content.prettify() == expected  # type: ignore
+    assert images == {"images/good.jpg": mock_good_image}
 
 
 @patch("memory.common.parsers.html.process_image")
@@ -494,15 +489,12 @@ def test_process_images_no_filename(mock_process_image):
     mock_image.filename = None
     mock_process_image.return_value = mock_image
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        image_dir = pathlib.Path(temp_dir)
+    updated_content, images = process_images(
+        content, "https://example.com", settings.WEBPAGE_STORAGE_DIR
+    )
 
-        updated_content, images = process_images(
-            content, "https://example.com", image_dir
-        )
-
-        # Should skip image without filename
-        assert len(images) == 0
+    # Should skip image without filename
+    assert not images
 
 
 class TestBaseHTMLParser:
@@ -541,7 +533,7 @@ class TestBaseHTMLParser:
 
         assert article.title == "Article Title"
         assert article.author == "John Smith"  # Should prefer content over meta
-        assert article.published_date == "2023-01-15T00:00:00"
+        assert article.published_date == datetime(2023, 1, 15)
         assert article.url == "https://example.com/article"
         assert "This is the main content" in article.content
         assert article.metadata["author"] == "Jane Doe"

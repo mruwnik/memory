@@ -2,11 +2,12 @@
 Database models for the knowledge base system.
 """
 
+from dataclasses import dataclass
 import pathlib
 import re
 import textwrap
 from datetime import datetime
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Iterable, Sequence, cast
 
 from PIL import Image
 from sqlalchemy import (
@@ -32,6 +33,9 @@ from sqlalchemy.orm import Session, relationship
 
 from memory.common import settings
 from memory.common.parsers.email import EmailMessage, parse_email_message
+import memory.common.extract as extract
+import memory.common.collections as collections
+import memory.common.chunker as chunker
 
 Base = declarative_base()
 
@@ -137,6 +141,7 @@ class SourceItem(Base):
     """Base class for all content in the system using SQLAlchemy's joined table inheritance."""
 
     __tablename__ = "source_item"
+    __allow_unmapped__ = True
 
     id = Column(BigInteger, primary_key=True)
     modality = Column(Text, nullable=False)
@@ -173,6 +178,14 @@ class SourceItem(Base):
     def vector_ids(self):
         """Get vector IDs from associated chunks."""
         return [chunk.id for chunk in self.chunks]
+
+    def data_chunks(self) -> Iterable[extract.DataChunk]:
+        return [
+            extract.DataChunk(
+                data=cast(str, self.content),
+                collection=cast(str, self.modality),
+            )
+        ]
 
     def as_payload(self) -> dict:
         return {
@@ -306,6 +319,19 @@ class EmailAttachment(SourceItem):
             "tags": self.tags,
         }
 
+    def data_chunks(self) -> Iterable[extract.DataChunk]:
+        if cast(str | None, self.filename):
+            contents = pathlib.Path(cast(str, self.filename)).read_bytes()
+        else:
+            contents = cast(str, self.content)
+
+        return extract.extract_data_chunks(
+            cast(str, self.mime_type),
+            contents,
+            collection=cast(str, self.modality),
+            embedding_model=collections.collection_model(cast(str, self.modality)),
+        )
+
     # Add indexes
     __table_args__ = (Index("email_attachment_message_idx", "mail_message_id"),)
 
@@ -407,6 +433,15 @@ class Comic(SourceItem):
         }
         return {k: v for k, v in payload.items() if v is not None}
 
+    def data_chunks(self) -> Iterable[extract.DataChunk]:
+        image = Image.open(pathlib.Path(cast(str, self.filename)))
+        return [
+            extract.DataChunk(
+                data=[image, cast(str, self.title), cast(str, self.author)],
+                collection=cast(str, self.modality),
+            )
+        ]
+
 
 class Book(Base):
     """Book-level metadata table"""
@@ -503,6 +538,19 @@ class BookSection(SourceItem):
             "tags": self.tags,
         }
 
+    def data_chunks(self) -> Iterable[extract.DataChunk]:
+        texts = [(page, i + self.start_page) for i, page in enumerate(self.pages)]
+        texts += [(cast(str, self.content), self.start_page)]
+        return [
+            extract.DataChunk(
+                data=[text],
+                collection=cast(str, self.modality),
+                metadata={"page": page_number},
+                max_size=chunker.EMBEDDING_MAX_TOKENS,
+            )
+            for text, page_number in texts
+        ]
+
 
 class BlogPost(SourceItem):
     __tablename__ = "blog_post"
@@ -519,6 +567,7 @@ class BlogPost(SourceItem):
     description = Column(Text, nullable=True)  # Meta description or excerpt
     domain = Column(Text, nullable=True)  # Domain of the source website
     word_count = Column(Integer, nullable=True)  # Approximate word count
+    images = Column(ARRAY(Text), nullable=True)  # List of image URLs
 
     # Store original metadata from parser
     webpage_metadata = Column(JSONB, nullable=True)
@@ -551,6 +600,30 @@ class BlogPost(SourceItem):
             **metadata,
         }
         return {k: v for k, v in payload.items() if v}
+
+    def data_chunks(self) -> Iterable[extract.DataChunk]:
+        images = [Image.open(image) for image in self.images]
+        data = [cast(str, self.content)] + images
+
+        # Always embed the full content as a single chunk (if possible, of course)
+        chunks = [
+            extract.DataChunk(
+                data=data,
+                collection=cast(str, self.modality),
+                max_size=chunker.EMBEDDING_MAX_TOKENS,
+            )
+        ]
+
+        # If the content is long enough, also embed it as chunks of the default size.
+        tokens = chunker.approx_token_count(cast(str, self.content))
+        if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
+            chunks += [
+                extract.DataChunk(
+                    data=data,
+                    collection=cast(str, self.modality),
+                )
+            ]
+        return chunks
 
 
 class MiscDoc(SourceItem):

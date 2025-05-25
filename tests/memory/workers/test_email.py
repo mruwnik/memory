@@ -12,7 +12,7 @@ from memory.common.db.models import (
     EmailAttachment,
     MailMessage,
 )
-from memory.common.parsers.email import Attachment
+from memory.common.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     create_mail_message,
     extract_email_uid,
@@ -226,14 +226,14 @@ def test_create_mail_message(db_session):
         "--boundary--"
     )
     folder = "INBOX"
+    parsed_email = parse_email_message(raw_email, "321")
 
     # Call function
     mail_message = create_mail_message(
         db_session=db_session,
-        raw_email=raw_email,
         folder=folder,
         tags=["test"],
-        message_id="123",
+        parsed_email=parsed_email,
     )
     db_session.commit()
 
@@ -344,6 +344,7 @@ def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
         recipients=["recipient@example.com"],
         content="This is a test email for vectorization",
         folder="INBOX",
+        modality="mail",
     )
     db_session.add(mail_message)
     db_session.flush()
@@ -373,6 +374,7 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         recipients=["recipient@example.com"],
         content="This is a test email with attachments",
         folder="INBOX",
+        modality="mail",
     )
     db_session.add(mail_message)
     db_session.flush()
