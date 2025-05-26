@@ -589,10 +589,12 @@ def test_html_list_parser_extract_date_without_selector():
         (
             PaulGrahamParser,
             "https://www.paulgraham.com/articles",
-            [("Long enough title", "essay.html")],
+            [
+                ("Long enough title", "essay.html"),
+                ("Long enough title", "https://other.com/essay.html"),
+            ],
             [
                 ("Short", "essay.html"),
-                ("Long enough title", "https://other.com/essay.html"),
                 ("Long enough title", "document.txt"),
             ],
         ),

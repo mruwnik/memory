@@ -615,36 +615,3 @@ def parse_webpage(url: str) -> Article:
     html = cast(str, fetch_html(url))
     parser = get_parser_for_url(url, html)
     return parser.parse(html, url)
-
-
-feeds = [
-    "https://archive.ph/o/IQUoT/https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine",
-    "https://www.rifters.com/crawl/",
-    "https://rachelbythebay.com/w/",
-    "https://danluu.com/",
-    "https://guzey.come",
-    "https://aphyr.com/",
-    "https://www.applieddivinitystudies.com/",
-    "https://www.imightbewrong.org/",
-    "https://www.kvetch.au/",
-    "https://www.overcomingbias.com/",
-    "https://samkriss.substack.com/",
-    "https://www.richardhanania.com/",
-    "https://skunkledger.substack.com/",
-    "https://taipology.substack.com/",
-    "https://putanumonit.com/",
-    "https://www.flyingmachinestudios.com/",
-    "https://www.theintrinsicperspective.com/",
-    "https://www.strangeloopcanon.com/",
-    "https://slimemoldtimemold.com/",
-    "https://zeroinputagriculture.substack.com/",
-    "https://nayafia.substack.com",
-    "https://www.paulgraham.com/articles.html",
-    "https://mcfunley.com/writing",
-    "https://www.bitsaboutmoney.com/",
-    "https://akarlin.com",
-    "https://www.exurbe.com/",
-    "https://acoup.blog/",
-    "https://www.theredhandfiles.com/",
-    "https://karlin.blog/",
-]

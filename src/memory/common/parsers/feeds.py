@@ -319,7 +319,8 @@ class GuzeyParser(HTMLListParser):
 
 
 class PaulGrahamParser(HTMLListParser):
-    item_selector = "font a[href]"
+    item_selector = "img + font"
+    title_selector = "a"
     skip_patterns = DEFAULT_SKIP_PATTERNS + [
         r"\.txt$",  # Skip text files
         r"turbifycdn\.com",  # Skip CDN links
@@ -329,7 +330,6 @@ class PaulGrahamParser(HTMLListParser):
         # Only include items that are actual essays (relative URLs ending in .html)
         return (
             item.url.endswith(".html")
-            and not item.url.startswith("http")
             and len(item.title) > 5  # Filter out very short titles
         )
 

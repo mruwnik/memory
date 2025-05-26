@@ -697,8 +697,8 @@ class GithubItem(SourceItem):
     )
 
 
-class RssFeed(Base):
-    __tablename__ = "rss_feeds"
+class ArticleFeed(Base):
+    __tablename__ = "article_feeds"
 
     id = Column(BigInteger, primary_key=True)
     url = Column(Text, nullable=False, unique=True)
@@ -716,8 +716,8 @@ class RssFeed(Base):
 
     # Add indexes
     __table_args__ = (
-        Index("rss_feeds_active_idx", "active", "last_checked_at"),
-        Index("rss_feeds_tags_idx", "tags", postgresql_using="gin"),
+        Index("article_feeds_active_idx", "active", "last_checked_at"),
+        Index("article_feeds_tags_idx", "tags", postgresql_using="gin"),
     )
 
 
