@@ -100,7 +100,7 @@ def test_find_new_urls_parse_error(mock_parse):
 
 
 @patch("memory.workers.tasks.comic.feedparser.parse")
-def test_find_new_urls_empty_feed(mock_parse):
+def test_find_new_urls_empty_feed(mock_parse, db_session):
     """Test handling of empty RSS feed."""
     mock_parse.return_value = Mock(entries=[])
 
@@ -110,7 +110,7 @@ def test_find_new_urls_empty_feed(mock_parse):
 
 
 @patch("memory.workers.tasks.comic.feedparser.parse")
-def test_find_new_urls_malformed_entries(mock_parse):
+def test_find_new_urls_malformed_entries(mock_parse, db_session):
     """Test handling of malformed RSS entries."""
     mock_parse.return_value = Mock(
         entries=[

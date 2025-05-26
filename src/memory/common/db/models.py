@@ -92,14 +92,19 @@ def clean_filename(filename: str) -> str:
 def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
         if not image.filename:  # type: ignore
-            filename = f"{chunk_id}_{i}.{image.format}"  # type: ignore
+            filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}_{i}.{image.format}"  # type: ignore
             image.save(filename)
+            image.filename = str(filename)  # type: ignore
 
     return [image.filename for image in images]  # type: ignore
 
 
 def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalChunk]:
-    return [chunk] + [i for i in images if i.filename in chunk]  # type: ignore
+    return [chunk] + [
+        i
+        for i in images
+        if getattr(i, "filename", None) and i.filename in chunk  # type: ignore
+    ]
 
 
 class Chunk(Base):
@@ -114,7 +119,9 @@ class Chunk(Base):
     source_id = Column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
     )
-    file_path = Column(Text)  # Path to content if stored as a file
+    file_paths = Column(
+        ARRAY(Text), nullable=True
+    )  # Path to content if stored as a file
     content = Column(Text)  # Direct content storage
     embedding_model = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -125,16 +132,16 @@ class Chunk(Base):
 
     # One of file_path or content must be populated
     __table_args__ = (
-        CheckConstraint("(file_path IS NOT NULL) OR (content IS NOT NULL)"),
+        CheckConstraint("(file_paths IS NOT NULL) OR (content IS NOT NULL)"),
         Index("chunk_source_idx", "source_id"),
     )
 
     @property
     def data(self) -> list[bytes | str | Image.Image]:
-        if self.file_path is None:
+        if self.file_paths is None:
             return [cast(str, self.content)]
 
-        paths = [pathlib.Path(p) for p in self.file_path.split("\n")]
+        paths = [pathlib.Path(cast(str, p)) for p in self.file_paths]
         files = [path for path in paths if path.exists()]
 
         items = []
@@ -205,16 +212,16 @@ class SourceItem(Base):
         self, data: Sequence[extract.MulitmodalChunk], metadata: dict[str, Any] = {}
     ):
         chunk_id = str(uuid.uuid4())
-        text = "\n\n".join(c for c in data if isinstance(c, str))
+        text = "\n\n".join(c for c in data if isinstance(c, str) and c.strip())
         images = [c for c in data if isinstance(c, Image.Image)]
         image_names = image_filenames(chunk_id, images)
 
         chunk = Chunk(
             id=chunk_id,
             source=self,
-            content=text,
+            content=text or None,
             images=images,
-            file_path="\n".join(image_names) if image_names else None,
+            file_paths=image_names,
             embedding_model=collections.collection_model(cast(str, self.modality)),
             item_metadata=self.as_payload() | metadata,
         )
@@ -555,7 +562,7 @@ class BookSection(SourceItem):
     )
 
     def as_payload(self) -> dict:
-        return {
+        vals = {
             "source_id": self.id,
             "book_id": self.book_id,
             "section_title": self.section_title,
@@ -565,14 +572,18 @@ class BookSection(SourceItem):
             "end_page": self.end_page,
             "tags": self.tags,
         }
+        return {k: v for k, v in vals.items() if v}
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+        if not cast(str, self.content.strip()):
+            return []
+
         texts = [(page, i + self.start_page) for i, page in enumerate(self.pages)]
-        texts += [(cast(str, self.content), self.start_page)]
         return [
             self._make_chunk([text.strip()], metadata | {"page": page_number})
             for text, page_number in texts
-        ]
+            if text and text.strip()
+        ] + [self._make_chunk([cast(str, self.content.strip())], metadata)]
 
 
 class BlogPost(SourceItem):
@@ -628,14 +639,15 @@ class BlogPost(SourceItem):
         images = [Image.open(image) for image in self.images]
 
         content = cast(str, self.content)
-        full_text = [content, *images]
+        full_text = [content.strip(), *images]
 
-        tokens = chunker.approx_token_count(cast(str, self.content))
-        if tokens < chunker.DEFAULT_CHUNK_TOKENS * 2:
-            return [full_text]
+        chunks = []
+        tokens = chunker.approx_token_count(content)
+        if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
+            chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
 
-        chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
-        return [full_text] + chunks
+        all_chunks = [full_text] + chunks
+        return [c for c in all_chunks if c and all(i for i in c)]
 
 
 class MiscDoc(SourceItem):

@@ -51,16 +51,16 @@ def chunk(request, test_image, db_session):
     collection = request.param
     if collection == "photo":
         content = None
-        file_path = str(test_image)
+        file_paths = [str(test_image)]
     else:
         content = "Test content for reingestion"
-        file_path = None
+        file_paths = None
 
     chunk = Chunk(
         id=str(uuid.uuid4()),
         source=SourceItem(id=1, modality=collection, sha256=b"123"),
         content=content,
-        file_path=file_path,
+        file_paths=file_paths,
         embedding_model="test-model",
         checked_at=datetime(2025, 1, 1),
     )
@@ -146,9 +146,7 @@ def test_reingest_chunk(db_session, qdrant, chunk):
 
     start = datetime.now()
     test_vector = [0.1] * 1024
-
-    with patch.object(embedding, "embed_chunks", return_value=[test_vector]):
-        reingest_chunk(str(chunk.id), collection)
+    reingest_chunk(str(chunk.id), collection)
 
     vectors = qd.search_vectors(qdrant, collection, test_vector, limit=1)
     assert len(vectors) == 1
@@ -198,7 +196,7 @@ def test_check_batch(db_session, qdrant):
             id=f"00000000-0000-0000-0000-0000000000{i:02d}",
             source=SourceItem(modality=modality, sha256=f"123{i}".encode()),
             content="Test content",
-            file_path=None,
+            file_paths=None,
             embedding_model="test-model",
             checked_at=datetime(2025, 1, 1),
         )
@@ -252,7 +250,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
             id=next(ids_generator),
             source=SourceItem(modality=modality, sha256=f"{modality}-{i}".encode()),
             content="Old content",
-            file_path=None,
+            file_paths=None,
             embedding_model="test-model",
             checked_at=old_time,
         )
@@ -267,7 +265,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
                 modality=modality, sha256=f"recent-{modality}-{i}".encode()
             ),
             content="Recent content",
-            file_path=None,
+            file_paths=None,
             embedding_model="test-model",
             checked_at=now,
         )

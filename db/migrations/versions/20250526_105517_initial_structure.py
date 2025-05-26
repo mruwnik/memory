@@ -1,8 +1,8 @@
-"""Initial structure for the database.
+"""Initial structure
 
-Revision ID: 4684845ca51e
-Revises: a466a07360d5
-Create Date: 2025-05-03 14:00:56.113840
+Revision ID: d897c6353a84
+Revises:
+Create Date: 2025-05-26 10:55:17.311208
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "4684845ca51e"
+revision: str = "d897c6353a84"
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -22,6 +22,35 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+
+    op.create_table(
+        "book",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("isbn", sa.Text(), nullable=True),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("author", sa.Text(), nullable=True),
+        sa.Column("publisher", sa.Text(), nullable=True),
+        sa.Column("published", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("language", sa.Text(), nullable=True),
+        sa.Column("edition", sa.Text(), nullable=True),
+        sa.Column("series", sa.Text(), nullable=True),
+        sa.Column("series_number", sa.Integer(), nullable=True),
+        sa.Column("total_pages", sa.Integer(), nullable=True),
+        sa.Column("file_path", sa.Text(), nullable=True),
+        sa.Column("tags", sa.ARRAY(sa.Text()), server_default="{}", nullable=False),
+        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=True,
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("isbn"),
+    )
+    op.create_index("book_author_idx", "book", ["author"], unique=False)
+    op.create_index("book_isbn_idx", "book", ["isbn"], unique=False)
+    op.create_index("book_title_idx", "book", ["title"], unique=False)
     op.create_table(
         "email_accounts",
         sa.Column("id", sa.BigInteger(), nullable=False),
@@ -82,6 +111,12 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("url"),
     )
@@ -128,20 +163,52 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("url", sa.Text(), nullable=True),
         sa.Column("title", sa.Text(), nullable=True),
+        sa.Column("author", sa.Text(), nullable=True),
         sa.Column("published", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("domain", sa.Text(), nullable=True),
+        sa.Column("word_count", sa.Integer(), nullable=True),
+        sa.Column("images", sa.ARRAY(sa.Text()), nullable=True),
+        sa.Column(
+            "webpage_metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
         sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("url"),
     )
+    op.create_index("blog_post_author_idx", "blog_post", ["author"], unique=False)
+    op.create_index("blog_post_domain_idx", "blog_post", ["domain"], unique=False)
+    op.create_index("blog_post_published_idx", "blog_post", ["published"], unique=False)
+    op.create_index(
+        "blog_post_word_count_idx", "blog_post", ["word_count"], unique=False
+    )
     op.create_table(
-        "book_doc",
+        "book_section",
         sa.Column("id", sa.BigInteger(), nullable=False),
-        sa.Column("title", sa.Text(), nullable=True),
-        sa.Column("author", sa.Text(), nullable=True),
-        sa.Column("chapter", sa.Text(), nullable=True),
-        sa.Column("published", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("book_id", sa.BigInteger(), nullable=False),
+        sa.Column("section_title", sa.Text(), nullable=True),
+        sa.Column("section_number", sa.Integer(), nullable=True),
+        sa.Column("section_level", sa.Integer(), nullable=True),
+        sa.Column("start_page", sa.Integer(), nullable=True),
+        sa.Column("end_page", sa.Integer(), nullable=True),
+        sa.Column("parent_section_id", sa.BigInteger(), nullable=True),
+        sa.ForeignKeyConstraint(["book_id"], ["book.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["parent_section_id"],
+            ["book_section.id"],
+        ),
         sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("book_section_book_idx", "book_section", ["book_id"], unique=False)
+    op.create_index(
+        "book_section_level_idx",
+        "book_section",
+        ["section_level", "section_number"],
+        unique=False,
+    )
+    op.create_index(
+        "book_section_parent_idx", "book_section", ["parent_section_id"], unique=False
     )
     op.create_table(
         "chat_message",
@@ -165,7 +232,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("source_id", sa.BigInteger(), nullable=False),
-        sa.Column("file_path", sa.Text(), nullable=True),
+        sa.Column("file_paths", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column("content", sa.Text(), nullable=True),
         sa.Column("embedding_model", sa.Text(), nullable=True),
         sa.Column(
@@ -174,11 +241,31 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=True,
         ),
-        sa.CheckConstraint("(file_path IS NOT NULL) OR (content IS NOT NULL)"),
+        sa.Column(
+            "checked_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=True,
+        ),
+        sa.CheckConstraint("(file_paths IS NOT NULL) OR (content IS NOT NULL)"),
         sa.ForeignKeyConstraint(["source_id"], ["source_item.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("chunk_source_idx", "chunk", ["source_id"], unique=False)
+    op.create_table(
+        "comic",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=True),
+        sa.Column("author", sa.Text(), nullable=True),
+        sa.Column("published", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("volume", sa.Text(), nullable=True),
+        sa.Column("issue", sa.Text(), nullable=True),
+        sa.Column("page", sa.Integer(), nullable=True),
+        sa.Column("url", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("comic_author_idx", "comic", ["author"], unique=False)
     op.create_table(
         "git_commit",
         sa.Column("id", sa.BigInteger(), nullable=False),
@@ -263,7 +350,6 @@ def upgrade() -> None:
         "misc_doc",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("path", sa.Text(), nullable=True),
-        sa.Column("mime_type", sa.TEXT(), autoincrement=False, nullable=True),
         sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -321,15 +407,25 @@ def downgrade() -> None:
     op.drop_index("git_files_idx", table_name="git_commit", postgresql_using="gin")
     op.drop_index("git_date_idx", table_name="git_commit")
     op.drop_table("git_commit")
+    op.drop_index("comic_author_idx", table_name="comic")
+    op.drop_table("comic")
     op.drop_index("chunk_source_idx", table_name="chunk")
     op.drop_table("chunk")
     op.drop_index("chat_channel_idx", table_name="chat_message")
     op.drop_table("chat_message")
-    op.drop_table("book_doc")
+    op.drop_index("book_section_parent_idx", table_name="book_section")
+    op.drop_index("book_section_level_idx", table_name="book_section")
+    op.drop_index("book_section_book_idx", table_name="book_section")
+    op.drop_table("book_section")
+    op.drop_index("blog_post_word_count_idx", table_name="blog_post")
+    op.drop_index("blog_post_published_idx", table_name="blog_post")
+    op.drop_index("blog_post_domain_idx", table_name="blog_post")
+    op.drop_index("blog_post_author_idx", table_name="blog_post")
     op.drop_table("blog_post")
     op.drop_index("source_tags_idx", table_name="source_item", postgresql_using="gin")
     op.drop_index("source_status_idx", table_name="source_item")
     op.drop_index("source_modality_idx", table_name="source_item")
+    op.drop_index("source_filename_idx", table_name="source_item")
     op.drop_table("source_item")
     op.drop_index("rss_feeds_tags_idx", table_name="rss_feeds", postgresql_using="gin")
     op.drop_index("rss_feeds_active_idx", table_name="rss_feeds")
@@ -340,3 +436,7 @@ def downgrade() -> None:
     op.drop_index("email_accounts_address_idx", table_name="email_accounts")
     op.drop_index("email_accounts_active_idx", table_name="email_accounts")
     op.drop_table("email_accounts")
+    op.drop_index("book_title_idx", table_name="book")
+    op.drop_index("book_isbn_idx", table_name="book")
+    op.drop_index("book_author_idx", table_name="book")
+    op.drop_table("book")
