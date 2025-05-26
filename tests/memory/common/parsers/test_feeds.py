@@ -1,10 +1,10 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
-from typing import Any, cast
+from typing import cast
+import json
 
 import pytest
 from bs4 import BeautifulSoup, Tag
-import requests
 
 from memory.common.parsers.feeds import (
     FeedItem,
@@ -17,13 +17,158 @@ from memory.common.parsers.feeds import (
     NadiaXyzParser,
     RedHandFilesParser,
     BloombergAuthorParser,
+    JSONParser,
+    SubstackAPIParser,
+    select_in,
+    clean_url,
     is_rss_feed,
-    extract_url,
     find_feed_link,
     get_feed_parser,
-    DEFAULT_SKIP_PATTERNS,
-    PARSER_REGISTRY,
 )
+
+
+@pytest.mark.parametrize(
+    "data, path, expected",
+    [
+        # Basic dictionary access
+        ({"key": "value"}, ["key"], "value"),
+        ({"nested": {"key": "value"}}, ["nested", "key"], "value"),
+        # List access
+        (["a", "b", "c"], [1], "b"),
+        ([{"key": "value"}], [0, "key"], "value"),
+        # Mixed access
+        (
+            {"items": [{"name": "first"}, {"name": "second"}]},
+            ["items", 1, "name"],
+            "second",
+        ),
+        # Empty path returns original data
+        ({"key": "value"}, [], {"key": "value"}),
+        # Missing keys return None
+        ({"key": "value"}, ["missing"], None),
+        ({"nested": {}}, ["nested", "missing"], None),
+        # Index out of bounds returns None
+        (["a", "b"], [5], None),
+        # Type errors return None
+        ("string", ["key"], None),
+        (123, [0], None),
+        (None, ["key"], None),
+        # Deep nesting
+        ({"a": {"b": {"c": {"d": "deep"}}}}, ["a", "b", "c", "d"], "deep"),
+    ],
+)
+def test_select_in(data, path, expected):
+    assert select_in(data, path) == expected
+
+
+@patch("memory.common.parsers.feeds.fetch_html")
+def test_json_parser_fetch_items_with_content(mock_fetch_html):
+    content = json.dumps(
+        [
+            {"title": "Article 1", "url": "https://example.com/1"},
+            {"title": "Article 2", "url": "https://example.com/2"},
+        ]
+    )
+
+    parser = JSONParser(url="https://example.com/feed.json", content=content)
+    items = parser.fetch_items()
+
+    assert items == [
+        {"title": "Article 1", "url": "https://example.com/1"},
+        {"title": "Article 2", "url": "https://example.com/2"},
+    ]
+    mock_fetch_html.assert_not_called()
+
+
+@patch("memory.common.parsers.feeds.fetch_html")
+def test_json_parser_fetch_items_without_content(mock_fetch_html):
+    content = json.dumps([{"title": "Article", "url": "https://example.com/1"}])
+    mock_fetch_html.return_value = content
+
+    parser = JSONParser(url="https://example.com/feed.json")
+    items = parser.fetch_items()
+
+    assert items == [{"title": "Article", "url": "https://example.com/1"}]
+    mock_fetch_html.assert_called_once_with("https://example.com/feed.json")
+
+
+@patch("memory.common.parsers.feeds.fetch_html")
+def test_json_parser_fetch_items_invalid_json(mock_fetch_html):
+    mock_fetch_html.return_value = "invalid json content"
+
+    parser = JSONParser(url="https://example.com/feed.json")
+    items = parser.fetch_items()
+
+    assert items == []
+
+
+def test_json_parser_extract_methods():
+    parser = JSONParser(url="https://example.com")
+
+    entry = {
+        "title": "Test Title",
+        "url": "https://example.com/article",
+        "description": "Test description",
+        "date": "2023-01-15",
+        "author": "John Doe",
+        "guid": "unique-123",
+        "metadata": {"tags": ["tech", "news"]},
+    }
+
+    assert parser.extract_title(entry) == "Test Title"
+    assert parser.extract_url(entry) == "https://example.com/article"
+    assert parser.extract_description(entry) == "Test description"
+    assert parser.extract_date(entry) == "2023-01-15"
+    assert parser.extract_author(entry) == "John Doe"
+    assert parser.extract_guid(entry) == "unique-123"
+    assert parser.extract_metadata(entry) == {"tags": ["tech", "news"]}
+
+
+def test_json_parser_custom_paths():
+    parser = JSONParser(url="https://example.com")
+    parser.title_path = ["content", "headline"]
+    parser.url_path = ["links", "canonical"]
+    parser.author_path = ["byline", "name"]
+
+    entry = {
+        "content": {"headline": "Custom Title"},
+        "links": {"canonical": "https://example.com/custom"},
+        "byline": {"name": "Jane Smith"},
+    }
+
+    assert parser.extract_title(entry) == "Custom Title"
+    assert parser.extract_url(entry) == "https://example.com/custom"
+    assert parser.extract_author(entry) == "Jane Smith"
+
+
+def test_json_parser_missing_fields():
+    parser = JSONParser(url="https://example.com")
+
+    entry = {}  # Empty entry
+
+    assert parser.extract_title(entry) is None
+    assert parser.extract_url(entry) is None
+    assert parser.extract_description(entry) is None
+    assert parser.extract_date(entry) is None
+    assert parser.extract_author(entry) is None
+    assert parser.extract_guid(entry) is None
+    assert parser.extract_metadata(entry) is None
+
+
+def test_json_parser_nested_paths():
+    parser = JSONParser(url="https://example.com")
+    parser.title_path = ["article", "header", "title"]
+    parser.author_path = ["article", "byline", 0, "name"]
+
+    entry = {
+        "article": {
+            "header": {"title": "Nested Title"},
+            "byline": [{"name": "First Author"}, {"name": "Second Author"}],
+        }
+    }
+
+    assert parser.extract_title(entry) == "Nested Title"
+    assert parser.extract_author(entry) == "First Author"
 
 
 def test_feed_parser_base_url():
@@ -582,7 +727,7 @@ def test_extract_url_function(html, expected):
     element = soup.find("a")
     assert element is not None
 
-    url = extract_url(cast(Tag, element), "https://example.com")
+    url = clean_url(cast(Tag, element), "https://example.com")
     assert url == expected
 
 
@@ -706,33 +851,30 @@ def test_get_feed_parser_with_check_from():
     assert parser.since == check_from
 
 
-def test_parser_registry_completeness():
-    """Ensure PARSER_REGISTRY contains expected parsers."""
-    expected_patterns = [
-        r"https://danluu.com",
-        r"https://guzey.com/archive",
-        r"https://www.paulgraham.com/articles",
-        r"https://nadia.xyz/posts",
-        r"https://www.theredhandfiles.com",
-        r"https://archive.ph/.*?/https://www.bloomberg.com/opinion/authors/",
-    ]
+def test_substack_api_parser():
+    parser = SubstackAPIParser(url="https://example.substack.com/api/v1/posts")
 
-    assert len(PARSER_REGISTRY) == len(expected_patterns)
-    for pattern in expected_patterns:
-        assert pattern in PARSER_REGISTRY
+    entry = {
+        "title": "Substack Post",
+        "canonical_url": "https://example.substack.com/p/post-slug",
+        "publishedBylines": [{"name": "Author Name"}],
+        "post_date": "2023-01-15T10:30:00Z",
+    }
+
+    assert parser.extract_title(entry) == "Substack Post"
+    assert parser.extract_url(entry) == "https://example.substack.com/p/post-slug"
+    assert parser.extract_author(entry) == "Author Name"
+    assert parser.extract_date(entry) == "2023-01-15T10:30:00Z"
 
 
-def test_default_skip_patterns():
-    """Ensure DEFAULT_SKIP_PATTERNS contains expected patterns."""
-    expected_patterns = [
-        r"^#",
-        r"mailto:",
-        r"tel:",
-        r"javascript:",
-        r"\.pdf$",
-        r"\.jpg$",
-        r"\.png$",
-        r"\.gif$",
-    ]
+def test_substack_api_parser_missing_bylines():
+    parser = SubstackAPIParser(url="https://example.substack.com/api/v1/posts")
 
-    assert DEFAULT_SKIP_PATTERNS == expected_patterns
+    entry = {
+        "title": "Post Without Author",
+        "canonical_url": "https://example.substack.com/p/post",
+        "publishedBylines": [],
+        "post_date": "2023-01-15T10:30:00Z",
+    }
+
+    assert parser.extract_author(entry) is None

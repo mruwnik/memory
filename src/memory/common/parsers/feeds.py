@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Generator, Sequence, cast
@@ -18,6 +19,20 @@ from memory.common.parsers.html import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+ObjectPath = list[str | int]
+
+
+def select_in(data: Any, path: ObjectPath) -> Any:
+    if not path:
+        return data
+
+    key, *rest = path
+    try:
+        return select_in(data[key], rest)
+    except (KeyError, TypeError, IndexError):
+        return None
 
 
 @dataclass
@@ -62,7 +77,7 @@ class FeedParser:
         )
 
     def valid_item(self, item: FeedItem) -> bool:
-        return True
+        return bool(item.url)
 
     def parse_feed(self) -> Generator[FeedItem, None, None]:
         """Parse feed content and return list of feed items."""
@@ -98,6 +113,46 @@ class FeedParser:
     def extract_metadata(self, entry: Any) -> dict[str, Any]:
         """Extract additional metadata from feed entry. Override in subclasses."""
         return {}
+
+
+class JSONParser(FeedParser):
+    title_path: ObjectPath = ["title"]
+    url_path: ObjectPath = ["url"]
+    description_path: ObjectPath = ["description"]
+    date_path: ObjectPath = ["date"]
+    author_path: ObjectPath = ["author"]
+    guid_path: ObjectPath = ["guid"]
+    metadata_path: ObjectPath = ["metadata"]
+
+    def fetch_items(self) -> Sequence[Any]:
+        if not self.content:
+            self.content = cast(str, fetch_html(self.url))
+        try:
+            return json.loads(self.content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing JSON: {e}")
+            return []
+
+    def extract_title(self, entry: Any) -> str:
+        return select_in(entry, self.title_path)
+
+    def extract_url(self, entry: Any) -> str:
+        return select_in(entry, self.url_path)
+
+    def extract_description(self, entry: Any) -> str:
+        return select_in(entry, self.description_path)
+
+    def extract_date(self, entry: Any) -> datetime:
+        return select_in(entry, self.date_path)
+
+    def extract_author(self, entry: Any) -> str:
+        return select_in(entry, self.author_path)
+
+    def extract_guid(self, entry: Any) -> str:
+        return select_in(entry, self.guid_path)
+
+    def extract_metadata(self, entry: Any) -> dict[str, Any]:
+        return select_in(entry, self.metadata_path)
 
 
 class RSSAtomParser(FeedParser):
@@ -237,8 +292,14 @@ class HTMLListParser(FeedParser):
             return extract_date(entry, self.date_selector, self.date_format)
 
 
+class SubstackAPIParser(JSONParser):
+    url_path = ["canonical_url"]
+    author_path = ["publishedBylines", 0, "name"]
+    date_path = ["post_date"]
+
+
 class DanluuParser(HTMLListParser):
-    skip_patterns = [r"^https://danluu.com/#"]
+    skip_patterns = DEFAULT_SKIP_PATTERNS + [r"^https://danluu\.com/?#"]
 
     def valid_item(self, item: FeedItem) -> bool:
         return item.url.startswith(self.base_url)
@@ -351,6 +412,13 @@ class RedHandFilesParser(HTMLListParser):
         return ""
 
 
+class RiftersParser(HTMLListParser):
+    item_selector = "#content .post"
+    title_selector = "h2 a"
+    url_selector = "h2 a"
+    description_selector = ".entry-content"
+
+
 class BloombergAuthorParser(HTMLListParser):
     item_selector = "section#author_page article"
     url_selector = "a[href]"
@@ -393,7 +461,7 @@ def is_rss_feed(content: str) -> bool:
     )
 
 
-def extract_url(element: Tag, base_url: str) -> str | None:
+def clean_url(element: Tag, base_url: str) -> str | None:
     if not (href := element.get("href")):
         return None
 
@@ -409,14 +477,14 @@ def find_feed_link(url: str, soup: BeautifulSoup) -> str | None:
         for link in links:
             if not isinstance(link, Tag):
                 continue
-            if not (link_url := extract_url(link, url)):
+            if not (link_url := clean_url(link, url)):
                 continue
             if link_url.rstrip("/") != url.rstrip("/"):
                 return link_url
     return None
 
 
-PARSER_REGISTRY = {
+FEED_REGISTRY = {
     r"https://danluu.com": DanluuParser,
     r"https://guzey.com/archive": GuzeyParser,
     r"https://www.paulgraham.com/articles": PaulGrahamParser,
@@ -427,7 +495,7 @@ PARSER_REGISTRY = {
 
 
 def get_feed_parser(url: str, check_from: datetime | None = None) -> FeedParser | None:
-    for pattern, parser_class in PARSER_REGISTRY.items():
+    for pattern, parser_class in FEED_REGISTRY.items():
         if re.search(pattern, url.rstrip("/")):
             return parser_class(url=url, since=check_from)
 

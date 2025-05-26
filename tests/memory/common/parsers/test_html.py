@@ -23,7 +23,11 @@ from memory.common.parsers.html import (
     extract_meta_by_pattern,
     extract_metadata,
     extract_title,
+    extract_url,
     get_base_url,
+    is_bloomberg,
+    is_substack,
+    is_wordpress,
     parse_date,
     process_image,
     process_images,
@@ -454,7 +458,7 @@ def test_process_images_empty():
         None, "https://example.com", pathlib.Path("/tmp")
     )
     assert result_content is None
-    assert result_images == []
+    assert result_images == {}
 
 
 @patch("memory.common.parsers.html.process_image")
@@ -501,6 +505,191 @@ def test_process_images_no_filename(mock_process_image):
 
     # Should skip image without filename
     assert not images
+
+
+@pytest.mark.parametrize(
+    "html, selectors, base_url, expected",
+    [
+        # Basic URL extraction
+        (
+            '<a href="/next-page">Next</a>',
+            "a",
+            "https://example.com",
+            "https://example.com/next-page",
+        ),
+        # Multiple selectors - should pick first matching
+        (
+            '<div><a href="/first">First</a><a href="/second">Second</a></div>',
+            "a",
+            "https://example.com",
+            "https://example.com/first",
+        ),
+        # Multiple selectors with comma separation - span doesn't have href, so falls back to a
+        (
+            '<div><span class="next">Span</span><a href="/link">Link</a></div>',
+            ".next, a",
+            "https://example.com",
+            "https://example.com/link",
+        ),
+        # Absolute URL should remain unchanged
+        (
+            '<a href="https://other.com/page">External</a>',
+            "a",
+            "https://example.com",
+            "https://other.com/page",
+        ),
+        # No href attribute
+        ("<a>No href</a>", "a", "https://example.com", None),
+        # No matching element
+        ("<p>No links</p>", "a", "https://example.com", None),
+        # Empty href
+        ('<a href="">Empty</a>', "a", "https://example.com", None),
+    ],
+)
+def test_extract_url(html, selectors, base_url, expected):
+    soup = BeautifulSoup(html, "html.parser")
+    assert extract_url(soup, selectors, base_url) == expected
+
+
+@pytest.mark.parametrize(
+    "html, expected",
+    [
+        # Substack with preconnect link
+        (
+            """
+            <head>
+                <link rel="preconnect" href="https://substackcdn.com">
+            </head>
+            """,
+            True,
+        ),
+        # Multiple preconnect links, one is Substack
+        (
+            """
+            <head>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://substackcdn.com">
+            </head>
+            """,
+            True,
+        ),
+        # No Substack preconnect
+        (
+            """
+            <head>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+            </head>
+            """,
+            False,
+        ),
+        # No preconnect links at all
+        ("<head></head>", False),
+        # Preconnect without href
+        ('<head><link rel="preconnect"></head>', False),
+        # Different rel attribute
+        ('<head><link rel="stylesheet" href="https://substackcdn.com"></head>', False),
+    ],
+)
+def test_is_substack(html, expected):
+    soup = BeautifulSoup(html, "html.parser")
+    assert is_substack(soup) == expected
+
+
+@pytest.mark.parametrize(
+    "html, expected",
+    [
+        # WordPress with wp-singular class on body should be False (looks for content inside body)
+        ('<body class="wp-singular">Content</body>', False),
+        # WordPress with nested wp-singular
+        ('<body><div class="wp-singular">Content</div></body>', True),
+        # Archived page with WordPress content
+        (
+            """
+            <div id="CONTENT">
+                <div class="html">
+                    <body class="wp-singular">Content</body>
+                </div>
+            </div>
+            """,
+            True,
+        ),
+        # No WordPress indicators
+        ('<body><div class="content">Regular content</div></body>', False),
+        # Empty body
+        ("<body></body>", False),
+        # No body tag
+        ("<div>No body</div>", False),
+    ],
+)
+def test_is_wordpress(html, expected):
+    soup = BeautifulSoup(html, "html.parser")
+    assert is_wordpress(soup) == expected
+
+
+@pytest.mark.parametrize(
+    "html, expected",
+    [
+        # Bloomberg with company link
+        (
+            """
+            <body>
+                <a href="https://www.bloomberg.com/company/">Bloomberg</a>
+            </body>
+            """,
+            True,
+        ),
+        # Bloomberg link among other links
+        (
+            """
+            <body>
+                <a href="https://example.com">Example</a>
+                <a href="https://www.bloomberg.com/company/">Bloomberg</a>
+                <a href="https://other.com">Other</a>
+            </body>
+            """,
+            True,
+        ),
+        # Archived page with Bloomberg content
+        (
+            """
+            <div id="CONTENT">
+                <div class="html">
+                    <body>
+                        <a href="https://www.bloomberg.com/company/">Bloomberg</a>
+                    </body>
+                </div>
+            </div>
+            """,
+            True,
+        ),
+        # No Bloomberg links
+        (
+            """
+            <body>
+                <a href="https://example.com">Example</a>
+                <a href="https://other.com">Other</a>
+            </body>
+            """,
+            False,
+        ),
+        # Bloomberg link but not company page
+        (
+            """
+            <body>
+                <a href="https://www.bloomberg.com/news/">Bloomberg News</a>
+            </body>
+            """,
+            False,
+        ),
+        # No links at all
+        ("<body><p>No links</p></body>", False),
+        # Links without href
+        ("<body><a>No href</a></body>", False),
+    ],
+)
+def test_is_bloomberg(html, expected):
+    soup = BeautifulSoup(html, "html.parser")
+    assert is_bloomberg(soup) == expected
 
 
 class TestBaseHTMLParser:
@@ -584,7 +773,7 @@ class TestBaseHTMLParser:
     def test_parse_with_images(self, mock_process_images):
         # Mock the image processing to return test data
         mock_image = MagicMock(spec=PILImage.Image)
-        mock_process_images.return_value = (MagicMock(), [mock_image])
+        mock_process_images.return_value = (MagicMock(), {"test_image.jpg": mock_image})
 
         html = """
         <article>
@@ -600,5 +789,6 @@ class TestBaseHTMLParser:
         article = parser.parse(html, "https://example.com/article")
 
         assert len(article.images) == 1
-        assert article.images[0] == mock_image
+        assert "test_image.jpg" in article.images
+        assert article.images["test_image.jpg"] == mock_image
         mock_process_images.assert_called_once()

@@ -13,6 +13,9 @@ from memory.common.parsers.html import (
     extract_title,
     extract_date,
     fetch_html,
+    is_wordpress,
+    is_substack,
+    is_bloomberg,
 )
 
 
@@ -587,24 +590,13 @@ def get_parser_for_url(url: str, html: str) -> BaseHTMLParser:
             return parser_class(url)
 
     soup = BeautifulSoup(html, "html.parser")
-    body_select = "body"
-    # Check if this is an archived page
-    if contents := soup.select_one("#CONTENT .html"):
-        body_select = ".body"
-        soup = contents
-
-    if soup.select_one(f"{body_select} .wp-singular"):
+    if is_wordpress(soup):
         return WordPressParser(url)
 
-    if any(
-        "https://substackcdn.com" == a.attrs.get("href")  # type: ignore
-        for a in soup.find_all("link", {"rel": "preconnect"})
-        if hasattr(a, "attrs")  # type: ignore
-    ):
+    if is_substack(soup):
         return SubstackParser(url)
 
-    urls = [a.attrs.get("href") for a in soup.select(f"{body_select} a")]  # type: ignore
-    if any(u.endswith("https://www.bloomberg.com/company/") for u in urls[:5] if u):  # type: ignore
+    if is_bloomberg(soup):
         return BloombergParser(url)
 
     return BaseHTMLParser(url)
@@ -628,11 +620,11 @@ def parse_webpage(url: str) -> Article:
 feeds = [
     "https://archive.ph/o/IQUoT/https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine",
     "https://www.rifters.com/crawl/",
-    "https://rachelbythebay.com/w/atom.xml",
+    "https://rachelbythebay.com/w/",
     "https://danluu.com/",
-    "https://guzey.com/archive",
-    "https://aphyr.com/posts.atom",
-    "https://www.applieddivinitystudies.com/atom.xml",
+    "https://guzey.come",
+    "https://aphyr.com/",
+    "https://www.applieddivinitystudies.com/",
     "https://www.imightbewrong.org/",
     "https://www.kvetch.au/",
     "https://www.overcomingbias.com/",
@@ -649,9 +641,10 @@ feeds = [
     "https://nayafia.substack.com",
     "https://www.paulgraham.com/articles.html",
     "https://mcfunley.com/writing",
-    "https://www.bitsaboutmoney.com/archive/",
-    "https://akarlin.com/archive/",
+    "https://www.bitsaboutmoney.com/",
+    "https://akarlin.com",
     "https://www.exurbe.com/",
     "https://acoup.blog/",
     "https://www.theredhandfiles.com/",
+    "https://karlin.blog/",
 ]

@@ -110,7 +110,14 @@ def extract_date(
 
         datetime_attr = element.get("datetime")
         if datetime_attr:
-            for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", date_format]:
+            for format in [
+                "%Y-%m-%dT%H:%M:%S.%fZ",
+                "%Y-%m-%dT%H:%M:%S%z",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d",
+                date_format,
+            ]:
                 if date := parse_date(str(datetime_attr), format):
                     return date
 
@@ -275,6 +282,47 @@ def extract_metadata(soup: BeautifulSoup) -> dict[str, Any]:
                 metadata[tag_name] = str(content)
 
     return metadata
+
+
+def extract_url(soup: BeautifulSoup, selectors: str, base_url: str = "") -> str | None:
+    for selector in selectors.split(","):
+        next_link = soup.select_one(selector)
+        if not (next_link and isinstance(next_link, Tag)):
+            continue
+
+        if not (href := next_link.get("href")):
+            continue
+
+        return to_absolute_url(str(href), base_url)
+
+    return None
+
+
+def is_substack(soup: BeautifulSoup | Tag) -> bool:
+    return any(
+        "https://substackcdn.com" == a.attrs.get("href")  # type: ignore
+        for a in soup.find_all("link", {"rel": "preconnect"})
+        if hasattr(a, "attrs")  # type: ignore
+    )
+
+
+def is_wordpress(soup: BeautifulSoup | Tag) -> bool:
+    body_select = "body"
+    # Check if this is an archived page
+    if contents := soup.select_one("#CONTENT .html"):
+        body_select = "#CONTENT .html"
+        soup = contents
+    return bool(soup.select_one(f"{body_select} .wp-singular"))
+
+
+def is_bloomberg(soup: BeautifulSoup | Tag) -> bool:
+    body_select = "body"
+    # Check if this is an archived page
+    if contents := soup.select_one("#CONTENT .html"):
+        body_select = "#CONTENT .html"
+        soup = contents
+    urls = [a.attrs.get("href") for a in soup.select(f"{body_select} a")]  # type: ignore
+    return any(u.endswith("https://www.bloomberg.com/company/") for u in urls[:5] if u)  # type: ignore
 
 
 class BaseHTMLParser:
