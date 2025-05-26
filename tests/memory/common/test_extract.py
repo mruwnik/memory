@@ -11,6 +11,7 @@ from memory.common.extract import (
     extract_image,
     docx_to_pdf,
     extract_docx,
+    DataChunk,
 )
 
 
@@ -47,8 +48,8 @@ def test_as_file_with_str():
 @pytest.mark.parametrize(
     "input_content,expected",
     [
-        ("simple text", [{"contents": ["simple text"], "metadata": {}}]),
-        (b"bytes text", [{"contents": ["bytes text"], "metadata": {}}]),
+        ("simple text", [DataChunk(data=["simple text"], metadata={})]),
+        (b"bytes text", [DataChunk(data=["bytes text"], metadata={})]),
     ],
 )
 def test_extract_text(input_content, expected):
@@ -60,7 +61,7 @@ def test_extract_text_with_path(tmp_path):
     test_file.write_text("file text content")
 
     assert extract_text(test_file) == [
-        {"contents": ["file text content"], "metadata": {}}
+        DataChunk(data=["file text content"], metadata={})
     ]
 
 
@@ -72,8 +73,8 @@ def test_doc_to_images():
         for page, pdf_page in zip(result, pdf.pages()):
             pix = pdf_page.get_pixmap()
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            assert page["contents"] == [img]
-            assert page["metadata"] == {
+            assert page.data == [img]
+            assert page.metadata == {
                 "page": pdf_page.number,
                 "width": pdf_page.rect.width,
                 "height": pdf_page.rect.height,
@@ -86,8 +87,8 @@ def test_extract_image_with_path(tmp_path):
     img.save(img_path)
 
     (page,) = extract_image(img_path)
-    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
-    assert page["metadata"] == {}
+    assert page.data[0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
+    assert page.metadata == {}
 
 
 def test_extract_image_with_bytes():
@@ -97,8 +98,8 @@ def test_extract_image_with_bytes():
     img_bytes = buffer.getvalue()
 
     (page,) = extract_image(img_bytes)
-    assert page["contents"][0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
-    assert page["metadata"] == {}
+    assert page.data[0].tobytes() == img.convert("RGB").tobytes()  # type: ignore
+    assert page.metadata == {}
 
 
 def test_extract_image_with_str():

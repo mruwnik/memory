@@ -1,17 +1,16 @@
-from collections.abc import Sequence
 import logging
-import pathlib
-import uuid
-from typing import Any, Iterable, Literal, cast
+from typing import Iterable, Literal, cast
 
 import voyageai
-from PIL import Image
 
 from memory.common import extract, settings
-from memory.common.chunker import chunk_text, DEFAULT_CHUNK_TOKENS, OVERLAP_TOKENS
-from memory.common.collections import ALL_COLLECTIONS, Vector
+from memory.common.chunker import (
+    DEFAULT_CHUNK_TOKENS,
+    OVERLAP_TOKENS,
+    chunk_text,
+)
+from memory.common.collections import Vector
 from memory.common.db.models import Chunk, SourceItem
-from memory.common.extract import DataChunk
 
 logger = logging.getLogger(__name__)
 
@@ -72,91 +71,18 @@ def embed_mixed(
     return embed_chunks([chunks], model, input_type)
 
 
-def write_to_file(chunk_id: str, item: extract.MulitmodalChunk) -> pathlib.Path:
-    if isinstance(item, str):
-        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.txt"
-        filename.write_text(item)
-    elif isinstance(item, bytes):
-        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.bin"
-        filename.write_bytes(item)
-    elif isinstance(item, Image.Image):
-        filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}.png"
-        item.save(filename)
-    else:
-        raise ValueError(f"Unsupported content type: {type(item)}")
-    return filename
-
-
-def make_chunk(
-    contents: Sequence[extract.MulitmodalChunk],
-    vector: Vector,
-    metadata: dict[str, Any] = {},
-) -> Chunk:
-    """Create a Chunk object from a page and a vector.
-
-    This is quite complex, because we need to handle the case where the page is a single string,
-    a single image, or a list of strings and images.
-    """
-    chunk_id = str(uuid.uuid4())
-    content, filename = None, None
-    if all(isinstance(c, str) for c in contents):
-        content = "\n\n".join(cast(list[str], contents))
-        model = settings.TEXT_EMBEDDING_MODEL
-    elif len(contents) == 1:
-        filename = write_to_file(chunk_id, contents[0]).absolute().as_posix()
-        model = settings.MIXED_EMBEDDING_MODEL
-    else:
-        for i, item in enumerate(contents):
-            write_to_file(f"{chunk_id}_{i}", item)
-        model = settings.MIXED_EMBEDDING_MODEL
-        filename = (settings.CHUNK_STORAGE_DIR / f"{chunk_id}_*").absolute().as_posix()
-
-    return Chunk(
-        id=chunk_id,
-        file_path=filename,
-        content=content,
-        embedding_model=model,
-        vector=vector,
-        item_metadata=metadata,
-    )
-
-
-def embed_data_chunk(
-    chunk: DataChunk,
-    metadata: dict[str, Any] = {},
-    chunk_size: int | None = None,
-) -> list[Chunk]:
-    chunk_size = chunk.max_size or chunk_size or DEFAULT_CHUNK_TOKENS
-
-    model = chunk.embedding_model
-    if not model and chunk.collection:
-        model = ALL_COLLECTIONS.get(chunk.collection, {}).get("model")
-    if not model:
-        model = settings.TEXT_EMBEDDING_MODEL
-
+def embed_chunk(chunk: Chunk) -> Chunk:
+    model = cast(str, chunk.embedding_model)
     if model == settings.TEXT_EMBEDDING_MODEL:
-        vectors = embed_text(cast(list[str], chunk.data), chunk_size=chunk_size)
+        content = cast(str, chunk.content)
     elif model == settings.MIXED_EMBEDDING_MODEL:
-        vectors = embed_mixed(
-            cast(list[extract.MulitmodalChunk], chunk.data),
-            chunk_size=chunk_size,
-        )
+        content = [cast(str, chunk.content)] + chunk.images
     else:
-        raise ValueError(f"Unsupported model: {model}")
+        raise ValueError(f"Unsupported model: {chunk.embedding_model}")
+    vectors = embed_chunks([content], model)  # type: ignore
+    chunk.vector = vectors[0]  # type: ignore
+    return chunk
 
-    metadata = metadata | chunk.metadata
-    return [make_chunk(chunk.data, vector, metadata) for vector in vectors]
 
-
-def embed_source_item(
-    item: SourceItem,
-    metadata: dict[str, Any] = {},
-    chunk_size: int | None = None,
-) -> list[Chunk]:
-    return [
-        chunk
-        for data_chunk in item.data_chunks()
-        for chunk in embed_data_chunk(
-            data_chunk, item.as_payload() | metadata, chunk_size
-        )
-    ]
+def embed_source_item(item: SourceItem) -> list[Chunk]:
+    return [embed_chunk(chunk) for chunk in item.data_chunks()]

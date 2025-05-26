@@ -8,6 +8,7 @@ import re
 import textwrap
 from datetime import datetime
 from typing import Any, ClassVar, Iterable, Sequence, cast
+import uuid
 
 from PIL import Image
 from sqlalchemy import (
@@ -88,6 +89,19 @@ def clean_filename(filename: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")
 
 
+def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
+    for i, image in enumerate(images):
+        if not image.filename:  # type: ignore
+            filename = f"{chunk_id}_{i}.{image.format}"  # type: ignore
+            image.save(filename)
+
+    return [image.filename for image in images]  # type: ignore
+
+
+def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalChunk]:
+    return [chunk] + [i for i in images if i.filename in chunk]  # type: ignore
+
+
 class Chunk(Base):
     """Stores content chunks with their vector embeddings."""
 
@@ -107,6 +121,7 @@ class Chunk(Base):
     checked_at = Column(DateTime(timezone=True), server_default=func.now())
     vector: ClassVar[list[float] | None] = None
     item_metadata: ClassVar[dict[str, Any] | None] = None
+    images: list[Image.Image] = []
 
     # One of file_path or content must be populated
     __table_args__ = (
@@ -119,11 +134,8 @@ class Chunk(Base):
         if self.file_path is None:
             return [cast(str, self.content)]
 
-        path = pathlib.Path(self.file_path.replace("/app/", ""))
-        if cast(str, self.file_path).endswith("*"):
-            files = list(path.parent.glob(path.name))
-        else:
-            files = [path]
+        paths = [pathlib.Path(p) for p in self.file_path.split("\n")]
+        files = [path for path in paths if path.exists()]
 
         items = []
         for file_path in files:
@@ -179,13 +191,37 @@ class SourceItem(Base):
         """Get vector IDs from associated chunks."""
         return [chunk.id for chunk in self.chunks]
 
-    def data_chunks(self) -> Iterable[extract.DataChunk]:
-        return [
-            extract.DataChunk(
-                data=cast(str, self.content),
-                collection=cast(str, self.modality),
-            )
-        ]
+    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
+        chunks: list[list[extract.MulitmodalChunk]] = []
+        if cast(str | None, self.content):
+            chunks = [[c] for c in chunker.chunk_text(cast(str, self.content))]
+
+        mime_type = cast(str | None, self.mime_type)
+        if mime_type and mime_type.startswith("image/"):
+            chunks.append([Image.open(self.filename)])
+        return chunks
+
+    def _make_chunk(
+        self, data: Sequence[extract.MulitmodalChunk], metadata: dict[str, Any] = {}
+    ):
+        chunk_id = str(uuid.uuid4())
+        text = "\n\n".join(c for c in data if isinstance(c, str))
+        images = [c for c in data if isinstance(c, Image.Image)]
+        image_names = image_filenames(chunk_id, images)
+
+        chunk = Chunk(
+            id=chunk_id,
+            source=self,
+            content=text,
+            images=images,
+            file_path="\n".join(image_names) if image_names else None,
+            embedding_model=collections.collection_model(cast(str, self.modality)),
+            item_metadata=self.as_payload() | metadata,
+        )
+        return chunk
+
+    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+        return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
 
     def as_payload(self) -> dict:
         return {
@@ -319,18 +355,14 @@ class EmailAttachment(SourceItem):
             "tags": self.tags,
         }
 
-    def data_chunks(self) -> Iterable[extract.DataChunk]:
+    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
         if cast(str | None, self.filename):
             contents = pathlib.Path(cast(str, self.filename)).read_bytes()
         else:
             contents = cast(str, self.content)
 
-        return extract.extract_data_chunks(
-            cast(str, self.mime_type),
-            contents,
-            collection=cast(str, self.modality),
-            embedding_model=collections.collection_model(cast(str, self.modality)),
-        )
+        chunks = extract.extract_data_chunks(cast(str, self.mime_type), contents)
+        return [self._make_chunk(c.data, metadata | c.metadata) for c in chunks]
 
     # Add indexes
     __table_args__ = (Index("email_attachment_message_idx", "mail_message_id"),)
@@ -433,14 +465,10 @@ class Comic(SourceItem):
         }
         return {k: v for k, v in payload.items() if v is not None}
 
-    def data_chunks(self) -> Iterable[extract.DataChunk]:
+    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
         image = Image.open(pathlib.Path(cast(str, self.filename)))
-        return [
-            extract.DataChunk(
-                data=[image, cast(str, self.title), cast(str, self.author)],
-                collection=cast(str, self.modality),
-            )
-        ]
+        description = f"{self.title} by {self.author}"
+        return [[image, description]]
 
 
 class Book(Base):
@@ -538,16 +566,11 @@ class BookSection(SourceItem):
             "tags": self.tags,
         }
 
-    def data_chunks(self) -> Iterable[extract.DataChunk]:
+    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
         texts = [(page, i + self.start_page) for i, page in enumerate(self.pages)]
         texts += [(cast(str, self.content), self.start_page)]
         return [
-            extract.DataChunk(
-                data=[text],
-                collection=cast(str, self.modality),
-                metadata={"page": page_number},
-                max_size=chunker.EMBEDDING_MAX_TOKENS,
-            )
+            self._make_chunk([text.strip()], metadata | {"page": page_number})
             for text, page_number in texts
         ]
 
@@ -601,29 +624,18 @@ class BlogPost(SourceItem):
         }
         return {k: v for k, v in payload.items() if v}
 
-    def data_chunks(self) -> Iterable[extract.DataChunk]:
+    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
         images = [Image.open(image) for image in self.images]
-        data = [cast(str, self.content)] + images
 
-        # Always embed the full content as a single chunk (if possible, of course)
-        chunks = [
-            extract.DataChunk(
-                data=data,
-                collection=cast(str, self.modality),
-                max_size=chunker.EMBEDDING_MAX_TOKENS,
-            )
-        ]
+        content = cast(str, self.content)
+        full_text = [content, *images]
 
-        # If the content is long enough, also embed it as chunks of the default size.
         tokens = chunker.approx_token_count(cast(str, self.content))
-        if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
-            chunks += [
-                extract.DataChunk(
-                    data=data,
-                    collection=cast(str, self.modality),
-                )
-            ]
-        return chunks
+        if tokens < chunker.DEFAULT_CHUNK_TOKENS * 2:
+            return [full_text]
+
+        chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
+        return [full_text] + chunks
 
 
 class MiscDoc(SourceItem):
