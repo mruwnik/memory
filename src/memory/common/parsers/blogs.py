@@ -2,15 +2,17 @@ import logging
 import re
 from datetime import datetime
 from urllib.parse import urlparse
+from typing import cast
 
-import requests
 from bs4 import BeautifulSoup, Tag
+
 from memory.common.parsers.html import (
     BaseHTMLParser,
     Article,
     parse_date,
     extract_title,
     extract_date,
+    fetch_html,
 )
 
 
@@ -618,48 +620,38 @@ def parse_webpage(url: str) -> Article:
     Returns:
         Article object with extracted content and metadata
     """
-    response = requests.get(
-        url,
-        timeout=30,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
-        },
-    )
-    response.raise_for_status()
-
-    parser = get_parser_for_url(url, response.text)
-
-    return parser.parse(response.text, url)
+    html = cast(str, fetch_html(url))
+    parser = get_parser_for_url(url, html)
+    return parser.parse(html, url)
 
 
-blogs = [
-    "https://acoup.blog/",
-    "https://guzey.com/",
-    "https://akarlin.com/",
-    "https://aphyr.com/",
-    "https://www.applieddivinitystudies.com/",
-    "https://www.bitsaboutmoney.com/",
+feeds = [
+    "https://archive.ph/o/IQUoT/https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine",
+    "https://www.rifters.com/crawl/",
+    "https://rachelbythebay.com/w/atom.xml",
     "https://danluu.com/",
-    "https://mcfunley.com/",
-    "https://www.exurbe.com/",
-    "https://www.flyingmachinestudios.com/",
+    "https://guzey.com/archive",
+    "https://aphyr.com/posts.atom",
+    "https://www.applieddivinitystudies.com/atom.xml",
     "https://www.imightbewrong.org/",
     "https://www.kvetch.au/",
     "https://www.overcomingbias.com/",
-    "https://www.rifters.com/crawl/",
     "https://samkriss.substack.com/",
-    "https://www.paulgraham.com/articles.html",
-    "https://putanumonit.com/",
     "https://www.richardhanania.com/",
     "https://skunkledger.substack.com/",
     "https://taipology.substack.com/",
+    "https://putanumonit.com/",
+    "https://www.flyingmachinestudios.com/",
     "https://www.theintrinsicperspective.com/",
     "https://www.strangeloopcanon.com/",
     "https://slimemoldtimemold.com/",
-    "https://www.theredhandfiles.com/",
-    "https://rachelbythebay.com/w/",
     "https://zeroinputagriculture.substack.com/",
-    "https://nadia.xyz/posts/",
     "https://nayafia.substack.com",
-    "https://archive.ph/o/IQUoT/https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine",
+    "https://www.paulgraham.com/articles.html",
+    "https://mcfunley.com/writing",
+    "https://www.bitsaboutmoney.com/archive/",
+    "https://akarlin.com/archive/",
+    "https://www.exurbe.com/",
+    "https://acoup.blog/",
+    "https://www.theredhandfiles.com/",
 ]

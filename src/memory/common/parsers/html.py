@@ -17,6 +17,20 @@ from memory.common import settings
 logger = logging.getLogger(__name__)
 
 
+def fetch_html(url: str, as_bytes: bool = False) -> str | bytes:
+    response = requests.get(
+        url,
+        timeout=30,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
+        },
+    )
+    response.raise_for_status()
+    if as_bytes:
+        return response.content
+    return response.text
+
+
 @dataclass
 class Article:
     """Structured representation of a web article."""
@@ -135,9 +149,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
 
     # Download if not already cached
     if not local_path.exists():
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        local_path.write_bytes(response.content)
+        local_path.write_bytes(fetch_html(url, as_bytes=True))
 
     try:
         return PILImage.open(local_path)
@@ -153,10 +165,10 @@ def process_images(
     Process all images in content: download them, update URLs, and return PIL Images.
 
     Returns:
-        Tuple of (updated_content, list_of_pil_images)
+        Tuple of (updated_content, dict_of_pil_images)
     """
     if not content:
-        return content, []
+        return content, {}
 
     images = {}
 

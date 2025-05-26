@@ -325,7 +325,13 @@ def test_process_image_success(mock_pil_open, mock_requests_get):
         result = process_image(url, image_dir)
 
         # Verify HTTP request was made
-        mock_requests_get.assert_called_once_with(url, timeout=30)
+        mock_requests_get.assert_called_once_with(
+            url,
+            timeout=30,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
+            },
+        )
         mock_response.raise_for_status.assert_called_once()
 
         # Verify image was opened
