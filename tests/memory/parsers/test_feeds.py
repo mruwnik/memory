@@ -6,7 +6,7 @@ import json
 import pytest
 from bs4 import BeautifulSoup, Tag
 
-from memory.common.parsers.feeds import (
+from memory.parsers.feeds import (
     FeedItem,
     FeedParser,
     RSSAtomParser,
@@ -61,7 +61,7 @@ def test_select_in(data, path, expected):
     assert select_in(data, path) == expected
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_json_parser_fetch_items_with_content(mock_fetch_html):
     content = json.dumps(
         [
@@ -80,7 +80,7 @@ def test_json_parser_fetch_items_with_content(mock_fetch_html):
     mock_fetch_html.assert_not_called()
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_json_parser_fetch_items_without_content(mock_fetch_html):
     content = json.dumps([{"title": "Article", "url": "https://example.com/1"}])
     mock_fetch_html.return_value = content
@@ -92,7 +92,7 @@ def test_json_parser_fetch_items_without_content(mock_fetch_html):
     mock_fetch_html.assert_called_once_with("https://example.com/feed.json")
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_json_parser_fetch_items_invalid_json(mock_fetch_html):
     mock_fetch_html.return_value = "invalid json content"
 
@@ -220,7 +220,7 @@ def test_feed_parser_parse_feed_with_invalid_items():
     ]
 
 
-@patch("memory.common.parsers.feeds.feedparser.parse")
+@patch("memory.parsers.feeds.feedparser.parse")
 @pytest.mark.parametrize("since_date", [None, datetime(2023, 1, 1)])
 def test_rss_atom_parser_fetch_items(mock_parse, since_date):
     mock_feed = MagicMock()
@@ -239,7 +239,7 @@ def test_rss_atom_parser_fetch_items(mock_parse, since_date):
     assert items == ["entry1", "entry2"]
 
 
-@patch("memory.common.parsers.feeds.feedparser.parse")
+@patch("memory.parsers.feeds.feedparser.parse")
 def test_rss_atom_parser_fetch_items_with_content(mock_parse):
     mock_feed = MagicMock()
     mock_feed.entries = ["entry1"]
@@ -411,7 +411,7 @@ def test_rss_atom_parser_extract_metadata():
     }
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_html_list_parser_fetch_items_with_content(mock_fetch_html):
     html = """
     <ul>
@@ -430,7 +430,7 @@ def test_html_list_parser_fetch_items_with_content(mock_fetch_html):
     mock_fetch_html.assert_not_called()
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_html_list_parser_fetch_items_without_content(mock_fetch_html):
     html = """
     <ul>
@@ -502,7 +502,7 @@ def test_html_list_parser_extract_title(html, title_selector, expected):
     parser.title_selector = title_selector
 
     if expected and title_selector:
-        with patch("memory.common.parsers.feeds.extract_title") as mock_extract:
+        with patch("memory.parsers.feeds.extract_title") as mock_extract:
             mock_extract.return_value = expected
             title = parser.extract_title(item)
             mock_extract.assert_called_once_with(item, title_selector)
@@ -555,7 +555,7 @@ def test_html_list_parser_extract_date_with_selector():
     parser = HTMLListParser(url="https://example.com")
     parser.date_selector = ".date"
 
-    with patch("memory.common.parsers.feeds.extract_date") as mock_extract:
+    with patch("memory.parsers.feeds.extract_date") as mock_extract:
         mock_extract.return_value = datetime(2023, 1, 15)
         date = parser.extract_date(item)
         mock_extract.assert_called_once_with(item, ".date", "%Y-%m-%d")
@@ -787,7 +787,7 @@ def test_get_feed_parser_registry(url, expected_parser_class):
     assert parser.url == url
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_get_feed_parser_rss_content(mock_fetch_html):
     mock_fetch_html.return_value = "<?xml version='1.0'?><rss>"
 
@@ -796,7 +796,7 @@ def test_get_feed_parser_rss_content(mock_fetch_html):
     assert parser.url == "https://example.com/unknown"
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_get_feed_parser_with_feed_link(mock_fetch_html):
     html = """
     <html>
@@ -812,19 +812,19 @@ def test_get_feed_parser_with_feed_link(mock_fetch_html):
     assert parser.url == "https://example.com/feed.xml"
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_get_feed_parser_recursive_paths(mock_fetch_html):
     # Mock the initial call to return HTML without feed links
     html = "<html><body>No feed links</body></html>"
     mock_fetch_html.return_value = html
 
     # Mock the recursive calls to avoid actual HTTP requests
-    with patch("memory.common.parsers.feeds.get_feed_parser") as mock_recursive:
+    with patch("memory.parsers.feeds.get_feed_parser") as mock_recursive:
         # Set up the mock to return None for recursive calls
         mock_recursive.return_value = None
 
         # Call the original function directly
-        from memory.common.parsers.feeds import (
+        from memory.parsers.feeds import (
             get_feed_parser as original_get_feed_parser,
         )
 
@@ -833,13 +833,13 @@ def test_get_feed_parser_recursive_paths(mock_fetch_html):
     assert parser is None
 
 
-@patch("memory.common.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.fetch_html")
 def test_get_feed_parser_no_match(mock_fetch_html):
     html = "<html><body>No feed links</body></html>"
     mock_fetch_html.return_value = html
 
     # Mock the recursive calls to avoid actual HTTP requests
-    with patch("memory.common.parsers.feeds.get_feed_parser") as mock_recursive:
+    with patch("memory.parsers.feeds.get_feed_parser") as mock_recursive:
         mock_recursive.return_value = None
         parser = get_feed_parser("https://unknown.com")
 

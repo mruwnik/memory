@@ -8,7 +8,7 @@ import requests
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Comic, clean_filename
-from memory.common.parsers import comics
+from memory.parsers import comics
 from memory.workers.celery_app import app
 from memory.workers.tasks.content_processing import (
     check_content_exists,

@@ -2,12 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements files and setup
-COPY requirements-*.txt ./
-COPY setup.py ./
-COPY src/ ./src/
-
-# Install dependencies
 RUN apt-get update && apt-get install -y \
     libpq-dev gcc pandoc \
     texlive-xetex texlive-fonts-recommended texlive-plain-generic \
@@ -18,14 +12,24 @@ RUN apt-get update && apt-get install -y \
     # For optional LibreOffice support (uncomment if needed)
     # libreoffice-writer \
     && apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-*.txt ./
+RUN pip install --no-cache-dir -r requirements-common.txt
+RUN pip install --no-cache-dir -r requirements-parsers.txt
+RUN pip install --no-cache-dir -r requirements-workers.txt
+
+# Install Python dependencies
+COPY setup.py ./
+COPY src/ ./src/
 RUN pip install -e ".[workers]"
 
-# Create and copy entrypoint script
+# Copy entrypoint scripts and set permissions
 COPY docker/workers/entry.sh ./entry.sh
-COPY docker/workers/unnest-table.lua ./unnest-table.lua
 RUN chmod +x entry.sh
 
 RUN mkdir -p /app/memory_files
+
+COPY docker/workers/unnest-table.lua ./unnest-table.lua
 
 # Create user and set permissions
 RUN useradd -m kb
@@ -35,7 +39,7 @@ RUN mkdir -p /var/cache/fontconfig /home/kb/.cache/fontconfig && \
 USER kb
 
 # Default queues to process
-ENV QUEUES="docs,email,maintenance"
+ENV QUEUES="ebooks,email,comic,blogs,photo_embed,maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["./entry.sh"] 

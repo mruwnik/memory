@@ -12,7 +12,7 @@ from memory.common.db.models import (
     EmailAttachment,
     MailMessage,
 )
-from memory.common.parsers.email import Attachment, parse_email_message
+from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     create_mail_message,
     extract_email_uid,

@@ -3,7 +3,7 @@ from urllib.parse import urlparse, parse_qs
 
 import pytest
 
-from memory.common.parsers.archives import (
+from memory.parsers.archives import (
     ArchiveFetcher,
     LinkFetcher,
     HTMLArchiveFetcher,
@@ -14,7 +14,7 @@ from memory.common.parsers.archives import (
     get_archive_fetcher,
     FETCHER_REGISTRY,
 )
-from memory.common.parsers.feeds import (
+from memory.parsers.feeds import (
     FeedItem,
     FeedParser,
     HTMLListParser,
@@ -56,7 +56,7 @@ def test_archive_fetcher_find_next_page_base():
     assert fetcher._find_next_page(parser, 0) is None
 
 
-@patch("memory.common.parsers.archives.time.sleep")
+@patch("memory.parsers.archives.time.sleep")
 def test_archive_fetcher_fetch_all_items_single_page(mock_sleep):
     items = [
         FeedItem(title="Item 1", url="https://example.com/1"),
@@ -80,7 +80,7 @@ def test_archive_fetcher_fetch_all_items_single_page(mock_sleep):
         mock_sleep.assert_not_called()  # No delay for single page
 
 
-@patch("memory.common.parsers.archives.time.sleep")
+@patch("memory.parsers.archives.time.sleep")
 def test_archive_fetcher_fetch_all_items_multiple_pages(mock_sleep):
     page1_items = [FeedItem(title="Item 1", url="https://example.com/1")]
     page2_items = [FeedItem(title="Item 2", url="https://example.com/2")]
@@ -258,7 +258,7 @@ def test_html_archive_fetcher_find_next_page(html, selectors, expected_url):
     )
     parser = MockParser("https://example.com", content=html)
 
-    with patch("memory.common.parsers.archives.extract_url") as mock_extract:
+    with patch("memory.parsers.archives.extract_url") as mock_extract:
         mock_extract.return_value = expected_url
 
         result = fetcher._find_next_page(parser)
@@ -308,7 +308,7 @@ def test_html_parser_factory():
     ],
 )
 def test_substack_archive_fetcher_post_init(start_url, expected_api_url):
-    with patch("memory.common.parsers.archives.get_base_url") as mock_get_base:
+    with patch("memory.parsers.archives.get_base_url") as mock_get_base:
         mock_get_base.return_value = "https://example.substack.com"
 
         fetcher = SubstackArchiveFetcher(SubstackAPIParser, start_url)
@@ -413,10 +413,10 @@ def test_html_next_url_archive_fetcher_find_next_page():
     ],
 )
 def test_get_archive_fetcher_registry_matches(url, expected_fetcher_type):
-    with patch("memory.common.parsers.archives.fetch_html") as mock_fetch:
+    with patch("memory.parsers.archives.fetch_html") as mock_fetch:
         mock_fetch.return_value = "<html><body>Not substack</body></html>"
 
-        with patch("memory.common.parsers.archives.is_substack") as mock_is_substack:
+        with patch("memory.parsers.archives.is_substack") as mock_is_substack:
             mock_is_substack.return_value = False
 
             fetcher = get_archive_fetcher(url)
@@ -430,7 +430,7 @@ def test_get_archive_fetcher_registry_matches(url, expected_fetcher_type):
 def test_get_archive_fetcher_tuple_registry():
     url = "https://putanumonit.com"
 
-    with patch("memory.common.parsers.archives.fetch_html") as mock_fetch:
+    with patch("memory.parsers.archives.fetch_html") as mock_fetch:
         mock_fetch.return_value = "<html><body>Not substack</body></html>"
 
         fetcher = get_archive_fetcher(url)
@@ -442,7 +442,7 @@ def test_get_archive_fetcher_tuple_registry():
 def test_get_archive_fetcher_direct_parser_registry():
     url = "https://danluu.com"
 
-    with patch("memory.common.parsers.archives.fetch_html") as mock_fetch:
+    with patch("memory.parsers.archives.fetch_html") as mock_fetch:
         mock_fetch.return_value = "<html><body>Not substack</body></html>"
 
         fetcher = get_archive_fetcher(url)
@@ -455,10 +455,10 @@ def test_get_archive_fetcher_direct_parser_registry():
 def test_get_archive_fetcher_substack():
     url = "https://example.substack.com"
 
-    with patch("memory.common.parsers.archives.fetch_html") as mock_fetch:
+    with patch("memory.parsers.archives.fetch_html") as mock_fetch:
         mock_fetch.return_value = "<html><body>Substack content</body></html>"
 
-        with patch("memory.common.parsers.archives.is_substack") as mock_is_substack:
+        with patch("memory.parsers.archives.is_substack") as mock_is_substack:
             mock_is_substack.return_value = True
 
             fetcher = get_archive_fetcher(url)
@@ -470,10 +470,10 @@ def test_get_archive_fetcher_substack():
 def test_get_archive_fetcher_no_match():
     url = "https://unknown.com"
 
-    with patch("memory.common.parsers.archives.fetch_html") as mock_fetch:
+    with patch("memory.parsers.archives.fetch_html") as mock_fetch:
         mock_fetch.return_value = "<html><body>Regular website</body></html>"
 
-        with patch("memory.common.parsers.archives.is_substack") as mock_is_substack:
+        with patch("memory.parsers.archives.is_substack") as mock_is_substack:
             mock_is_substack.return_value = False
 
             fetcher = get_archive_fetcher(url)

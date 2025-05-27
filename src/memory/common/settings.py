@@ -39,11 +39,20 @@ CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
 
 # File storage settings
 FILE_STORAGE_DIR = pathlib.Path(os.getenv("FILE_STORAGE_DIR", "/tmp/memory_files"))
+EBOOK_STORAGE_DIR = pathlib.Path(
+    os.getenv("EBOOK_STORAGE_DIR", FILE_STORAGE_DIR / "ebooks")
+)
+EMAIL_STORAGE_DIR = pathlib.Path(
+    os.getenv("EMAIL_STORAGE_DIR", FILE_STORAGE_DIR / "emails")
+)
 CHUNK_STORAGE_DIR = pathlib.Path(
     os.getenv("CHUNK_STORAGE_DIR", FILE_STORAGE_DIR / "chunks")
 )
 COMIC_STORAGE_DIR = pathlib.Path(
     os.getenv("COMIC_STORAGE_DIR", FILE_STORAGE_DIR / "comics")
+)
+PHOTO_STORAGE_DIR = pathlib.Path(
+    os.getenv("PHOTO_STORAGE_DIR", FILE_STORAGE_DIR / "photos")
 )
 WEBPAGE_STORAGE_DIR = pathlib.Path(
     os.getenv("WEBPAGE_STORAGE_DIR", FILE_STORAGE_DIR / "webpages")
@@ -51,8 +60,11 @@ WEBPAGE_STORAGE_DIR = pathlib.Path(
 
 storage_dirs = [
     FILE_STORAGE_DIR,
+    EBOOK_STORAGE_DIR,
+    EMAIL_STORAGE_DIR,
     CHUNK_STORAGE_DIR,
     COMIC_STORAGE_DIR,
+    PHOTO_STORAGE_DIR,
     WEBPAGE_STORAGE_DIR,
 ]
 for dir in storage_dirs:
@@ -83,3 +95,4 @@ CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 
 # Embedding settings
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
+EMBEDDING_MAX_WORKERS = int(os.getenv("EMBEDDING_MAX_WORKERS", 50))

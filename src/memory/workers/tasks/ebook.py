@@ -1,9 +1,10 @@
 import logging
-from pathlib import Path
+import pathlib
 from typing import Iterable, cast
 
+import memory.common.settings as settings
+from memory.parsers.ebook import Ebook, parse_ebook, Section
 from memory.common.db.models import Book, BookSection
-from memory.common.parsers.ebook import Ebook, parse_ebook, Section
 from memory.common.db.connection import make_session
 from memory.workers.celery_app import app
 from memory.workers.tasks.content_processing import (
@@ -16,7 +17,7 @@ from memory.workers.tasks.content_processing import (
 
 logger = logging.getLogger(__name__)
 
-SYNC_BOOK = "memory.workers.tasks.book.sync_book"
+SYNC_BOOK = "memory.workers.tasks.ebook.sync_book"
 
 # Minimum section length to embed (avoid noise from very short sections)
 MIN_SECTION_LENGTH = 100
@@ -59,6 +60,8 @@ def section_processor(
                 end_page=section.end_page,
                 parent_section_id=None,  # Will be set after flush
                 content=content,
+                size=len(content),
+                mime_type="text/plain",
                 sha256=create_content_hash(
                     f"{book.id}:{section.title}:{section.start_page}"
                 ),
@@ -94,7 +97,13 @@ def create_all_sections(
 
 def validate_and_parse_book(file_path: str) -> Ebook:
     """Validate file exists and parse the ebook."""
-    path = Path(file_path)
+    logger.info(f"Validating and parsing book from {file_path}")
+    path = pathlib.Path(file_path)
+    if not path.is_absolute():
+        path = settings.EBOOK_STORAGE_DIR / path
+
+    logger.info(f"Resolved path: {path}")
+
     if not path.exists():
         raise FileNotFoundError(f"Book file not found: {path}")
 
@@ -145,6 +154,7 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
         dict: Summary of what was processed
     """
     ebook = validate_and_parse_book(file_path)
+    logger.info(f"Ebook parsed: {ebook.title}")
 
     with make_session() as session:
         # Check for existing book
@@ -161,14 +171,22 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
                 "sections_processed": 0,
             }
 
+        logger.info("Creating book and sections with relationships")
         # Create book and sections with relationships
         book, all_sections = create_book_and_sections(ebook, session, tags)
 
         # Embed sections
+        logger.info("Embedding sections")
         embedded_count = sum(embed_source_item(section) for section in all_sections)
         session.flush()
 
+        for section in all_sections:
+            logger.info(
+                f"Embedded section: {section.section_title} - {section.content[:100]}"
+            )
+        logger.info("Pushing to Qdrant")
         push_to_qdrant(all_sections, "book")
+        logger.info("Committing session")
 
         session.commit()
 

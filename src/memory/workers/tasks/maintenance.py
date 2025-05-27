@@ -23,6 +23,10 @@ REINGEST_CHUNK = "memory.workers.tasks.maintenance.reingest_chunk"
 @app.task(name=CLEAN_COLLECTION)
 def clean_collection(collection: str) -> dict[str, int]:
     logger.info(f"Cleaning collection {collection}")
+
+    if collection not in collections.ALL_COLLECTIONS:
+        raise ValueError(f"Unsupported collection {collection}")
+
     client = qdrant.get_qdrant_client()
     batches, deleted, checked = 0, 0, 0
     for batch in qdrant.batch_ids(client, collection):
@@ -47,7 +51,7 @@ def clean_collection(collection: str) -> dict[str, int]:
 @app.task(name=CLEAN_ALL_COLLECTIONS)
 def clean_all_collections():
     logger.info("Cleaning all collections")
-    for collection in embedding.ALL_COLLECTIONS:
+    for collection in collections.ALL_COLLECTIONS:
         clean_collection.delay(collection)  # type: ignore
 
 
@@ -111,10 +115,12 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
 
 
 @app.task(name=REINGEST_MISSING_CHUNKS)
-def reingest_missing_chunks(batch_size: int = 1000):
+def reingest_missing_chunks(
+    batch_size: int = 1000, minutes_ago: int = settings.CHUNK_REINGEST_SINCE_MINUTES
+):
     logger.info("Reingesting missing chunks")
     total_stats = defaultdict(lambda: {"missing": 0, "correct": 0, "total": 0})
-    since = datetime.now() - timedelta(minutes=settings.CHUNK_REINGEST_SINCE_MINUTES)
+    since = datetime.now() - timedelta(minutes=minutes_ago)
 
     with make_session() as session:
         total_count = session.query(Chunk).filter(Chunk.checked_at < since).count()

@@ -33,7 +33,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, relationship
 
 from memory.common import settings
-from memory.common.parsers.email import EmailMessage, parse_email_message
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -126,8 +125,8 @@ class Chunk(Base):
     embedding_model = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     checked_at = Column(DateTime(timezone=True), server_default=func.now())
-    vector: ClassVar[list[float] | None] = None
-    item_metadata: ClassVar[dict[str, Any] | None] = None
+    vector: list[float] = []
+    item_metadata: dict[str, Any] = {}
     images: list[Image.Image] = []
 
     # One of file_path or content must be populated
@@ -275,7 +274,7 @@ class MailMessage(SourceItem):
     def attachments_path(self) -> pathlib.Path:
         clean_sender = clean_filename(cast(str, self.sender))
         clean_folder = clean_filename(cast(str | None, self.folder) or "INBOX")
-        return pathlib.Path(settings.FILE_STORAGE_DIR) / clean_sender / clean_folder
+        return pathlib.Path(settings.EMAIL_STORAGE_DIR) / clean_sender / clean_folder
 
     def safe_filename(self, filename: str) -> pathlib.Path:
         suffix = pathlib.Path(filename).suffix
@@ -297,7 +296,9 @@ class MailMessage(SourceItem):
         }
 
     @property
-    def parsed_content(self) -> EmailMessage:
+    def parsed_content(self):
+        from memory.parsers.email import parse_email_message
+
         return parse_email_message(cast(str, self.content), cast(str, self.message_id))
 
     @property
@@ -563,6 +564,8 @@ class BookSection(SourceItem):
 
     def as_payload(self) -> dict:
         vals = {
+            "title": self.book.title,
+            "author": self.book.author,
             "source_id": self.id,
             "book_id": self.book_id,
             "section_title": self.section_title,
@@ -636,7 +639,9 @@ class BlogPost(SourceItem):
         return {k: v for k, v in payload.items() if v}
 
     def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
-        images = [Image.open(image) for image in self.images]
+        images = [
+            Image.open(settings.FILE_STORAGE_DIR / image) for image in self.images
+        ]
 
         content = cast(str, self.content)
         full_text = [content.strip(), *images]
@@ -705,6 +710,9 @@ class ArticleFeed(Base):
     title = Column(Text)
     description = Column(Text)
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+    check_interval = Column(
+        Integer, nullable=False, server_default="3600", doc="Seconds between checks"
+    )
     last_checked_at = Column(DateTime(timezone=True))
     active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(

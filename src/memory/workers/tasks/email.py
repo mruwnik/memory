@@ -10,7 +10,7 @@ from memory.workers.email import (
     process_folder,
     vectorize_email,
 )
-from memory.common.parsers.email import parse_email_message
+from memory.parsers.email import parse_email_message
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     safe_task_execution,

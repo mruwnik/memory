@@ -14,6 +14,7 @@ def read_requirements(filename: str) -> list[str]:
 
 # Read requirements files
 common_requires = read_requirements("requirements-common.txt")
+parsers_requires = read_requirements("requirements-parsers.txt")
 api_requires = read_requirements("requirements-api.txt")
 workers_requires = read_requirements("requirements-workers.txt")
 dev_requires = read_requirements("requirements-dev.txt")
@@ -26,9 +27,13 @@ setup(
     python_requires=">=3.10",
     extras_require={
         "api": api_requires + common_requires,
-        "workers": workers_requires + common_requires,
+        "workers": workers_requires + common_requires + parsers_requires,
         "common": common_requires,
         "dev": dev_requires,
-        "all": api_requires + workers_requires + common_requires + dev_requires,
+        "all": api_requires
+        + workers_requires
+        + common_requires
+        + dev_requires
+        + parsers_requires,
     },
 )

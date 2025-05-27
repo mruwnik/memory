@@ -20,6 +20,7 @@ MulitmodalChunk = Image.Image | str
 class DataChunk:
     data: Sequence[MulitmodalChunk]
     metadata: dict[str, Any] = field(default_factory=dict)
+    mime_type: str = "text/plain"
 
 
 @contextmanager
@@ -36,7 +37,9 @@ def as_file(content: bytes | str | pathlib.Path) -> Generator[pathlib.Path, None
 
 def page_to_image(page: pymupdf.Page) -> Image.Image:
     pix = page.get_pixmap()  # type: ignore
-    return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    image.format = "jpeg"
+    return image
 
 
 def doc_to_images(content: bytes | str | pathlib.Path) -> list[DataChunk]:
@@ -50,6 +53,7 @@ def doc_to_images(content: bytes | str | pathlib.Path) -> list[DataChunk]:
                         "width": page.rect.width,
                         "height": page.rect.height,
                     },
+                    mime_type="image/jpeg",
                 )
                 for page in pdf.pages()
             ]
@@ -99,7 +103,8 @@ def extract_image(content: bytes | str | pathlib.Path) -> list[DataChunk]:
         image = Image.open(io.BytesIO(content))
     else:
         raise ValueError(f"Unsupported content type: {type(content)}")
-    return [DataChunk(data=[image])]
+    image_format = image.format or "jpeg"
+    return [DataChunk(data=[image], mime_type=f"image/{image_format.lower()}")]
 
 
 def extract_text(
@@ -112,7 +117,7 @@ def extract_text(
 
     content = cast(str, content)
     chunks = chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
-    return [DataChunk(data=[c]) for c in chunks]
+    return [DataChunk(data=[c], mime_type="text/plain") for c in chunks if c.strip()]
 
 
 def extract_data_chunks(

@@ -21,12 +21,11 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_routes={
-        "memory.workers.tasks.text.*": {"queue": "medium_embed"},
         "memory.workers.tasks.email.*": {"queue": "email"},
         "memory.workers.tasks.photo.*": {"queue": "photo_embed"},
         "memory.workers.tasks.comic.*": {"queue": "comic"},
+        "memory.workers.tasks.ebook.*": {"queue": "ebooks"},
         "memory.workers.tasks.blogs.*": {"queue": "blogs"},
-        "memory.workers.tasks.docs.*": {"queue": "docs"},
         "memory.workers.tasks.maintenance.*": {"queue": "maintenance"},
     },
 )

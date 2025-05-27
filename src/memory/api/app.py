@@ -15,7 +15,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from memory.common import embedding, qdrant, extract, settings
-from memory.common.collections import get_modality, TEXT_COLLECTIONS
+from memory.common.collections import get_modality, TEXT_COLLECTIONS, ALL_COLLECTIONS
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 
@@ -95,8 +95,8 @@ def group_chunks(chunks: list[tuple[SourceItem, AnnotatedChunk]]) -> list[Search
     return [
         SearchResult(
             id=source.id,
-            size=source.size,
-            mime_type=source.mime_type,
+            size=source.size or len(source.content),
+            mime_type=source.mime_type or "text/plain",
             filename=source.filename
             and source.filename.replace(
                 str(settings.FILE_STORAGE_DIR).lstrip("/"), "/files"
@@ -110,7 +110,7 @@ def group_chunks(chunks: list[tuple[SourceItem, AnnotatedChunk]]) -> list[Search
 
 def query_chunks(
     client: qdrant_client.QdrantClient,
-    upload_data: list[tuple[str, list[extract.Page]]],
+    upload_data: list[extract.DataChunk],
     allowed_modalities: set[str],
     embedder: Callable,
     min_score: float = 0.0,
@@ -119,15 +119,9 @@ def query_chunks(
     if not upload_data:
         return {}
 
-    chunks = [
-        chunk
-        for content_type, pages in upload_data
-        if get_modality(content_type) in allowed_modalities
-        for page in pages
-        for chunk in page["contents"]
-    ]
-
+    chunks = [chunk for data_chunk in upload_data for chunk in data_chunk.data]
     if not chunks:
+        logger.error(f"No chunks to embed for {allowed_modalities}")
         return {}
 
     vector = embedder(chunks, input_type="query")[0]
@@ -143,18 +137,18 @@ def query_chunks(
             )
             if r.score >= min_score
         ]
-        for collection in embedding.ALL_COLLECTIONS
+        for collection in allowed_modalities
     }
 
 
-async def input_type(item: str | UploadFile) -> tuple[str, list[extract.Page]]:
+async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
     if not item:
-        return "text/plain", []
+        return []
 
     if isinstance(item, str):
-        return "text/plain", extract.extract_text(item)
+        return extract.extract_text(item)
     content_type = item.content_type or "application/octet-stream"
-    return content_type, extract.extract_content(content_type, await item.read())
+    return extract.extract_data_chunks(content_type, await item.read())
 
 
 @app.post("/search", response_model=list[SearchResult])
@@ -179,13 +173,15 @@ async def search(
     Returns:
     - List of search results sorted by score
     """
-    upload_data = [await input_type(item) for item in [query, *files]]
+    upload_data = [
+        chunk for item in [query, *files] for chunk in await input_type(item)
+    ]
     logger.error(
         f"Querying chunks for {modalities}, query: {query}, previews: {previews}, upload_data: {upload_data}"
     )
 
     client = qdrant.get_qdrant_client()
-    allowed_modalities = set(modalities or embedding.ALL_COLLECTIONS.keys())
+    allowed_modalities = set(modalities or ALL_COLLECTIONS.keys())
     text_results = query_chunks(
         client,
         upload_data,
@@ -212,6 +208,7 @@ async def search(
     }
     with make_session() as db:
         chunks = db.query(Chunk).filter(Chunk.id.in_(found_chunks.keys())).all()
+        logger.error(f"Found chunks: {chunks}")
 
         results = group_chunks(
             [
@@ -245,3 +242,16 @@ def get_file_by_path(path: str):
         raise HTTPException(status_code=404, detail=f"File not found at path: {path}")
 
     return FileResponse(path=file_path, filename=file_path.name)
+
+
+def main():
+    """Run the FastAPI server in debug mode with auto-reloading."""
+    import uvicorn
+
+    uvicorn.run(
+        "memory.api.app:app", host="0.0.0.0", port=8000, reload=True, log_level="debug"
+    )
+
+
+if __name__ == "__main__":
+    main()

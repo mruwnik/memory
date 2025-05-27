@@ -1,26 +1,22 @@
-from dataclasses import dataclass, field
 import logging
 import re
 import time
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from dataclasses import dataclass, field
 from typing import Generator, cast
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
-from memory.common.parsers.blogs import is_substack
 
-from memory.common.parsers.feeds import (
+from memory.parsers.blogs import is_substack
+from memory.parsers.feeds import (
     DanluuParser,
-    HTMLListParser,
-    RiftersParser,
     FeedItem,
     FeedParser,
+    HTMLListParser,
+    RiftersParser,
     SubstackAPIParser,
 )
-from memory.common.parsers.html import (
-    fetch_html,
-    extract_url,
-    get_base_url,
-)
+from memory.parsers.html import extract_url, fetch_html, get_base_url
 
 logger = logging.getLogger(__name__)
 

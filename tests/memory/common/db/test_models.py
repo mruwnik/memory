@@ -753,7 +753,65 @@ def test_email_attachment_cascade_delete(db_session: Session):
     assert deleted_attachment is None
 
 
-# BookSection tests
+def test_subclass_deletion_cascades_to_source_item(db_session: Session):
+    mail_message = MailMessage(
+        sha256=b"test_email_cascade",
+        content="test email content",
+        message_id="<cascade_test@example.com>",
+        subject="Cascade Test",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        folder="INBOX",
+    )
+    db_session.add(mail_message)
+    db_session.commit()
+
+    source_item_id = mail_message.id
+    mail_message_id = mail_message.id
+
+    # Verify both records exist
+    assert db_session.query(SourceItem).filter_by(id=source_item_id).first() is not None
+    assert (
+        db_session.query(MailMessage).filter_by(id=mail_message_id).first() is not None
+    )
+
+    # Delete the MailMessage subclass
+    db_session.delete(mail_message)
+    db_session.commit()
+
+    # Verify both the MailMessage and SourceItem records are deleted
+    assert db_session.query(MailMessage).filter_by(id=mail_message_id).first() is None
+    assert db_session.query(SourceItem).filter_by(id=source_item_id).first() is None
+
+
+def test_subclass_deletion_cascades_from_source_item(db_session: Session):
+    mail_message = MailMessage(
+        sha256=b"test_email_cascade",
+        content="test email content",
+        message_id="<cascade_test@example.com>",
+        subject="Cascade Test",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        folder="INBOX",
+    )
+    db_session.add(mail_message)
+    db_session.commit()
+
+    source_item_id = mail_message.id
+    mail_message_id = mail_message.id
+
+    # Verify both records exist
+    source_item = db_session.query(SourceItem).get(source_item_id)
+    assert source_item
+    assert db_session.query(MailMessage).get(mail_message_id)
+
+    # Delete the MailMessage subclass
+    db_session.delete(source_item)
+    db_session.commit()
+
+    # Verify both the MailMessage and SourceItem records are deleted
+    assert db_session.query(MailMessage).filter_by(id=mail_message_id).first() is None
+    assert db_session.query(SourceItem).filter_by(id=source_item_id).first() is None
 
 
 @pytest.mark.parametrize(

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import fitz
 
-from memory.common.parsers.ebook import (
+from memory.parsers.ebook import (
     Peekable,
     extract_epub_metadata,
     get_pages,
@@ -381,7 +381,7 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
     section2.pages = ["Content of section 2"]
 
     # Mock extract_sections to return our sections
-    with patch("memory.common.parsers.ebook.extract_sections") as mock_extract:
+    with patch("memory.parsers.ebook.extract_sections") as mock_extract:
         mock_extract.return_value = [section1, section2]
 
         mock_open.return_value = mock_doc

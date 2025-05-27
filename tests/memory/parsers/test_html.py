@@ -1,11 +1,10 @@
+import hashlib
 import pathlib
+import re
 import tempfile
 from datetime import datetime
 from typing import cast
 from unittest.mock import MagicMock, patch
-from urllib.parse import urlparse
-import re
-import hashlib
 
 import pytest
 import requests
@@ -13,8 +12,7 @@ from bs4 import BeautifulSoup, Tag
 from PIL import Image as PILImage
 
 from memory.common import settings
-from memory.common.parsers.html import (
-    Article,
+from memory.parsers.html import (
     BaseHTMLParser,
     convert_to_markdown,
     extract_author,
@@ -311,8 +309,8 @@ def test_extract_metadata():
     assert isinstance(metadata, dict)
 
 
-@patch("memory.common.parsers.html.requests.get")
-@patch("memory.common.parsers.html.PILImage.open")
+@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.PILImage.open")
 def test_process_image_success(mock_pil_open, mock_requests_get):
     # Setup mocks
     mock_response = MagicMock()
@@ -345,7 +343,7 @@ def test_process_image_success(mock_pil_open, mock_requests_get):
         assert result == mock_image
 
 
-@patch("memory.common.parsers.html.requests.get")
+@patch("memory.parsers.html.requests.get")
 def test_process_image_http_error(mock_requests_get):
     # Setup mock to raise HTTP error
     mock_requests_get.side_effect = requests.RequestException("Network error")
@@ -359,8 +357,8 @@ def test_process_image_http_error(mock_requests_get):
             process_image(url, image_dir)
 
 
-@patch("memory.common.parsers.html.requests.get")
-@patch("memory.common.parsers.html.PILImage.open")
+@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.PILImage.open")
 def test_process_image_pil_error(mock_pil_open, mock_requests_get):
     # Setup mocks
     mock_response = MagicMock()
@@ -378,8 +376,8 @@ def test_process_image_pil_error(mock_pil_open, mock_requests_get):
         assert result is None
 
 
-@patch("memory.common.parsers.html.requests.get")
-@patch("memory.common.parsers.html.PILImage.open")
+@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.PILImage.open")
 def test_process_image_cached(mock_pil_open, mock_requests_get):
     # Create a temporary file to simulate cached image
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -404,7 +402,7 @@ def test_process_image_cached(mock_pil_open, mock_requests_get):
         assert result == mock_image
 
 
-@patch("memory.common.parsers.html.process_image")
+@patch("memory.parsers.html.process_image")
 def test_process_images_basic(mock_process_image):
     html = """
     <div>
@@ -461,7 +459,7 @@ def test_process_images_empty():
     assert result_images == {}
 
 
-@patch("memory.common.parsers.html.process_image")
+@patch("memory.parsers.html.process_image")
 def test_process_images_with_failures(mock_process_image):
     html = """
     <div>
@@ -488,7 +486,7 @@ def test_process_images_with_failures(mock_process_image):
     assert images == {"images/good.jpg": mock_good_image}
 
 
-@patch("memory.common.parsers.html.process_image")
+@patch("memory.parsers.html.process_image")
 def test_process_images_no_filename(mock_process_image):
     html = '<div><img src="test.jpg" alt="Test"></div>'
     soup = BeautifulSoup(html, "html.parser")
@@ -769,7 +767,7 @@ class TestBaseHTMLParser:
 
         assert article.author == "Fixed Author"
 
-    @patch("memory.common.parsers.html.process_images")
+    @patch("memory.parsers.html.process_images")
     def test_parse_with_images(self, mock_process_images):
         # Mock the image processing to return test data
         mock_image = MagicMock(spec=PILImage.Image)

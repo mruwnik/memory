@@ -10,7 +10,7 @@ import feedparser
 from bs4 import BeautifulSoup, Tag
 import requests
 
-from memory.common.parsers.html import (
+from memory.parsers.html import (
     get_base_url,
     to_absolute_url,
     extract_title,

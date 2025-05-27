@@ -1,10 +1,10 @@
 import email
 import hashlib
 import logging
+import pathlib
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import TypedDict
-import pathlib
 
 logger = logging.getLogger(__name__)
 

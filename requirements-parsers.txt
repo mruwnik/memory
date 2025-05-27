@@ -1,0 +1,5 @@
+PyMuPDF==1.25.5
+ebooklib==0.18.0
+beautifulsoup4==4.13.4
+markdownify==0.13.1
+pillow==10.4.0

@@ -1,11 +1,11 @@
-from datetime import datetime
+import hashlib
 import logging
+import pathlib
 import re
 from dataclasses import dataclass, field
-import pathlib
+from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
-import hashlib
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -153,6 +153,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
     ext = pathlib.Path(urlparse(url).path).suffix or ".jpg"
     filename = f"{url_hash}{ext}"
     local_path = image_dir / filename
+    local_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Download if not already cached
     if not local_path.exists():

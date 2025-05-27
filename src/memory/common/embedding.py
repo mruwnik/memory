@@ -20,6 +20,7 @@ def embed_chunks(
     model: str = settings.TEXT_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
+    logger.debug(f"Embedding chunks: {model} - {str(chunks)[:100]}")
     vo = voyageai.Client()  # type: ignore
     if model == settings.MIXED_EMBEDDING_MODEL:
         return vo.multimodal_embed(
@@ -71,18 +72,24 @@ def embed_mixed(
     return embed_chunks([chunks], model, input_type)
 
 
-def embed_chunk(chunk: Chunk) -> Chunk:
-    model = cast(str, chunk.embedding_model)
-    if model == settings.TEXT_EMBEDDING_MODEL:
-        content = cast(str, chunk.content)
-    elif model == settings.MIXED_EMBEDDING_MODEL:
-        content = [cast(str, chunk.content)] + chunk.images
-    else:
-        raise ValueError(f"Unsupported model: {chunk.embedding_model}")
-    vectors = embed_chunks([content], model)  # type: ignore
-    chunk.vector = vectors[0]  # type: ignore
-    return chunk
+def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
+    model_chunks = [
+        chunk for chunk in chunks if cast(str, chunk.embedding_model) == model
+    ]
+    if not model_chunks:
+        return []
+
+    vectors = embed_chunks([chunk.content for chunk in model_chunks], model)  # type: ignore
+    for chunk, vector in zip(model_chunks, vectors):
+        chunk.vector = vector
+    return model_chunks
 
 
 def embed_source_item(item: SourceItem) -> list[Chunk]:
-    return [embed_chunk(chunk) for chunk in item.data_chunks()]
+    chunks = list(item.data_chunks())
+    if not chunks:
+        return []
+
+    text_chunks = embed_by_model(chunks, settings.TEXT_EMBEDDING_MODEL)
+    mixed_chunks = embed_by_model(chunks, settings.MIXED_EMBEDDING_MODEL)
+    return text_chunks + mixed_chunks

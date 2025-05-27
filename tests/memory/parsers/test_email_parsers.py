@@ -7,7 +7,7 @@ from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY
 import pytest
-from memory.common.parsers.email import (
+from memory.parsers.email import (
     compute_message_hash,
     extract_attachments,
     extract_body,

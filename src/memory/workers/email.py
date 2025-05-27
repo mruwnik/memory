@@ -1,7 +1,6 @@
 import hashlib
 import imaplib
 import logging
-import pathlib
 import re
 from collections import defaultdict
 from contextlib import contextmanager
@@ -16,7 +15,7 @@ from memory.common.db.models import (
     EmailAttachment,
     MailMessage,
 )
-from memory.common.parsers.email import (
+from memory.parsers.email import (
     Attachment,
     EmailMessage,
     RawEmailResponse,

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.common.parsers.comics import extract_smbc, extract_xkcd
+from memory.parsers.comics import extract_smbc, extract_xkcd
 
 MOCK_SMBC_HTML = """
 <!DOCTYPE html>

@@ -6,7 +6,7 @@ from typing import cast
 
 from bs4 import BeautifulSoup, Tag
 
-from memory.common.parsers.html import (
+from memory.parsers.html import (
     BaseHTMLParser,
     Article,
     parse_date,

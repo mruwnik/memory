@@ -1,8 +1,8 @@
 """Rename rss feed
 
-Revision ID: f8e6a7f80928
+Revision ID: 1b535e1b044e
 Revises: d897c6353a84
-Create Date: 2025-05-27 01:39:45.722077
+Create Date: 2025-05-27 01:51:38.553777
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "f8e6a7f80928"
+revision: str = "1b535e1b044e"
 down_revision: Union[str, None] = "d897c6353a84"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -27,6 +27,9 @@ def upgrade() -> None:
         sa.Column("title", sa.Text(), nullable=True),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("tags", sa.ARRAY(sa.Text()), server_default="{}", nullable=False),
+        sa.Column(
+            "check_interval", sa.Integer(), server_default="3600", nullable=False
+        ),
         sa.Column("last_checked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("active", sa.Boolean(), server_default="true", nullable=False),
         sa.Column(

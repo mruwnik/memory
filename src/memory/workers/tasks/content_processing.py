@@ -221,6 +221,7 @@ def process_content_item(
     try:
         push_to_qdrant([item], collection_name)
         status = "processed"
+        item.embed_status = "STORED"  # type: ignore
         logger.info(
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )
@@ -228,7 +229,6 @@ def process_content_item(
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
         item.embed_status = "FAILED"  # type: ignore
         status = "failed"
-
     session.commit()
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))

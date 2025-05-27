@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 
 from memory.common.db.models import Book, BookSection, Chunk
-from memory.common.parsers.ebook import Ebook, Section
+from memory.parsers.ebook import Ebook, Section
 from memory.workers.tasks import ebook
 
 

@@ -76,6 +76,9 @@ services:
     mem_limit: 4g
     cpus: "1.5"
     security_opt: [ "no-new-privileges=true" ]
+    ports:
+      # PostgreSQL port for local Celery result backend
+      - "15432:5432"
 
   rabbitmq:
     image: rabbitmq:3.13-management
@@ -97,7 +100,9 @@ services:
     security_opt: [ "no-new-privileges=true" ]
     ports:
       # UI only on localhost
-      - "127.0.0.1:15672:15672"
+      - "15672:15672"
+      # AMQP port for local Celery clients
+      - "15673:5672"
 
   qdrant:
     image: qdrant/qdrant:v1.14.0
@@ -114,6 +119,8 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    ports:
+      - "6333:6333"
     mem_limit: 4g
     cpus: "2"
     security_opt: [ "no-new-privileges=true" ]
@@ -181,7 +188,24 @@ services:
     environment:
       <<: *worker-env
       QUEUES: "medium_embed"
-    # deploy: { resources: { limits: { cpus: "2", memory: 3g } } }
+
+  worker-ebook:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "ebooks"
+
+  worker-comic:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "comic"
+
+  worker-blogs:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "blogs"
 
   worker-photo:
     <<: *worker-base
