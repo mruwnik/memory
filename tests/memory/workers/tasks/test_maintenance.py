@@ -283,9 +283,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
         qd.upsert_vectors(qdrant, chunk.source.modality, [str(chunk.id)], [[1] * 1024])
 
     with patch.object(reingest_chunk, "delay", reingest_chunk):
-        with patch.object(settings, "CHUNK_REINGEST_SINCE_MINUTES", 60):
-            with patch.object(embedding, "embed_chunks", return_value=[[1] * 1024]):
-                result = reingest_missing_chunks(batch_size=batch_size)
+        result = reingest_missing_chunks(batch_size=batch_size, minutes_ago=60)
 
     assert result == {
         "photo": {"correct": 10, "missing": 10, "total": 20},

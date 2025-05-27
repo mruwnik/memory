@@ -212,11 +212,15 @@ def process_content_item(
         - Commits database transaction
         - Stores vectors in Qdrant
     """
+    status = "failed"
     session.add(item)
     session.flush()
 
     chunks_count = embed_source_item(item)
     session.flush()
+
+    if not chunks_count:
+        return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     try:
         push_to_qdrant([item], collection_name)
@@ -228,7 +232,6 @@ def process_content_item(
     except Exception as e:
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
         item.embed_status = "FAILED"  # type: ignore
-        status = "failed"
     session.commit()
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))

@@ -1,9 +1,9 @@
-from datetime import datetime
 import os
 import subprocess
-from unittest.mock import patch
 import uuid
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 import qdrant_client
@@ -207,10 +207,13 @@ def mock_file_storage(tmp_path: Path):
     chunk_storage_dir.mkdir(parents=True, exist_ok=True)
     image_storage_dir = tmp_path / "images"
     image_storage_dir.mkdir(parents=True, exist_ok=True)
+    email_storage_dir = tmp_path / "emails"
+    email_storage_dir.mkdir(parents=True, exist_ok=True)
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "CHUNK_STORAGE_DIR", chunk_storage_dir),
         patch.object(settings, "WEBPAGE_STORAGE_DIR", image_storage_dir),
+        patch.object(settings, "EMAIL_STORAGE_DIR", email_storage_dir),
     ):
         yield
 
@@ -226,8 +229,11 @@ def qdrant():
 
 @pytest.fixture(autouse=True)
 def mock_voyage_client():
+    def embeder(chunks, *args, **kwargs):
+        return Mock(embeddings=[[0.1] * 1024] * len(chunks))
+
     with patch.object(voyageai, "Client", autospec=True) as mock_client:
         client = mock_client()
-        client.embed.return_value.embeddings = [[0.1] * 1024]
-        client.multimodal_embed.return_value.embeddings = [[0.1] * 1024]
+        client.embed = embeder
+        client.multimodal_embed = embeder
         yield client

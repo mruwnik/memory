@@ -170,7 +170,7 @@ def test_embed_sections(db_session):
 
 
 @patch("memory.workers.tasks.ebook.parse_ebook")
-def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path):
+def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant):
     """Test successful book synchronization."""
     book_file = tmp_path / "test.epub"
     book_file.write_text("dummy content")
@@ -315,17 +315,18 @@ def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):
     db_session.add_all(sections)
     db_session.flush()
 
+    return_val = Mock(embeddings=[[0.1] * 1024] * 3)
+    mock_voyage_client.embed = Mock(return_value=return_val)
     ebook.embed_sections(sections)
 
     # Verify that the voyage client was called with the full large content
     # Should be called 3 times: once for section content, twice for pages
-    assert mock_voyage_client.embed.call_count == 3
+    assert mock_voyage_client.embed.call_count == 1
 
     # Check that the full content was passed to the embedding function
-    calls = mock_voyage_client.embed.call_args_list
-    texts = [c[0][0] for c in calls]
+    texts = mock_voyage_client.embed.call_args[0][0]
     assert texts == [
-        [large_page_1.strip()],
-        [large_page_2.strip()],
-        [large_section_content.strip()],
+        large_page_1.strip(),
+        large_page_2.strip(),
+        large_section_content.strip(),
     ]

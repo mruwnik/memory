@@ -102,6 +102,7 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
     assert not cast(str, result.content)
     assert cast(str, result.filename) == str(
         settings.FILE_STORAGE_DIR
+        / "emails"
         / "sender_example_com"
         / "INBOX"
         / "test_with_special_chars.txt"
@@ -183,7 +184,11 @@ def test_process_attachments_mixed():
 
     # Verify large attachment has a path
     assert cast(str, results[1].filename) == str(
-        settings.FILE_STORAGE_DIR / "sender_example_com" / "INBOX" / "large.txt"
+        settings.FILE_STORAGE_DIR
+        / "emails"
+        / "sender_example_com"
+        / "INBOX"
+        / "large.txt"
     )
 
 

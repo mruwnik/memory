@@ -423,7 +423,7 @@ def test_create_task_result_no_title():
     [
         ("success", False, "processed", "STORED"),
         ("success", True, "failed", "FAILED"),
-        ("empty", False, "processed", "FAILED"),
+        ("empty", False, "failed", "FAILED"),
     ],
 )
 def test_process_content_item(

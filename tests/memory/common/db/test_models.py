@@ -16,6 +16,7 @@ from memory.common.db.models import (
     EmailAttachment,
     BookSection,
     BlogPost,
+    Book,
 )
 
 
@@ -499,9 +500,8 @@ def test_mail_message_attachments_path(sender, folder, expected_path):
         sha256=b"test", content="test", sender=sender, folder=folder
     )
 
-    with patch.object(settings, "FILE_STORAGE_DIR", "/tmp/storage"):
-        result = mail_message.attachments_path
-        assert str(result) == f"/tmp/storage/{expected_path}"
+    result = mail_message.attachments_path
+    assert str(result) == f"{settings.FILE_STORAGE_DIR}/emails/{expected_path}"
 
 
 @pytest.mark.parametrize(
@@ -520,15 +520,8 @@ def test_mail_message_safe_filename(tmp_path, filename, expected):
         sha256=b"test", content="test", sender="user@example.com", folder="INBOX"
     )
 
-    with patch.object(settings, "FILE_STORAGE_DIR", tmp_path):
-        result = mail_message.safe_filename(filename)
-
-        # Check that the path is correct
-        expected_path = tmp_path / "user_example_com" / "INBOX" / expected
-        assert result == expected_path
-
-        # Check that the directory was created
-        assert result.parent.exists()
+    expected = settings.FILE_STORAGE_DIR / f"emails/user_example_com/INBOX/{expected}"
+    assert mail_message.safe_filename(filename) == expected
 
 
 @pytest.mark.parametrize(
@@ -847,6 +840,7 @@ def test_book_section_data_chunks(pages, expected_chunks):
         start_page=10,
         end_page=10 + len(pages),
         pages=pages,
+        book=Book(id=1, title="Test Book", author="Test Author"),
     )
 
     chunks = book_section.data_chunks()

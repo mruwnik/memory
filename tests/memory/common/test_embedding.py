@@ -15,8 +15,8 @@ def mock_embed(mock_voyage_client):
     def embed(texts, model, input_type):
         return Mock(embeddings=[next(vectors) for _ in texts])
 
-    mock_voyage_client.embed.side_effect = embed
-    mock_voyage_client.multimodal_embed.side_effect = embed
+    mock_voyage_client.embed = embed
+    mock_voyage_client.multimodal_embed = embed
 
     return mock_voyage_client
 

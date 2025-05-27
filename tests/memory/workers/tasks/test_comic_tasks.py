@@ -342,7 +342,7 @@ def test_sync_comic_embedding_failure(
     assert result == {
         "comic_id": 1,
         "title": "Test Comic",
-        "status": "processed",
+        "status": "failed",
         "chunks_count": 0,
         "embed_status": "FAILED",
         "content_length": 90,
