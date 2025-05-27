@@ -4,7 +4,7 @@ import pathlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -157,7 +157,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
 
     # Download if not already cached
     if not local_path.exists():
-        local_path.write_bytes(fetch_html(url, as_bytes=True))
+        local_path.write_bytes(cast(bytes, fetch_html(url, as_bytes=True)))
 
     try:
         return PILImage.open(local_path)

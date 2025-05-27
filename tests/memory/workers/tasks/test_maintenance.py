@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from memory.common import qdrant as qd
-from memory.common import embedding, settings
+from memory.common import settings
 from memory.common.db.models import Chunk, SourceItem
 from memory.workers.tasks.maintenance import (
     clean_collection,

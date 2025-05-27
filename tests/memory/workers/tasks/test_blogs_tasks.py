@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from memory.common.db.models import ArticleFeed, BlogPost
 from memory.workers.tasks import blogs

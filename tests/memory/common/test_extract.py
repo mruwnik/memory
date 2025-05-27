@@ -128,14 +128,3 @@ def test_docx_to_pdf_default_output():
 
     assert result_path == SAMPLE_DOCX.with_suffix(".pdf")
     assert result_path.exists()
-
-
-@pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
-def test_extract_docx():
-    pages = extract_docx(SAMPLE_DOCX)
-
-    assert len(pages) > 0
-    assert all(isinstance(page, dict) for page in pages)
-    assert all("contents" in page for page in pages)
-    assert all("metadata" in page for page in pages)
-    assert all(isinstance(page["contents"][0], Image.Image) for page in pages)

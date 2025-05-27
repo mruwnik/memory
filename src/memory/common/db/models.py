@@ -2,12 +2,11 @@
 Database models for the knowledge base system.
 """
 
-from dataclasses import dataclass
 import pathlib
 import re
 import textwrap
 from datetime import datetime
-from typing import Any, ClassVar, Iterable, Sequence, cast
+from typing import Any, Sequence, cast
 import uuid
 
 from PIL import Image
