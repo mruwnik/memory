@@ -2,13 +2,15 @@ import logging
 from typing import Iterable, Any
 import re
 
+from memory.common import settings
+
 logger = logging.getLogger(__name__)
 
 
 # Chunking configuration
-EMBEDDING_MAX_TOKENS = 32000  # VoyageAI max context window
-DEFAULT_CHUNK_TOKENS = 512  # Optimal chunk size for semantic search
-OVERLAP_TOKENS = 50  # Default overlap between chunks (10% of chunk size)
+EMBEDDING_MAX_TOKENS = settings.EMBEDDING_MAX_TOKENS
+DEFAULT_CHUNK_TOKENS = settings.DEFAULT_CHUNK_TOKENS
+OVERLAP_TOKENS = settings.OVERLAP_TOKENS
 CHARS_PER_TOKEN = 4
 
 

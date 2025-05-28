@@ -1,3 +1,4 @@
+# FIXME: Most of this was vibe-coded
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import patch, call
@@ -15,6 +16,9 @@ from memory.workers.tasks.maintenance import (
     reingest_missing_chunks,
     reingest_item,
     reingest_empty_source_items,
+    update_metadata_for_item,
+    update_metadata_for_source_items,
+    _payloads_equal,
 )
 
 
@@ -596,3 +600,372 @@ def test_reingest_empty_source_items_invalid_type(db_session):
 
 def test_reingest_missing_chunks_no_chunks(db_session):
     assert reingest_missing_chunks() == {}
+
+
+@pytest.mark.parametrize(
+    "payload1,payload2,expected",
+    [
+        # Identical payloads
+        (
+            {"tags": ["a", "b"], "source_id": 1, "title": "Test"},
+            {"tags": ["a", "b"], "source_id": 1, "title": "Test"},
+            True,
+        ),
+        # Different tag order (should be equal)
+        (
+            {"tags": ["a", "b"], "source_id": 1},
+            {"tags": ["b", "a"], "source_id": 1},
+            True,
+        ),
+        # Different tags
+        (
+            {"tags": ["a", "b"], "source_id": 1},
+            {"tags": ["a", "c"], "source_id": 1},
+            False,
+        ),
+        # Different non-tag fields
+        ({"tags": ["a"], "source_id": 1}, {"tags": ["a"], "source_id": 2}, False),
+        # Missing tags in one payload
+        ({"tags": ["a"], "source_id": 1}, {"source_id": 1}, False),
+        # Empty tags (should be equal)
+        ({"tags": [], "source_id": 1}, {"source_id": 1}, True),
+    ],
+)
+def test_payloads_equal(payload1, payload2, expected):
+    """Test the _payloads_equal helper function."""
+    assert _payloads_equal(payload1, payload2) == expected
+
+
+@pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+def test_update_metadata_for_item_success(db_session, qdrant, item_type):
+    """Test successful metadata update for an item with chunks."""
+    if item_type == "MailMessage":
+        item = MailMessage(
+            sha256=b"test_hash" + bytes(24),
+            tags=["original", "test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="STORED",
+            message_id="<test@example.com>",
+            subject="Test Subject",
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+            content="Test content",
+            folder="INBOX",
+            modality="mail",
+        )
+        modality = "mail"
+    else:
+        item = BlogPost(
+            sha256=b"test_hash" + bytes(24),
+            tags=["original", "test"],
+            size=100,
+            mime_type="text/html",
+            embed_status="STORED",
+            url="https://example.com/post",
+            title="Test Blog Post",
+            author="Author Name",
+            content="Test blog content",
+            modality="blog",
+        )
+        modality = "blog"
+
+    db_session.add(item)
+    db_session.flush()
+
+    # Add chunks to the item
+    chunk_ids = [str(uuid.uuid4()) for _ in range(3)]
+    chunks = [
+        Chunk(
+            id=chunk_id,
+            source=item,
+            content=f"Test chunk content {i}",
+            embedding_model="test-model",
+        )
+        for i, chunk_id in enumerate(chunk_ids)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+
+    # Setup Qdrant with existing payloads
+    qd.ensure_collection_exists(qdrant, modality, 1024)
+
+    existing_payloads = [
+        {"tags": ["existing", "qdrant"], "source_id": item.id, "old_field": "value"}
+        for _ in chunk_ids
+    ]
+    qd.upsert_vectors(
+        qdrant, modality, chunk_ids, [[1] * 1024] * len(chunk_ids), existing_payloads
+    )
+
+    # Mock the qdrant functions to track calls
+    with (
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.get_payloads"
+        ) as mock_get_payloads,
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.set_payload"
+        ) as mock_set_payload,
+    ):
+        # Return the existing payloads
+        mock_get_payloads.return_value = {
+            chunk_id: payload for chunk_id, payload in zip(chunk_ids, existing_payloads)
+        }
+
+        result = update_metadata_for_item(str(item.id), item_type)
+
+    # Verify result
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 3
+    assert result["errors"] == 0
+
+    # Verify batch retrieval was called once
+    mock_get_payloads.assert_called_once_with(qdrant, modality, chunk_ids)
+
+    # Verify set_payload was called for each chunk with merged tags
+    assert mock_set_payload.call_count == 3
+    for call in mock_set_payload.call_args_list:
+        args, kwargs = call
+        client, collection, chunk_id, updated_payload = args
+
+        # Check that tags were merged (existing + new)
+        expected_tags = set(
+            [
+                "existing",
+                "qdrant",
+                "original",
+                "test",
+            ]
+        )
+        if item_type == "MailMessage":
+            expected_tags.update(["recipient@example.com", "sender@example.com"])
+
+        actual_tags = set(updated_payload["tags"])
+        assert actual_tags == expected_tags
+
+        # Check that new metadata is present
+        assert updated_payload["source_id"] == item.id
+
+
+def test_update_metadata_for_item_no_changes(db_session, qdrant):
+    """Test that no updates are made when metadata hasn't changed."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk_id = str(uuid.uuid4())
+    chunk = Chunk(
+        id=chunk_id,
+        source=item,
+        content="Test chunk content",
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+
+    # Setup payload that matches what the item would generate
+    item_payload = item.as_payload()
+    existing_payload = {chunk_id: item_payload}
+
+    with (
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.get_payloads"
+        ) as mock_get_payloads,
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.set_payload"
+        ) as mock_set_payload,
+    ):
+        mock_get_payloads.return_value = existing_payload
+
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    # Verify no updates were made
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 0
+    assert result["errors"] == 0
+
+    # Verify set_payload was never called since nothing changed
+    mock_set_payload.assert_not_called()
+
+
+def test_update_metadata_for_item_no_chunks(db_session):
+    """Test updating metadata for an item with no chunks."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 0
+    assert result["errors"] == 0
+
+
+def test_update_metadata_for_item_not_found(db_session):
+    """Test updating metadata for a non-existent item."""
+    non_existent_id = "999"
+    result = update_metadata_for_item(non_existent_id, "MailMessage")
+
+    assert result == {"status": "error", "error": f"Item {non_existent_id} not found"}
+
+
+def test_update_metadata_for_item_invalid_type(db_session):
+    """Test updating metadata with an invalid item type."""
+    result = update_metadata_for_item("1", "invalid_type")
+
+    assert result["status"] == "error"
+    assert "Unsupported item type invalid_type" in result["error"]
+    assert "Available types:" in result["error"]
+
+
+def test_update_metadata_for_item_missing_chunks_in_qdrant(db_session, qdrant):
+    """Test when some chunks exist in DB but not in Qdrant."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk_ids = [str(uuid.uuid4()) for _ in range(3)]
+    chunks = [
+        Chunk(
+            id=chunk_id,
+            source=item,
+            content=f"Test chunk content {i}",
+            embedding_model="test-model",
+        )
+        for i, chunk_id in enumerate(chunk_ids)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+
+    # Mock qdrant to return payloads for only some chunks
+    with (
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.get_payloads"
+        ) as mock_get_payloads,
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.set_payload"
+        ) as mock_set_payload,
+    ):
+        # Only return payload for first chunk
+        mock_get_payloads.return_value = {
+            chunk_ids[0]: {"tags": ["existing"], "source_id": item.id}
+        }
+
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    # Should only update the chunk that was found in Qdrant
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 1
+    assert result["errors"] == 0
+
+    # Only one set_payload call for the found chunk
+    assert mock_set_payload.call_count == 1
+
+
+@pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+def test_update_metadata_for_source_items_success(db_session, item_type):
+    """Test updating metadata for all items of a given type."""
+    if item_type == "MailMessage":
+        items = [
+            MailMessage(
+                sha256=f"test_hash_{i}".encode() + bytes(32 - len(f"test_hash_{i}")),
+                tags=["test"],
+                size=100,
+                mime_type="message/rfc822",
+                embed_status="STORED",
+                message_id=f"<test{i}@example.com>",
+                subject=f"Test Subject {i}",
+                sender="sender@example.com",
+                recipients=["recipient@example.com"],
+                content=f"Test content {i}",
+                folder="INBOX",
+                modality="mail",
+            )
+            for i in range(3)
+        ]
+    else:
+        items = [
+            BlogPost(
+                sha256=f"test_hash_{i}".encode() + bytes(32 - len(f"test_hash_{i}")),
+                tags=["test"],
+                size=100,
+                mime_type="text/html",
+                embed_status="STORED",
+                url=f"https://example.com/post{i}",
+                title=f"Test Blog Post {i}",
+                author="Author Name",
+                content=f"Test blog content {i}",
+                modality="blog",
+            )
+            for i in range(3)
+        ]
+
+    db_session.add_all(items)
+    db_session.commit()
+
+    with patch.object(update_metadata_for_item, "delay") as mock_update:
+        result = update_metadata_for_source_items(item_type)
+
+    assert result == {"status": "success", "items": 3}
+
+    # Verify that update_metadata_for_item.delay was called for each item
+    assert mock_update.call_count == 3
+    expected_calls = [call(item.id, item_type) for item in items]
+    mock_update.assert_has_calls(expected_calls, any_order=True)
+
+
+def test_update_metadata_for_source_items_no_items(db_session):
+    """Test when there are no items of the specified type."""
+    with patch.object(update_metadata_for_item, "delay") as mock_update:
+        result = update_metadata_for_source_items("MailMessage")
+
+    assert result == {"status": "success", "items": 0}
+    mock_update.assert_not_called()
+
+
+def test_update_metadata_for_source_items_invalid_type(db_session):
+    """Test updating metadata for an invalid item type."""
+    result = update_metadata_for_source_items("invalid_type")
+
+    assert result["status"] == "error"
+    assert "Unsupported item type invalid_type" in result["error"]
+    assert "Available types:" in result["error"]

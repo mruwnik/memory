@@ -35,6 +35,7 @@ from memory.common import settings
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
+import memory.common.summarizer as summarizer
 
 Base = declarative_base()
 
@@ -105,19 +106,36 @@ def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalCh
     ]
 
 
-def chunk_mixed(
-    content: str, image_paths: Sequence[str]
-) -> list[list[extract.MulitmodalChunk]]:
-    images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
-    full_text: list[extract.MulitmodalChunk] = [content.strip(), *images]
+def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:
+    final = {}
+    for m in metadata:
+        if tags := set(m.pop("tags", [])):
+            final["tags"] = tags | final.get("tags", set())
+        final |= m
+    return final
 
-    chunks = []
+
+def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataChunk]:
+    if not content.strip():
+        return []
+
+    images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
+
+    summary, tags = summarizer.summarize(content)
+    full_text: extract.DataChunk = extract.DataChunk(
+        data=[content.strip(), *images], metadata={"tags": tags}
+    )
+
+    chunks: list[extract.DataChunk] = [full_text]
     tokens = chunker.approx_token_count(content)
     if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
-        chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
+        chunks += [
+            extract.DataChunk(data=add_pics(c, images), metadata={"tags": tags})
+            for c in chunker.chunk_text(content)
+        ]
+        chunks.append(extract.DataChunk(data=[summary], metadata={"tags": tags}))
 
-    all_chunks = [full_text] + chunks
-    return [c for c in all_chunks if c and all(i for i in c)]
+    return [c for c in chunks if c.data]
 
 
 class Chunk(Base):
@@ -224,22 +242,27 @@ class SourceItem(Base):
         """Get vector IDs from associated chunks."""
         return [chunk.id for chunk in self.chunks]
 
-    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
-        chunks: list[list[extract.MulitmodalChunk]] = []
-        if cast(str | None, self.content):
-            chunks = [[c] for c in chunker.chunk_text(cast(str, self.content))]
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        chunks: list[extract.DataChunk] = []
+        content = cast(str | None, self.content)
+        if content:
+            chunks = [extract.DataChunk(data=[c]) for c in chunker.chunk_text(content)]
+
+        if content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
+            summary, tags = summarizer.summarize(content)
+            chunks.append(extract.DataChunk(data=[summary], metadata={"tags": tags}))
 
         mime_type = cast(str | None, self.mime_type)
         if mime_type and mime_type.startswith("image/"):
-            chunks.append([Image.open(self.filename)])
+            chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
         return chunks
 
     def _make_chunk(
-        self, data: Sequence[extract.MulitmodalChunk], metadata: dict[str, Any] = {}
-    ):
+        self, data: extract.DataChunk, metadata: dict[str, Any] = {}
+    ) -> Chunk:
         chunk_id = str(uuid.uuid4())
-        text = "\n\n".join(c for c in data if isinstance(c, str) and c.strip())
-        images = [c for c in data if isinstance(c, Image.Image)]
+        text = "\n\n".join(c for c in data.data if isinstance(c, str) and c.strip())
+        images = [c for c in data.data if isinstance(c, Image.Image)]
         image_names = image_filenames(chunk_id, images)
 
         chunk = Chunk(
@@ -249,17 +272,18 @@ class SourceItem(Base):
             images=images,
             file_paths=image_names,
             embedding_model=collections.collection_model(cast(str, self.modality)),
-            item_metadata=self.as_payload() | metadata,
+            item_metadata=merge_metadata(self.as_payload(), data.metadata, metadata),
         )
         return chunk
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
-        return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
+        return [self._make_chunk(data) for data in self._chunk_contents()]
 
     def as_payload(self) -> dict:
         return {
             "source_id": self.id,
             "tags": self.tags,
+            "size": self.size,
         }
 
     @property
@@ -312,7 +336,7 @@ class MailMessage(SourceItem):
 
     def as_payload(self) -> dict:
         return {
-            "source_id": self.id,
+            **super().as_payload(),
             "message_id": self.message_id,
             "subject": self.subject,
             "sender": self.sender,
@@ -381,13 +405,12 @@ class EmailAttachment(SourceItem):
 
     def as_payload(self) -> dict:
         return {
+            **super().as_payload(),
             "filename": self.filename,
             "content_type": self.mime_type,
             "size": self.size,
             "created_at": (self.created_at and self.created_at.isoformat() or None),  # type: ignore
             "mail_message_id": self.mail_message_id,
-            "source_id": self.id,
-            "tags": self.tags,
         }
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
@@ -397,7 +420,7 @@ class EmailAttachment(SourceItem):
             contents = cast(str, self.content)
 
         chunks = extract.extract_data_chunks(cast(str, self.mime_type), contents)
-        return [self._make_chunk(c.data, metadata | c.metadata) for c in chunks]
+        return [self._make_chunk(c, metadata) for c in chunks]
 
     # Add indexes
     __table_args__ = (Index("email_attachment_message_idx", "mail_message_id"),)
@@ -488,8 +511,7 @@ class Comic(SourceItem):
 
     def as_payload(self) -> dict:
         payload = {
-            "source_id": self.id,
-            "tags": self.tags,
+            **super().as_payload(),
             "title": self.title,
             "author": self.author,
             "published": self.published,
@@ -500,10 +522,10 @@ class Comic(SourceItem):
         }
         return {k: v for k, v in payload.items() if v is not None}
 
-    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         image = Image.open(pathlib.Path(cast(str, self.filename)))
         description = f"{self.title} by {self.author}"
-        return [[image, description]]
+        return [extract.DataChunk(data=[image, description])]
 
 
 class Book(Base):
@@ -538,7 +560,7 @@ class Book(Base):
 
     def as_payload(self) -> dict:
         return {
-            "source_id": self.id,
+            **super().as_payload(),
             "isbn": self.isbn,
             "title": self.title,
             "author": self.author,
@@ -548,7 +570,6 @@ class Book(Base):
             "edition": self.edition,
             "series": self.series,
             "series_number": self.series_number,
-            "tags": self.tags,
         } | (cast(dict, self.book_metadata) or {})
 
 
@@ -591,29 +612,41 @@ class BookSection(SourceItem):
 
     def as_payload(self) -> dict:
         vals = {
+            **super().as_payload(),
             "title": self.book.title,
             "author": self.book.author,
-            "source_id": self.id,
             "book_id": self.book_id,
             "section_title": self.section_title,
             "section_number": self.section_number,
             "section_level": self.section_level,
             "start_page": self.start_page,
             "end_page": self.end_page,
-            "tags": self.tags,
         }
         return {k: v for k, v in vals.items() if v}
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
-        if not cast(str, self.content.strip()):
+        content = cast(str, self.content.strip())
+        if not content:
             return []
 
-        texts = [(page, i + self.start_page) for i, page in enumerate(self.pages)]
+        if len([p for p in self.pages if p.strip()]) == 1:
+            return [
+                self._make_chunk(
+                    extract.DataChunk(data=[content]), metadata | {"type": "page"}
+                )
+            ]
+
+        summary, tags = summarizer.summarize(content)
         return [
-            self._make_chunk([text.strip()], metadata | {"page": page_number})
-            for text, page_number in texts
-            if text and text.strip()
-        ] + [self._make_chunk([cast(str, self.content.strip())], metadata)]
+            self._make_chunk(
+                extract.DataChunk(data=[content]),
+                merge_metadata(metadata, {"type": "section", "tags": tags}),
+            ),
+            self._make_chunk(
+                extract.DataChunk(data=[summary]),
+                merge_metadata(metadata, {"type": "summary", "tags": tags}),
+            ),
+        ]
 
 
 class BlogPost(SourceItem):
@@ -652,7 +685,7 @@ class BlogPost(SourceItem):
         metadata = cast(dict | None, self.webpage_metadata) or {}
 
         payload = {
-            "source_id": self.id,
+            **super().as_payload(),
             "url": self.url,
             "title": self.title,
             "author": self.author,
@@ -660,12 +693,11 @@ class BlogPost(SourceItem):
             "description": self.description,
             "domain": self.domain,
             "word_count": self.word_count,
-            "tags": self.tags,
             **metadata,
         }
         return {k: v for k, v in payload.items() if v}
 
-    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
 
 
@@ -701,7 +733,7 @@ class ForumPost(SourceItem):
 
     def as_payload(self) -> dict:
         return {
-            "source_id": self.id,
+            **super().as_payload(),
             "url": self.url,
             "title": self.title,
             "description": self.description,
@@ -712,10 +744,9 @@ class ForumPost(SourceItem):
             "votes": self.votes,
             "score": self.score,
             "comments": self.comments,
-            "tags": self.tags,
         }
 
-    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
 
 

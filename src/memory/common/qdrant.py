@@ -245,3 +245,46 @@ def find_missing_points(
         collection_name, ids=ids, with_payload=False, with_vectors=False
     )
     return set(ids) - {str(r.id) for r in found}
+
+
+def set_payload(
+    client: qdrant_client.QdrantClient,
+    collection_name: str,
+    point_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Set payload for a single point without modifying its vector.
+
+    Args:
+        client: Qdrant client
+        collection_name: Name of the collection
+        point_id: Vector ID (as string)
+        payload: New payload to set
+    """
+    client.set_payload(
+        collection_name=collection_name,
+        payload=payload,
+        points=[point_id],
+    )
+
+    logger.debug(f"Set payload for point {point_id} in {collection_name}")
+
+
+def get_payloads(
+    client: qdrant_client.QdrantClient, collection_name: str, ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Retrieve payloads for multiple points.
+
+    Args:
+        client: Qdrant client
+        collection_name: Name of the collection
+        ids: List of vector IDs (as strings)
+
+    Returns:
+        Dictionary mapping point IDs to their payloads
+    """
+    points = client.retrieve(
+        collection_name=collection_name, ids=ids, with_payload=True, with_vectors=False
+    )
+
+    return {str(point.id): point.payload or {} for point in points}

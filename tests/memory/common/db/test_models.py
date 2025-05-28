@@ -5,8 +5,7 @@ from typing import cast
 import pytest
 from PIL import Image
 from datetime import datetime
-from memory.common import settings
-from memory.common import chunker
+from memory.common import settings, chunker, extract
 from memory.common.db.models import (
     Chunk,
     clean_filename,
@@ -17,6 +16,7 @@ from memory.common.db.models import (
     BookSection,
     BlogPost,
     Book,
+    merge_metadata,
 )
 
 
@@ -52,6 +52,114 @@ def default_chunk_size():
 )
 def test_clean_filename(input_filename, expected):
     assert clean_filename(input_filename) == expected
+
+
+@pytest.mark.parametrize(
+    "dicts,expected",
+    [
+        # Empty input
+        ([], {}),
+        # Single dict without tags
+        ([{"key": "value"}], {"key": "value"}),
+        # Single dict with tags as list
+        (
+            [{"key": "value", "tags": ["tag1", "tag2"]}],
+            {"key": "value", "tags": {"tag1", "tag2"}},
+        ),
+        # Single dict with tags as set
+        (
+            [{"key": "value", "tags": {"tag1", "tag2"}}],
+            {"key": "value", "tags": {"tag1", "tag2"}},
+        ),
+        # Multiple dicts without tags
+        (
+            [{"key1": "value1"}, {"key2": "value2"}],
+            {"key1": "value1", "key2": "value2"},
+        ),
+        # Multiple dicts with non-overlapping tags
+        (
+            [
+                {"key1": "value1", "tags": ["tag1"]},
+                {"key2": "value2", "tags": ["tag2"]},
+            ],
+            {"key1": "value1", "key2": "value2", "tags": {"tag1", "tag2"}},
+        ),
+        # Multiple dicts with overlapping tags
+        (
+            [
+                {"key1": "value1", "tags": ["tag1", "tag2"]},
+                {"key2": "value2", "tags": ["tag2", "tag3"]},
+            ],
+            {"key1": "value1", "key2": "value2", "tags": {"tag1", "tag2", "tag3"}},
+        ),
+        # Overlapping keys - later dict wins
+        (
+            [
+                {"key": "value1", "other": "data1"},
+                {"key": "value2", "another": "data2"},
+            ],
+            {"key": "value2", "other": "data1", "another": "data2"},
+        ),
+        # Mixed tags types (list and set)
+        (
+            [
+                {"key1": "value1", "tags": ["tag1", "tag2"]},
+                {"key2": "value2", "tags": {"tag3", "tag4"}},
+            ],
+            {
+                "key1": "value1",
+                "key2": "value2",
+                "tags": {"tag1", "tag2", "tag3", "tag4"},
+            },
+        ),
+        # Empty tags
+        (
+            [{"key": "value", "tags": []}, {"key2": "value2", "tags": []}],
+            {"key": "value", "key2": "value2"},
+        ),
+        # None values
+        (
+            [{"key1": None, "key2": "value"}, {"key3": None}],
+            {"key1": None, "key2": "value", "key3": None},
+        ),
+        # Complex nested structures
+        (
+            [
+                {"nested": {"inner": "value1"}, "list": [1, 2, 3], "tags": ["tag1"]},
+                {"nested": {"inner": "value2"}, "list": [4, 5], "tags": ["tag2"]},
+            ],
+            {"nested": {"inner": "value2"}, "list": [4, 5], "tags": {"tag1", "tag2"}},
+        ),
+        # Boolean and numeric values
+        (
+            [
+                {"bool": True, "int": 42, "float": 3.14, "tags": ["numeric"]},
+                {"bool": False, "int": 100},
+            ],
+            {"bool": False, "int": 100, "float": 3.14, "tags": {"numeric"}},
+        ),
+        # Three or more dicts
+        (
+            [
+                {"a": 1, "tags": ["t1"]},
+                {"b": 2, "tags": ["t2", "t3"]},
+                {"c": 3, "a": 10, "tags": ["t3", "t4"]},
+            ],
+            {"a": 10, "b": 2, "c": 3, "tags": {"t1", "t2", "t3", "t4"}},
+        ),
+        # Dict with only tags
+        ([{"tags": ["tag1", "tag2"]}], {"tags": {"tag1", "tag2"}}),
+        # Empty dicts
+        ([{}, {}], {}),
+        # Mix of empty and non-empty dicts
+        (
+            [{}, {"key": "value", "tags": ["tag"]}, {}],
+            {"key": "value", "tags": {"tag"}},
+        ),
+    ],
+)
+def test_merge_metadata(dicts, expected):
+    assert merge_metadata(*dicts) == expected
 
 
 def test_image_filenames_with_existing_filenames(tmp_path):
@@ -262,7 +370,7 @@ def test_source_item_chunk_contents_text(chunk_length, expected, default_chunk_s
     )
 
     default_chunk_size(chunk_length)
-    assert source._chunk_contents() == expected
+    assert source._chunk_contents() == [extract.DataChunk(data=e) for e in expected]
 
 
 def test_source_item_chunk_contents_image(tmp_path):
@@ -281,8 +389,8 @@ def test_source_item_chunk_contents_image(tmp_path):
     result = source._chunk_contents()
 
     assert len(result) == 1
-    assert len(result[0]) == 1
-    assert isinstance(result[0][0], Image.Image)
+    assert len(result[0].data) == 1
+    assert isinstance(result[0].data[0], Image.Image)
 
 
 def test_source_item_chunk_contents_mixed(tmp_path):
@@ -302,8 +410,8 @@ def test_source_item_chunk_contents_mixed(tmp_path):
     result = source._chunk_contents()
 
     assert len(result) == 2
-    assert result[0][0] == "Bla bla"
-    assert isinstance(result[1][0], Image.Image)
+    assert result[0].data[0] == "Bla bla"
+    assert isinstance(result[1].data[0], Image.Image)
 
 
 @pytest.mark.parametrize(
@@ -323,7 +431,11 @@ def test_source_item_chunk_contents_mixed(tmp_path):
 def test_source_item_make_chunk(tmp_path, texts, expected_content):
     """Test SourceItem._make_chunk method"""
     source = SourceItem(
-        sha256=b"test123", content="test", modality="text", tags=["tag1"]
+        sha256=b"test123",
+        content="test",
+        modality="text",
+        tags=["tag1"],
+        size=1024,
     )
     # Create actual image
     image_file = tmp_path / "test.png"
@@ -335,7 +447,7 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
     data = [*texts, img]
     metadata = {"extra": "data"}
 
-    chunk = source._make_chunk(data, metadata)
+    chunk = source._make_chunk(extract.DataChunk(data=data), metadata)
 
     assert chunk.id is not None
     assert chunk.source == source
@@ -344,7 +456,12 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
     assert chunk.embedding_model is not None
 
     # Check that metadata is merged correctly
-    expected_payload = {"source_id": source.id, "tags": ["tag1"], "extra": "data"}
+    expected_payload = {
+        "source_id": source.id,
+        "tags": {"tag1"},
+        "extra": "data",
+        "size": 1024,
+    }
     assert chunk.item_metadata == expected_payload
 
 
@@ -355,10 +472,11 @@ def test_source_item_as_payload():
         content="test",
         modality="text",
         tags=["tag1", "tag2"],
+        size=1024,
     )
 
     payload = source.as_payload()
-    assert payload == {"source_id": 123, "tags": ["tag1", "tag2"]}
+    assert payload == {"source_id": 123, "tags": ["tag1", "tag2"], "size": 1024}
 
 
 @pytest.mark.parametrize(
@@ -544,6 +662,7 @@ def test_mail_message_as_payload(sent_at, expected_date):
         folder="INBOX",
         sent_at=sent_at,
         tags=["tag1", "tag2"],
+        size=1024,
     )
     # Manually set id for testing
     object.__setattr__(mail_message, "id", 123)
@@ -552,6 +671,7 @@ def test_mail_message_as_payload(sent_at, expected_date):
 
     expected = {
         "source_id": 123,
+        "size": 1024,
         "message_id": "<test@example.com>",
         "subject": "Test Subject",
         "sender": "sender@example.com",
@@ -646,12 +766,12 @@ def test_email_attachment_as_payload(created_at, expected_date):
     payload = attachment.as_payload()
 
     expected = {
+        "source_id": 456,
         "filename": "document.pdf",
         "content_type": "application/pdf",
         "size": 1024,
         "created_at": expected_date,
         "mail_message_id": 123,
-        "source_id": 456,
         "tags": ["pdf", "document"],
     }
     assert payload == expected
@@ -702,7 +822,8 @@ def test_email_attachment_data_chunks(
     # Verify the method calls
     mock_extract.assert_called_once_with("text/plain", expected_content)
     mock_make.assert_called_once_with(
-        ["extracted text"], {"extra": "metadata", "source": content_source}
+        extract.DataChunk(data=["extracted text"], metadata={"source": content_source}),
+        {"extra": "metadata"},
     )
     assert result == [mock_chunk]
 
@@ -813,18 +934,20 @@ def test_subclass_deletion_cascades_from_source_item(db_session: Session):
         # No pages
         ([], []),
         # Single page
-        (["Page 1 content"], [("Page 1 content", 10)]),
+        (["Page 1 content"], [("Page 1 content", {"type": "page"})]),
         # Multiple pages
         (
             ["Page 1", "Page 2", "Page 3"],
             [
-                ("Page 1", 10),
-                ("Page 2", 11),
-                ("Page 3", 12),
+                (
+                    "Page 1\n\nPage 2\n\nPage 3",
+                    {"type": "section", "tags": {"tag1", "tag2"}},
+                ),
+                ("test", {"type": "summary", "tags": {"tag1", "tag2"}}),
             ],
         ),
         # Empty/whitespace pages filtered out
-        (["", "  ", "Page 3"], [("Page 3", 12)]),
+        (["", "  ", "Page 3"], [("Page 3", {"type": "page"})]),
         # All empty - no chunks created
         (["", "  ", "   "], []),
     ],
@@ -845,11 +968,8 @@ def test_book_section_data_chunks(pages, expected_chunks):
 
     chunks = book_section.data_chunks()
     expected = [
-        (p, book_section.as_payload() | {"page": i}) for p, i in expected_chunks
+        (c, merge_metadata(book_section.as_payload(), m)) for c, m in expected_chunks
     ]
-    if content:
-        expected.append((content, book_section.as_payload()))
-
     assert [(c.content, c.item_metadata) for c in chunks] == expected
     for c in chunks:
         assert cast(list, c.file_paths) == []
@@ -859,16 +979,39 @@ def test_book_section_data_chunks(pages, expected_chunks):
     "content,expected",
     [
         ("", []),
-        ("Short content", [["Short content"]]),
+        (
+            "Short content",
+            [
+                extract.DataChunk(
+                    data=["Short content"], metadata={"tags": ["tag1", "tag2"]}
+                )
+            ],
+        ),
         (
             "This is a very long piece of content that should be chunked into multiple pieces when processed.",
             [
-                [
-                    "This is a very long piece of content that should be chunked into multiple pieces when processed."
-                ],
-                ["This is a very long piece of content that"],
-                ["should be chunked into multiple pieces when"],
-                ["processed."],
+                extract.DataChunk(
+                    data=[
+                        "This is a very long piece of content that should be chunked into multiple pieces when processed."
+                    ],
+                    metadata={"tags": ["tag1", "tag2"]},
+                ),
+                extract.DataChunk(
+                    data=["This is a very long piece of content that"],
+                    metadata={"tags": ["tag1", "tag2"]},
+                ),
+                extract.DataChunk(
+                    data=["should be chunked into multiple pieces when"],
+                    metadata={"tags": ["tag1", "tag2"]},
+                ),
+                extract.DataChunk(
+                    data=["processed."],
+                    metadata={"tags": ["tag1", "tag2"]},
+                ),
+                extract.DataChunk(
+                    data=["test"],
+                    metadata={"tags": ["tag1", "tag2"]},
+                ),
             ],
         ),
     ],
@@ -906,7 +1049,8 @@ def test_blog_post_chunk_contents_with_images(tmp_path):
 
     result = blog_post._chunk_contents()
     result = [
-        [i if isinstance(i, str) else getattr(i, "filename") for i in c] for c in result
+        [i if isinstance(i, str) else getattr(i, "filename") for i in c.data]
+        for c in result
     ]
     assert result == [
         ["Content with images", img1_path.as_posix(), img2_path.as_posix()]
@@ -933,9 +1077,9 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
         result = blog_post._chunk_contents()
 
     result = [
-        [i if isinstance(i, str) else getattr(i, "filename") for i in c] for c in result
+        [i if isinstance(i, str) else getattr(i, "filename") for i in c.data]
+        for c in result
     ]
-    print(result)
     assert result == [
         [
             f"First picture is here: {img1_path.as_posix()}\nSecond picture is here: {img2_path.as_posix()}",
@@ -950,4 +1094,5 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
             f"Second picture is here: {img2_path.as_posix()}",
             img2_path.as_posix(),
         ],
+        ["test"],
     ]

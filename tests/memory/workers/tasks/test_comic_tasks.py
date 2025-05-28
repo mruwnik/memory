@@ -218,6 +218,7 @@ def test_sync_comic_success(mock_get, mock_image_response, db_session, qdrant):
                 "title": "Test Comic",
                 "url": "https://example.com/comic/1",
                 "source_id": 1,
+                "size": 90,
             },
             None,
         )

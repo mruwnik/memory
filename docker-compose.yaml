@@ -11,6 +11,7 @@ secrets:
   postgres_password: { file: ./secrets/postgres_password.txt }
   jwt_secret: { file: ./secrets/jwt_secret.txt }
   openai_key: { file: ./secrets/openai_key.txt }
+  anthropic_key: { file: ./secrets/anthropic_key.txt }
 
 # --------------------------------------------------------------------- volumes
 volumes:
@@ -42,7 +43,8 @@ x-worker-base: &worker-base
     # DSNs are built in worker entrypoint from user + pw files
     QDRANT_URL: http://qdrant:6333
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
-  secrets: [ postgres_password, openai_key ]
+    ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+  secrets: [ postgres_password, openai_key, anthropic_key ]
   read_only: true
   tmpfs: [ /tmp, /var/tmp ]
   cap_drop: [ ALL ]
@@ -76,9 +78,6 @@ services:
     mem_limit: 4g
     cpus: "1.5"
     security_opt: [ "no-new-privileges=true" ]
-    ports:
-      # PostgreSQL port for local Celery result backend
-      - "15432:5432"
 
   rabbitmq:
     image: rabbitmq:3.13-management
@@ -98,11 +97,6 @@ services:
     mem_limit: 512m
     cpus: "0.5"
     security_opt: [ "no-new-privileges=true" ]
-    ports:
-      # UI only on localhost
-      - "15672:15672"
-      # AMQP port for local Celery clients
-      - "15673:5672"
 
   qdrant:
     image: qdrant/qdrant:v1.14.0
@@ -119,8 +113,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    ports:
-      - "6333:6333"
     mem_limit: 4g
     cpus: "2"
     security_opt: [ "no-new-privileges=true" ]

@@ -98,3 +98,22 @@ CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
 EMBEDDING_MAX_WORKERS = int(os.getenv("EMBEDDING_MAX_WORKERS", 50))
+
+# VoyageAI max context window
+EMBEDDING_MAX_TOKENS = int(os.getenv("EMBEDDING_MAX_TOKENS", 32000))
+# Optimal chunk size for semantic search
+DEFAULT_CHUNK_TOKENS = int(os.getenv("DEFAULT_CHUNK_TOKENS", 512))
+OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
+
+
+# LLM settings
+if openai_key_file := os.getenv("OPENAI_API_KEY_FILE"):
+    OPENAI_API_KEY = pathlib.Path(openai_key_file).read_text().strip()
+else:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
+    ANTHROPIC_API_KEY = pathlib.Path(anthropic_key_file).read_text().strip()
+else:
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240307")

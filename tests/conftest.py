@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import anthropic
+import openai
 import pytest
 import qdrant_client
 import voyageai
@@ -236,4 +238,36 @@ def mock_voyage_client():
         client = mock_client()
         client.embed = embeder
         client.multimodal_embed = embeder
+        yield client
+
+
+@pytest.fixture(autouse=True)
+def mock_openai_client():
+    with patch.object(openai, "OpenAI", autospec=True) as mock_client:
+        client = mock_client()
+        client.chat = Mock()
+        client.chat.completions.create = Mock(
+            return_value=Mock(
+                choices=[
+                    Mock(
+                        message=Mock(
+                            content='{"summary": "test", "tags": ["tag1", "tag2"]}'
+                        )
+                    )
+                ]
+            )
+        )
+        yield client
+
+
+@pytest.fixture(autouse=True)
+def mock_anthropic_client():
+    with patch.object(anthropic, "Anthropic", autospec=True) as mock_client:
+        client = mock_client()
+        client.messages = Mock()
+        client.messages.create = Mock(
+            return_value=Mock(
+                content=[Mock(text='{"summary": "test", "tags": ["tag1", "tag2"]}')]
+            )
+        )
         yield client

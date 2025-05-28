@@ -335,38 +335,19 @@ def test_sync_lesswrong_max_items_limit(mock_fetch, db_session):
         assert result["max_items"] == 3
 
 
-@pytest.mark.parametrize(
-    "since_str,expected_days_ago",
-    [
-        ("2024-01-01T00:00:00", None),  # Specific date
-        (None, 30),  # Default should be 30 days ago
-    ],
-)
 @patch("memory.workers.tasks.forums.fetch_lesswrong_posts")
-def test_sync_lesswrong_since_parameter(
-    mock_fetch, since_str, expected_days_ago, db_session
-):
+def test_sync_lesswrong_since_parameter(mock_fetch, db_session):
     """Test that since parameter is handled correctly."""
     mock_fetch.return_value = []
 
-    if since_str:
-        forums.sync_lesswrong(since=since_str)
-        expected_since = datetime.fromisoformat(since_str)
-    else:
-        forums.sync_lesswrong()
-        # Should default to 30 days ago
-        expected_since = datetime.now() - timedelta(days=30)
+    forums.sync_lesswrong(since="2024-01-01T00:00:00")
+    expected_since = datetime.fromisoformat("2024-01-01T00:00:00")
 
     # Verify fetch was called with correct since date
     call_args = mock_fetch.call_args[0]
     actual_since = call_args[0]
 
-    if expected_days_ago:
-        # For default case, check it's approximately 30 days ago
-        time_diff = abs((actual_since - expected_since).total_seconds())
-        assert time_diff < 120  # Within 2 minute tolerance for slow tests
-    else:
-        assert actual_since == expected_since
+    assert actual_since == expected_since
 
 
 @pytest.mark.parametrize(

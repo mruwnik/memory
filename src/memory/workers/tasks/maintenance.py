@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Sequence
+from typing import Sequence, Any
 
 from memory.workers.tasks.content_processing import process_content_item
 from sqlalchemy import select
@@ -21,6 +21,10 @@ REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
 REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
 REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
 REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
+UPDATE_METADATA_FOR_SOURCE_ITEMS = (
+    f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
+)
+UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 
 
 @app.task(name=CLEAN_COLLECTION)
@@ -97,6 +101,8 @@ def get_item_class(item_type: str):
         raise ValueError(
             f"Unsupported item type {item_type}. Available types: {available_types}"
         )
+    if not hasattr(class_, "chunks"):
+        raise ValueError(f"Item type {item_type} does not have chunks")
     return class_
 
 
@@ -226,3 +232,99 @@ def reingest_missing_chunks(
                 total_stats[collection]["total"] += stats["total"]
 
         return dict(total_stats)
+
+
+def _payloads_equal(current: dict[str, Any], new: dict[str, Any]) -> bool:
+    """Compare two payloads to see if they're effectively equal."""
+    # Handle tags specially - compare as sets since order doesn't matter
+    current_tags = set(current.get("tags", []))
+    new_tags = set(new.get("tags", []))
+
+    if current_tags != new_tags:
+        return False
+
+    # Compare all other fields
+    current_without_tags = {k: v for k, v in current.items() if k != "tags"}
+    new_without_tags = {k: v for k, v in new.items() if k != "tags"}
+
+    return current_without_tags == new_without_tags
+
+
+@app.task(name=UPDATE_METADATA_FOR_ITEM)
+def update_metadata_for_item(item_id: str, item_type: str):
+    """Update metadata in Qdrant for all chunks of a single source item, merging tags."""
+    logger.info(f"Updating metadata for {item_type} {item_id}")
+    try:
+        class_ = get_item_class(item_type)
+    except ValueError as e:
+        logger.error(f"Error getting item class: {e}")
+        return {"status": "error", "error": str(e)}
+
+    client = qdrant.get_qdrant_client()
+    updated_chunks = 0
+    errors = 0
+
+    with make_session() as session:
+        item = session.query(class_).get(item_id)
+        if not item:
+            return {"status": "error", "error": f"Item {item_id} not found"}
+
+        chunk_ids = [str(chunk.id) for chunk in item.chunks if chunk.id]
+        if not chunk_ids:
+            return {"status": "success", "updated_chunks": 0, "errors": 0}
+
+        collection = item.modality
+
+        try:
+            current_payloads = qdrant.get_payloads(client, collection, chunk_ids)
+
+            # Get new metadata from source item
+            new_metadata = item.as_payload()
+            new_tags = set(new_metadata.get("tags", []))
+
+            for chunk_id in chunk_ids:
+                if chunk_id not in current_payloads:
+                    logger.warning(
+                        f"Chunk {chunk_id} not found in Qdrant collection {collection}"
+                    )
+                    continue
+
+                current_payload = current_payloads[chunk_id]
+                current_tags = set(current_payload.get("tags", []))
+
+                # Merge tags (combine existing and new tags)
+                merged_tags = list(current_tags | new_tags)
+                updated_metadata = new_metadata.copy()
+                updated_metadata["tags"] = merged_tags
+
+                if _payloads_equal(current_payload, updated_metadata):
+                    continue
+
+                qdrant.set_payload(client, collection, chunk_id, updated_metadata)
+                updated_chunks += 1
+
+        except Exception as e:
+            logger.error(f"Error updating metadata for item {item.id}: {e}")
+            errors += 1
+
+    return {"status": "success", "updated_chunks": updated_chunks, "errors": errors}
+
+
+@app.task(name=UPDATE_METADATA_FOR_SOURCE_ITEMS)
+def update_metadata_for_source_items(item_type: str):
+    """Update metadata in Qdrant for all chunks of all items of a given source type."""
+    logger.info(f"Updating metadata for all {item_type} source items")
+    try:
+        class_ = get_item_class(item_type)
+    except ValueError as e:
+        logger.error(f"Error getting item class: {e}")
+        return {"status": "error", "error": str(e)}
+
+    with make_session() as session:
+        item_ids = session.query(class_.id).all()
+        logger.info(f"Found {len(item_ids)} items to update metadata for")
+
+        for item_id in item_ids:
+            update_metadata_for_item.delay(item_id.id, item_type)  # type: ignore
+
+        return {"status": "success", "items": len(item_ids)}
