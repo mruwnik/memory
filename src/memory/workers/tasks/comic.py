@@ -9,7 +9,7 @@ from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Comic, clean_filename
 from memory.parsers import comics
-from memory.workers.celery_app import app
+from memory.workers.celery_app import app, COMIC_ROOT
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -19,10 +19,10 @@ from memory.workers.tasks.content_processing import (
 
 logger = logging.getLogger(__name__)
 
-SYNC_ALL_COMICS = "memory.workers.tasks.comic.sync_all_comics"
-SYNC_SMBC = "memory.workers.tasks.comic.sync_smbc"
-SYNC_XKCD = "memory.workers.tasks.comic.sync_xkcd"
-SYNC_COMIC = "memory.workers.tasks.comic.sync_comic"
+SYNC_ALL_COMICS = f"{COMIC_ROOT}.sync_all_comics"
+SYNC_SMBC = f"{COMIC_ROOT}.sync_smbc"
+SYNC_XKCD = f"{COMIC_ROOT}.sync_xkcd"
+SYNC_COMIC = f"{COMIC_ROOT}.sync_comic"
 
 BASE_SMBC_URL = "https://www.smbc-comics.com/"
 SMBC_RSS_URL = "https://www.smbc-comics.com/comic/rss"
@@ -109,7 +109,7 @@ def sync_comic(
     )
 
     with make_session() as session:
-        return process_content_item(comic, "comic", session)
+        return process_content_item(comic, session)
 
 
 @app.task(name=SYNC_SMBC)

@@ -471,11 +471,9 @@ def test_process_content_item(
                 "memory.workers.tasks.content_processing.push_to_qdrant",
                 side_effect=Exception("Qdrant error"),
             ):
-                result = process_content_item(
-                    mail_message, "mail", db_session, ["tag1"]
-                )
+                result = process_content_item(mail_message, db_session)
         else:
-            result = process_content_item(mail_message, "mail", db_session, ["tag1"])
+            result = process_content_item(mail_message, db_session)
 
     assert result["status"] == expected_status
     assert result["embed_status"] == expected_embed_status

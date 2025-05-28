@@ -3,21 +3,24 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Sequence
 
+from memory.workers.tasks.content_processing import process_content_item
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
 
 from memory.common import collections, embedding, qdrant, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
-from memory.workers.celery_app import app
+from memory.workers.celery_app import app, MAINTENANCE_ROOT
 
 logger = logging.getLogger(__name__)
 
 
-CLEAN_ALL_COLLECTIONS = "memory.workers.tasks.maintenance.clean_all_collections"
-CLEAN_COLLECTION = "memory.workers.tasks.maintenance.clean_collection"
-REINGEST_MISSING_CHUNKS = "memory.workers.tasks.maintenance.reingest_missing_chunks"
-REINGEST_CHUNK = "memory.workers.tasks.maintenance.reingest_chunk"
+CLEAN_ALL_COLLECTIONS = f"{MAINTENANCE_ROOT}.clean_all_collections"
+CLEAN_COLLECTION = f"{MAINTENANCE_ROOT}.clean_collection"
+REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
+REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
+REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
+REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
 
 
 @app.task(name=CLEAN_COLLECTION)
@@ -87,6 +90,61 @@ def reingest_chunk(chunk_id: str, collection: str):
         session.commit()
 
 
+def get_item_class(item_type: str):
+    class_ = SourceItem.registry._class_registry.get(item_type)
+    if not class_:
+        available_types = ", ".join(sorted(SourceItem.registry._class_registry.keys()))
+        raise ValueError(
+            f"Unsupported item type {item_type}. Available types: {available_types}"
+        )
+    return class_
+
+
+@app.task(name=REINGEST_ITEM)
+def reingest_item(item_id: str, item_type: str):
+    logger.info(f"Reingesting {item_type} {item_id}")
+    try:
+        class_ = get_item_class(item_type)
+    except ValueError as e:
+        logger.error(f"Error getting item class: {e}")
+        return {"status": "error", "error": str(e)}
+
+    with make_session() as session:
+        item = session.query(class_).get(item_id)
+        if not item:
+            return {"status": "error", "error": f"Item {item_id} not found"}
+
+        chunk_ids = [str(c.id) for c in item.chunks if c.id]
+        if chunk_ids:
+            client = qdrant.get_qdrant_client()
+            qdrant.delete_points(client, item.modality, chunk_ids)
+
+        for chunk in item.chunks:
+            session.delete(chunk)
+
+        return process_content_item(item, session)
+
+
+@app.task(name=REINGEST_EMPTY_SOURCE_ITEMS)
+def reingest_empty_source_items(item_type: str):
+    logger.info("Reingesting empty source items")
+    try:
+        class_ = get_item_class(item_type)
+    except ValueError as e:
+        logger.error(f"Error getting item class: {e}")
+        return {"status": "error", "error": str(e)}
+
+    with make_session() as session:
+        item_ids = session.query(class_.id).filter(~class_.chunks.any()).all()
+
+        logger.info(f"Found {len(item_ids)} items to reingest")
+
+        for item_id in item_ids:
+            reingest_item.delay(item_id.id, item_type)  # type: ignore
+
+        return {"status": "success", "items": len(item_ids)}
+
+
 def check_batch(batch: Sequence[Chunk]) -> dict:
     client = qdrant.get_qdrant_client()
     by_collection = defaultdict(list)
@@ -116,14 +174,19 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
 
 @app.task(name=REINGEST_MISSING_CHUNKS)
 def reingest_missing_chunks(
-    batch_size: int = 1000, minutes_ago: int = settings.CHUNK_REINGEST_SINCE_MINUTES
+    batch_size: int = 1000,
+    collection: str | None = None,
+    minutes_ago: int = settings.CHUNK_REINGEST_SINCE_MINUTES,
 ):
     logger.info("Reingesting missing chunks")
     total_stats = defaultdict(lambda: {"missing": 0, "correct": 0, "total": 0})
     since = datetime.now() - timedelta(minutes=minutes_ago)
 
     with make_session() as session:
-        total_count = session.query(Chunk).filter(Chunk.checked_at < since).count()
+        query = session.query(Chunk).filter(Chunk.checked_at < since)
+        if collection:
+            query = query.filter(Chunk.source.has(SourceItem.modality == collection))
+        total_count = query.count()
 
         logger.info(
             f"Found {total_count} chunks to check, processing in batches of {batch_size}"

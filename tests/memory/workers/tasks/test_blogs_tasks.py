@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import ArticleFeed, BlogPost
@@ -60,37 +60,6 @@ def inactive_article_feed(db_session):
         active=False,
     )
     db_session.add(feed)
-    db_session.commit()
-    return feed
-
-
-@pytest.fixture
-def recently_checked_feed(db_session):
-    """Create a recently checked ArticleFeed."""
-    from sqlalchemy import text
-
-    # Use a very recent timestamp that will trigger the "recently checked" condition
-    # The check_interval is 3600 seconds, so 30 seconds ago should be "recent"
-    recent_time = datetime.now() - timedelta(seconds=30)
-
-    feed = ArticleFeed(
-        url="https://example.com/recent.xml",
-        title="Recent Feed",
-        description="A recently checked feed",
-        tags=["test"],
-        check_interval=3600,
-        active=True,
-    )
-    db_session.add(feed)
-    db_session.flush()  # Get the ID
-
-    # Manually set the last_checked_at to avoid timezone issues
-    db_session.execute(
-        text(
-            "UPDATE article_feeds SET last_checked_at = :timestamp WHERE id = :feed_id"
-        ),
-        {"timestamp": recent_time, "feed_id": feed.id},
-    )
     db_session.commit()
     return feed
 
@@ -564,3 +533,65 @@ def test_sync_website_archive_empty_results(
     assert result["articles_found"] == 0
     assert result["new_articles"] == 0
     assert result["task_ids"] == []
+
+
+@pytest.mark.parametrize(
+    "check_interval_minutes,seconds_since_check,should_skip",
+    [
+        (60, 30, True),  # 60min interval, checked 30s ago -> skip
+        (60, 3000, True),  # 60min interval, checked 50min ago -> skip
+        (60, 4000, False),  # 60min interval, checked 66min ago -> don't skip
+        (30, 1000, True),  # 30min interval, checked 16min ago -> skip
+        (30, 2000, False),  # 30min interval, checked 33min ago -> don't skip
+    ],
+)
+@patch("memory.workers.tasks.blogs.get_feed_parser")
+def test_sync_article_feed_check_interval(
+    mock_get_parser,
+    check_interval_minutes,
+    seconds_since_check,
+    should_skip,
+    db_session,
+):
+    """Test sync respects check interval with various timing scenarios."""
+    from sqlalchemy import text
+
+    # Mock parser to return None (no parser available) for non-skipped cases
+    mock_get_parser.return_value = None
+
+    # Create feed with specific check interval
+    feed = ArticleFeed(
+        url="https://example.com/interval-test.xml",
+        title="Interval Test Feed",
+        description="Feed for testing check intervals",
+        tags=["test"],
+        check_interval=check_interval_minutes,
+        active=True,
+    )
+    db_session.add(feed)
+    db_session.flush()
+
+    # Set last_checked_at to specific time in the past
+    last_checked_time = datetime.now(timezone.utc) - timedelta(
+        seconds=seconds_since_check
+    )
+    db_session.execute(
+        text(
+            "UPDATE article_feeds SET last_checked_at = :timestamp WHERE id = :feed_id"
+        ),
+        {"timestamp": last_checked_time, "feed_id": feed.id},
+    )
+    db_session.commit()
+
+    result = blogs.sync_article_feed(feed.id)
+
+    if should_skip:
+        assert result == {"status": "skipped_recent_check", "feed_id": feed.id}
+        # get_feed_parser should not be called when skipping
+        mock_get_parser.assert_not_called()
+    else:
+        # Should proceed with sync, but will fail due to no parser - that's expected
+        assert result["status"] == "error"
+        assert result["error"] == "No parser available for feed"
+        # get_feed_parser should be called when not skipping
+        mock_get_parser.assert_called_once()

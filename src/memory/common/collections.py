@@ -43,7 +43,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
     "blog": {
         "dimension": 1024,
         "distance": "Cosine",
-        "model": settings.TEXT_EMBEDDING_MODEL,
+        "model": settings.MIXED_EMBEDDING_MODEL,
+    },
+    "forum": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.MIXED_EMBEDDING_MODEL,
     },
     "text": {
         "dimension": 1024,

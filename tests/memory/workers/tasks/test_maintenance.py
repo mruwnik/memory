@@ -7,12 +7,14 @@ from PIL import Image
 
 from memory.common import qdrant as qd
 from memory.common import settings
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk, SourceItem, MailMessage, BlogPost
 from memory.workers.tasks.maintenance import (
     clean_collection,
     reingest_chunk,
     check_batch,
     reingest_missing_chunks,
+    reingest_item,
+    reingest_empty_source_items,
 )
 
 
@@ -300,6 +302,296 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
         ]
         db_ids = [str(c.id) for c in old_chunks if c.source.modality == modality]
         assert set(qdrant_ids) == set(db_ids)
+
+
+@pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+def test_reingest_item_success(db_session, qdrant, item_type):
+    """Test successful reingestion of an item with existing chunks."""
+    if item_type == "MailMessage":
+        item = MailMessage(
+            sha256=b"test_hash" + bytes(24),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="STORED",
+            message_id="<test@example.com>",
+            subject="Test Subject",
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+            content="Test content for reingestion",
+            folder="INBOX",
+            modality="mail",
+        )
+    else:  # blog_post
+        item = BlogPost(
+            sha256=b"test_hash" + bytes(24),
+            tags=["test"],
+            size=100,
+            mime_type="text/html",
+            embed_status="STORED",
+            url="https://example.com/post",
+            title="Test Blog Post",
+            author="Author Name",
+            content="Test blog content for reingestion",
+            modality="blog",
+        )
+
+    db_session.add(item)
+    db_session.flush()
+
+    # Add some chunks to the item
+    chunk_ids = [str(uuid.uuid4()) for _ in range(3)]
+    chunks = [
+        Chunk(
+            id=chunk_id,
+            source=item,
+            content=f"Test chunk content {i}",
+            embedding_model="test-model",
+        )
+        for i, chunk_id in enumerate(chunk_ids)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+
+    # Add vectors to Qdrant
+    modality = "mail" if item_type == "MailMessage" else "blog"
+    qd.ensure_collection_exists(qdrant, modality, 1024)
+    qd.upsert_vectors(qdrant, modality, chunk_ids, [[1] * 1024] * len(chunk_ids))
+
+    # Verify chunks exist in Qdrant before reingestion
+    qdrant_ids_before = {
+        str(i) for batch in qd.batch_ids(qdrant, modality) for i in batch
+    }
+    assert set(chunk_ids).issubset(qdrant_ids_before)
+
+    # Mock the embedding function to return chunks
+    with patch("memory.common.embedding.embed_source_item") as mock_embed:
+        mock_embed.return_value = [
+            Chunk(
+                id=str(uuid.uuid4()),
+                content="New chunk content 1",
+                embedding_model="test-model",
+                vector=[0.1] * 1024,
+                item_metadata={"source_id": item.id, "tags": ["test"]},
+            ),
+            Chunk(
+                id=str(uuid.uuid4()),
+                content="New chunk content 2",
+                embedding_model="test-model",
+                vector=[0.2] * 1024,
+                item_metadata={"source_id": item.id, "tags": ["test"]},
+            ),
+        ]
+
+        result = reingest_item(str(item.id), item_type)
+
+    assert result["status"] == "processed"
+    assert result[f"{item_type.lower()}_id"] == item.id
+    assert result["chunks_count"] == 2
+    assert result["embed_status"] == "STORED"
+
+    # Verify old chunks were deleted from database
+    db_session.refresh(item)
+    remaining_chunks = db_session.query(Chunk).filter(Chunk.id.in_(chunk_ids)).all()
+    assert len(remaining_chunks) == 0
+
+    # Verify old vectors were deleted from Qdrant
+    qdrant_ids_after = {
+        str(i) for batch in qd.batch_ids(qdrant, modality) for i in batch
+    }
+    assert not set(chunk_ids).intersection(qdrant_ids_after)
+
+
+def test_reingest_item_not_found(db_session):
+    """Test reingesting a non-existent item."""
+    non_existent_id = "999"
+    result = reingest_item(non_existent_id, "MailMessage")
+
+    assert result == {"status": "error", "error": f"Item {non_existent_id} not found"}
+
+
+def test_reingest_item_invalid_type(db_session):
+    """Test reingesting with an invalid item type."""
+    result = reingest_item("1", "invalid_type")
+
+    assert result["status"] == "error"
+    assert "Unsupported item type invalid_type" in result["error"]
+    assert "Available types:" in result["error"]
+
+
+def test_reingest_item_no_chunks(db_session, qdrant):
+    """Test reingesting an item that has no chunks."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    # Mock the embedding function to return a chunk
+    with patch("memory.common.embedding.embed_source_item") as mock_embed:
+        mock_embed.return_value = [
+            Chunk(
+                id=str(uuid.uuid4()),
+                content="New chunk content",
+                embedding_model="test-model",
+                vector=[0.1] * 1024,
+                item_metadata={"source_id": item.id, "tags": ["test"]},
+            ),
+        ]
+
+        result = reingest_item(str(item.id), "MailMessage")
+
+    assert result["status"] == "processed"
+    assert result["mailmessage_id"] == item.id
+    assert result["chunks_count"] == 1
+    assert result["embed_status"] == "STORED"
+
+
+@pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+def test_reingest_empty_source_items_success(db_session, item_type):
+    """Test reingesting empty source items."""
+    # Create items with and without chunks
+    if item_type == "MailMessage":
+        empty_items = [
+            MailMessage(
+                sha256=f"empty_hash_{i}".encode() + bytes(32 - len(f"empty_hash_{i}")),
+                tags=["test"],
+                size=100,
+                mime_type="message/rfc822",
+                embed_status="RAW",
+                message_id=f"<empty{i}@example.com>",
+                subject=f"Empty Subject {i}",
+                sender="sender@example.com",
+                recipients=["recipient@example.com"],
+                content=f"Empty content {i}",
+                folder="INBOX",
+                modality="mail",
+            )
+            for i in range(3)
+        ]
+
+        item_with_chunks = MailMessage(
+            sha256=b"with_chunks_hash" + bytes(16),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="STORED",
+            message_id="<with_chunks@example.com>",
+            subject="With Chunks Subject",
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+            content="Content with chunks",
+            folder="INBOX",
+            modality="mail",
+        )
+    else:  # blog_post
+        empty_items = [
+            BlogPost(
+                sha256=f"empty_hash_{i}".encode() + bytes(32 - len(f"empty_hash_{i}")),
+                tags=["test"],
+                size=100,
+                mime_type="text/html",
+                embed_status="RAW",
+                url=f"https://example.com/empty{i}",
+                title=f"Empty Post {i}",
+                author="Author Name",
+                content=f"Empty blog content {i}",
+                modality="blog",
+            )
+            for i in range(3)
+        ]
+
+        item_with_chunks = BlogPost(
+            sha256=b"with_chunks_hash" + bytes(16),
+            tags=["test"],
+            size=100,
+            mime_type="text/html",
+            embed_status="STORED",
+            url="https://example.com/with_chunks",
+            title="With Chunks Post",
+            author="Author Name",
+            content="Blog content with chunks",
+            modality="blog",
+        )
+
+    db_session.add_all(empty_items + [item_with_chunks])
+    db_session.flush()
+
+    # Add a chunk to the item_with_chunks
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=item_with_chunks,
+        content="Test chunk content",
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        result = reingest_empty_source_items(item_type)
+
+    assert result == {"status": "success", "items": 3}
+
+    # Verify that reingest_item.delay was called for each empty item
+    assert mock_reingest.call_count == 3
+    expected_calls = [call(item.id, item_type) for item in empty_items]
+    mock_reingest.assert_has_calls(expected_calls, any_order=True)
+
+
+def test_reingest_empty_source_items_no_empty_items(db_session):
+    """Test when there are no empty source items."""
+    # Create an item with chunks
+    item = MailMessage(
+        sha256=b"with_chunks_hash" + bytes(16),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<with_chunks@example.com>",
+        subject="With Chunks Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Content with chunks",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=item,
+        content="Test chunk content",
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        result = reingest_empty_source_items("MailMessage")
+
+    assert result == {"status": "success", "items": 0}
+    mock_reingest.assert_not_called()
+
+
+def test_reingest_empty_source_items_invalid_type(db_session):
+    """Test reingesting empty source items with invalid type."""
+    result = reingest_empty_source_items("invalid_type")
+
+    assert result["status"] == "error"
+    assert "Unsupported item type invalid_type" in result["error"]
+    assert "Available types:" in result["error"]
 
 
 def test_reingest_missing_chunks_no_chunks(db_session):

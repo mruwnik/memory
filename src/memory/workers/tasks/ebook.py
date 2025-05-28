@@ -6,7 +6,7 @@ import memory.common.settings as settings
 from memory.parsers.ebook import Ebook, parse_ebook, Section
 from memory.common.db.models import Book, BookSection
 from memory.common.db.connection import make_session
-from memory.workers.celery_app import app
+from memory.workers.celery_app import app, EBOOK_ROOT
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -17,7 +17,7 @@ from memory.workers.tasks.content_processing import (
 
 logger = logging.getLogger(__name__)
 
-SYNC_BOOK = "memory.workers.tasks.ebook.sync_book"
+SYNC_BOOK = f"{EBOOK_ROOT}.sync_book"
 
 # Minimum section length to embed (avoid noise from very short sections)
 MIN_SECTION_LENGTH = 100

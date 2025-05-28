@@ -207,6 +207,12 @@ services:
       <<: *worker-env
       QUEUES: "blogs"
 
+  worker-forums:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "forums"
+
   worker-photo:
     <<: *worker-base
     environment:

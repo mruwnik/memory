@@ -20,7 +20,7 @@ def embed_chunks(
     model: str = settings.TEXT_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
 ) -> list[Vector]:
-    logger.debug(f"Embedding chunks: {model} - {str(chunks)[:100]}")
+    logger.debug(f"Embedding chunks: {model} - {str(chunks)[:100]} {len(chunks)}")
     vo = voyageai.Client()  # type: ignore
     if model == settings.MIXED_EMBEDDING_MODEL:
         return vo.multimodal_embed(
@@ -79,7 +79,7 @@ def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
     if not model_chunks:
         return []
 
-    vectors = embed_chunks([chunk.content for chunk in model_chunks], model)  # type: ignore
+    vectors = embed_chunks([chunk.chunks for chunk in model_chunks], model)
     for chunk, vector in zip(model_chunks, vectors):
         chunk.vector = vector
     return model_chunks

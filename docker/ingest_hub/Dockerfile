@@ -33,7 +33,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor
 RUN useradd -m kb && chown -R kb /app /var/log/supervisor /var/run/supervisor /app/memory_files
 USER kb
 
-ENV QUEUES="docs,email,maintenance"
+ENV QUEUES="maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisor.conf"]

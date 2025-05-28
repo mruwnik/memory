@@ -326,7 +326,7 @@ def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):
     # Check that the full content was passed to the embedding function
     texts = mock_voyage_client.embed.call_args[0][0]
     assert texts == [
-        large_page_1.strip(),
-        large_page_2.strip(),
-        large_section_content.strip(),
+        [large_page_1.strip()],
+        [large_page_2.strip()],
+        [large_section_content.strip()],
     ]

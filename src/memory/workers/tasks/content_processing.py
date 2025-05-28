@@ -99,6 +99,7 @@ def embed_source_item(source_item: SourceItem) -> int:
     except Exception as e:
         source_item.embed_status = "FAILED"  # type: ignore
         logger.error(f"Failed to embed {type(source_item).__name__}: {e}")
+        logger.error(traceback.format_exc())
         return 0
 
 
@@ -156,6 +157,7 @@ def push_to_qdrant(source_items: Sequence[SourceItem], collection_name: str):
         for item in items_to_process:
             item.embed_status = "FAILED"  # type: ignore
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
+        logger.error(traceback.format_exc())
         raise
 
 
@@ -186,9 +188,7 @@ def create_task_result(
     }
 
 
-def process_content_item(
-    item: SourceItem, collection_name: str, session, tags: Iterable[str] = []
-) -> dict[str, Any]:
+def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     """
     Execute complete content processing workflow.
 
@@ -200,7 +200,6 @@ def process_content_item(
 
     Args:
         item: SourceItem to process
-        collection_name: Qdrant collection name for vector storage
         session: Database session for persistence
         tags: Optional tags to associate with the item (currently unused)
 
@@ -223,7 +222,7 @@ def process_content_item(
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     try:
-        push_to_qdrant([item], collection_name)
+        push_to_qdrant([item], cast(str, item.modality))
         status = "processed"
         item.embed_status = "STORED"  # type: ignore
         logger.info(
@@ -231,6 +230,7 @@ def process_content_item(
         )
     except Exception as e:
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
+        logger.error(traceback.format_exc())
         item.embed_status = "FAILED"  # type: ignore
     session.commit()
 
@@ -261,10 +261,8 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            logger.error(
-                f"Task {func.__name__} failed with traceback:\n{traceback.format_exc()}"
-            )
             logger.error(f"Task {func.__name__} failed: {e}")
+            logger.error(traceback.format_exc())
             return {"status": "error", "error": str(e)}
 
     return wrapper

@@ -105,6 +105,21 @@ def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalCh
     ]
 
 
+def chunk_mixed(
+    content: str, image_paths: Sequence[str]
+) -> list[list[extract.MulitmodalChunk]]:
+    images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
+    full_text: list[extract.MulitmodalChunk] = [content.strip(), *images]
+
+    chunks = []
+    tokens = chunker.approx_token_count(content)
+    if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
+        chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
+
+    all_chunks = [full_text] + chunks
+    return [c for c in all_chunks if c and all(i for i in c)]
+
+
 class Chunk(Base):
     """Stores content chunks with their vector embeddings."""
 
@@ -133,6 +148,19 @@ class Chunk(Base):
         CheckConstraint("(file_paths IS NOT NULL) OR (content IS NOT NULL)"),
         Index("chunk_source_idx", "source_id"),
     )
+
+    @property
+    def chunks(self) -> list[extract.MulitmodalChunk]:
+        chunks: list[extract.MulitmodalChunk] = []
+        if cast(str | None, self.content):
+            chunks = [cast(str, self.content)]
+        if self.images:
+            chunks += self.images
+        elif cast(Sequence[str] | None, self.file_paths):
+            chunks += [
+                Image.open(pathlib.Path(cast(str, cp))) for cp in self.file_paths
+            ]
+        return chunks
 
     @property
     def data(self) -> list[bytes | str | Image.Image]:
@@ -638,20 +666,57 @@ class BlogPost(SourceItem):
         return {k: v for k, v in payload.items() if v}
 
     def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
-        images = [
-            Image.open(settings.FILE_STORAGE_DIR / image) for image in self.images
-        ]
+        return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
 
-        content = cast(str, self.content)
-        full_text = [content.strip(), *images]
 
-        chunks = []
-        tokens = chunker.approx_token_count(content)
-        if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
-            chunks = [add_pics(c, images) for c in chunker.chunk_text(content)]
+class ForumPost(SourceItem):
+    __tablename__ = "forum_post"
 
-        all_chunks = [full_text] + chunks
-        return [c for c in all_chunks if c and all(i for i in c)]
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    url = Column(Text, unique=True)
+    title = Column(Text)
+    description = Column(Text, nullable=True)
+    authors = Column(ARRAY(Text), nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    modified_at = Column(DateTime(timezone=True), nullable=True)
+    slug = Column(Text, nullable=True)
+    karma = Column(Integer, nullable=True)
+    votes = Column(Integer, nullable=True)
+    comments = Column(Integer, nullable=True)
+    words = Column(Integer, nullable=True)
+    score = Column(Integer, nullable=True)
+    images = Column(ARRAY(Text), nullable=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "forum_post",
+    }
+
+    __table_args__ = (
+        Index("forum_post_url_idx", "url"),
+        Index("forum_post_slug_idx", "slug"),
+        Index("forum_post_title_idx", "title"),
+    )
+
+    def as_payload(self) -> dict:
+        return {
+            "source_id": self.id,
+            "url": self.url,
+            "title": self.title,
+            "description": self.description,
+            "authors": self.authors,
+            "published_at": self.published_at,
+            "slug": self.slug,
+            "karma": self.karma,
+            "votes": self.votes,
+            "score": self.score,
+            "comments": self.comments,
+            "tags": self.tags,
+        }
+
+    def _chunk_contents(self) -> Sequence[Sequence[extract.MulitmodalChunk]]:
+        return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
 
 
 class MiscDoc(SourceItem):
@@ -710,7 +775,7 @@ class ArticleFeed(Base):
     description = Column(Text)
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
     check_interval = Column(
-        Integer, nullable=False, server_default="3600", doc="Seconds between checks"
+        Integer, nullable=False, server_default="60", doc="Minutes between checks"
     )
     last_checked_at = Column(DateTime(timezone=True))
     active = Column(Boolean, nullable=False, server_default="true")

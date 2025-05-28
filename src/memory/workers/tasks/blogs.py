@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, cast
 
 from memory.common.db.connection import make_session
@@ -7,7 +7,7 @@ from memory.common.db.models import ArticleFeed, BlogPost
 from memory.parsers.blogs import parse_webpage
 from memory.parsers.feeds import get_feed_parser
 from memory.parsers.archives import get_archive_fetcher
-from memory.workers.celery_app import app
+from memory.workers.celery_app import app, BLOGS_ROOT
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -18,10 +18,10 @@ from memory.workers.tasks.content_processing import (
 
 logger = logging.getLogger(__name__)
 
-SYNC_WEBPAGE = "memory.workers.tasks.blogs.sync_webpage"
-SYNC_ARTICLE_FEED = "memory.workers.tasks.blogs.sync_article_feed"
-SYNC_ALL_ARTICLE_FEEDS = "memory.workers.tasks.blogs.sync_all_article_feeds"
-SYNC_WEBSITE_ARCHIVE = "memory.workers.tasks.blogs.sync_website_archive"
+SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
+SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
+SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
+SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
 
 @app.task(name=SYNC_WEBPAGE)
@@ -71,7 +71,7 @@ def sync_webpage(url: str, tags: Iterable[str] = []) -> dict:
             logger.info(f"Blog post already exists: {existing_post.title}")
             return create_task_result(existing_post, "already_exists", url=article.url)
 
-        return process_content_item(blog_post, "blog", session, tags)
+        return process_content_item(blog_post, session)
 
 
 @app.task(name=SYNC_ARTICLE_FEED)
@@ -93,8 +93,8 @@ def sync_article_feed(feed_id: int) -> dict:
             return {"status": "error", "error": "Feed not found or inactive"}
 
         last_checked_at = cast(datetime | None, feed.last_checked_at)
-        if last_checked_at and datetime.now() - last_checked_at < timedelta(
-            seconds=cast(int, feed.check_interval)
+        if last_checked_at and datetime.now(timezone.utc) - last_checked_at < timedelta(
+            minutes=cast(int, feed.check_interval)
         ):
             logger.info(f"Feed {feed_id} checked too recently, skipping")
             return {"status": "skipped_recent_check", "feed_id": feed_id}
@@ -129,7 +129,7 @@ def sync_article_feed(feed_id: int) -> dict:
             logger.error(f"Error parsing feed {feed.url}: {e}")
             errors += 1
 
-        feed.last_checked_at = datetime.now()  # type: ignore
+        feed.last_checked_at = datetime.now(timezone.utc)  # type: ignore
         session.commit()
 
         return {

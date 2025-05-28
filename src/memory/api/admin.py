@@ -17,6 +17,7 @@ from memory.common.db.models import (
     MiscDoc,
     ArticleFeed,
     EmailAccount,
+    ForumPost,
 )
 
 
@@ -33,7 +34,11 @@ DEFAULT_COLUMNS = (
 
 
 def source_columns(model: type[SourceItem], *columns: str):
-    return [getattr(model, c) for c in columns + DEFAULT_COLUMNS if hasattr(model, c)]
+    return [
+        getattr(model, c)
+        for c in ("id",) + columns + DEFAULT_COLUMNS
+        if hasattr(model, c)
+    ]
 
 
 # Create admin views for all models
@@ -84,6 +89,21 @@ class BlogPostAdmin(ModelView, model=BlogPost):
         BlogPost, "title", "author", "url", "published", "domain"
     )
     column_searchable_list = ["title", "author", "domain"]
+
+
+class ForumPostAdmin(ModelView, model=ForumPost):
+    column_list = source_columns(
+        ForumPost,
+        "title",
+        "authors",
+        "published_at",
+        "url",
+        "karma",
+        "votes",
+        "comments",
+        "score",
+    )
+    column_searchable_list = ["title", "authors"]
 
 
 class PhotoAdmin(ModelView, model=Photo):
@@ -166,5 +186,6 @@ def setup_admin(admin: Admin):
     admin.add_view(MiscDocAdmin)
     admin.add_view(ArticleFeedAdmin)
     admin.add_view(BlogPostAdmin)
+    admin.add_view(ForumPostAdmin)
     admin.add_view(ComicAdmin)
     admin.add_view(PhotoAdmin)
