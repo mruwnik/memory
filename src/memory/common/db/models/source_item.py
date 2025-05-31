@@ -103,9 +103,10 @@ def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalCh
 def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:
     final = {}
     for m in metadata:
-        if tags := set(m.pop("tags", [])):
+        data = m.copy()
+        if tags := set(data.pop("tags", [])):
             final["tags"] = tags | final.get("tags", set())
-        final |= m
+        final |= data
     return final
 
 

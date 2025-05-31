@@ -27,6 +27,7 @@ from sqlalchemy.orm import relationship
 from memory.common import settings
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
+import memory.common.formatters.observation as observation
 
 from memory.common.db.models.source_item import (
     SourceItem,
@@ -568,3 +569,67 @@ class AgentObservation(SourceItem):
     def all_contradictions(self):
         """Get all contradictions involving this observation."""
         return self.contradictions_as_first + self.contradictions_as_second
+
+    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[extract.DataChunk]:
+        """
+        Generate multiple chunks for different embedding dimensions.
+        Each chunk goes to a different Qdrant collection for specialized search.
+        """
+        chunks = []
+
+        # 1. Semantic chunk - standard content representation
+        semantic_text = observation.generate_semantic_text(
+            cast(str, self.subject),
+            cast(str, self.observation_type),
+            cast(str, self.content),
+            cast(observation.Evidence, self.evidence),
+        )
+        chunks.append(
+            extract.DataChunk(
+                data=[semantic_text],
+                metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
+                collection_name="semantic",
+            )
+        )
+
+        # 2. Temporal chunk - time-aware representation
+        temporal_text = observation.generate_temporal_text(
+            cast(str, self.subject),
+            cast(str, self.content),
+            cast(float, self.confidence),
+            cast(datetime, self.inserted_at),
+        )
+        chunks.append(
+            extract.DataChunk(
+                data=[temporal_text],
+                metadata=merge_metadata(metadata, {"embedding_type": "temporal"}),
+                collection_name="temporal",
+            )
+        )
+
+        # TODO: Add more embedding dimensions here:
+        # 3. Epistemic chunk - belief structure focused
+        # epistemic_text = self._generate_epistemic_text()
+        # chunks.append(extract.DataChunk(
+        #     data=[epistemic_text],
+        #     metadata={**base_metadata, "embedding_type": "epistemic"},
+        #     collection_name="observations_epistemic"
+        # ))
+        #
+        # 4. Emotional chunk - emotional context focused
+        # emotional_text = self._generate_emotional_text()
+        # chunks.append(extract.DataChunk(
+        #     data=[emotional_text],
+        #     metadata={**base_metadata, "embedding_type": "emotional"},
+        #     collection_name="observations_emotional"
+        # ))
+        #
+        # 5. Relational chunk - connection patterns focused
+        # relational_text = self._generate_relational_text()
+        # chunks.append(extract.DataChunk(
+        #     data=[relational_text],
+        #     metadata={**base_metadata, "embedding_type": "relational"},
+        #     collection_name="observations_relational"
+        # ))
+
+        return chunks

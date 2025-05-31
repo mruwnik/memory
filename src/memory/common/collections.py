@@ -71,6 +71,17 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "distance": "Cosine",
         "model": settings.MIXED_EMBEDDING_MODEL,
     },
+    # Observations
+    "semantic": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
+    "temporal": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "model": settings.TEXT_EMBEDDING_MODEL,
+    },
 }
 TEXT_COLLECTIONS = {
     coll
