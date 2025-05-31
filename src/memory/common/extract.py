@@ -21,6 +21,7 @@ class DataChunk:
     data: Sequence[MulitmodalChunk]
     metadata: dict[str, Any] = field(default_factory=dict)
     mime_type: str = "text/plain"
+    collection_name: str | None = None
 
 
 @contextmanager

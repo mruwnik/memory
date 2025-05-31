@@ -1,4 +1,3 @@
-from memory.common.db.models import SourceItem
 from sqlalchemy.orm import Session
 from unittest.mock import patch, Mock
 from typing import cast
@@ -6,17 +5,20 @@ import pytest
 from PIL import Image
 from datetime import datetime
 from memory.common import settings, chunker, extract
-from memory.common.db.models import (
+from memory.common.db.models.sources import Book
+from memory.common.db.models.source_items import (
     Chunk,
-    clean_filename,
-    image_filenames,
-    add_pics,
     MailMessage,
     EmailAttachment,
     BookSection,
     BlogPost,
-    Book,
+)
+from memory.common.db.models.source_item import (
+    SourceItem,
+    image_filenames,
+    add_pics,
     merge_metadata,
+    clean_filename,
 )
 
 

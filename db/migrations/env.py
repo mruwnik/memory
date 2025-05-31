@@ -12,6 +12,32 @@ from alembic import context
 from memory.common import settings
 from memory.common.db.models import Base
 
+# Import all models to ensure they're registered with Base.metadata
+from memory.common.db.models import (
+    SourceItem,
+    Chunk,
+    MailMessage,
+    EmailAttachment,
+    ChatMessage,
+    BlogPost,
+    Comic,
+    BookSection,
+    ForumPost,
+    GithubItem,
+    GitCommit,
+    Photo,
+    MiscDoc,
+    AgentObservation,
+    ObservationContradiction,
+    ReactionPattern,
+    ObservationPattern,
+    BeliefCluster,
+    ConversationMetrics,
+    Book,
+    ArticleFeed,
+    EmailAccount,
+)
+
 
 # this is the Alembic Config object
 config = context.config

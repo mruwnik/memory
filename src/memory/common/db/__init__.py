@@ -2,7 +2,7 @@
 Database utilities package.
 """
 
-from memory.common.db.models import Base
+from memory.common.db.models.base import Base
 from memory.common.db.connection import (
     get_engine,
     get_session_factory,

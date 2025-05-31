@@ -2,6 +2,7 @@
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import patch, call
+from typing import cast
 
 import pytest
 from PIL import Image
@@ -350,6 +351,7 @@ def test_reingest_item_success(db_session, qdrant, item_type):
             id=chunk_id,
             source=item,
             content=f"Test chunk content {i}",
+            collection_name=item.modality,
             embedding_model="test-model",
         )
         for i, chunk_id in enumerate(chunk_ids)
@@ -358,7 +360,7 @@ def test_reingest_item_success(db_session, qdrant, item_type):
     db_session.commit()
 
     # Add vectors to Qdrant
-    modality = "mail" if item_type == "MailMessage" else "blog"
+    modality = cast(str, item.modality)
     qd.ensure_collection_exists(qdrant, modality, 1024)
     qd.upsert_vectors(qdrant, modality, chunk_ids, [[1] * 1024] * len(chunk_ids))
 
@@ -375,6 +377,7 @@ def test_reingest_item_success(db_session, qdrant, item_type):
                 id=str(uuid.uuid4()),
                 content="New chunk content 1",
                 embedding_model="test-model",
+                collection_name=modality,
                 vector=[0.1] * 1024,
                 item_metadata={"source_id": item.id, "tags": ["test"]},
             ),
@@ -382,6 +385,7 @@ def test_reingest_item_success(db_session, qdrant, item_type):
                 id=str(uuid.uuid4()),
                 content="New chunk content 2",
                 embedding_model="test-model",
+                collection_name=modality,
                 vector=[0.2] * 1024,
                 item_metadata={"source_id": item.id, "tags": ["test"]},
             ),
@@ -449,6 +453,7 @@ def test_reingest_item_no_chunks(db_session, qdrant):
                 id=str(uuid.uuid4()),
                 content="New chunk content",
                 embedding_model="test-model",
+                collection_name=item.modality,
                 vector=[0.1] * 1024,
                 item_metadata={"source_id": item.id, "tags": ["test"]},
             ),
@@ -538,6 +543,7 @@ def test_reingest_empty_source_items_success(db_session, item_type):
         source=item_with_chunks,
         content="Test chunk content",
         embedding_model="test-model",
+        collection_name=item_with_chunks.modality,
     )
     db_session.add(chunk)
     db_session.commit()

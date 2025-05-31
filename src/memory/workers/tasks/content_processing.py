@@ -6,13 +6,14 @@ the complete workflow: existence checking, content hashing, embedding generation
 vector storage, and result tracking.
 """
 
+from collections import defaultdict
 import hashlib
 import traceback
 import logging
 from typing import Any, Callable, Iterable, Sequence, cast
 
 from memory.common import embedding, qdrant
-from memory.common.db.models import SourceItem
+from memory.common.db.models import SourceItem, Chunk
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,19 @@ def embed_source_item(source_item: SourceItem) -> int:
         return 0
 
 
-def push_to_qdrant(source_items: Sequence[SourceItem], collection_name: str):
+def by_collection(chunks: Sequence[Chunk]) -> dict[str, dict[str, Any]]:
+    collections: dict[str, dict[str, list[Any]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for chunk in chunks:
+        collection = collections[cast(str, chunk.collection_name)]
+        collection["ids"].append(chunk.id)
+        collection["vectors"].append(chunk.vector)
+        collection["payloads"].append(chunk.item_metadata)
+    return collections
+
+
+def push_to_qdrant(source_items: Sequence[SourceItem]):
     """
     Push embeddings to Qdrant vector database.
 
@@ -135,17 +148,16 @@ def push_to_qdrant(source_items: Sequence[SourceItem], collection_name: str):
         return
 
     try:
-        vector_ids = [str(chunk.id) for chunk in all_chunks]
-        vectors = [chunk.vector for chunk in all_chunks]
-        payloads = [chunk.item_metadata for chunk in all_chunks]
-
-        qdrant.upsert_vectors(
-            client=qdrant.get_qdrant_client(),
-            collection_name=collection_name,
-            ids=vector_ids,
-            vectors=vectors,
-            payloads=payloads,
-        )
+        client = qdrant.get_qdrant_client()
+        collections = by_collection(all_chunks)
+        for collection_name, collection in collections.items():
+            qdrant.upsert_vectors(
+                client=client,
+                collection_name=collection_name,
+                ids=collection["ids"],
+                vectors=collection["vectors"],
+                payloads=collection["payloads"],
+            )
 
         for item in items_to_process:
             item.embed_status = "STORED"  # type: ignore
@@ -222,7 +234,7 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     try:
-        push_to_qdrant([item], cast(str, item.modality))
+        push_to_qdrant([item])
         status = "processed"
         item.embed_status = "STORED"  # type: ignore
         logger.info(

@@ -18,6 +18,7 @@ from memory.workers.tasks.content_processing import (
     process_content_item,
     push_to_qdrant,
     safe_task_execution,
+    by_collection,
 )
 
 
@@ -71,6 +72,7 @@ def mock_chunk():
     chunk.id = "00000000-0000-0000-0000-000000000001"
     chunk.vector = [0.1] * 1024
     chunk.item_metadata = {"source_id": 1, "tags": ["test"]}
+    chunk.collection_name = "mail"
     return chunk
 
 
@@ -242,17 +244,19 @@ def test_push_to_qdrant_success(qdrant):
     mock_chunk1.id = "00000000-0000-0000-0000-000000000001"
     mock_chunk1.vector = [0.1] * 1024
     mock_chunk1.item_metadata = {"source_id": 1, "tags": ["test"]}
+    mock_chunk1.collection_name = "mail"
 
     mock_chunk2 = MagicMock()
     mock_chunk2.id = "00000000-0000-0000-0000-000000000002"
     mock_chunk2.vector = [0.2] * 1024
     mock_chunk2.item_metadata = {"source_id": 2, "tags": ["test"]}
+    mock_chunk2.collection_name = "mail"
 
     # Assign chunks directly (bypassing SQLAlchemy relationship)
     item1.chunks = [mock_chunk1]
     item2.chunks = [mock_chunk2]
 
-    push_to_qdrant([item1, item2], "mail")
+    push_to_qdrant([item1, item2])
 
     assert str(item1.embed_status) == "STORED"
     assert str(item2.embed_status) == "STORED"
@@ -294,6 +298,7 @@ def test_push_to_qdrant_no_processing(
             mock_chunk.id = f"00000000-0000-0000-0000-00000000000{suffix}"
             mock_chunk.vector = [0.1] * 1024
             mock_chunk.item_metadata = {"source_id": int(suffix), "tags": ["test"]}
+            mock_chunk.collection_name = "mail"
             item.chunks = [mock_chunk]
         else:
             item.chunks = []
@@ -302,7 +307,7 @@ def test_push_to_qdrant_no_processing(
     item1 = create_item("1", item1_status, item1_has_chunks)
     item2 = create_item("2", item2_status, item2_has_chunks)
 
-    push_to_qdrant([item1, item2], "mail")
+    push_to_qdrant([item1, item2])
 
     assert str(item1.embed_status) == expected_item1_status
     assert str(item2.embed_status) == expected_item2_status
@@ -317,7 +322,7 @@ def test_push_to_qdrant_exception(sample_mail_message, mock_chunk):
         side_effect=Exception("Qdrant error"),
     ):
         with pytest.raises(Exception, match="Qdrant error"):
-            push_to_qdrant([sample_mail_message], "mail")
+            push_to_qdrant([sample_mail_message])
 
     assert str(sample_mail_message.embed_status) == "FAILED"
 
@@ -418,6 +423,196 @@ def test_create_task_result_no_title():
     assert result["chunks_count"] == 0
 
 
+def test_by_collection_empty_chunks():
+    result = by_collection([])
+    assert result == {}
+
+
+def test_by_collection_single_chunk():
+    chunk = Chunk(
+        id="00000000-0000-0000-0000-000000000001",
+        content="test content",
+        embedding_model="test-model",
+        vector=[0.1, 0.2, 0.3],
+        item_metadata={"source_id": 1, "tags": ["test"]},
+        collection_name="test_collection",
+    )
+
+    result = by_collection([chunk])
+
+    assert len(result) == 1
+    assert "test_collection" in result
+    assert result["test_collection"]["ids"] == ["00000000-0000-0000-0000-000000000001"]
+    assert result["test_collection"]["vectors"] == [[0.1, 0.2, 0.3]]
+    assert result["test_collection"]["payloads"] == [{"source_id": 1, "tags": ["test"]}]
+
+
+def test_by_collection_multiple_chunks_same_collection():
+    chunks = [
+        Chunk(
+            id="00000000-0000-0000-0000-000000000001",
+            content="test content 1",
+            embedding_model="test-model",
+            vector=[0.1, 0.2],
+            item_metadata={"source_id": 1},
+            collection_name="collection_a",
+        ),
+        Chunk(
+            id="00000000-0000-0000-0000-000000000002",
+            content="test content 2",
+            embedding_model="test-model",
+            vector=[0.3, 0.4],
+            item_metadata={"source_id": 2},
+            collection_name="collection_a",
+        ),
+    ]
+
+    result = by_collection(chunks)
+
+    assert len(result) == 1
+    assert "collection_a" in result
+    assert result["collection_a"]["ids"] == [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+    ]
+    assert result["collection_a"]["vectors"] == [[0.1, 0.2], [0.3, 0.4]]
+    assert result["collection_a"]["payloads"] == [{"source_id": 1}, {"source_id": 2}]
+
+
+def test_by_collection_multiple_chunks_different_collections():
+    chunks = [
+        Chunk(
+            id="00000000-0000-0000-0000-000000000001",
+            content="test content 1",
+            embedding_model="test-model",
+            vector=[0.1, 0.2],
+            item_metadata={"source_id": 1},
+            collection_name="collection_a",
+        ),
+        Chunk(
+            id="00000000-0000-0000-0000-000000000002",
+            content="test content 2",
+            embedding_model="test-model",
+            vector=[0.3, 0.4],
+            item_metadata={"source_id": 2},
+            collection_name="collection_b",
+        ),
+        Chunk(
+            id="00000000-0000-0000-0000-000000000003",
+            content="test content 3",
+            embedding_model="test-model",
+            vector=[0.5, 0.6],
+            item_metadata={"source_id": 3},
+            collection_name="collection_a",
+        ),
+    ]
+
+    result = by_collection(chunks)
+
+    assert len(result) == 2
+    assert "collection_a" in result
+    assert "collection_b" in result
+
+    # Check collection_a
+    assert result["collection_a"]["ids"] == [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000003",
+    ]
+    assert result["collection_a"]["vectors"] == [[0.1, 0.2], [0.5, 0.6]]
+    assert result["collection_a"]["payloads"] == [{"source_id": 1}, {"source_id": 3}]
+
+    # Check collection_b
+    assert result["collection_b"]["ids"] == ["00000000-0000-0000-0000-000000000002"]
+    assert result["collection_b"]["vectors"] == [[0.3, 0.4]]
+    assert result["collection_b"]["payloads"] == [{"source_id": 2}]
+
+
+@pytest.mark.parametrize(
+    "collection_names,expected_collections",
+    [
+        (["col1", "col1", "col1"], 1),
+        (["col1", "col2", "col3"], 3),
+        (["col1", "col2", "col1", "col2"], 2),
+        (["single"], 1),
+    ],
+)
+def test_by_collection_various_groupings(collection_names, expected_collections):
+    chunks = [
+        Chunk(
+            id=f"00000000-0000-0000-0000-00000000000{i}",
+            content=f"test content {i}",
+            embedding_model="test-model",
+            vector=[float(i)],
+            item_metadata={"index": i},
+            collection_name=collection_name,
+        )
+        for i, collection_name in enumerate(collection_names, 1)
+    ]
+
+    result = by_collection(chunks)
+
+    assert len(result) == expected_collections
+    # Verify all chunks are accounted for
+    total_chunks = sum(len(coll["ids"]) for coll in result.values())
+    assert total_chunks == len(chunks)
+
+
+def test_by_collection_with_none_values():
+    chunks = [
+        Chunk(
+            id="00000000-0000-0000-0000-000000000001",
+            content="test content",
+            embedding_model="test-model",
+            vector=None,  # None vector
+            item_metadata=None,  # None metadata
+            collection_name="test_collection",
+        ),
+        Chunk(
+            id="00000000-0000-0000-0000-000000000002",
+            content="test content 2",
+            embedding_model="test-model",
+            vector=[0.1, 0.2],
+            item_metadata={"key": "value"},
+            collection_name="test_collection",
+        ),
+    ]
+
+    result = by_collection(chunks)
+
+    assert len(result) == 1
+    assert "test_collection" in result
+    assert result["test_collection"]["ids"] == [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+    ]
+    assert result["test_collection"]["vectors"] == [None, [0.1, 0.2]]
+    assert result["test_collection"]["payloads"] == [None, {"key": "value"}]
+
+
+def test_by_collection_preserves_order():
+    chunks = []
+    for i in range(5):
+        chunks.append(
+            Chunk(
+                id=f"00000000-0000-0000-0000-00000000000{i}",
+                content=f"test content {i}",
+                embedding_model="test-model",
+                vector=[float(i)],
+                item_metadata={"order": i},
+                collection_name="ordered_collection",
+            )
+        )
+
+    result = by_collection(chunks)
+
+    assert len(result) == 1
+    assert result["ordered_collection"]["ids"] == [
+        f"00000000-0000-0000-0000-00000000000{i}" for i in range(5)
+    ]
+    assert result["ordered_collection"]["vectors"] == [[float(i)] for i in range(5)]
+    assert result["ordered_collection"]["payloads"] == [{"order": i} for i in range(5)]
+
+
 @pytest.mark.parametrize(
     "embedding_return,qdrant_error,expected_status,expected_embed_status",
     [
@@ -459,6 +654,7 @@ def test_process_content_item(
             embedding_model="test-model",
             vector=[0.1] * 1024,
             item_metadata={"source_id": 1, "tags": ["test"]},
+            collection_name="mail",
         )
         mock_chunks = [real_chunk]
     else:  # empty

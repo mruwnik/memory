@@ -185,7 +185,7 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
                 f"Embedded section: {section.section_title} - {section.content[:100]}"
             )
         logger.info("Pushing to Qdrant")
-        push_to_qdrant(all_sections, "book")
+        push_to_qdrant(all_sections)
         logger.info("Committing session")
 
         session.commit()
