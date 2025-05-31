@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 TAGS_PROMPT = """
 The following text is already concise. Please identify 3-5 relevant tags that capture the main topics or themes.
 
+Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
+
 Return your response as JSON with this format:
 {{
 "summary": "{summary}",
@@ -22,6 +24,8 @@ Text:
 SUMMARY_PROMPT = """
 Please summarize the following text into approximately {target_tokens} tokens ({target_chars} characters).
 Also provide 3-5 relevant tags that capture the main topics or themes.
+
+Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
 
 Return your response as JSON with this format:
 {{

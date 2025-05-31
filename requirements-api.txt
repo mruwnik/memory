@@ -3,3 +3,4 @@ uvicorn==0.29.0
 python-jose==3.3.0
 python-multipart==0.0.9
 sqladmin 
+mcp==1.9.2

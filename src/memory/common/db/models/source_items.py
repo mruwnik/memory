@@ -570,13 +570,23 @@ class AgentObservation(SourceItem):
         """Get all contradictions involving this observation."""
         return self.contradictions_as_first + self.contradictions_as_second
 
-    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[extract.DataChunk]:
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "subject": self.subject,
+            "content": self.content,
+            "observation_type": self.observation_type,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "agent_model": self.agent_model,
+            "tags": self.tags,
+        }
+
+    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
         """
         Generate multiple chunks for different embedding dimensions.
         Each chunk goes to a different Qdrant collection for specialized search.
         """
-        chunks = []
-
         # 1. Semantic chunk - standard content representation
         semantic_text = observation.generate_semantic_text(
             cast(str, self.subject),
@@ -584,12 +594,10 @@ class AgentObservation(SourceItem):
             cast(str, self.content),
             cast(observation.Evidence, self.evidence),
         )
-        chunks.append(
-            extract.DataChunk(
-                data=[semantic_text],
-                metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
-                collection_name="semantic",
-            )
+        semantic_chunk = extract.DataChunk(
+            data=[semantic_text],
+            metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
+            modality="semantic",
         )
 
         # 2. Temporal chunk - time-aware representation
@@ -599,13 +607,28 @@ class AgentObservation(SourceItem):
             cast(float, self.confidence),
             cast(datetime, self.inserted_at),
         )
-        chunks.append(
-            extract.DataChunk(
-                data=[temporal_text],
-                metadata=merge_metadata(metadata, {"embedding_type": "temporal"}),
-                collection_name="temporal",
-            )
+        temporal_chunk = extract.DataChunk(
+            data=[temporal_text],
+            metadata=merge_metadata(metadata, {"embedding_type": "temporal"}),
+            modality="temporal",
         )
+
+        others = [
+            self._make_chunk(
+                extract.DataChunk(
+                    data=[i],
+                    metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
+                    modality="semantic",
+                )
+            )
+            for i in [
+                self.content,
+                self.subject,
+                self.observation_type,
+                self.evidence.get("quote", ""),
+            ]
+            if i
+        ]
 
         # TODO: Add more embedding dimensions here:
         # 3. Epistemic chunk - belief structure focused
@@ -632,4 +655,7 @@ class AgentObservation(SourceItem):
         #     collection_name="observations_relational"
         # ))
 
-        return chunks
+        return [
+            self._make_chunk(semantic_chunk),
+            self._make_chunk(temporal_chunk),
+        ] + others

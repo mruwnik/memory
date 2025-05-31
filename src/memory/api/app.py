@@ -2,6 +2,7 @@
 FastAPI application for the knowledge base.
 """
 
+import contextlib
 import pathlib
 import logging
 from typing import Annotated, Optional
@@ -15,15 +16,25 @@ from memory.common import extract
 from memory.common.db.connection import get_engine
 from memory.api.admin import setup_admin
 from memory.api.search import search, SearchResult
+from memory.api.MCP.tools import mcp
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Knowledge Base API")
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with contextlib.AsyncExitStack() as stack:
+        await stack.enter_async_context(mcp.session_manager.run())
+        yield
+
+
+app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
 
 # SQLAdmin setup
 engine = get_engine()
 admin = Admin(app, engine)
 setup_admin(admin)
+app.mount("/", mcp.streamable_http_app())
 
 
 @app.get("/health")
@@ -104,4 +115,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from memory.common.qdrant import setup_qdrant
+
+    setup_qdrant()
     main()

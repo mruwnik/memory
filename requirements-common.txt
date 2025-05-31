@@ -6,3 +6,5 @@ dotenv==0.9.9
 voyageai==0.3.2
 qdrant-client==1.9.0
 anthropic==0.18.1 
+
+bm25s[full]==0.2.13

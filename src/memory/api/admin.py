@@ -18,6 +18,7 @@ from memory.common.db.models import (
     ArticleFeed,
     EmailAccount,
     ForumPost,
+    AgentObservation,
 )
 
 
@@ -53,6 +54,7 @@ class SourceItemAdmin(ModelView, model=SourceItem):
 
 class ChunkAdmin(ModelView, model=Chunk):
     column_list = ["id", "source_id", "embedding_model", "created_at"]
+    column_sortable_list = ["created_at"]
 
 
 class MailMessageAdmin(ModelView, model=MailMessage):
@@ -174,9 +176,23 @@ class EmailAccountAdmin(ModelView, model=EmailAccount):
     column_searchable_list = ["name", "email_address"]
 
 
+class AgentObservationAdmin(ModelView, model=AgentObservation):
+    column_list = [
+        "id",
+        "content",
+        "subject",
+        "observation_type",
+        "confidence",
+        "evidence",
+        "inserted_at",
+    ]
+    column_searchable_list = ["subject", "observation_type"]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance."""
     admin.add_view(SourceItemAdmin)
+    admin.add_view(AgentObservationAdmin)
     admin.add_view(ChunkAdmin)
     admin.add_view(EmailAccountAdmin)
     admin.add_view(MailMessageAdmin)

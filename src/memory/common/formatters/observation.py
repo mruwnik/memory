@@ -8,7 +8,7 @@ class Evidence(TypedDict):
 
 
 def generate_semantic_text(
-    subject: str, observation_type: str, content: str, evidence: Evidence
+    subject: str, observation_type: str, content: str, evidence: Evidence | None = None
 ) -> str:
     """Generate text optimized for semantic similarity search."""
     parts = [
@@ -54,8 +54,9 @@ def generate_temporal_text(
         f"Time: {time_of_day} on {day_of_week} ({time_period})",
         f"Subject: {subject}",
         f"Observation: {content}",
-        f"Confidence: {confidence}",
     ]
+    if confidence:
+        parts.append(f"Confidence: {confidence}")
 
     return " | ".join(parts)
 

@@ -205,7 +205,9 @@ class SourceItem(Base):
     id = Column(BigInteger, primary_key=True)
     modality = Column(Text, nullable=False)
     sha256 = Column(BYTEA, nullable=False, unique=True)
-    inserted_at = Column(DateTime(timezone=True), server_default=func.now())
+    inserted_at = Column(
+        DateTime(timezone=True), server_default=func.now(), default=func.now()
+    )
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
     size = Column(Integer)
     mime_type = Column(Text)
@@ -261,14 +263,15 @@ class SourceItem(Base):
         images = [c for c in data.data if isinstance(c, Image.Image)]
         image_names = image_filenames(chunk_id, images)
 
+        modality = data.modality or cast(str, self.modality)
         chunk = Chunk(
             id=chunk_id,
             source=self,
             content=text or None,
             images=images,
             file_paths=image_names,
-            collection_name=data.collection_name or cast(str, self.modality),
-            embedding_model=collections.collection_model(cast(str, self.modality)),
+            collection_name=modality,
+            embedding_model=collections.collection_model(modality, text, images),
             item_metadata=merge_metadata(self.as_payload(), data.metadata, metadata),
         )
         return chunk
@@ -284,5 +287,8 @@ class SourceItem(Base):
         }
 
     @property
-    def display_contents(self) -> str | None:
-        return cast(str | None, self.content) or cast(str | None, self.filename)
+    def display_contents(self) -> str | dict | None:
+        return {
+            "tags": self.tags,
+            "size": self.size,
+        }
