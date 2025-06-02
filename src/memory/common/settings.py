@@ -33,6 +33,7 @@ DB_URL = os.getenv("DATABASE_URL", make_db_url())
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kb")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "kb")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
 
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
 
@@ -57,6 +58,9 @@ PHOTO_STORAGE_DIR = pathlib.Path(
 WEBPAGE_STORAGE_DIR = pathlib.Path(
     os.getenv("WEBPAGE_STORAGE_DIR", FILE_STORAGE_DIR / "webpages")
 )
+NOTES_STORAGE_DIR = pathlib.Path(
+    os.getenv("NOTES_STORAGE_DIR", FILE_STORAGE_DIR / "notes")
+)
 
 storage_dirs = [
     FILE_STORAGE_DIR,
@@ -66,6 +70,7 @@ storage_dirs = [
     COMIC_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
     WEBPAGE_STORAGE_DIR,
+    NOTES_STORAGE_DIR,
 ]
 for dir in storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)

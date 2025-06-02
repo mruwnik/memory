@@ -2,23 +2,22 @@
 MCP tools for the epistemic sparring partner system.
 """
 
-from datetime import datetime, timezone
-from hashlib import sha256
 import logging
-import uuid
-from typing import cast
-from mcp.server.fastmcp import FastMCP
-from memory.common.db.models.source_item import SourceItem
-from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy import func, cast as sql_cast, Text
-from memory.common.db.connection import make_session
+import pathlib
+from datetime import datetime, timezone
 
-from memory.common import extract
-from memory.common.db.models import AgentObservation
-from memory.api.search.search import search, SearchFilters
-from memory.common.formatters import observation
-from memory.workers.tasks.content_processing import process_content_item
+from mcp.server.fastmcp import FastMCP
+from sqlalchemy import Text, func
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import ARRAY
+
+from memory.api.search.search import SearchFilters, search
+from memory.common import extract, settings
 from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
+from memory.common.db.connection import make_session
+from memory.common.db.models import AgentObservation, SourceItem
+from memory.common.formatters import observation
+from memory.common.celery_app import app as celery_app, SYNC_OBSERVATION, SYNC_NOTE
 
 logger = logging.getLogger(__name__)
 
@@ -452,44 +451,24 @@ async def observe(
             agent_model="gpt-4"
         )
     """
-    # Create the observation
-    observation = AgentObservation(
-        content=content,
-        subject=subject,
-        observation_type=observation_type,
-        confidence=confidence,
-        evidence=evidence,
-        tags=tags or [],
-        session_id=uuid.UUID(session_id) if session_id else None,
-        agent_model=agent_model,
-        size=len(content),
-        mime_type="text/plain",
-        sha256=sha256(f"{content}{subject}{observation_type}".encode("utf-8")).digest(),
-        inserted_at=datetime.now(timezone.utc),
-        modality="observation",
+    task = celery_app.send_task(
+        SYNC_OBSERVATION,
+        queue="notes",
+        kwargs={
+            "subject": subject,
+            "content": content,
+            "observation_type": observation_type,
+            "confidence": confidence,
+            "evidence": evidence,
+            "tags": tags,
+            "session_id": session_id,
+            "agent_model": agent_model,
+        },
     )
-    try:
-        with make_session() as session:
-            process_content_item(observation, session)
-
-            if not cast(int | None, observation.id):
-                raise ValueError("Observation not created")
-
-            logger.info(
-                f"Observation created: {observation.id}, {observation.inserted_at}"
-            )
-            return {
-                "id": observation.id,
-                "created_at": observation.inserted_at.isoformat(),
-                "subject": observation.subject,
-                "observation_type": observation.observation_type,
-                "confidence": cast(float, observation.confidence),
-                "tags": observation.tags,
-            }
-
-    except Exception as e:
-        logger.error(f"Error creating observation: {e}")
-        raise
+    return {
+        "task_id": task.id,
+        "status": "queued",
+    }
 
 
 @mcp.tool()
@@ -651,3 +630,75 @@ async def search_observations(
         }
         for r in results
     ]
+
+
+@mcp.tool()
+async def create_note(
+    subject: str,
+    content: str,
+    filename: str | None = None,
+    note_type: str | None = None,
+    confidence: float = 0.5,
+    tags: list[str] = [],
+) -> dict:
+    """
+    Create a note when the user asks for something to be noted down.
+
+    Purpose:
+        Use this tool when the user explicitly asks to note, save, or record
+        something for later reference. Notes don't have to be really short - long
+        markdown docs are fine, as long as that was what was asked for.
+
+    When to use:
+        - User says "note down that..." or "please save this"
+        - User asks to record information for future reference
+        - User wants to remember something specific
+
+    Args:
+        subject: What the note is about (e.g., "meeting_notes", "idea")
+        content: The actual content to note down, as markdown
+        filename: Optional path relative to notes folder (e.g., "project/ideas.md")
+        note_type: Optional categorization of the note
+        confidence: How confident you are in the note accuracy (0.0-1.0)
+        tags: Optional tags for organization
+
+    Example:
+        # User: "Please note down that we decided to use React for the frontend"
+        await create_note(
+            subject="project_decisions",
+            content="Decided to use React for the frontend",
+            tags=["project", "frontend"]
+        )
+    """
+    if filename:
+        path = pathlib.Path(filename)
+        if path.is_absolute():
+            path = path.relative_to(settings.NOTES_STORAGE_DIR)
+        else:
+            path = pathlib.Path(settings.NOTES_STORAGE_DIR) / path
+        filename = path.as_posix()
+
+    try:
+        task = celery_app.send_task(
+            SYNC_NOTE,
+            queue="notes",
+            kwargs={
+                "subject": subject,
+                "content": content,
+                "filename": filename,
+                "note_type": note_type,
+                "confidence": confidence,
+                "tags": tags,
+            },
+        )
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        logger.error(f"Error creating note: {e}")
+        raise
+
+    return {
+        "task_id": task.id,
+        "status": "queued",
+    }

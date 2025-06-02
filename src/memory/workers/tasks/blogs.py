@@ -7,7 +7,13 @@ from memory.common.db.models import ArticleFeed, BlogPost
 from memory.parsers.blogs import parse_webpage
 from memory.parsers.feeds import get_feed_parser
 from memory.parsers.archives import get_archive_fetcher
-from memory.workers.celery_app import app, BLOGS_ROOT
+from memory.common.celery_app import (
+    app,
+    SYNC_WEBPAGE,
+    SYNC_ARTICLE_FEED,
+    SYNC_ALL_ARTICLE_FEEDS,
+    SYNC_WEBSITE_ARCHIVE,
+)
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -17,11 +23,6 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
-
-SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
-SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
-SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
-SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
 
 @app.task(name=SYNC_WEBPAGE)

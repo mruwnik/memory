@@ -495,6 +495,68 @@ class GithubItem(SourceItem):
     )
 
 
+class Note(SourceItem):
+    """A quick note of something of interest."""
+
+    __tablename__ = "notes"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    note_type = Column(Text, nullable=True)
+    subject = Column(Text, nullable=True)
+    confidence = Column(Numeric(3, 2), nullable=False, default=0.5)  # 0.0-1.0
+
+    __mapper_args__ = {
+        "polymorphic_identity": "note",
+    }
+
+    __table_args__ = (
+        Index("note_type_idx", "note_type"),
+        Index("note_subject_idx", "subject"),
+        Index("note_confidence_idx", "confidence"),
+    )
+
+    def as_payload(self) -> dict:
+        return {
+            **super().as_payload(),
+            "note_type": self.note_type,
+            "subject": self.subject,
+            "confidence": float(cast(Any, self.confidence)),
+        }
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "subject": self.subject,
+            "content": self.content,
+            "note_type": self.note_type,
+            "confidence": self.confidence,
+            "tags": self.tags,
+        }
+
+    def save_to_file(self):
+        if not self.filename:
+            path = settings.NOTES_STORAGE_DIR / f"{self.subject}.md"
+        else:
+            path = pathlib.Path(self.filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(cast(str, self.content))
+        self.filename = path.as_posix()
+
+    @staticmethod
+    def as_text(content: str, subject: str | None = None) -> str:
+        text = content
+        if subject:
+            text = f"# {subject}\n\n{text}"
+        return text
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        return extract.extract_text(
+            self.as_text(cast(str, self.content), cast(str | None, self.subject))
+        )
+
+
 class AgentObservation(SourceItem):
     """
     Records observations made by AI agents about the user.
@@ -578,23 +640,27 @@ class AgentObservation(SourceItem):
             "tags": self.tags,
         }
 
-    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         """
         Generate multiple chunks for different embedding dimensions.
         Each chunk goes to a different Qdrant collection for specialized search.
         """
         # 1. Semantic chunk - standard content representation
+        chunks: list[extract.DataChunk] = []
         semantic_text = observation.generate_semantic_text(
             cast(str, self.subject),
             cast(str, self.observation_type),
             cast(str, self.content),
-            cast(observation.Evidence, self.evidence),
+            cast(observation.Evidence | None, self.evidence),
         )
-        semantic_chunk = extract.DataChunk(
-            data=[semantic_text],
-            metadata=extract.merge_metadata(metadata, {"embedding_type": "semantic"}),
-            modality="semantic",
-        )
+        if semantic_text:
+            chunks += [
+                extract.DataChunk(
+                    data=[semantic_text],
+                    metadata={"embedding_type": "semantic"},
+                    modality="semantic",
+                )
+            ]
 
         # 2. Temporal chunk - time-aware representation
         temporal_text = observation.generate_temporal_text(
@@ -603,27 +669,27 @@ class AgentObservation(SourceItem):
             cast(float, self.confidence),
             cast(datetime, self.inserted_at),
         )
-        temporal_chunk = extract.DataChunk(
-            data=[temporal_text],
-            metadata=extract.merge_metadata(metadata, {"embedding_type": "temporal"}),
-            modality="temporal",
-        )
-
-        others = [
-            self._make_chunk(
+        if temporal_text:
+            chunks += [
                 extract.DataChunk(
-                    data=[i],
-                    metadata=extract.merge_metadata(
-                        metadata, {"embedding_type": "semantic"}
-                    ),
-                    modality="semantic",
+                    data=[temporal_text],
+                    metadata={"embedding_type": "temporal"},
+                    modality="temporal",
                 )
-            )
-            for i in [
-                self.content,
-                self.evidence.get("quote", ""),
             ]
-            if i
+
+        raw_data = [
+            self.content,
+            cast(dict | None, self.evidence) and self.evidence.get("quote"),
+        ]
+        chunks += [
+            extract.DataChunk(
+                data=[datum],
+                metadata={"embedding_type": "semantic"},
+                modality="semantic",
+            )
+            for datum in raw_data
+            if datum and all(datum)
         ]
 
         # TODO: Add more embedding dimensions here:
@@ -651,7 +717,4 @@ class AgentObservation(SourceItem):
         #     collection_name="observations_relational"
         # ))
 
-        return [
-            self._make_chunk(semantic_chunk),
-            self._make_chunk(temporal_chunk),
-        ] + others
+        return chunks

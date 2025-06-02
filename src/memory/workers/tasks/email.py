@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import cast
 from memory.common.db.connection import make_session
 from memory.common.db.models import EmailAccount, MailMessage
-from memory.workers.celery_app import app, EMAIL_ROOT
+from memory.common.celery_app import app, PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS
 from memory.workers.email import (
     create_mail_message,
     imap_connection,
@@ -17,10 +17,6 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
-
-PROCESS_EMAIL = f"{EMAIL_ROOT}.process_message"
-SYNC_ACCOUNT = f"{EMAIL_ROOT}.sync_account"
-SYNC_ALL_ACCOUNTS = f"{EMAIL_ROOT}.sync_all_accounts"
 
 
 @app.task(name=PROCESS_EMAIL)

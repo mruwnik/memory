@@ -22,9 +22,17 @@ from memory.common.embedding import embed_source_item
 from memory.common.extract import page_to_image
 from tests.data.contents import (
     CHUNKS,
+    DATA_DIR,
+    LANG_TIMELINE,
     LANG_TIMELINE_HASH,
+    CODE_COMPLEXITY,
+    CODE_COMPLEXITY_HASH,
     SAMPLE_MARKDOWN,
     SAMPLE_TEXT,
+    SECOND_PAGE,
+    SECOND_PAGE_MARKDOWN,
+    SECOND_PAGE_TEXT,
+    TWO_PAGE_CHUNKS,
     image_hash,
 )
 

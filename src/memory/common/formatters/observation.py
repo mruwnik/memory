@@ -55,7 +55,7 @@ def generate_temporal_text(
         f"Subject: {subject}",
         f"Observation: {content}",
     ]
-    if confidence:
+    if confidence is not None:
         parts.append(f"Confidence: {confidence}")
 
     return " | ".join(parts)

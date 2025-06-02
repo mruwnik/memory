@@ -25,7 +25,6 @@ SAMPLE_HTML = f"""
     and Elm have demonstrated the power of pure functions and type systems in creating more reliable 
     and maintainable code. These paradigms emphasize the elimination of side effects and the treatment 
     of computation as the evaluation of mathematical functions.</p>
- patch
     <p>Modern development has also seen the emergence of domain-specific languages and the resurgence 
     of interest in memory safety. The advent of languages like Python and JavaScript has democratized 
     programming by lowering the barrier to entry, while systems languages like Rust have proven that 

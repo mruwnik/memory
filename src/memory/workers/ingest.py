@@ -1,8 +1,11 @@
 import logging
 
 from memory.common import settings
-from memory.workers.celery_app import app
-from memory.workers.tasks import CLEAN_ALL_COLLECTIONS, REINGEST_MISSING_CHUNKS
+from memory.common.celery_app import (
+    app,
+    CLEAN_ALL_COLLECTIONS,
+    REINGEST_MISSING_CHUNKS,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import logging
 from memory.parsers.lesswrong import fetch_lesswrong_posts, LessWrongPost
 from memory.common.db.connection import make_session
 from memory.common.db.models import ForumPost
-from memory.workers.celery_app import app, FORUMS_ROOT
+from memory.common.celery_app import app, SYNC_LESSWRONG, SYNC_LESSWRONG_POST
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -14,9 +14,6 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
-
-SYNC_LESSWRONG = f"{FORUMS_ROOT}.sync_lesswrong"
-SYNC_LESSWRONG_POST = f"{FORUMS_ROOT}.sync_lesswrong_post"
 
 
 @app.task(name=SYNC_LESSWRONG_POST)

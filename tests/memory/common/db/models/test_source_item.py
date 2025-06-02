@@ -22,8 +22,7 @@ def default_chunk_size():
     real_chunker = chunker.chunk_text
 
     def chunk_text(text: str, max_tokens: int = 0):
-        max_tokens = max_tokens or chunk_length
-        return real_chunker(text, max_tokens=max_tokens)
+        return real_chunker(text, max_tokens=chunk_length)
 
     def set_size(new_size: int):
         nonlocal chunk_length
@@ -258,7 +257,9 @@ def test_source_item_chunk_contents_text(chunk_length, expected, default_chunk_s
     )
 
     default_chunk_size(chunk_length)
-    assert source._chunk_contents() == [extract.DataChunk(data=e) for e in expected]
+    assert source._chunk_contents() == [
+        extract.DataChunk(data=e, modality="text") for e in expected
+    ]
 
 
 def test_source_item_chunk_contents_image(tmp_path):
@@ -368,20 +369,32 @@ def test_source_item_as_payload():
 
 
 @pytest.mark.parametrize(
-    "content,filename,expected",
+    "content,filename",
     [
-        ("Test content", None, "Test content"),
-        (None, "test.txt", "test.txt"),
-        ("Test content", "test.txt", "Test content"),  # content takes precedence
-        (None, None, None),
+        ("Test content", None),
+        (None, "test.txt"),
+        ("Test content", "test.txt"),
+        (None, None),
     ],
 )
-def test_source_item_display_contents(content, filename, expected):
+def test_source_item_display_contents(content, filename):
     """Test SourceItem.display_contents property"""
     source = SourceItem(
-        sha256=b"test123", content=content, filename=filename, modality="text"
+        sha256=b"test123",
+        content=content,
+        filename=filename,
+        modality="text",
+        mime_type="text/plain",
+        size=123,
+        tags=["bla", "ble"],
     )
-    assert source.display_contents == expected
+    assert source.display_contents == {
+        "content": content,
+        "filename": filename,
+        "mime_type": "text/plain",
+        "size": 123,
+        "tags": ["bla", "ble"],
+    }
 
 
 def test_unique_source_items_same_commit(db_session: Session):

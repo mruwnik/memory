@@ -19,21 +19,25 @@ Usage:
 
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 import click
-from memory.workers.tasks.blogs import (
+from celery import Celery
+from memory.common.celery_app import (
     SYNC_ALL_ARTICLE_FEEDS,
     SYNC_ARTICLE_FEED,
     SYNC_WEBPAGE,
     SYNC_WEBSITE_ARCHIVE,
-)
-from memory.workers.tasks.comic import SYNC_ALL_COMICS, SYNC_COMIC, SYNC_SMBC, SYNC_XKCD
-from memory.workers.tasks.ebook import SYNC_BOOK
-from memory.workers.tasks.email import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS
-from memory.workers.tasks.forums import SYNC_LESSWRONG, SYNC_LESSWRONG_POST
-from memory.workers.tasks.maintenance import (
+    SYNC_ALL_COMICS,
+    SYNC_COMIC,
+    SYNC_SMBC,
+    SYNC_XKCD,
+    SYNC_BOOK,
+    PROCESS_EMAIL,
+    SYNC_ACCOUNT,
+    SYNC_ALL_ACCOUNTS,
+    SYNC_LESSWRONG,
+    SYNC_LESSWRONG_POST,
     CLEAN_ALL_COLLECTIONS,
     CLEAN_COLLECTION,
     REINGEST_CHUNK,
@@ -43,13 +47,8 @@ from memory.workers.tasks.maintenance import (
     REINGEST_MISSING_CHUNKS,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
+    app,
 )
-
-# Add the src directory to Python path so we can import memory modules
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
-from celery import Celery
-from memory.common import settings
 
 
 TASK_MAPPINGS = {
@@ -96,25 +95,6 @@ QUEUE_MAPPINGS = {
 }
 
 
-def create_local_celery_app() -> Celery:
-    """Create a Celery app configured to connect to the Docker RabbitMQ."""
-    # Override settings for local connection to Docker services
-    rabbitmq_url = f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}@localhost:15673//"
-
-    app = Celery(
-        "memory-local",
-        broker=rabbitmq_url,
-        backend=settings.CELERY_RESULT_BACKEND.replace(
-            "postgres:5432", "localhost:15432"
-        ),
-    )
-
-    # Import task modules so they're registered
-    app.autodiscover_tasks(["memory.workers.tasks"])
-
-    return app
-
-
 def run_task(app: Celery, category: str, task_name: str, **kwargs) -> str:
     """Run a task using the task mappings."""
     if category not in TASK_MAPPINGS:
@@ -152,7 +132,7 @@ def cli(ctx, wait, timeout):
     ctx.obj["timeout"] = timeout
 
     try:
-        ctx.obj["app"] = create_local_celery_app()
+        ctx.obj["app"] = app
     except Exception as e:
         click.echo(f"Error connecting to Celery broker: {e}")
         click.echo(

@@ -25,6 +25,8 @@ x-common-env: &env
   RABBITMQ_HOST: rabbitmq
   QDRANT_HOST: qdrant
   DB_HOST: postgres
+  DB_PORT: 5432
+  RABBITMQ_PORT: 5672
   FILE_STORAGE_DIR: /app/memory_files
   TZ: "Etc/UTC"
 
@@ -210,6 +212,13 @@ services:
     environment:
       <<: *worker-env
       QUEUES: "photo_embed,comic"
+    # deploy: { resources: { limits: { cpus: "4", memory: 4g } } }
+
+  worker-notes:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      QUEUES: "notes"
     # deploy: { resources: { limits: { cpus: "4", memory: 4g } } }
 
   worker-maintenance:

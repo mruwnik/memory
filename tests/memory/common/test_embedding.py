@@ -6,6 +6,7 @@ from memory.common.embedding import (
     embed_mixed,
     embed_text,
 )
+from memory.common.extract import DataChunk
 
 
 @pytest.fixture
@@ -44,10 +45,10 @@ def test_get_modality(mime_type, expected_modality):
 
 
 def test_embed_text(mock_embed):
-    texts = ["text1 with words", "text2"]
-    assert embed_text(texts) == [[0], [1]]
+    chunks = [DataChunk(data=["text1 with words"]), DataChunk(data=["text2"])]
+    assert embed_text(chunks) == [[0], [1]]
 
 
 def test_embed_mixed(mock_embed):
-    items = ["text", {"type": "image", "data": "base64"}]
+    items = [DataChunk(data=["text"])]
     assert embed_mixed(items) == [[0]]

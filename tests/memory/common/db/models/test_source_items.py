@@ -13,7 +13,9 @@ from memory.common.db.models.source_items import (
     BookSection,
     BlogPost,
     AgentObservation,
+    Note,
 )
+from tests.data.contents import SAMPLE_MARKDOWN, CHUNKS
 
 
 @pytest.fixture
@@ -330,7 +332,7 @@ def test_email_attachment_cascade_delete(db_session: Session):
                     "Page 1\n\nPage 2\n\nPage 3",
                     {"type": "section", "tags": {"tag1", "tag2"}},
                 ),
-                ("test", {"type": "summary", "tags": {"tag1", "tag2"}}),
+                ("test summary", {"type": "summary", "tags": {"tag1", "tag2"}}),
             ],
         ),
         # Empty/whitespace pages filtered out
@@ -397,7 +399,7 @@ def test_book_section_data_chunks(pages, expected_chunks):
                     metadata={"tags": ["tag1", "tag2"]},
                 ),
                 extract.DataChunk(
-                    data=["test"],
+                    data=["test summary"],
                     metadata={"tags": ["tag1", "tag2"]},
                 ),
             ],
@@ -482,7 +484,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
             f"Second picture is here: {img2_path.as_posix()}",
             img2_path.as_posix(),
         ],
-        ["test"],
+        ["test summary"],
     ]
 
 
@@ -491,20 +493,102 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
     [
         (
             {},
-            {"embedding_type": "semantic"},
-            {"embedding_type": "temporal"},
+            {
+                "source_id": None,
+                "tags": [],
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "embedding_type": "semantic",
+            },
+            {
+                "source_id": None,
+                "tags": [],
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "embedding_type": "temporal",
+            },
             [],
         ),
         (
             {"extra_key": "extra_value"},
-            {"extra_key": "extra_value", "embedding_type": "semantic"},
-            {"extra_key": "extra_value", "embedding_type": "temporal"},
+            {
+                "source_id": None,
+                "tags": [],
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "extra_key": "extra_value",
+                "embedding_type": "semantic",
+            },
+            {
+                "source_id": None,
+                "tags": [],
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "extra_key": "extra_value",
+                "embedding_type": "temporal",
+            },
             [],
         ),
         (
             {"tags": ["existing_tag"], "source": "test"},
-            {"tags": {"existing_tag"}, "source": "test", "embedding_type": "semantic"},
-            {"tags": {"existing_tag"}, "source": "test", "embedding_type": "temporal"},
+            {
+                "source_id": None,
+                "tags": {"existing_tag"},
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "source": "test",
+                "embedding_type": "semantic",
+            },
+            {
+                "source_id": None,
+                "tags": {"existing_tag"},
+                "size": None,
+                "observation_type": "preference",
+                "subject": "programming preferences",
+                "confidence": 0.9,
+                "evidence": {
+                    "quote": "I really like Python",
+                    "context": "discussion about languages",
+                },
+                "agent_model": "claude-3.5-sonnet",
+                "source": "test",
+                "embedding_type": "temporal",
+            },
             [],
         ),
     ],
@@ -513,6 +597,7 @@ def test_agent_observation_data_chunks(
     metadata, expected_semantic_metadata, expected_temporal_metadata, observation_tags
 ):
     """Test AgentObservation.data_chunks generates correct chunks with proper metadata"""
+    session_id = uuid.uuid4()
     observation = AgentObservation(
         sha256=b"test_obs",
         content="User prefers Python over JavaScript",
@@ -524,7 +609,7 @@ def test_agent_observation_data_chunks(
             "context": "discussion about languages",
         },
         agent_model="claude-3.5-sonnet",
-        session_id=uuid.uuid4(),
+        session_id=session_id,
         tags=observation_tags,
     )
     # Set inserted_at using object.__setattr__ to bypass SQLAlchemy restrictions
@@ -533,19 +618,33 @@ def test_agent_observation_data_chunks(
     result = observation.data_chunks(metadata)
 
     # Verify chunks
-    assert len(result) == 2
+    assert len(result) == 4
 
     semantic_chunk = result[0]
     expected_semantic_text = "Subject: programming preferences | Type: preference | Observation: User prefers Python over JavaScript | Quote: I really like Python | Context: discussion about languages"
     assert semantic_chunk.data == [expected_semantic_text]
-    assert semantic_chunk.metadata == expected_semantic_metadata
-    assert semantic_chunk.collection_name == "semantic"
+
+    # Add session_id to expected metadata and remove tags if empty
+    expected_semantic_with_session = expected_semantic_metadata.copy()
+    expected_semantic_with_session["session_id"] = str(session_id)
+    if not expected_semantic_with_session.get("tags"):
+        del expected_semantic_with_session["tags"]
+
+    assert semantic_chunk.item_metadata == expected_semantic_with_session
+    assert cast(str, semantic_chunk.collection_name) == "semantic"
 
     temporal_chunk = result[1]
     expected_temporal_text = "Time: 12:00 on Sunday (afternoon) | Subject: programming preferences | Observation: User prefers Python over JavaScript | Confidence: 0.9"
     assert temporal_chunk.data == [expected_temporal_text]
-    assert temporal_chunk.metadata == expected_temporal_metadata
-    assert temporal_chunk.collection_name == "temporal"
+
+    # Add session_id to expected metadata and remove tags if empty
+    expected_temporal_with_session = expected_temporal_metadata.copy()
+    expected_temporal_with_session["session_id"] = str(session_id)
+    if not expected_temporal_with_session.get("tags"):
+        del expected_temporal_with_session["tags"]
+
+    assert temporal_chunk.item_metadata == expected_temporal_with_session
+    assert cast(str, temporal_chunk.collection_name) == "temporal"
 
 
 def test_agent_observation_data_chunks_with_none_values():
@@ -564,16 +663,18 @@ def test_agent_observation_data_chunks_with_none_values():
 
     result = observation.data_chunks()
 
-    assert len(result) == 2
-    assert result[0].collection_name == "semantic"
-    assert result[1].collection_name == "temporal"
+    assert len(result) == 3
+    assert cast(str, result[0].collection_name) == "semantic"
+    assert cast(str, result[1].collection_name) == "temporal"
 
     # Verify content with None evidence
-    semantic_text = "Subject: subject | Type: belief | Observation: Content"
-    assert result[0].data == [semantic_text]
-
-    temporal_text = "Time: 09:30 on Wednesday (morning) | Subject: subject | Observation: Content | Confidence: 0.7"
-    assert result[1].data == [temporal_text]
+    assert [i.data for i in result] == [
+        ["Subject: subject | Type: belief | Observation: Content"],
+        [
+            "Time: 09:30 on Wednesday (morning) | Subject: subject | Observation: Content | Confidence: 0.7"
+        ],
+        ["Content"],
+    ]
 
 
 def test_agent_observation_data_chunks_merge_metadata_behavior():
@@ -594,14 +695,51 @@ def test_agent_observation_data_chunks_merge_metadata_behavior():
     input_metadata = {"existing": "value", "tags": ["tag1"]}
     result = observation.data_chunks(input_metadata)
 
-    semantic_metadata = result[0].metadata
-    temporal_metadata = result[1].metadata
+    semantic_metadata = result[0].item_metadata
+    temporal_metadata = result[1].item_metadata
 
     # Both should have the existing metadata plus embedding_type
     assert semantic_metadata["existing"] == "value"
-    assert semantic_metadata["tags"] == {"tag1"}  # Merged tags
+    assert semantic_metadata["tags"] == {"tag1", "base_tag"}  # Merged tags
     assert semantic_metadata["embedding_type"] == "semantic"
 
     assert temporal_metadata["existing"] == "value"
-    assert temporal_metadata["tags"] == {"tag1"}  # Merged tags
+    assert temporal_metadata["tags"] == {"tag1", "base_tag"}  # Merged tags
     assert temporal_metadata["embedding_type"] == "temporal"
+
+
+@pytest.mark.parametrize(
+    "subject, content, expected",
+    (
+        (None, "bla bla bla", ["bla bla bla"]),
+        (None, "    \n\n  bla bla bla  \t\t \n ", ["bla bla bla"]),
+        ("my gosh, a subject!", "blee bleee", ["# my gosh, a subject!\n\nblee bleee"]),
+        (None, SAMPLE_MARKDOWN, [i.strip() for i in CHUNKS] + ["test summary"]),
+    ),
+)
+def test_note_data_chunks(subject, content, expected):
+    note = Note(
+        sha256=b"test_obs",
+        content=content,
+        subject=subject,
+        note_type="quicky",
+        confidence=0.9,
+        size=123,
+        tags=["bla"],
+    )
+
+    chunks = note.data_chunks()
+    assert [chunk.content for chunk in chunks] == expected
+    for chunk in chunks:
+        assert cast(list, chunk.file_paths) == []
+        tags = {"bla"}
+        if cast(str, chunk.content) == "test summary":
+            tags |= {"tag1", "tag2"}
+        assert chunk.item_metadata == {
+            "confidence": 0.9,
+            "note_type": "quicky",
+            "size": 123,
+            "source_id": None,
+            "subject": subject,
+            "tags": tags,
+        }

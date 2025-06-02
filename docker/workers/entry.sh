@@ -7,7 +7,7 @@ LOGLEVEL=${LOGLEVEL:-INFO}
 
 HOSTNAME="${QUEUES%@*}@$(hostname)"
 
-exec celery -A memory.workers.celery_app worker \
+exec celery -A memory.common.celery_app worker \
      -Q "${QUEUES}" \
      --concurrency="${CONCURRENCY}" \
      --hostname="${HOSTNAME}" \

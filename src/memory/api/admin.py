@@ -19,6 +19,7 @@ from memory.common.db.models import (
     EmailAccount,
     ForumPost,
     AgentObservation,
+    Note,
 )
 
 
@@ -189,10 +190,24 @@ class AgentObservationAdmin(ModelView, model=AgentObservation):
     column_searchable_list = ["subject", "observation_type"]
 
 
+class NoteAdmin(ModelView, model=Note):
+    column_list = [
+        "id",
+        "subject",
+        "content",
+        "note_type",
+        "confidence",
+        "tags",
+        "inserted_at",
+    ]
+    column_searchable_list = ["subject", "content"]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance."""
     admin.add_view(SourceItemAdmin)
     admin.add_view(AgentObservationAdmin)
+    admin.add_view(NoteAdmin)
     admin.add_view(ChunkAdmin)
     admin.add_view(EmailAccountAdmin)
     admin.add_view(MailMessageAdmin)

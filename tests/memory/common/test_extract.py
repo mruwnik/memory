@@ -10,7 +10,7 @@ from memory.common.extract import (
     doc_to_images,
     extract_image,
     docx_to_pdf,
-    extract_docx,
+    merge_metadata,
     DataChunk,
 )
 
@@ -48,8 +48,11 @@ def test_as_file_with_str():
 @pytest.mark.parametrize(
     "input_content,expected",
     [
-        ("simple text", [DataChunk(data=["simple text"], metadata={})]),
-        (b"bytes text", [DataChunk(data=["bytes text"], metadata={})]),
+        (
+            "simple text",
+            [DataChunk(data=["simple text"], metadata={}, modality="text")],
+        ),
+        (b"bytes text", [DataChunk(data=["bytes text"], metadata={}, modality="text")]),
     ],
 )
 def test_extract_text(input_content, expected):
@@ -61,7 +64,7 @@ def test_extract_text_with_path(tmp_path):
     test_file.write_text("file text content")
 
     assert extract_text(test_file) == [
-        DataChunk(data=["file text content"], metadata={})
+        DataChunk(data=["file text content"], metadata={}, modality="text")
     ]
 
 
@@ -128,3 +131,111 @@ def test_docx_to_pdf_default_output():
 
     assert result_path == SAMPLE_DOCX.with_suffix(".pdf")
     assert result_path.exists()
+
+
+@pytest.mark.parametrize(
+    "dicts,expected",
+    [
+        # Empty input
+        ([], {}),
+        # Single dict without tags
+        ([{"key": "value"}], {"key": "value"}),
+        # Single dict with tags as list
+        (
+            [{"key": "value", "tags": ["tag1", "tag2"]}],
+            {"key": "value", "tags": {"tag1", "tag2"}},
+        ),
+        # Single dict with tags as set
+        (
+            [{"key": "value", "tags": {"tag1", "tag2"}}],
+            {"key": "value", "tags": {"tag1", "tag2"}},
+        ),
+        # Multiple dicts without tags
+        (
+            [{"key1": "value1"}, {"key2": "value2"}],
+            {"key1": "value1", "key2": "value2"},
+        ),
+        # Multiple dicts with non-overlapping tags
+        (
+            [
+                {"key1": "value1", "tags": ["tag1"]},
+                {"key2": "value2", "tags": ["tag2"]},
+            ],
+            {"key1": "value1", "key2": "value2", "tags": {"tag1", "tag2"}},
+        ),
+        # Multiple dicts with overlapping tags
+        (
+            [
+                {"key1": "value1", "tags": ["tag1", "tag2"]},
+                {"key2": "value2", "tags": ["tag2", "tag3"]},
+            ],
+            {"key1": "value1", "key2": "value2", "tags": {"tag1", "tag2", "tag3"}},
+        ),
+        # Overlapping keys - later dict wins
+        (
+            [
+                {"key": "value1", "other": "data1"},
+                {"key": "value2", "another": "data2"},
+            ],
+            {"key": "value2", "other": "data1", "another": "data2"},
+        ),
+        # Mixed tags types (list and set)
+        (
+            [
+                {"key1": "value1", "tags": ["tag1", "tag2"]},
+                {"key2": "value2", "tags": {"tag3", "tag4"}},
+            ],
+            {
+                "key1": "value1",
+                "key2": "value2",
+                "tags": {"tag1", "tag2", "tag3", "tag4"},
+            },
+        ),
+        # Empty tags
+        (
+            [{"key": "value", "tags": []}, {"key2": "value2", "tags": []}],
+            {"key": "value", "key2": "value2"},
+        ),
+        # None values
+        (
+            [{"key1": None, "key2": "value"}, {"key3": None}],
+            {"key1": None, "key2": "value", "key3": None},
+        ),
+        # Complex nested structures
+        (
+            [
+                {"nested": {"inner": "value1"}, "list": [1, 2, 3], "tags": ["tag1"]},
+                {"nested": {"inner": "value2"}, "list": [4, 5], "tags": ["tag2"]},
+            ],
+            {"nested": {"inner": "value2"}, "list": [4, 5], "tags": {"tag1", "tag2"}},
+        ),
+        # Boolean and numeric values
+        (
+            [
+                {"bool": True, "int": 42, "float": 3.14, "tags": ["numeric"]},
+                {"bool": False, "int": 100},
+            ],
+            {"bool": False, "int": 100, "float": 3.14, "tags": {"numeric"}},
+        ),
+        # Three or more dicts
+        (
+            [
+                {"a": 1, "tags": ["t1"]},
+                {"b": 2, "tags": ["t2", "t3"]},
+                {"c": 3, "a": 10, "tags": ["t3", "t4"]},
+            ],
+            {"a": 10, "b": 2, "c": 3, "tags": {"t1", "t2", "t3", "t4"}},
+        ),
+        # Dict with only tags
+        ([{"tags": ["tag1", "tag2"]}], {"tags": {"tag1", "tag2"}}),
+        # Empty dicts
+        ([{}, {}], {}),
+        # Mix of empty and non-empty dicts
+        (
+            [{}, {"key": "value", "tags": ["tag"]}, {}],
+            {"key": "value", "tags": {"tag"}},
+        ),
+    ],
+)
+def test_merge_metadata(dicts, expected):
+    assert merge_metadata(*dicts) == expected

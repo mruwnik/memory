@@ -168,13 +168,18 @@ class Chunk(Base):
 
     @property
     def data(self) -> list[bytes | str | Image.Image]:
-        if self.file_paths is None:
-            return [cast(str, self.content)]
+        content = cast(str | None, self.content)
+        file_paths = cast(Sequence[str] | None, self.file_paths)
+        items: list[bytes | str | Image.Image] = []
+        if content:
+            items = [content]
 
-        paths = [pathlib.Path(cast(str, p)) for p in self.file_paths]
+        if not file_paths:
+            return items
+
+        paths = [pathlib.Path(cast(str, p)) for p in file_paths]
         files = [path for path in paths if path.exists()]
 
-        items = []
         for file_path in files:
             if file_path.suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 if file_path.exists():

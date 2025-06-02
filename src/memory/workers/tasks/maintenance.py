@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Sequence, Any
 
+from memory.common import extract
 from memory.workers.tasks.content_processing import process_content_item
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
@@ -10,22 +11,20 @@ from sqlalchemy.orm import contains_eager
 from memory.common import collections, embedding, qdrant, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
-from memory.workers.celery_app import app, MAINTENANCE_ROOT
+from memory.common.celery_app import (
+    app,
+    CLEAN_ALL_COLLECTIONS,
+    CLEAN_COLLECTION,
+    REINGEST_MISSING_CHUNKS,
+    REINGEST_CHUNK,
+    REINGEST_ITEM,
+    REINGEST_EMPTY_SOURCE_ITEMS,
+    REINGEST_ALL_EMPTY_SOURCE_ITEMS,
+    UPDATE_METADATA_FOR_SOURCE_ITEMS,
+    UPDATE_METADATA_FOR_ITEM,
+)
 
 logger = logging.getLogger(__name__)
-
-
-CLEAN_ALL_COLLECTIONS = f"{MAINTENANCE_ROOT}.clean_all_collections"
-CLEAN_COLLECTION = f"{MAINTENANCE_ROOT}.clean_collection"
-REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
-REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
-REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
-REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
-REINGEST_ALL_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_all_empty_source_items"
-UPDATE_METADATA_FOR_SOURCE_ITEMS = (
-    f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
-)
-UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 
 
 @app.task(name=CLEAN_COLLECTION)
@@ -75,11 +74,11 @@ def reingest_chunk(chunk_id: str, collection: str):
         if collection not in collections.ALL_COLLECTIONS:
             raise ValueError(f"Unsupported collection {collection}")
 
-        data = chunk.data
+        data = [extract.DataChunk(data=chunk.data)]
         if collection in collections.MULTIMODAL_COLLECTIONS:
-            vector = embedding.embed_mixed([data])[0]
+            vector = embedding.embed_mixed(data)[0]
         elif collection in collections.TEXT_COLLECTIONS:
-            vector = embedding.embed_text([data])[0]
+            vector = embedding.embed_text(data)[0]
         else:
             raise ValueError(f"Unsupported data type for collection {collection}")
 

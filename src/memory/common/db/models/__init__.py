@@ -17,6 +17,7 @@ from memory.common.db.models.source_items import (
     GitCommit,
     Photo,
     MiscDoc,
+    Note,
 )
 from memory.common.db.models.observations import (
     ObservationContradiction,
@@ -48,6 +49,7 @@ __all__ = [
     "GitCommit",
     "Photo",
     "MiscDoc",
+    "Note",
     # Observations
     "ObservationContradiction",
     "ReactionPattern",
