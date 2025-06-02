@@ -96,9 +96,6 @@ def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
 
 def embed_source_item(item: SourceItem) -> list[Chunk]:
     chunks = list(item.data_chunks())
-    logger.error(
-        f"Embedding source item: {item.id} - {[(c.embedding_model, c.collection_name, c.chunks) for c in chunks]}"
-    )
     if not chunks:
         return []
 

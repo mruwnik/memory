@@ -192,7 +192,7 @@ def create_task_result(
     """
     return {
         f"{type(item).__name__.lower()}_id": item.id,
-        "title": getattr(item, "title", None),
+        "title": getattr(item, "title", None) or getattr(item, "subject", None),
         "status": status,
         "chunks_count": len(item.chunks),
         "embed_status": item.embed_status,

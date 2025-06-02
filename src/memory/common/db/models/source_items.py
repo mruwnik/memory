@@ -537,12 +537,10 @@ class Note(SourceItem):
 
     def save_to_file(self):
         if not self.filename:
-            path = settings.NOTES_STORAGE_DIR / f"{self.subject}.md"
-        else:
-            path = pathlib.Path(self.filename)
+            self.filename = f"{self.subject}.md"
+        path = settings.NOTES_STORAGE_DIR / self.filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(cast(str, self.content))
-        self.filename = path.as_posix()
 
     @staticmethod
     def as_text(content: str, subject: str | None = None) -> str:

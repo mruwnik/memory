@@ -1,6 +1,5 @@
 import pytest
 import pathlib
-from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import Note
@@ -12,11 +11,10 @@ from memory.common import settings
 @pytest.fixture
 def mock_note_data():
     """Mock note data for testing."""
-    test_filename = pathlib.Path(settings.NOTES_STORAGE_DIR) / "test_note.md"
     return {
         "subject": "Test Note Subject",
         "content": "This is test note content with enough text to be processed and embedded.",
-        "filename": str(test_filename),
+        "filename": "test_note.md",
         "note_type": "observation",
         "confidence": 0.8,
         "tags": ["test", "note"],
@@ -79,6 +77,7 @@ def markdown_files_in_storage():
 def test_sync_note_success(mock_note_data, db_session, qdrant):
     """Test successful note synchronization."""
     result = notes.sync_note(**mock_note_data)
+    db_session.commit()
 
     # Verify the Note was created in the database
     note = db_session.query(Note).filter_by(subject="Test Note Subject").first()
@@ -95,12 +94,15 @@ def test_sync_note_success(mock_note_data, db_session, qdrant):
     assert note.filename is not None
     assert note.tags == ["test", "note"]
 
-    # Verify the result
-    assert result["status"] == "processed"
-    assert result["note_id"] == note.id
-    assert (
-        "subject" not in result
-    )  # create_task_result doesn't include subject for Note
+    # Verify the result - updated to match actual return format
+    assert result == {
+        "note_id": note.id,
+        "title": "Test Note Subject",
+        "status": "processed",
+        "chunks_count": 1,
+        "embed_status": "STORED",
+        "content_length": 93,
+    }
 
 
 def test_sync_note_minimal_data(mock_minimal_note, db_session, qdrant):
@@ -115,7 +117,16 @@ def test_sync_note_minimal_data(mock_minimal_note, db_session, qdrant):
     assert float(note.confidence) == 0.5  # Default value, convert Decimal to float
     assert note.tags == []  # Default empty list
     assert note.filename is not None and "Minimal Note.md" in note.filename
-    assert result["status"] == "processed"
+
+    # Updated to match actual return format
+    assert result == {
+        "note_id": note.id,
+        "title": "Minimal Note",
+        "status": "processed",
+        "chunks_count": 1,
+        "embed_status": "STORED",
+        "content_length": 31,
+    }
 
 
 def test_sync_note_empty_content(mock_empty_note, db_session, qdrant):
@@ -127,9 +138,16 @@ def test_sync_note_empty_content(mock_empty_note, db_session, qdrant):
     assert note is not None
     assert note.subject == "Empty Note"
     assert note.content == ""
-    # Empty content with subject header "# Empty Note" still generates chunks
-    assert result["status"] == "processed"
-    assert result["chunks_count"] > 0
+
+    # Updated to match actual return format
+    assert result == {
+        "note_id": note.id,
+        "title": "Empty Note",
+        "status": "processed",
+        "chunks_count": 1,
+        "embed_status": "STORED",
+        "content_length": 14,
+    }
 
 
 def test_sync_note_already_exists(mock_note_data, db_session):
@@ -148,19 +166,65 @@ def test_sync_note_already_exists(mock_note_data, db_session):
         mime_type="text/markdown",
         size=len(text.encode("utf-8")),
         embed_status="RAW",
-        filename=str(pathlib.Path(settings.NOTES_STORAGE_DIR) / "existing_note.md"),
+        filename="existing_note.md",
     )
     db_session.add(existing_note)
     db_session.commit()
 
     result = notes.sync_note(**mock_note_data)
 
-    assert result["status"] == "already_exists"
-    assert result["note_id"] == existing_note.id
+    # Updated to match actual return format for already_exists case
+    assert result == {
+        "note_id": existing_note.id,
+        "title": "Existing Note",
+        "status": "already_exists",
+        "chunks_count": 0,  # Existing note has no chunks
+        "embed_status": "RAW",  # Existing note has RAW status
+    }
 
     # Verify no duplicate was created
     notes_with_hash = db_session.query(Note).filter_by(sha256=sha256).all()
     assert len(notes_with_hash) == 1
+
+
+def test_sync_note_edit(mock_note_data, db_session):
+    """Test note sync when content already exists."""
+    # Create the content text the same way sync_note does
+    text = Note.as_text(mock_note_data["content"], mock_note_data["subject"])
+    sha256 = create_content_hash(text)
+
+    # Add existing note with same content hash but different filename to avoid file conflicts
+    existing_note = Note(
+        subject="Existing Note",
+        content=mock_note_data["content"],
+        sha256=sha256,
+        modality="note",
+        tags=["existing"],
+        mime_type="text/markdown",
+        size=len(text.encode("utf-8")),
+        embed_status="RAW",
+        filename="test_note.md",
+    )
+    db_session.add(existing_note)
+    db_session.commit()
+
+    result = notes.sync_note(
+        **{**mock_note_data, "content": "bla bla bla", "subject": "blee"}
+    )
+
+    assert result == {
+        "note_id": existing_note.id,
+        "status": "processed",
+        "chunks_count": 1,
+        "embed_status": "STORED",
+        "title": "blee",
+        "content_length": 19,
+    }
+
+    # Verify no duplicate was created
+    assert len(db_session.query(Note).all()) == 1
+    db_session.refresh(existing_note)
+    assert existing_note.content == "bla bla bla"  # type: ignore
 
 
 @pytest.mark.parametrize(
@@ -187,7 +251,17 @@ def test_sync_note_parameters(note_type, confidence, tags, db_session, qdrant):
     assert note.note_type == note_type
     assert float(note.confidence) == confidence  # Convert Decimal to float
     assert note.tags == tags
-    assert result["status"] == "processed"
+
+    # Updated to match actual return format
+    text = f"# Test Note {note_type}\n\nTest content for parameter testing"
+    assert result == {
+        "note_id": note.id,
+        "title": f"Test Note {note_type}",
+        "status": "processed",
+        "chunks_count": 1,
+        "embed_status": "STORED",
+        "content_length": len(text.encode("utf-8")),
+    }
 
 
 def test_sync_note_content_hash_consistency(db_session):

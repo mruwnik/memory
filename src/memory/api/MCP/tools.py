@@ -80,13 +80,6 @@ async def get_all_tags() -> list[str]:
         AI observations (created with 'observe') and other content. Use it to
         understand the tag taxonomy, ensure consistency, or discover related topics.
 
-    When to use:
-        - Before creating new observations, to use consistent tag naming
-        - To explore what topics/contexts have been tracked
-        - To build tag filters for search operations
-        - To understand the user's areas of interest
-        - For tag autocomplete or suggestion features
-
     Returns:
         Sorted list of all unique tags in the system. Tags follow patterns like:
         - Topics: "machine-learning", "functional-programming"
@@ -109,13 +102,6 @@ async def get_all_subjects() -> list[str]:
         observations (created with 'observe'). Subjects are the consistent
         identifiers for what observations are about. Use this to understand
         what aspects of the user have been tracked and ensure consistency.
-
-    When to use:
-        - Before creating new observations, to use existing subject names
-        - To discover what aspects of the user have been observed
-        - To build subject filters for targeted searches
-        - To ensure consistent naming across observations
-        - To get an overview of the user model
 
     Returns:
         Sorted list of all unique subjects. Common patterns include:
@@ -141,12 +127,6 @@ async def get_all_observation_types() -> list[str]:
         in the system. While the standard types are predefined (belief, preference,
         behavior, contradiction, general), this shows what's actually been used.
         Helpful for understanding the distribution of observation types.
-
-    When to use:
-        - To see what types of observations have been made
-        - To understand the balance of different observation types
-        - To check if all standard types are being utilized
-        - For analytics or reporting on observation patterns
 
     Standard types:
         - "belief": Opinions or beliefs the user holds
@@ -642,12 +622,14 @@ async def create_note(
     tags: list[str] = [],
 ) -> dict:
     """
-    Create a note when the user asks for something to be noted down.
+    Create a note when the user asks for something to be noted down or when you think
+    something is important to note down.
 
     Purpose:
         Use this tool when the user explicitly asks to note, save, or record
         something for later reference. Notes don't have to be really short - long
         markdown docs are fine, as long as that was what was asked for.
+        You can also use this tool to note down things that are important to you.
 
     When to use:
         - User says "note down that..." or "please save this"
@@ -702,3 +684,88 @@ async def create_note(
         "task_id": task.id,
         "status": "queued",
     }
+
+
+@mcp.tool()
+async def note_files(path: str = "/"):
+    """
+    List all available note files in the user's note storage system.
+
+    Purpose:
+        This tool provides a way to discover and browse the user's organized note
+        collection. Notes are stored as Markdown files and can be created either
+        through the 'create_note' tool or by the user directly. Use this tool to
+        understand what notes exist before reading or referencing them, or to help
+        the user navigate their note collection.
+
+    Args:
+        path: Directory path to search within the notes collection. Use "/" for the
+            root notes directory, or specify subdirectories like "/projects" or
+            "/meetings". The path should start with "/" and use forward slashes.
+            Examples:
+            - "/" - List all notes in the entire collection
+            - "/projects" - Only notes in the projects folder
+            - "/meetings/2024" - Notes in a specific year's meetings folder
+
+    Examples:
+        # List all notes
+        all_notes = await note_files("/")
+        # Returns: ["/notes/project_ideas.md", "/notes/meetings/daily_standup.md", ...]
+
+        # List notes in a specific folder
+        project_notes = await note_files("/projects")
+        # Returns: ["/notes/projects/website_redesign.md", "/notes/projects/mobile_app.md"]
+
+        # Check for meeting notes
+        meeting_notes = await note_files("/meetings")
+        # Returns: ["/notes/meetings/2024-01-15.md", "/notes/meetings/weekly_review.md"]
+    """
+    root = settings.NOTES_STORAGE_DIR / path.lstrip("/")
+    return [
+        f"/notes/{f.relative_to(settings.NOTES_STORAGE_DIR)}"
+        for f in root.rglob("*.md")
+        if f.is_file()
+    ]
+
+
+@mcp.tool()
+def fetch_file(filename: str):
+    """
+    Retrieve the raw content of a file from the user's storage system.
+
+    Purpose:
+        This tool allows you to read the actual content of files stored in the
+        user's file system, including notes, documents, images, and other files.
+        Use this when you need to access the specific content of a file that has
+        been referenced or when the user asks you to read/examine a particular file.
+
+    Args:
+        filename: Path to the file to fetch, relative to the file storage directory.
+            Should start with "/" and use forward slashes. The path structure depends
+            on how files are organized in the storage system.
+            Examples:
+            - "/notes/project_ideas.md" - A note file
+            - "/documents/report.pdf" - A PDF document
+            - "/images/diagram.png" - An image file
+            - "/emails/important_thread.txt" - Saved email content
+
+    Returns:
+        Raw bytes content of the file. For text files (like Markdown notes), you'll
+        typically want to decode this as UTF-8 to get readable text:
+        ```python
+        content_bytes = await fetch_file("/notes/my_note.md")
+        content_text = content_bytes.decode('utf-8')
+        ```
+
+    Raises:
+        FileNotFoundError: If the specified file doesn't exist at the given path.
+
+    Security note:
+        This tool only accesses files within the configured storage directory,
+        ensuring it cannot read arbitrary system files.
+    """
+    path = settings.FILE_STORAGE_DIR / filename.lstrip("/")
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {filename}")
+
+    return path.read_bytes()

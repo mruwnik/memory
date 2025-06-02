@@ -1,6 +1,7 @@
 import logging
 import pathlib
 
+from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
 from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES
@@ -22,27 +23,15 @@ def sync_note(
     content: str,
     filename: str | None = None,
     note_type: str | None = None,
-    confidence: float = 0.5,
+    confidence: float | None = None,
     tags: list[str] = [],
 ):
     logger.info(f"Syncing note {subject}")
     text = Note.as_text(content, subject)
     sha256 = create_content_hash(text)
 
-    note = Note(
-        subject=subject,
-        content=content,
-        embed_status="RAW",
-        size=len(text.encode("utf-8")),
-        modality="note",
-        mime_type="text/markdown",
-        sha256=sha256,
-        note_type=note_type,
-        confidence=confidence,
-        tags=tags,
-        filename=filename,
-    )
-    note.save_to_file()
+    if filename:
+        filename = filename.lstrip("/")
 
     with make_session() as session:
         existing_note = check_content_exists(session, Note, sha256=sha256)
@@ -50,6 +39,31 @@ def sync_note(
             logger.info(f"Note already exists: {existing_note.subject}")
             return create_task_result(existing_note, "already_exists")
 
+        note = session.query(Note).filter(Note.filename == filename).one_or_none()
+
+        if not note:
+            note = Note(
+                modality="note",
+                mime_type="text/markdown",
+                confidence=confidence or 0.5,
+            )
+        else:
+            logger.info("Editing preexisting note")
+        note.content = content  # type: ignore
+        note.subject = subject  # type: ignore
+        note.filename = filename  # type: ignore
+        note.embed_status = "RAW"  # type: ignore
+        note.size = len(text.encode("utf-8"))  # type: ignore
+        note.sha256 = sha256  # type: ignore
+
+        if note_type:
+            note.note_type = note_type  # type: ignore
+        if confidence:
+            note.confidence = confidence  # type: ignore
+        if tags:
+            note.tags = tags  # type: ignore
+
+        note.save_to_file()
         return process_content_item(note, session)
 
 
