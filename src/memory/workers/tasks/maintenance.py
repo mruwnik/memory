@@ -21,6 +21,7 @@ REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
 REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
 REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
 REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
+REINGEST_ALL_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_all_empty_source_items"
 UPDATE_METADATA_FOR_SOURCE_ITEMS = (
     f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
 )
@@ -76,9 +77,9 @@ def reingest_chunk(chunk_id: str, collection: str):
 
         data = chunk.data
         if collection in collections.MULTIMODAL_COLLECTIONS:
-            vector = embedding.embed_mixed(data)[0]
-        elif len(data) == 1 and isinstance(data[0], str):
-            vector = embedding.embed_text([data[0]])[0]
+            vector = embedding.embed_mixed([data])[0]
+        elif collection in collections.TEXT_COLLECTIONS:
+            vector = embedding.embed_text([data])[0]
         else:
             raise ValueError(f"Unsupported data type for collection {collection}")
 
@@ -123,7 +124,10 @@ def reingest_item(item_id: str, item_type: str):
         chunk_ids = [str(c.id) for c in item.chunks if c.id]
         if chunk_ids:
             client = qdrant.get_qdrant_client()
-            qdrant.delete_points(client, item.modality, chunk_ids)
+            try:
+                qdrant.delete_points(client, item.modality, chunk_ids)
+            except IOError as e:
+                logger.error(f"Error deleting chunks for {item_id}: {e}")
 
         for chunk in item.chunks:
             session.delete(chunk)
@@ -149,6 +153,13 @@ def reingest_empty_source_items(item_type: str):
             reingest_item.delay(item_id.id, item_type)  # type: ignore
 
         return {"status": "success", "items": len(item_ids)}
+
+
+@app.task(name=REINGEST_ALL_EMPTY_SOURCE_ITEMS)
+def reingest_all_empty_source_items():
+    logger.info("Reingesting all empty source items")
+    for item_type in SourceItem.registry._class_registry.keys():
+        reingest_empty_source_items.delay(item_type)  # type: ignore
 
 
 def check_batch(batch: Sequence[Chunk]) -> dict:

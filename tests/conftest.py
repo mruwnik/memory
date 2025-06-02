@@ -234,8 +234,10 @@ def mock_voyage_client():
     def embeder(chunks, *args, **kwargs):
         return Mock(embeddings=[[0.1] * 1024] * len(chunks))
 
+    real_client = voyageai.Client
     with patch.object(voyageai, "Client", autospec=True) as mock_client:
         client = mock_client()
+        client.real_client = real_client
         client.embed = embeder
         client.multimodal_embed = embeder
         yield client
@@ -251,7 +253,7 @@ def mock_openai_client():
                 choices=[
                     Mock(
                         message=Mock(
-                            content='{"summary": "test", "tags": ["tag1", "tag2"]}'
+                            content='{"summary": "test summary", "tags": ["tag1", "tag2"]}'
                         )
                     )
                 ]
@@ -267,7 +269,9 @@ def mock_anthropic_client():
         client.messages = Mock()
         client.messages.create = Mock(
             return_value=Mock(
-                content=[Mock(text='{"summary": "test", "tags": ["tag1", "tag2"]}')]
+                content=[
+                    Mock(text='{"summary": "test summary", "tags": ["tag1", "tag2"]}')
+                ]
             )
         )
         yield client

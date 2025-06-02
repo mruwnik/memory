@@ -14,7 +14,6 @@ from memory.common.db.models.source_items import (
     BlogPost,
     AgentObservation,
 )
-from memory.common.db.models.source_item import merge_metadata
 
 
 @pytest.fixture
@@ -356,7 +355,8 @@ def test_book_section_data_chunks(pages, expected_chunks):
 
     chunks = book_section.data_chunks()
     expected = [
-        (c, merge_metadata(book_section.as_payload(), m)) for c, m in expected_chunks
+        (c, extract.merge_metadata(book_section.as_payload(), m))
+        for c, m in expected_chunks
     ]
     assert [(c.content, c.item_metadata) for c in chunks] == expected
     for c in chunks:

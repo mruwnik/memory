@@ -1,5 +1,6 @@
 import json
 import logging
+import traceback
 from typing import Any
 
 from memory.common import settings, chunker
@@ -131,6 +132,7 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
         summary = result.get("summary", "")
         tags = result.get("tags", [])
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Summarization failed: {e}")
 
     tokens = chunker.approx_token_count(summary)

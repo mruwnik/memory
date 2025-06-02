@@ -6,7 +6,7 @@ import tempfile
 from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
-from memory.common import chunker
+from memory.common import chunker, summarizer
 import pymupdf  # PyMuPDF
 import pypandoc
 from PIL import Image
@@ -14,6 +14,16 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 MulitmodalChunk = Image.Image | str
+
+
+def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:
+    final = {}
+    for m in metadata:
+        data = m.copy()
+        if tags := set(data.pop("tags", []) or []):
+            final["tags"] = tags | final.get("tags", set())
+        final |= data
+    return final
 
 
 @dataclass
@@ -109,7 +119,9 @@ def extract_image(content: bytes | str | pathlib.Path) -> list[DataChunk]:
 
 
 def extract_text(
-    content: bytes | str | pathlib.Path, chunk_size: int | None = None
+    content: bytes | str | pathlib.Path,
+    chunk_size: int | None = None,
+    metadata: dict[str, Any] = {},
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
         content = content.read_text()
@@ -117,8 +129,20 @@ def extract_text(
         content = content.decode("utf-8")
 
     content = cast(str, content)
-    chunks = chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
-    return [DataChunk(data=[c], mime_type="text/plain") for c in chunks if c.strip()]
+    chunks = [
+        DataChunk(data=[c], modality="text", metadata=metadata)
+        for c in chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
+    ]
+    if content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
+        summary, tags = summarizer.summarize(content)
+        chunks.append(
+            DataChunk(
+                data=[summary],
+                metadata=merge_metadata(metadata, {"tags": tags}),
+                modality="text",
+            )
+        )
+    return chunks
 
 
 def extract_data_chunks(

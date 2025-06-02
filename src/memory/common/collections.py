@@ -102,6 +102,7 @@ TEXT_COLLECTIONS = {
 MULTIMODAL_COLLECTIONS = {
     coll for coll, params in ALL_COLLECTIONS.items() if params.get("multimodal")
 }
+OBSERVATION_COLLECTIONS = {"semantic", "temporal"}
 
 TYPES = {
     "doc": ["application/pdf", "application/docx", "application/msword"],

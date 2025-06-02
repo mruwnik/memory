@@ -33,7 +33,6 @@ from memory.common.db.models.source_item import (
     SourceItem,
     Chunk,
     clean_filename,
-    merge_metadata,
     chunk_mixed,
 )
 
@@ -326,27 +325,24 @@ class BookSection(SourceItem):
         }
         return {k: v for k, v in vals.items() if v}
 
-    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = cast(str, self.content.strip())
         if not content:
             return []
 
         if len([p for p in self.pages if p.strip()]) == 1:
-            return [
-                self._make_chunk(
-                    extract.DataChunk(data=[content]), metadata | {"type": "page"}
-                )
-            ]
+            chunks = extract.extract_text(content, metadata={"type": "page"})
+            if len(chunks) > 1:
+                chunks[-1].metadata["type"] = "summary"
+            return chunks
 
         summary, tags = summarizer.summarize(content)
         return [
-            self._make_chunk(
-                extract.DataChunk(data=[content]),
-                merge_metadata(metadata, {"type": "section", "tags": tags}),
+            extract.DataChunk(
+                data=[content], metadata={"type": "section", "tags": tags}
             ),
-            self._make_chunk(
-                extract.DataChunk(data=[summary]),
-                merge_metadata(metadata, {"type": "summary", "tags": tags}),
+            extract.DataChunk(
+                data=[summary], metadata={"type": "summary", "tags": tags}
             ),
         ]
 
@@ -596,7 +592,7 @@ class AgentObservation(SourceItem):
         )
         semantic_chunk = extract.DataChunk(
             data=[semantic_text],
-            metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
+            metadata=extract.merge_metadata(metadata, {"embedding_type": "semantic"}),
             modality="semantic",
         )
 
@@ -609,7 +605,7 @@ class AgentObservation(SourceItem):
         )
         temporal_chunk = extract.DataChunk(
             data=[temporal_text],
-            metadata=merge_metadata(metadata, {"embedding_type": "temporal"}),
+            metadata=extract.merge_metadata(metadata, {"embedding_type": "temporal"}),
             modality="temporal",
         )
 
@@ -617,14 +613,14 @@ class AgentObservation(SourceItem):
             self._make_chunk(
                 extract.DataChunk(
                     data=[i],
-                    metadata=merge_metadata(metadata, {"embedding_type": "semantic"}),
+                    metadata=extract.merge_metadata(
+                        metadata, {"embedding_type": "semantic"}
+                    ),
                     modality="semantic",
                 )
             )
             for i in [
                 self.content,
-                self.subject,
-                self.observation_type,
                 self.evidence.get("quote", ""),
             ]
             if i

@@ -15,14 +15,60 @@ from memory.common.db.connection import make_session
 
 from memory.common import extract
 from memory.common.db.models import AgentObservation
-from memory.api.search import search, SearchFilters
+from memory.api.search.search import search, SearchFilters
 from memory.common.formatters import observation
 from memory.workers.tasks.content_processing import process_content_item
+from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
 
 logger = logging.getLogger(__name__)
 
 # Create MCP server instance
-mcp = FastMCP("memory", stateless=True)
+mcp = FastMCP("memory", stateless_http=True)
+
+
+def filter_observation_source_ids(
+    tags: list[str] | None = None, observation_types: list[str] | None = None
+):
+    if not tags and not observation_types:
+        return None
+
+    with make_session() as session:
+        items_query = session.query(AgentObservation.id)
+
+        if tags:
+            # Use PostgreSQL array overlap operator with proper array casting
+            items_query = items_query.filter(
+                AgentObservation.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
+            )
+        if observation_types:
+            items_query = items_query.filter(
+                AgentObservation.observation_type.in_(observation_types)
+            )
+        source_ids = [item.id for item in items_query.all()]
+
+    return source_ids
+
+
+def filter_source_ids(
+    modalities: set[str],
+    tags: list[str] | None = None,
+):
+    if not tags:
+        return None
+
+    with make_session() as session:
+        items_query = session.query(SourceItem.id)
+
+        if tags:
+            # Use PostgreSQL array overlap operator with proper array casting
+            items_query = items_query.filter(
+                SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
+            )
+        if modalities:
+            items_query = items_query.filter(SourceItem.modality.in_(modalities))
+        source_ids = [item.id for item in items_query.all()]
+
+    return source_ids
 
 
 @mcp.tool()
@@ -48,20 +94,6 @@ async def get_all_tags() -> list[str]:
         - Projects: "project:website-redesign"
         - Contexts: "context:work", "context:late-night"
         - Domains: "domain:finance"
-
-    Example:
-        # Get all tags to ensure consistency
-        tags = await get_all_tags()
-        # Returns: ["ai-safety", "context:work", "functional-programming",
-        #           "machine-learning", "project:thesis", ...]
-
-        # Use to check if a topic has been discussed before
-        if "quantum-computing" in tags:
-            # Search for related observations
-            observations = await search_observations(
-                query="quantum computing",
-                tags=["quantum-computing"]
-            )
     """
     with make_session() as session:
         tags_query = session.query(func.unnest(SourceItem.tags)).distinct()
@@ -93,26 +125,6 @@ async def get_all_subjects() -> list[str]:
         - "ai_beliefs", "ai_safety_beliefs"
         - "learning_preferences"
         - "communication_style"
-
-    Example:
-        # Get all subjects to ensure consistency
-        subjects = await get_all_subjects()
-        # Returns: ["ai_safety_beliefs", "architecture_preferences",
-        #           "programming_philosophy", "work_schedule", ...]
-
-        # Use to check what we know about the user
-        if "programming_style" in subjects:
-            # Get all programming-related observations
-            observations = await search_observations(
-                query="programming",
-                subject="programming_style"
-            )
-
-    Best practices:
-        - Always check existing subjects before creating new ones
-        - Use snake_case for consistency
-        - Be specific but not too granular
-        - Group related observations under same subject
     """
     with make_session() as session:
         return sorted(
@@ -146,20 +158,6 @@ async def get_all_observation_types() -> list[str]:
 
     Returns:
         List of observation types that have actually been used in the system.
-
-    Example:
-        # Check what types of observations exist
-        types = await get_all_observation_types()
-        # Returns: ["behavior", "belief", "contradiction", "preference"]
-
-        # Use to analyze observation distribution
-        for obs_type in types:
-            observations = await search_observations(
-                query="",
-                observation_types=[obs_type],
-                limit=100
-            )
-            print(f"{obs_type}: {len(observations)} observations")
     """
     with make_session() as session:
         return sorted(
@@ -173,7 +171,11 @@ async def get_all_observation_types() -> list[str]:
 
 @mcp.tool()
 async def search_knowledge_base(
-    query: str, previews: bool = False, modalities: list[str] = [], limit: int = 10
+    query: str,
+    previews: bool = False,
+    modalities: set[str] = set(),
+    tags: list[str] = [],
+    limit: int = 10,
 ) -> list[dict]:
     """
     Search through the user's stored knowledge and content.
@@ -283,14 +285,22 @@ async def search_knowledge_base(
     """
     logger.info(f"MCP search for: {query}")
 
+    if not modalities:
+        modalities = set(ALL_COLLECTIONS.keys())
+    modalities = set(modalities) & ALL_COLLECTIONS.keys() - OBSERVATION_COLLECTIONS
+
     upload_data = extract.extract_text(query)
     results = await search(
         upload_data,
         previews=previews,
         modalities=modalities,
         limit=limit,
-        min_text_score=0.3,
-        min_multimodal_score=0.3,
+        min_text_score=0.4,
+        min_multimodal_score=0.25,
+        filters=SearchFilters(
+            tags=tags,
+            source_ids=filter_source_ids(tags=tags, modalities=modalities),
+        ),
     )
 
     # Convert SearchResult objects to dictionaries for MCP
@@ -456,12 +466,13 @@ async def observe(
         mime_type="text/plain",
         sha256=sha256(f"{content}{subject}{observation_type}".encode("utf-8")).digest(),
         inserted_at=datetime.now(timezone.utc),
+        modality="observation",
     )
     try:
         with make_session() as session:
             process_content_item(observation, session)
 
-            if not observation.id:
+            if not cast(int | None, observation.id):
                 raise ValueError("Observation not created")
 
             logger.info(
@@ -600,24 +611,6 @@ async def search_observations(
         - Higher confidence observations are more reliable
         - Recent observations may override older ones on same topic
     """
-    source_ids = None
-    if tags or observation_types:
-        with make_session() as session:
-            items_query = session.query(AgentObservation.id)
-
-            if tags:
-                # Use PostgreSQL array overlap operator with proper array casting
-                items_query = items_query.filter(
-                    AgentObservation.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
-                )
-            if observation_types:
-                items_query = items_query.filter(
-                    AgentObservation.observation_type.in_(observation_types)
-                )
-            source_ids = [item.id for item in items_query.all()]
-            if not source_ids:
-                return []
-
     semantic_text = observation.generate_semantic_text(
         subject=subject or "",
         observation_type="".join(observation_types or []),
@@ -637,18 +630,24 @@ async def search_observations(
             extract.DataChunk(data=[temporal]),
         ],
         previews=True,
-        modalities=["semantic", "temporal"],
+        modalities={"semantic", "temporal"},
         limit=limit,
-        min_text_score=0.8,
         filters=SearchFilters(
             subject=subject,
             confidence=min_confidence,
             tags=tags,
             observation_types=observation_types,
-            source_ids=source_ids,
+            source_ids=filter_observation_source_ids(tags=tags),
         ),
+        timeout=2,
     )
 
     return [
-        cast(dict, cast(dict, result.model_dump()).get("content")) for result in results
+        {
+            "content": r.content,
+            "tags": r.tags,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "metadata": r.metadata,
+        }
+        for r in results
     ]

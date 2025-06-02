@@ -38,6 +38,7 @@ from memory.workers.tasks.maintenance import (
     CLEAN_COLLECTION,
     REINGEST_CHUNK,
     REINGEST_EMPTY_SOURCE_ITEMS,
+    REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     REINGEST_ITEM,
     REINGEST_MISSING_CHUNKS,
     UPDATE_METADATA_FOR_ITEM,
@@ -67,6 +68,7 @@ TASK_MAPPINGS = {
         "reingest_chunk": REINGEST_CHUNK,
         "reingest_item": REINGEST_ITEM,
         "reingest_empty_source_items": REINGEST_EMPTY_SOURCE_ITEMS,
+        "reingest_all_empty_source_items": REINGEST_ALL_EMPTY_SOURCE_ITEMS,
         "update_metadata_for_item": UPDATE_METADATA_FOR_ITEM,
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
     },
@@ -314,6 +316,13 @@ def maintenance_update_metadata_for_source_items(ctx, item_type):
 def maintenance_reingest_empty_source_items(ctx, item_type):
     """Reingest empty source items."""
     execute_task(ctx, "maintenance", "reingest_empty_source_items", item_type=item_type)
+
+
+@maintenance.command("reingest-all-empty-source-items")
+@click.pass_context
+def maintenance_reingest_all_empty_source_items(ctx):
+    """Reingest all empty source items."""
+    execute_task(ctx, "maintenance", "reingest_all_empty_source_items")
 
 
 @maintenance.command("reingest-chunk")

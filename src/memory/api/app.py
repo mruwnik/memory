@@ -3,6 +3,7 @@ FastAPI application for the knowledge base.
 """
 
 import contextlib
+import os
 import pathlib
 import logging
 from typing import Annotated, Optional
@@ -105,12 +106,16 @@ def get_file_by_path(path: str):
     return FileResponse(path=file_path, filename=file_path.name)
 
 
-def main():
+def main(reload: bool = False):
     """Run the FastAPI server in debug mode with auto-reloading."""
     import uvicorn
 
     uvicorn.run(
-        "memory.api.app:app", host="0.0.0.0", port=8000, reload=True, log_level="debug"
+        "memory.api.app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=reload,
+        log_level="debug",
     )
 
 
@@ -118,4 +123,4 @@ if __name__ == "__main__":
     from memory.common.qdrant import setup_qdrant
 
     setup_qdrant()
-    main()
+    main(os.getenv("RELOAD", "false") == "true")

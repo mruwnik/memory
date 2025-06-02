@@ -3,7 +3,7 @@ from typing import Any, cast, Generator, Sequence
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
-from qdrant_client.http.exceptions import UnexpectedResponse
+from qdrant_client.http.exceptions import UnexpectedResponse, ApiException
 from memory.common import settings
 from memory.common.collections import ALL_COLLECTIONS, Collection, DistanceType, Vector
 
@@ -193,14 +193,18 @@ def delete_points(
         collection_name: Name of the collection
         ids: List of vector IDs to delete
     """
-    client.delete(
-        collection_name=collection_name,
-        points_selector=qdrant_models.PointIdsList(
-            points=ids,  # type: ignore
-        ),
-    )
+    try:
+        client.delete(
+            collection_name=collection_name,
+            points_selector=qdrant_models.PointIdsList(
+                points=ids,  # type: ignore
+            ),
+        )
 
-    logger.debug(f"Deleted {len(ids)} vectors from {collection_name}")
+        logger.debug(f"Deleted {len(ids)} vectors from {collection_name}")
+    except (ApiException, UnexpectedResponse) as e:
+        logger.error(f"Error deleting points from {collection_name}: {e}")
+        raise IOError(f"Error deleting points from {collection_name}: {e}")
 
 
 def get_collection_info(

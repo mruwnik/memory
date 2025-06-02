@@ -60,6 +60,7 @@ def section_processor(
                 end_page=section.end_page,
                 parent_section_id=None,  # Will be set after flush
                 content=content,
+                filename=book.file_path,
                 size=len(content),
                 mime_type="text/plain",
                 sha256=create_content_hash(

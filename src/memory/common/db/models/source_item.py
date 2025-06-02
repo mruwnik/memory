@@ -84,7 +84,7 @@ def clean_filename(filename: str) -> str:
 
 def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
-        if not image.filename:  # type: ignore
+        if not getattr(image, "filename", None):  # type: ignore
             filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}_{i}.{image.format}"  # type: ignore
             image.save(filename)
             image.filename = str(filename)  # type: ignore
@@ -98,16 +98,6 @@ def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalCh
         for i in images
         if getattr(i, "filename", None) and i.filename in chunk  # type: ignore
     ]
-
-
-def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:
-    final = {}
-    for m in metadata:
-        data = m.copy()
-        if tags := set(data.pop("tags", [])):
-            final["tags"] = tags | final.get("tags", set())
-        final |= data
-    return final
 
 
 def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataChunk]:
@@ -241,14 +231,11 @@ class SourceItem(Base):
         return [chunk.id for chunk in self.chunks]
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        chunks: list[extract.DataChunk] = []
         content = cast(str | None, self.content)
         if content:
-            chunks = [extract.DataChunk(data=[c]) for c in chunker.chunk_text(content)]
-
-        if content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
-            summary, tags = summarizer.summarize(content)
-            chunks.append(extract.DataChunk(data=[summary], metadata={"tags": tags}))
+            chunks = extract.extract_text(content)
+        else:
+            chunks = []
 
         mime_type = cast(str | None, self.mime_type)
         if mime_type and mime_type.startswith("image/"):
@@ -272,12 +259,14 @@ class SourceItem(Base):
             file_paths=image_names,
             collection_name=modality,
             embedding_model=collections.collection_model(modality, text, images),
-            item_metadata=merge_metadata(self.as_payload(), data.metadata, metadata),
+            item_metadata=extract.merge_metadata(
+                self.as_payload(), data.metadata, metadata
+            ),
         )
         return chunk
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
-        return [self._make_chunk(data) for data in self._chunk_contents()]
+        return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
 
     def as_payload(self) -> dict:
         return {
@@ -291,4 +280,7 @@ class SourceItem(Base):
         return {
             "tags": self.tags,
             "size": self.size,
+            "content": self.content,
+            "filename": self.filename,
+            "mime_type": self.mime_type,
         }
