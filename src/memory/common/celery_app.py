@@ -14,6 +14,7 @@ OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
+SETUP_GIT_NOTES = f"{NOTES_ROOT}.setup_git_notes"
 SYNC_OBSERVATION = f"{OBSERVATIONS_ROOT}.sync_observation"
 SYNC_ALL_COMICS = f"{COMIC_ROOT}.sync_all_comics"
 SYNC_SMBC = f"{COMIC_ROOT}.sync_smbc"

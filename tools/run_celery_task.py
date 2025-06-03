@@ -23,6 +23,7 @@ from typing import Any
 
 import click
 from celery import Celery
+from memory.common import settings
 from memory.common.celery_app import (
     SYNC_ALL_ARTICLE_FEEDS,
     SYNC_ARTICLE_FEED,
@@ -47,6 +48,7 @@ from memory.common.celery_app import (
     REINGEST_MISSING_CHUNKS,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
+    SETUP_GIT_NOTES,
     app,
 )
 
@@ -87,6 +89,9 @@ TASK_MAPPINGS = {
         "sync_lesswrong": SYNC_LESSWRONG,
         "sync_lesswrong_post": SYNC_LESSWRONG_POST,
     },
+    "notes": {
+        "setup_git_notes": SETUP_GIT_NOTES,
+    },
 }
 QUEUE_MAPPINGS = {
     "email": "email",
@@ -106,7 +111,9 @@ def run_task(app: Celery, category: str, task_name: str, **kwargs) -> str:
     task_path = TASK_MAPPINGS[category][task_name]
     queue_name = QUEUE_MAPPINGS.get(category) or category
 
-    result = app.send_task(task_path, kwargs=kwargs, queue=queue_name)
+    result = app.send_task(
+        task_path, kwargs=kwargs, queue=f"{settings.CELERY_QUEUE_PREFIX}-{queue_name}"
+    )
     return result.id
 
 
@@ -222,6 +229,23 @@ def ebook(ctx):
 def ebook_sync_book(ctx, file_path, tags):
     """Sync an ebook."""
     execute_task(ctx, "ebook", "sync_book", file_path=file_path, tags=tags)
+
+
+@cli.group()
+@click.pass_context
+def notes(ctx):
+    """Notes-related tasks."""
+    pass
+
+
+@notes.command("setup-git-notes")
+@click.option("--origin", required=True, help="Git origin")
+@click.option("--email", required=True, help="Git email")
+@click.option("--name", required=True, help="Git name")
+@click.pass_context
+def notes_setup_git_notes(ctx, origin, email, name):
+    """Setup git notes."""
+    execute_task(ctx, "notes", "setup_git_notes", origin=origin, email=email, name=name)
 
 
 @cli.group()

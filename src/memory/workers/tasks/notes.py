@@ -7,7 +7,7 @@ import shlex
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
-from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES
+from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES, SETUP_GIT_NOTES
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -19,15 +19,14 @@ from memory.workers.tasks.content_processing import (
 logger = logging.getLogger(__name__)
 
 
-def git_command(repo_root: pathlib.Path, *args: str):
-    if not (repo_root / ".git").exists():
+def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
+    if not (repo_root / ".git").exists() and not force:
         return
 
     # Properly escape arguments for shell execution
     escaped_args = [shlex.quote(arg) for arg in args]
     cmd = f"git -C {shlex.quote(repo_root.as_posix())} {' '.join(escaped_args)}"
 
-    logger.info(f"Running git command: {cmd}")
     res = subprocess.run(
         cmd,
         shell=True,
@@ -131,3 +130,21 @@ def sync_notes(folder: str):
         "notes_num": len(all_files),
         "new_notes": new_notes,
     }
+
+
+@app.task(name=SETUP_GIT_NOTES)
+@safe_task_execution
+def setup_git_notes(origin: str, email: str, name: str):
+    logger.info(f"Setting up git notes in {origin}")
+    if (settings.NOTES_STORAGE_DIR / ".git").exists():
+        logger.info("Git notes already setup")
+        return {"status": "already_setup"}
+
+    git_command(settings.NOTES_STORAGE_DIR, "init", "-b", "main", force=True)
+    git_command(settings.NOTES_STORAGE_DIR, "config", "user.email", email)
+    git_command(settings.NOTES_STORAGE_DIR, "config", "user.name", name)
+    git_command(settings.NOTES_STORAGE_DIR, "remote", "add", "origin", origin)
+    git_command(settings.NOTES_STORAGE_DIR, "add", ".")
+    git_command(settings.NOTES_STORAGE_DIR, "commit", "-m", "Initial commit")
+    git_command(settings.NOTES_STORAGE_DIR, "push", "-u", "origin", "main")
+    return {"status": "success"}

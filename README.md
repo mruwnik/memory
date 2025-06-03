@@ -54,6 +54,8 @@ The API will be available at `http://localhost:8000`
 The is also an admin interface at `http://localhost:8000/admin` where you can see what the database
 contains.
 
+Because of how MCP can't yet handle basic auth,
+
 ## User Management
 
 ### Create a User
@@ -65,6 +67,18 @@ pip install -e ".[all]"
 # Create a new user
 python tools/add_user.py --email user@example.com --password yourpassword --name "Your Name"
 ```
+
+### Notes synchronisation
+
+You can set up notes to be automatically pushed to a git repo whenever they are modified.
+Run the following job to do so:
+
+```bash
+python tools/run_celery_task.py notes setup-git-notes --origin ssh://git@github.com/some/repo.git --email bla@ble.com --name <user to send commits>
+```
+
+For this to work you need to make sure you have set up the ssh keys in `secrets` (see the README.md
+in that folder), and you will need to add the public key that is generated there to your git server.
 
 ### Authentication
 
