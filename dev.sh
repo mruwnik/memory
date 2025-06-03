@@ -16,15 +16,48 @@ cd "$SCRIPT_DIR"
 docker volume create memory_file_storage
 docker run --rm -v memory_file_storage:/data busybox chown -R 1000:1000 /data
 
+POSTGRES_PASSWORD=543218ZrHw8Pxbs3YXzaVHq8YKVHwCj6Pz8RQkl8
+echo $POSTGRES_PASSWORD > secrets/postgres_password.txt
+
 # Create a temporary docker-compose override file to expose PostgreSQL
 echo -e "${YELLOW}Creating docker-compose override to expose PostgreSQL...${NC}"
 if [ ! -f docker-compose.override.yml ]; then
     cat > docker-compose.override.yml << EOL
 version: "3.9"
 services:
+  qdrant:
+    ports:
+      - "6333:6333"
+
   postgres:
     ports:
-      - "5432:5432"
+      # PostgreSQL port for local Celery result backend
+      - "15432:5432"
+
+  rabbitmq:
+    ports:
+      # UI only on localhost
+      - "15672:15672"
+      # AMQP port for local Celery clients (for local workers)
+      - "15673:5672"
+EOL
+fi
+
+if [ ! -f .env ]; then
+    echo $POSTGRES_PASSWORD > .env
+    cat >> .env << EOL
+CELERY_BROKER_PASSWORD=543218ZrHw8Pxbs3YXzaVHq8YKVHwCj6Pz8RQkl8
+
+RABBITMQ_HOST=localhost
+QDRANT_HOST=localhost
+DB_HOST=localhost
+
+VOYAGE_API_KEY=
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+
+DB_PORT=15432
+RABBITMQ_PORT=15673
 EOL
 fi
 

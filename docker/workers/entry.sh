@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+QUEUE_PREFIX=${QUEUE_PREFIX:-memory}
 QUEUES=${QUEUES:-default}
+QUEUES=$(IFS=,; echo "${QUEUES}" | tr ',' '\n' | sed "s/^/${QUEUE_PREFIX}-/" | paste -sd, -)
 CONCURRENCY=${CONCURRENCY:-2}
 LOGLEVEL=${LOGLEVEL:-INFO}
 

@@ -5,17 +5,16 @@ WORKDIR /app
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     libpq-dev gcc supervisor && \
-    pip install -e ".[workers]" && \
     apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-*.txt ./
-RUN pip install --no-cache-dir -r requirements-common.txt
-RUN pip install --no-cache-dir -r requirements-parsers.txt
-RUN pip install --no-cache-dir -r requirements-workers.txt
-
 # Copy requirements files and setup
+COPY requirements ./requirements/
 COPY setup.py ./
+RUN mkdir src
+RUN pip install -e ".[common]"
+
 COPY src/ ./src/
+RUN pip install -e ".[common]"
 
 # Create and copy entrypoint script
 COPY docker/workers/entry.sh ./entry.sh

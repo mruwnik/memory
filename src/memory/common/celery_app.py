@@ -1,4 +1,5 @@
 from celery import Celery
+from kombu.utils.url import safequote
 from memory.common import settings
 
 EMAIL_ROOT = "memory.workers.tasks.email"
@@ -41,13 +42,17 @@ SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
 SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
 
-def rabbit_url() -> str:
-    return f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}@{settings.RABBITMQ_HOST}:{settings.RABBITMQ_PORT}//"
+def get_broker_url() -> str:
+    protocol = settings.CELERY_BROKER_TYPE
+    user = safequote(settings.CELERY_BROKER_USER)
+    password = safequote(settings.CELERY_BROKER_PASSWORD)
+    host = settings.CELERY_BROKER_HOST
+    return f"{protocol}://{user}:{password}@{host}"
 
 
 app = Celery(
     "memory",
-    broker=rabbit_url(),
+    broker=get_broker_url(),
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
@@ -59,20 +64,22 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_routes={
-        f"{EMAIL_ROOT}.*": {"queue": "email"},
-        f"{PHOTO_ROOT}.*": {"queue": "photo_embed"},
-        f"{COMIC_ROOT}.*": {"queue": "comic"},
-        f"{EBOOK_ROOT}.*": {"queue": "ebooks"},
-        f"{BLOGS_ROOT}.*": {"queue": "blogs"},
-        f"{FORUMS_ROOT}.*": {"queue": "forums"},
-        f"{MAINTENANCE_ROOT}.*": {"queue": "maintenance"},
-        f"{NOTES_ROOT}.*": {"queue": "notes"},
-        f"{OBSERVATIONS_ROOT}.*": {"queue": "notes"},
+        f"{EMAIL_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-email"},
+        f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photo-embed"},
+        f"{COMIC_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-comic"},
+        f"{EBOOK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-ebooks"},
+        f"{BLOGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-blogs"},
+        f"{FORUMS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-forums"},
+        f"{MAINTENANCE_ROOT}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
+        },
+        f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
+        f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
     },
 )
 
 
-@app.on_after_configure.connect  # type: ignore
+@app.on_after_configure.connect  # type: ignore[attr-defined]
 def ensure_qdrant_initialised(sender, **_):
     from memory.common import qdrant
 

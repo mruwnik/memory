@@ -8,16 +8,30 @@ import pathlib
 import logging
 from typing import Annotated, Optional
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Query, Form
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    File,
+    UploadFile,
+    Query,
+    Form,
+    Depends,
+)
 from fastapi.responses import FileResponse
 from sqladmin import Admin
 
 from memory.common import settings
 from memory.common import extract
 from memory.common.db.connection import get_engine
+from memory.common.db.models import User
 from memory.api.admin import setup_admin
 from memory.api.search import search, SearchResult
 from memory.api.MCP.tools import mcp
+from memory.api.auth import (
+    router as auth_router,
+    get_current_user,
+    AuthenticationMiddleware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +49,10 @@ app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
 engine = get_engine()
 admin = Admin(app, engine)
 setup_admin(admin)
+
+# Include auth router
+app.add_middleware(AuthenticationMiddleware)
+app.include_router(auth_router)
 app.mount("/", mcp.streamable_http_app())
 
 
@@ -63,6 +81,7 @@ async def search_endpoint(
     limit: int = Query(10, ge=1, le=100),
     min_text_score: float = Query(0.3, ge=0.0, le=1.0),
     min_multimodal_score: float = Query(0.3, ge=0.0, le=1.0),
+    current_user: User = Depends(get_current_user),
 ):
     """Search endpoint - delegates to search module"""
     upload_data = [
@@ -74,7 +93,7 @@ async def search_endpoint(
     return await search(
         upload_data,
         previews=previews,
-        modalities=modalities,
+        modalities=set(modalities),
         limit=limit,
         min_text_score=min_text_score,
         min_multimodal_score=min_multimodal_score,
@@ -82,7 +101,7 @@ async def search_endpoint(
 
 
 @app.get("/files/{path:path}")
-def get_file_by_path(path: str):
+def get_file_by_path(path: str, current_user: User = Depends(get_current_user)):
     """
     Fetch a file by its path
 

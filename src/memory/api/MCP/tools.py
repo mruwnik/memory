@@ -182,6 +182,24 @@ async def observe(
     Use proactively when user expresses preferences, behaviors, beliefs, or contradictions.
     Be specific and detailed - observations should make sense months later.
 
+    Example call:
+    ```
+    {
+        "observations": [
+            {
+                "content": "The user is a software engineer.",
+                "subject": "user",
+                "observation_type": "belief",
+                "confidences": {"observation_accuracy": 0.9},
+                "evidence": {"quote": "I am a software engineer.", "context": "I work at Google."},
+                "tags": ["programming", "work"]
+            }
+        ],
+        "session_id": "123e4567-e89b-12d3-a456-426614174000",
+        "agent_model": "gpt-4o"
+    }
+    ```
+
     RawObservation fields:
         content (required): Detailed observation text explaining what you observed
         subject (required): Consistent identifier like "programming_style", "work_habits"
@@ -200,7 +218,7 @@ async def observe(
             observation,
             celery_app.send_task(
                 SYNC_OBSERVATION,
-                queue="notes",
+                queue=f"{settings.CELERY_QUEUE_PREFIX}-notes",
                 kwargs={
                     "subject": observation.subject,
                     "content": observation.content,
@@ -323,7 +341,7 @@ async def create_note(
     try:
         task = celery_app.send_task(
             SYNC_NOTE,
-            queue="notes",
+            queue=f"{settings.CELERY_QUEUE_PREFIX}-notes",
             kwargs={
                 "subject": subject,
                 "content": content,

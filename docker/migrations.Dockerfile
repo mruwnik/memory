@@ -2,23 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy requirements files and setup
 COPY requirements ./requirements/
-RUN mkdir src
 COPY setup.py ./
-# Do an initial install to get the dependencies cached
-RUN pip install -e ".[api]"
+RUN mkdir src
+RUN pip install -e ".[common]"
 
 # Install the package with common dependencies
 COPY src/ ./src/
-RUN pip install -e ".[api]"
+RUN pip install -e ".[common]"
 
 # Run as non-root user
 RUN useradd -m appuser
@@ -32,8 +24,5 @@ RUN mkdir -p /var/cache/fontconfig /home/kb/.cache/fontconfig && \
 
 USER kb
 
-# Set environment variables
-ENV PORT=8000
-EXPOSE 8000
-
-CMD ["uvicorn", "memory.api.app:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Run the migrations
+CMD ["alembic", "-c", "/app/db/migrations/alembic.ini", "upgrade", "head"] 

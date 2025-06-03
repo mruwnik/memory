@@ -13,13 +13,12 @@ RUN apt-get update && apt-get install -y \
     # libreoffice-writer \
     && apt-get purge -y gcc && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-*.txt ./
-RUN pip install --no-cache-dir -r requirements-common.txt
-RUN pip install --no-cache-dir -r requirements-parsers.txt
-RUN pip install --no-cache-dir -r requirements-workers.txt
+COPY requirements ./requirements/
+COPY setup.py ./
+RUN mkdir src
+RUN pip install -e ".[common]"
 
 # Install Python dependencies
-COPY setup.py ./
 COPY src/ ./src/
 RUN pip install -e ".[workers]"
 

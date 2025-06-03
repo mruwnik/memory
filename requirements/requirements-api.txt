@@ -2,6 +2,6 @@ fastapi==0.112.2
 uvicorn==0.29.0
 python-jose==3.3.0
 python-multipart==0.0.9
-sqladmin 
+sqladmin==0.20.1
 mcp==1.9.2
 bm25s[full]==0.2.13

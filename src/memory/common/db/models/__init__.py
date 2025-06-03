@@ -32,6 +32,10 @@ from memory.common.db.models.sources import (
     ArticleFeed,
     EmailAccount,
 )
+from memory.common.db.models.users import (
+    User,
+    UserSession,
+)
 
 __all__ = [
     "Base",
@@ -62,4 +66,7 @@ __all__ = [
     "Book",
     "ArticleFeed",
     "EmailAccount",
+    # Users
+    "User",
+    "UserSession",
 ]

@@ -4,7 +4,7 @@ from setuptools import setup, find_namespace_packages
 
 def read_requirements(filename: str) -> list[str]:
     """Read requirements from file, ignoring comments and -r directives."""
-    path = pathlib.Path(filename)
+    path = pathlib.Path(__file__).parent / "requirements" / filename
     return [
         line.strip()
         for line in path.read_text().splitlines()
@@ -16,7 +16,6 @@ def read_requirements(filename: str) -> list[str]:
 common_requires = read_requirements("requirements-common.txt")
 parsers_requires = read_requirements("requirements-parsers.txt")
 api_requires = read_requirements("requirements-api.txt")
-workers_requires = read_requirements("requirements-workers.txt")
 dev_requires = read_requirements("requirements-dev.txt")
 
 setup(
@@ -26,14 +25,9 @@ setup(
     packages=find_namespace_packages(where="src"),
     python_requires=">=3.10",
     extras_require={
-        "api": api_requires + common_requires,
-        "workers": workers_requires + common_requires + parsers_requires,
-        "common": common_requires,
+        "api": api_requires + common_requires + parsers_requires,
+        "common": common_requires + parsers_requires,
         "dev": dev_requires,
-        "all": api_requires
-        + workers_requires
-        + common_requires
-        + dev_requires
-        + parsers_requires,
+        "all": api_requires + common_requires + dev_requires + parsers_requires,
     },
 )

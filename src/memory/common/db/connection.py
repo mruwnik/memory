@@ -3,8 +3,9 @@ Database connection utilities.
 """
 
 from contextlib import contextmanager
+from typing import Generator
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker, scoped_session, Session
 
 from memory.common import settings
 
@@ -23,9 +24,17 @@ def get_session_factory():
 
 def get_scoped_session():
     """Create a thread-local scoped session factory"""
-    engine = get_engine()
-    session_factory = sessionmaker(bind=engine)
-    return scoped_session(session_factory)
+    return scoped_session(get_session_factory())
+
+
+def get_session() -> Generator[Session, None, None]:
+    """FastAPI dependency for database sessions"""
+    session_factory = get_session_factory()
+    session = session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 @contextmanager

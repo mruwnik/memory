@@ -29,11 +29,18 @@ def make_db_url(
 
 DB_URL = os.getenv("DATABASE_URL", make_db_url())
 
-# Celery settings
-RABBITMQ_USER = os.getenv("RABBITMQ_USER", "kb")
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "kb")
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
+
+# Broker settings
+CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", "memory")
+CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "amqp").lower()  # amqp or sqs
+CELERY_BROKER_USER = os.getenv("CELERY_BROKER_USER", "kb")
+CELERY_BROKER_PASSWORD = os.getenv("CELERY_BROKER_PASSWORD", "kb")
+
+CELERY_BROKER_HOST = os.getenv("CELERY_BROKER_HOST", "")
+if not CELERY_BROKER_HOST and CELERY_BROKER_TYPE == "amqp":
+    RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+    RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
+    CELERY_BROKER_HOST = f"{RABBITMQ_HOST}:{RABBITMQ_PORT}//"
 
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
 
@@ -122,3 +129,12 @@ if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
 else:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240307")
+
+# API settings
+HTTPS = boolean_env("HTTPS", False)
+SESSION_HEADER_NAME = os.getenv("SESSION_HEADER_NAME", "X-Session-ID")
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
+SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
+SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
+
+REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False) or True

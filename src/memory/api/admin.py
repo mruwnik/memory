@@ -20,6 +20,7 @@ from memory.common.db.models import (
     ForumPost,
     AgentObservation,
     Note,
+    User,
 )
 
 
@@ -207,6 +208,15 @@ class NoteAdmin(ModelView, model=Note):
     column_sortable_list = ["inserted_at"]
 
 
+class UserAdmin(ModelView, model=User):
+    column_list = [
+        "id",
+        "email",
+        "name",
+        "created_at",
+    ]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance."""
     admin.add_view(SourceItemAdmin)
@@ -224,3 +234,4 @@ def setup_admin(admin: Admin):
     admin.add_view(ForumPostAdmin)
     admin.add_view(ComicAdmin)
     admin.add_view(PhotoAdmin)
+    admin.add_view(UserAdmin)

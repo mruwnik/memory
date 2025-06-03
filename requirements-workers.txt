@@ -1,5 +1,0 @@
-openai==1.25.0
-pillow==10.4.0
-pypandoc==1.15.0
-beautifulsoup4==4.13.4
-feedparser==6.0.10
