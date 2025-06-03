@@ -76,6 +76,7 @@ async def proxy_request(request: Request) -> Response:
     # Get request body
     body = await request.body()
     headers = dict(request.headers)
+    headers.pop("host", None)
 
     async with httpx.AsyncClient() as client:
         try:
@@ -88,12 +89,13 @@ async def proxy_request(request: Request) -> Response:
             )
 
             # Forward response
-            return Response(
+            resp = Response(
                 content=response.content,
                 status_code=response.status_code,
                 headers=dict(response.headers),
                 media_type=response.headers.get("content-type"),
             )
+            return resp
 
         except httpx.RequestError as e:
             print(f"Request failed: {e}")

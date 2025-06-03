@@ -83,8 +83,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    mem_limit: 4g
-    cpus: "1.5"
     security_opt: [ "no-new-privileges=true" ]
 
   migrate:
@@ -117,8 +115,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    mem_limit: 512m
-    cpus: "0.5"
     security_opt: [ "no-new-privileges=true" ]
 
   qdrant:
@@ -136,8 +132,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    mem_limit: 4g
-    cpus: "2"
     security_opt: [ "no-new-privileges=true" ]
     cap_drop: [ ALL ]
 
@@ -161,8 +155,6 @@ services:
       retries: 5
     ports:
       - "8000:8000"
-    mem_limit: 768m
-    cpus: "1"
 
   proxy:
     build:
@@ -181,8 +173,6 @@ services:
       - ./tools:/app/tools:ro
     ports:
       - "8001:8001"
-    mem_limit: 256m
-    cpus: "0.5"
 
   # ------------------------------------------------------------ Celery workers
   worker:

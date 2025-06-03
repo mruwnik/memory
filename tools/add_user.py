@@ -13,7 +13,9 @@ if __name__ == "__main__":
     args = args.parse_args()
 
     with make_session() as session:
-        user = User(email=args.email, password=args.password, name=args.name)
+        user = User.create_with_password(
+            email=args.email, password=args.password, name=args.name
+        )
         session.add(user)
         session.commit()
 
