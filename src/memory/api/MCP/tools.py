@@ -291,7 +291,7 @@ async def observe(
     content: str,
     subject: str,
     observation_type: str = "general",
-    confidence: float = 0.8,
+    confidences: dict[str, float] = {},
     evidence: dict | None = None,
     tags: list[str] | None = None,
     session_id: str | None = None,
@@ -345,12 +345,16 @@ async def observe(
             - "contradiction": An inconsistency with previous observations
             - "general": Doesn't fit other categories
 
-        confidence: How certain you are (0.0-1.0):
+        confidences: How certain you are (0.0-1.0) in a given aspect of the observation:
             - 1.0: User explicitly stated this
             - 0.9: Strongly implied or demonstrated repeatedly
             - 0.8: Inferred with high confidence (default)
             - 0.7: Probable but with some uncertainty
             - 0.6 or below: Speculative, use sparingly
+            Provided as a mapping of <aspect>: <confidence>
+            Examples:
+            - {"observation_accuracy": 0.95}
+            - {"observation_accuracy": 0.8, "interpretation": 0.5}
 
         evidence: Supporting context as a dict. Include relevant details:
             - "quote": Exact words from the user
@@ -392,7 +396,7 @@ async def observe(
                     "of all evil'. They prioritize code purity over performance.",
             subject="programming_philosophy",
             observation_type="belief",
-            confidence=0.95,
+            confidences={"observation_accuracy": 0.95},
             evidence={
                 "quote": "State is the root of all evil in programming",
                 "context": "Discussing why they chose Haskell for their project"
@@ -408,7 +412,7 @@ async def observe(
                     "typically between 11pm and 3am, claiming better focus",
             subject="work_schedule",
             observation_type="behavior",
-            confidence=0.85,
+            confidences={"observation_accuracy": 0.85},
             evidence={
                 "context": "Mentioned across multiple conversations over 2 weeks"
             },
@@ -422,7 +426,7 @@ async def observe(
                     "previously argued strongly for monoliths in similar contexts",
             subject="architecture_preferences",
             observation_type="contradiction",
-            confidence=0.9,
+            confidences={"observation_accuracy": 0.9},
             evidence={
                 "quote": "Microservices are definitely the way to go",
                 "context": "Designing a new system similar to one from 3 months ago"
@@ -438,7 +442,7 @@ async def observe(
             "subject": subject,
             "content": content,
             "observation_type": observation_type,
-            "confidence": confidence,
+            "confidences": confidences,
             "evidence": evidence,
             "tags": tags,
             "session_id": session_id,
@@ -457,7 +461,7 @@ async def search_observations(
     subject: str = "",
     tags: list[str] | None = None,
     observation_types: list[str] | None = None,
-    min_confidence: float = 0.5,
+    min_confidences: dict[str, float] = {},
     limit: int = 10,
 ) -> list[dict]:
     """
@@ -477,12 +481,6 @@ async def search_observations(
         - To find related observations on a topic
         - To build context about the user's expertise or interests
         - Whenever personalization would improve your response
-
-    How it works:
-        Uses hybrid search combining semantic similarity with keyword matching.
-        Searches across multiple embedding spaces (semantic meaning and temporal
-        context) to find relevant observations from different angles. This approach
-        ensures you find both conceptually related and specifically mentioned items.
 
     Args:
         query: Natural language description of what you're looking for. The search
@@ -513,10 +511,9 @@ async def search_observations(
             - "general": Other observations
             Leave as None to search all types.
 
-        min_confidence: Only return observations with confidence >= this value.
-            - Use 0.8+ for high-confidence facts
-            - Use 0.5-0.7 to include inferred observations
-            - Default 0.5 includes most observations
+        min_confidences: Only return observations with confidence >= this value, e.g.
+        {"observation_accuracy": 0.8, "interpretation": 0.5} facts where you were confident
+        that you observed the fact but are not necessarily sure about the interpretation.
             Range: 0.0 to 1.0
 
         limit: Maximum results to return (1-100). Default 10. Increase when you
@@ -579,7 +576,6 @@ async def search_observations(
     temporal = observation.generate_temporal_text(
         subject=subject or "",
         content=query,
-        confidence=0,
         created_at=datetime.now(timezone.utc),
     )
     results = await search(
@@ -593,7 +589,7 @@ async def search_observations(
         limit=limit,
         filters=SearchFilters(
             subject=subject,
-            confidence=min_confidence,
+            min_confidences=min_confidences,
             tags=tags,
             observation_types=observation_types,
             source_ids=filter_observation_source_ids(tags=tags),

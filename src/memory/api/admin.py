@@ -188,6 +188,8 @@ class AgentObservationAdmin(ModelView, model=AgentObservation):
         "inserted_at",
     ]
     column_searchable_list = ["subject", "observation_type"]
+    column_default_sort = [("inserted_at", True)]
+    column_sortable_list = ["inserted_at"]
 
 
 class NoteAdmin(ModelView, model=Note):
@@ -201,6 +203,8 @@ class NoteAdmin(ModelView, model=Note):
         "inserted_at",
     ]
     column_searchable_list = ["subject", "content"]
+    column_default_sort = [("inserted_at", True)]
+    column_sortable_list = ["inserted_at"]
 
 
 def setup_admin(admin: Admin):

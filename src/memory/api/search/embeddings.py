@@ -111,15 +111,26 @@ async def search_embeddings(
     - filters: Filters to apply to the search results
     - multimodal: Whether to search in multimodal collections
     """
-    query_filters = {}
-    if confidence := filters.get("confidence"):
-        query_filters["must"] += [{"key": "confidence", "range": {"gte": confidence}}]
-    if tags := filters.get("tags"):
-        query_filters["must"] += [{"key": "tags", "match": {"any": tags}}]
-    if observation_types := filters.get("observation_types"):
-        query_filters["must"] += [
-            {"key": "observation_type", "match": {"any": observation_types}}
+    query_filters = {"must": []}
+
+    # Handle structured confidence filtering
+    if min_confidences := filters.get("min_confidences"):
+        confidence_filters = [
+            {
+                "key": f"confidence.{confidence_type}",
+                "range": {"gte": min_confidence_score},
+            }
+            for confidence_type, min_confidence_score in min_confidences.items()
         ]
+        query_filters["must"].extend(confidence_filters)
+
+    if tags := filters.get("tags"):
+        query_filters["must"].append({"key": "tags", "match": {"any": tags}})
+
+    if observation_types := filters.get("observation_types"):
+        query_filters["must"].append(
+            {"key": "observation_type", "match": {"any": observation_types}}
+        )
 
     client = qdrant.get_qdrant_client()
     results = query_chunks(
@@ -129,7 +140,7 @@ async def search_embeddings(
         embedding.embed_text if not multimodal else embedding.embed_mixed,
         min_score=min_score,
         limit=limit,
-        filters=query_filters,
+        filters=query_filters if query_filters["must"] else None,
     )
     search_results = {k: results.get(k, []) for k in modalities}
 

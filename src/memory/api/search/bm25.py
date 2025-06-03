@@ -10,7 +10,7 @@ import Stemmer
 from memory.api.search.utils import SourceData, AnnotatedChunk, SearchFilters
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk
+from memory.common.db.models import Chunk, ConfidenceScore
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,24 @@ async def search_bm25(
         items_query = db.query(Chunk.id, Chunk.content).filter(
             Chunk.collection_name.in_(modalities)
         )
+
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))
+
+        # Add confidence filtering if specified
+        if min_confidences := filters.get("min_confidences"):
+            for confidence_type, min_score in min_confidences.items():
+                items_query = items_query.join(
+                    ConfidenceScore,
+                    (ConfidenceScore.source_item_id == Chunk.source_id)
+                    & (ConfidenceScore.confidence_type == confidence_type)
+                    & (ConfidenceScore.score >= min_score),
+                )
+
         items = items_query.all()
+        if not items:
+            return []
+
         item_ids = {
             sha256(item.content.lower().strip().encode("utf-8")).hexdigest(): item.id
             for item in items

@@ -65,7 +65,7 @@ class SearchResult(BaseModel):
 
 class SearchFilters(TypedDict):
     subject: NotRequired[str | None]
-    confidence: NotRequired[float]
+    min_confidences: NotRequired[dict[str, float]]
     tags: NotRequired[list[str] | None]
     observation_types: NotRequired[list[str] | None]
     source_ids: NotRequired[list[int] | None]
