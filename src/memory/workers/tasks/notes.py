@@ -1,6 +1,10 @@
 import logging
 import pathlib
+import contextlib
+import subprocess
+import shlex
 
+from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
 from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES
@@ -13,6 +17,42 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def git_command(repo_root: pathlib.Path, *args: str):
+    if not (repo_root / ".git").exists():
+        return
+
+    # Properly escape arguments for shell execution
+    escaped_args = [shlex.quote(arg) for arg in args]
+    cmd = f"git -C {shlex.quote(repo_root.as_posix())} {' '.join(escaped_args)}"
+
+    logger.info(f"Running git command: {cmd}")
+    res = subprocess.run(
+        cmd,
+        shell=True,
+        text=True,
+        capture_output=True,  # Capture both stdout and stderr
+    )
+    if res.returncode != 0:
+        logger.error(f"Git command failed: {res.returncode}")
+        logger.error(f"stderr: {res.stderr}")
+        if res.stdout:
+            logger.error(f"stdout: {res.stdout}")
+    return res
+
+
+@contextlib.contextmanager
+def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note"):
+    git_command(repo_root, "fetch")
+    git_command(repo_root, "reset", "--hard", "origin/master")
+    git_command(repo_root, "clean", "-fd")
+
+    yield
+
+    git_command(repo_root, "add", ".")
+    git_command(repo_root, "commit", "-m", commit_message)
+    git_command(repo_root, "push")
 
 
 @app.task(name=SYNC_NOTE)
@@ -62,7 +102,10 @@ def sync_note(
             note.tags = tags  # type: ignore
 
         note.update_confidences(confidences)
-        note.save_to_file()
+        with git_tracking(
+            settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
+        ):
+            note.save_to_file()
         return process_content_item(note, session)
 
 

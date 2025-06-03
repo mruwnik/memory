@@ -11,6 +11,9 @@ secrets:
   postgres_password: { file: ./secrets/postgres_password.txt }
   openai_key: { file: ./secrets/openai_key.txt }
   anthropic_key: { file: ./secrets/anthropic_key.txt }
+  ssh_private_key: { file: ./secrets/ssh_private_key }
+  ssh_public_key: { file: ./secrets/ssh_public_key }
+  ssh_known_hosts: { file: ./secrets/ssh_known_hosts }
 
 # --------------------------------------------------------------------- volumes
 volumes:
@@ -46,9 +49,12 @@ x-worker-base: &worker-base
     QDRANT_URL: http://qdrant:6333
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
     ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
-  secrets: [ postgres_password, openai_key, anthropic_key ]
+  secrets: [ postgres_password, openai_key, anthropic_key, ssh_private_key, ssh_public_key, ssh_known_hosts ]
   read_only: true
-  tmpfs: [ /tmp, /var/tmp ]
+  tmpfs: 
+    - /tmp
+    - /var/tmp
+    - /home/kb/.ssh:uid=1000,gid=1000,mode=700
   cap_drop: [ ALL ]
   volumes:
     - ./memory_files:/app/memory_files:rw
