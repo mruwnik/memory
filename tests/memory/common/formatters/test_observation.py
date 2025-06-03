@@ -123,11 +123,10 @@ def test_generate_temporal_text_time_periods(hour: int, expected_period: str):
     result = generate_temporal_text(
         subject="test_subject",
         content="test_content",
-        confidence=0.8,
         created_at=test_date,
     )
     time_str = test_date.strftime("%H:%M")
-    expected = f"Time: {time_str} on Monday ({expected_period}) | Subject: test_subject | Observation: test_content | Confidence: 0.8"
+    expected = f"Time: {time_str} on Monday ({expected_period}) | Subject: test_subject | Observation: test_content"
     assert result == expected
 
 
@@ -146,7 +145,7 @@ def test_generate_temporal_text_time_periods(hour: int, expected_period: str):
 def test_generate_temporal_text_days_of_week(weekday: int, day_name: str):
     test_date = datetime(2024, 1, 15 + weekday, 10, 30)
     result = generate_temporal_text(
-        subject="subject", content="content", confidence=0.5, created_at=test_date
+        subject="subject", content="content", created_at=test_date
     )
     assert f"on {day_name}" in result
 
@@ -157,10 +156,8 @@ def test_generate_temporal_text_confidence_values(confidence: float):
     result = generate_temporal_text(
         subject="subject",
         content="content",
-        confidence=confidence,
         created_at=test_date,
     )
-    assert f"Confidence: {confidence}" in result
 
 
 @pytest.mark.parametrize(
@@ -180,7 +177,7 @@ def test_generate_temporal_text_boundary_cases(
     test_date: datetime, expected_period: str
 ):
     result = generate_temporal_text(
-        subject="subject", content="content", confidence=0.8, created_at=test_date
+        subject="subject", content="content", created_at=test_date
     )
     assert f"({expected_period})" in result
 
@@ -190,22 +187,16 @@ def test_generate_temporal_text_complete_format():
     result = generate_temporal_text(
         subject="Important observation",
         content="User showed strong preference for X",
-        confidence=0.95,
         created_at=test_date,
     )
-    expected = "Time: 14:45 on Friday (afternoon) | Subject: Important observation | Observation: User showed strong preference for X | Confidence: 0.95"
+    expected = "Time: 14:45 on Friday (afternoon) | Subject: Important observation | Observation: User showed strong preference for X"
     assert result == expected
 
 
 def test_generate_temporal_text_empty_strings():
     test_date = datetime(2024, 1, 15, 10, 30)
-    result = generate_temporal_text(
-        subject="", content="", confidence=0.0, created_at=test_date
-    )
-    assert (
-        result
-        == "Time: 10:30 on Monday (morning) | Subject:  | Observation:  | Confidence: 0.0"
-    )
+    result = generate_temporal_text(subject="", content="", created_at=test_date)
+    assert result == "Time: 10:30 on Monday (morning) | Subject:  | Observation:"
 
 
 def test_generate_temporal_text_special_characters():
@@ -213,8 +204,7 @@ def test_generate_temporal_text_special_characters():
     result = generate_temporal_text(
         subject="Subject with | pipe",
         content="Content with | pipe and @#$ symbols",
-        confidence=0.75,
         created_at=test_date,
     )
-    expected = "Time: 15:20 on Monday (afternoon) | Subject: Subject with | pipe | Observation: Content with | pipe and @#$ symbols | Confidence: 0.75"
+    expected = "Time: 15:20 on Monday (afternoon) | Subject: Subject with | pipe | Observation: Content with | pipe and @#$ symbols"
     assert result == expected

@@ -654,11 +654,9 @@ async def create_note(
     """
     if filename:
         path = pathlib.Path(filename)
-        if path.is_absolute():
-            path = path.relative_to(settings.NOTES_STORAGE_DIR)
-        else:
+        if not path.is_absolute():
             path = pathlib.Path(settings.NOTES_STORAGE_DIR) / path
-        filename = path.as_posix()
+        filename = path.relative_to(settings.NOTES_STORAGE_DIR).as_posix()
 
     try:
         task = celery_app.send_task(

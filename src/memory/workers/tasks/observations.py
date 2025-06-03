@@ -21,7 +21,7 @@ def sync_observation(
     content: str,
     observation_type: str,
     evidence: dict | None = None,
-    confidence: float = 0.5,
+    confidences: dict[str, float] = {},
     session_id: str | None = None,
     agent_model: str = "unknown",
     tags: list[str] = [],
@@ -33,7 +33,6 @@ def sync_observation(
         content=content,
         subject=subject,
         observation_type=observation_type,
-        confidence=confidence,
         evidence=evidence,
         tags=tags or [],
         session_id=session_id,
@@ -43,6 +42,7 @@ def sync_observation(
         sha256=sha256,
         modality="observation",
     )
+    observation.update_confidences(confidences)
 
     with make_session() as session:
         existing_observation = check_content_exists(

@@ -499,7 +499,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -513,7 +513,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -531,7 +531,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -546,7 +546,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -565,7 +565,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -580,7 +580,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "size": None,
                 "observation_type": "preference",
                 "subject": "programming preferences",
-                "confidence": 0.9,
+                "confidence": {"observation_accuracy": 0.9},
                 "evidence": {
                     "quote": "I really like Python",
                     "context": "discussion about languages",
@@ -603,7 +603,6 @@ def test_agent_observation_data_chunks(
         content="User prefers Python over JavaScript",
         subject="programming preferences",
         observation_type="preference",
-        confidence=0.9,
         evidence={
             "quote": "I really like Python",
             "context": "discussion about languages",
@@ -612,6 +611,7 @@ def test_agent_observation_data_chunks(
         session_id=session_id,
         tags=observation_tags,
     )
+    observation.update_confidences({"observation_accuracy": 0.9})
     # Set inserted_at using object.__setattr__ to bypass SQLAlchemy restrictions
     object.__setattr__(observation, "inserted_at", datetime(2023, 1, 1, 12, 0, 0))
 
@@ -634,7 +634,7 @@ def test_agent_observation_data_chunks(
     assert cast(str, semantic_chunk.collection_name) == "semantic"
 
     temporal_chunk = result[1]
-    expected_temporal_text = "Time: 12:00 on Sunday (afternoon) | Subject: programming preferences | Observation: User prefers Python over JavaScript | Confidence: 0.9"
+    expected_temporal_text = "Time: 12:00 on Sunday (afternoon) | Subject: programming preferences | Observation: User prefers Python over JavaScript"
     assert temporal_chunk.data == [expected_temporal_text]
 
     # Add session_id to expected metadata and remove tags if empty
@@ -654,11 +654,11 @@ def test_agent_observation_data_chunks_with_none_values():
         content="Content",
         subject="subject",
         observation_type="belief",
-        confidence=0.7,
         evidence=None,
         agent_model="gpt-4",
         session_id=None,
     )
+    observation.update_confidences({"observation_accuracy": 0.7})
     object.__setattr__(observation, "inserted_at", datetime(2023, 2, 15, 9, 30, 0))
 
     result = observation.data_chunks()
@@ -671,7 +671,7 @@ def test_agent_observation_data_chunks_with_none_values():
     assert [i.data for i in result] == [
         ["Subject: subject | Type: belief | Observation: Content"],
         [
-            "Time: 09:30 on Wednesday (morning) | Subject: subject | Observation: Content | Confidence: 0.7"
+            "Time: 09:30 on Wednesday (morning) | Subject: subject | Observation: Content"
         ],
         ["Content"],
     ]
@@ -684,11 +684,11 @@ def test_agent_observation_data_chunks_merge_metadata_behavior():
         content="test",
         subject="test",
         observation_type="test",
-        confidence=0.8,
         evidence={},
         agent_model="test",
         tags=["base_tag"],  # Set base tags so they appear in both chunks
     )
+    observation.update_confidences({"observation_accuracy": 0.9})
     object.__setattr__(observation, "inserted_at", datetime.now())
 
     # Test that metadata merging preserves original values and adds new ones
@@ -723,11 +723,10 @@ def test_note_data_chunks(subject, content, expected):
         content=content,
         subject=subject,
         note_type="quicky",
-        confidence=0.9,
         size=123,
         tags=["bla"],
     )
-
+    note.update_confidences({"observation_accuracy": 0.9})
     chunks = note.data_chunks()
     assert [chunk.content for chunk in chunks] == expected
     for chunk in chunks:
@@ -736,7 +735,7 @@ def test_note_data_chunks(subject, content, expected):
         if cast(str, chunk.content) == "test summary":
             tags |= {"tag1", "tag2"}
         assert chunk.item_metadata == {
-            "confidence": 0.9,
+            "confidence": {"observation_accuracy": 0.9},
             "note_type": "quicky",
             "size": 123,
             "source_id": None,

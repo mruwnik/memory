@@ -2,6 +2,7 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.source_item import (
     Chunk,
     SourceItem,
+    ConfidenceScore,
     clean_filename,
 )
 from memory.common.db.models.source_items import (
@@ -37,6 +38,7 @@ __all__ = [
     "Chunk",
     "clean_filename",
     "SourceItem",
+    "ConfidenceScore",
     "MailMessage",
     "EmailAttachment",
     "AgentObservation",

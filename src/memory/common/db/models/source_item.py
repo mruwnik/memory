@@ -22,9 +22,11 @@ from sqlalchemy import (
     Text,
     event,
     func,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.orm import Session, relationship
+from sqlalchemy.types import Numeric
 
 from memory.common import settings
 import memory.common.extract as extract
@@ -191,6 +193,41 @@ class Chunk(Base):
         return items
 
 
+class ConfidenceScore(Base):
+    """
+    Stores structured confidence scores for source items.
+    Provides detailed confidence dimensions instead of a single score.
+    """
+
+    __tablename__ = "confidence_score"
+
+    id = Column(BigInteger, primary_key=True)
+    source_item_id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
+    )
+    confidence_type = Column(
+        Text, nullable=False
+    )  # e.g., "observation_accuracy", "interpretation", "predictive_value"
+    score = Column(Numeric(3, 2), nullable=False)  # 0.0-1.0
+
+    # Relationship back to source item
+    source_item = relationship("SourceItem", back_populates="confidence_scores")
+
+    __table_args__ = (
+        Index("confidence_source_idx", "source_item_id"),
+        Index("confidence_type_idx", "confidence_type"),
+        Index("confidence_score_idx", "score"),
+        CheckConstraint("score >= 0.0 AND score <= 1.0", name="score_range_check"),
+        # Ensure each source_item can only have one score per confidence_type
+        UniqueConstraint(
+            "source_item_id", "confidence_type", name="unique_source_confidence_type"
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ConfidenceScore(type={self.confidence_type}, score={self.score})>"
+
+
 class SourceItem(Base):
     """Base class for all content in the system using SQLAlchemy's joined table inheritance."""
 
@@ -216,6 +253,11 @@ class SourceItem(Base):
     embed_status = Column(Text, nullable=False, server_default="RAW")
     chunks = relationship("Chunk", backref="source", cascade="all, delete-orphan")
 
+    # Confidence scores relationship
+    confidence_scores = relationship(
+        "ConfidenceScore", back_populates="source_item", cascade="all, delete-orphan"
+    )
+
     # Discriminator column for SQLAlchemy inheritance
     type = Column(String(50))
 
@@ -234,6 +276,35 @@ class SourceItem(Base):
     def vector_ids(self):
         """Get vector IDs from associated chunks."""
         return [chunk.id for chunk in self.chunks]
+
+    @property
+    def confidence_dict(self) -> dict[str, float]:
+        return {
+            score.confidence_type: float(score.score)
+            for score in self.confidence_scores
+        }
+
+    def update_confidences(self, confidence_updates: dict[str, float]) -> None:
+        """
+        Update confidence scores for this source item.
+        Merges new scores with existing ones, overwriting duplicates.
+
+        Args:
+            confidence_updates: Dict mapping confidence_type to score (0.0-1.0)
+        """
+        if not confidence_updates:
+            return
+
+        current = {s.confidence_type: s for s in self.confidence_scores}
+
+        for confidence_type, score in confidence_updates.items():
+            if current_score := current.get(confidence_type):
+                current_score.score = score
+            else:
+                new_score = ConfidenceScore(
+                    source_item_id=self.id, confidence_type=confidence_type, score=score
+                )
+                self.confidence_scores.append(new_score)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = cast(str | None, self.content)

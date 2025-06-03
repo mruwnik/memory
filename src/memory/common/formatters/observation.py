@@ -31,7 +31,6 @@ def generate_semantic_text(
 def generate_temporal_text(
     subject: str,
     content: str,
-    confidence: float,
     created_at: datetime,
 ) -> str:
     """Generate text with temporal context for time-pattern search."""
@@ -55,8 +54,6 @@ def generate_temporal_text(
         f"Subject: {subject}",
         f"Observation: {content}",
     ]
-    if confidence is not None:
-        parts.append(f"Confidence: {confidence}")
 
     return " | ".join(parts)
 

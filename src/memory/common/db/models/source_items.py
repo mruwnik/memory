@@ -505,7 +505,6 @@ class Note(SourceItem):
     )
     note_type = Column(Text, nullable=True)
     subject = Column(Text, nullable=True)
-    confidence = Column(Numeric(3, 2), nullable=False, default=0.5)  # 0.0-1.0
 
     __mapper_args__ = {
         "polymorphic_identity": "note",
@@ -514,7 +513,6 @@ class Note(SourceItem):
     __table_args__ = (
         Index("note_type_idx", "note_type"),
         Index("note_subject_idx", "subject"),
-        Index("note_confidence_idx", "confidence"),
     )
 
     def as_payload(self) -> dict:
@@ -522,7 +520,7 @@ class Note(SourceItem):
             **super().as_payload(),
             "note_type": self.note_type,
             "subject": self.subject,
-            "confidence": float(cast(Any, self.confidence)),
+            "confidence": self.confidence_dict,
         }
 
     @property
@@ -531,7 +529,7 @@ class Note(SourceItem):
             "subject": self.subject,
             "content": self.content,
             "note_type": self.note_type,
-            "confidence": self.confidence,
+            "confidence": self.confidence_dict,
             "tags": self.tags,
         }
 
@@ -573,7 +571,6 @@ class AgentObservation(SourceItem):
         Text, nullable=False
     )  # belief, preference, pattern, contradiction, behavior
     subject = Column(Text, nullable=False)  # What/who the observation is about
-    confidence = Column(Numeric(3, 2), nullable=False, default=0.8)  # 0.0-1.0
     evidence = Column(JSONB)  # Supporting context, quotes, etc.
     agent_model = Column(Text, nullable=False)  # Which AI model made this observation
 
@@ -599,7 +596,6 @@ class AgentObservation(SourceItem):
         Index("agent_obs_session_idx", "session_id"),
         Index("agent_obs_type_idx", "observation_type"),
         Index("agent_obs_subject_idx", "subject"),
-        Index("agent_obs_confidence_idx", "confidence"),
         Index("agent_obs_model_idx", "agent_model"),
     )
 
@@ -613,7 +609,7 @@ class AgentObservation(SourceItem):
             **super().as_payload(),
             "observation_type": self.observation_type,
             "subject": self.subject,
-            "confidence": float(cast(Any, self.confidence)),
+            "confidence": self.confidence_dict,
             "evidence": self.evidence,
             "agent_model": self.agent_model,
         }
@@ -633,7 +629,7 @@ class AgentObservation(SourceItem):
             "content": self.content,
             "observation_type": self.observation_type,
             "evidence": self.evidence,
-            "confidence": self.confidence,
+            "confidence": self.confidence_dict,
             "agent_model": self.agent_model,
             "tags": self.tags,
         }
@@ -664,7 +660,6 @@ class AgentObservation(SourceItem):
         temporal_text = observation.generate_temporal_text(
             cast(str, self.subject),
             cast(str, self.content),
-            cast(float, self.confidence),
             cast(datetime, self.inserted_at),
         )
         if temporal_text:

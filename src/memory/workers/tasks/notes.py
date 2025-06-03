@@ -1,7 +1,6 @@
 import logging
 import pathlib
 
-from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
 from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES
@@ -23,7 +22,7 @@ def sync_note(
     content: str,
     filename: str | None = None,
     note_type: str | None = None,
-    confidence: float | None = None,
+    confidences: dict[str, float] = {},
     tags: list[str] = [],
 ):
     logger.info(f"Syncing note {subject}")
@@ -32,6 +31,8 @@ def sync_note(
 
     if filename:
         filename = filename.lstrip("/")
+        if not filename.endswith(".md"):
+            filename = f"{filename}.md"
 
     with make_session() as session:
         existing_note = check_content_exists(session, Note, sha256=sha256)
@@ -45,7 +46,6 @@ def sync_note(
             note = Note(
                 modality="note",
                 mime_type="text/markdown",
-                confidence=confidence or 0.5,
             )
         else:
             logger.info("Editing preexisting note")
@@ -58,11 +58,10 @@ def sync_note(
 
         if note_type:
             note.note_type = note_type  # type: ignore
-        if confidence:
-            note.confidence = confidence  # type: ignore
         if tags:
             note.tags = tags  # type: ignore
 
+        note.update_confidences(confidences)
         note.save_to_file()
         return process_content_item(note, session)
 

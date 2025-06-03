@@ -16,7 +16,7 @@ def mock_note_data():
         "content": "This is test note content with enough text to be processed and embedded.",
         "filename": "test_note.md",
         "note_type": "observation",
-        "confidence": 0.8,
+        "confidences": {"observation_accuracy": 0.8},
         "tags": ["test", "note"],
     }
 
@@ -90,7 +90,7 @@ def test_sync_note_success(mock_note_data, db_session, qdrant):
     assert note.modality == "note"
     assert note.mime_type == "text/markdown"
     assert note.note_type == "observation"
-    assert float(note.confidence) == 0.8  # Convert Decimal to float for comparison
+    assert note.confidence_dict == {"observation_accuracy": 0.8}
     assert note.filename is not None
     assert note.tags == ["test", "note"]
 
@@ -114,7 +114,7 @@ def test_sync_note_minimal_data(mock_minimal_note, db_session, qdrant):
     assert note.subject == "Minimal Note"
     assert note.content == "Minimal content"
     assert note.note_type is None
-    assert float(note.confidence) == 0.5  # Default value, convert Decimal to float
+    assert note.confidence_dict == {}
     assert note.tags == []  # Default empty list
     assert note.filename is not None and "Minimal Note.md" in note.filename
 
@@ -205,6 +205,9 @@ def test_sync_note_edit(mock_note_data, db_session):
         embed_status="RAW",
         filename="test_note.md",
     )
+    existing_note.update_confidences(
+        {"observation_accuracy": 0.2, "predictive_value": 0.3}
+    )
     db_session.add(existing_note)
     db_session.commit()
 
@@ -225,6 +228,10 @@ def test_sync_note_edit(mock_note_data, db_session):
     assert len(db_session.query(Note).all()) == 1
     db_session.refresh(existing_note)
     assert existing_note.content == "bla bla bla"  # type: ignore
+    assert existing_note.confidence_dict == {
+        "observation_accuracy": 0.8,
+        "predictive_value": 0.3,
+    }
 
 
 @pytest.mark.parametrize(
@@ -242,14 +249,14 @@ def test_sync_note_parameters(note_type, confidence, tags, db_session, qdrant):
         subject=f"Test Note {note_type}",
         content="Test content for parameter testing",
         note_type=note_type,
-        confidence=confidence,
+        confidences={"observation_accuracy": confidence},
         tags=tags,
     )
 
     note = db_session.query(Note).filter_by(subject=f"Test Note {note_type}").first()
     assert note is not None
     assert note.note_type == note_type
-    assert float(note.confidence) == confidence  # Convert Decimal to float
+    assert note.confidence_dict == {"observation_accuracy": confidence}
     assert note.tags == tags
 
     # Updated to match actual return format

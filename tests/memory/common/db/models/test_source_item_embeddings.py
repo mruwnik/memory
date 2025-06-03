@@ -583,7 +583,6 @@ def test_agent_observation_embeddings(mock_voyage_client):
         tags=["bla"],
         observation_type="belief",
         subject="humans",
-        confidence=0.8,
         evidence={
             "quote": "All humans are mortal.",
             "source": "https://en.wikipedia.org/wiki/Human",
@@ -591,6 +590,7 @@ def test_agent_observation_embeddings(mock_voyage_client):
         agent_model="gpt-4o",
         inserted_at=datetime(2025, 1, 1, 12, 0, 0),
     )
+    item.update_confidences({"observation_accuracy": 0.8})
     metadata = item.as_payload()
     metadata["tags"] = {"bla"}
     expected = [
@@ -600,7 +600,7 @@ def test_agent_observation_embeddings(mock_voyage_client):
             metadata | {"embedding_type": "semantic"},
         ),
         (
-            "Time: 12:00 on Wednesday (afternoon) | Subject: humans | Observation: The user thinks that all men must die. | Confidence: 0.8",
+            "Time: 12:00 on Wednesday (afternoon) | Subject: humans | Observation: The user thinks that all men must die.",
             [],
             metadata | {"embedding_type": "temporal"},
         ),
@@ -625,7 +625,7 @@ def test_agent_observation_embeddings(mock_voyage_client):
     assert mock_voyage_client.embed.call_args == call(
         [
             "Subject: humans | Type: belief | Observation: The user thinks that all men must die. | Quote: All humans are mortal.",
-            "Time: 12:00 on Wednesday (afternoon) | Subject: humans | Observation: The user thinks that all men must die. | Confidence: 0.8",
+            "Time: 12:00 on Wednesday (afternoon) | Subject: humans | Observation: The user thinks that all men must die.",
             "The user thinks that all men must die.",
             "All humans are mortal.",
         ],
