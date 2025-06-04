@@ -1,7 +1,8 @@
-import json
 import logging
 import traceback
 from typing import Any
+
+from bs4 import BeautifulSoup
 
 from memory.common import settings, chunker
 
@@ -12,11 +13,13 @@ The following text is already concise. Please identify 3-5 relevant tags that ca
 
 Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
 
-Return your response as JSON with this format:
-{{
-"summary": "{summary}",
-"tags": ["tag1", "tag2", "tag3"]
-}}
+Return your response as XML with this format:
+<summary>{summary}</summary>
+<tags>
+    <tag>tag1</tag>
+    <tag>tag2</tag>
+    <tag>tag3</tag>
+</tags>
 
 Text:
 {content}
@@ -28,15 +31,26 @@ Also provide 3-5 relevant tags that capture the main topics or themes.
 
 Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
 
-Return your response as JSON with this format:
-{{
-    "summary": "your summary here",
-    "tags": ["tag1", "tag2", "tag3"]
-}}
+Return your response as XML with this format:
+
+<summary>your summary here</summary>
+<tags>
+    <tag>tag1</tag>
+    <tag>tag2</tag>
+    <tag>tag3</tag>
+</tags>
 
 Text to summarize:
 {content}
 """
+
+
+def parse_response(response: str) -> dict[str, Any]:
+    """Parse the response from the summarizer."""
+    soup = BeautifulSoup(response, "xml")
+    summary = soup.find("summary").text
+    tags = [tag.text for tag in soup.find_all("tag")]
+    return {"summary": summary, "tags": tags}
 
 
 def _call_openai(prompt: str) -> dict[str, Any]:
@@ -58,7 +72,7 @@ def _call_openai(prompt: str) -> dict[str, Any]:
             temperature=0.3,
             max_tokens=2048,
         )
-        return json.loads(response.choices[0].message.content or "{}")
+        return parse_response(response.choices[0].message.content or "")
     except Exception as e:
         logger.error(f"OpenAI API error: {e}")
         raise
@@ -73,13 +87,14 @@ def _call_anthropic(prompt: str) -> dict[str, Any]:
         response = client.messages.create(
             model=settings.SUMMARIZER_MODEL.split("/")[1],
             messages=[{"role": "user", "content": prompt}],
-            system="You are a helpful assistant that creates concise summaries and identifies key topics. Always respond with valid JSON.",
+            system="You are a helpful assistant that creates concise summaries and identifies key topics. Always respond with valid XML.",
             temperature=0.3,
             max_tokens=2048,
         )
-        return json.loads(response.content[0].text)
+        return parse_response(response.content[0].text)
     except Exception as e:
         logger.error(f"Anthropic API error: {e}")
+        logger.error(response.content[0].text)
         raise
 
 

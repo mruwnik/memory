@@ -84,6 +84,7 @@ TASK_MAPPINGS = {
         "sync_smbc": SYNC_SMBC,
         "sync_xkcd": SYNC_XKCD,
         "sync_comic": SYNC_COMIC,
+        "full_sync_comics": "memory.workers.tasks.comic.full_sync_comic",
     },
     "forums": {
         "sync_lesswrong": SYNC_LESSWRONG,
@@ -422,6 +423,13 @@ def comic_sync_comic(ctx, image_url, title, author, published_date):
     )
 
 
+@comic.command("full-sync-comics")
+@click.pass_context
+def comic_full_sync_comics(ctx):
+    """Full sync comics."""
+    execute_task(ctx, "comic", "full_sync_comics")
+
+
 @cli.group()
 @click.pass_context
 def forums(ctx):
@@ -442,7 +450,7 @@ def forums_sync_lesswrong(ctx, since_date, min_karma, limit, cooldown, max_items
         ctx,
         "forums",
         "sync_lesswrong",
-        since_date=since_date,
+        since=since_date,
         min_karma=min_karma,
         limit=limit,
         cooldown=cooldown,

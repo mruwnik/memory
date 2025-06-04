@@ -294,4 +294,5 @@ feeds = [
     "https://www.theredhandfiles.com/",
     "https://karlin.blog/",
     "https://slatestarcodex.com/",
+    "https://www.astralcodexten.com/",
 ]

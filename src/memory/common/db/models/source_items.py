@@ -269,7 +269,7 @@ class Comic(SourceItem):
         return {k: v for k, v in payload.items() if v is not None}
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(pathlib.Path(cast(str, self.filename)))
+        image = Image.open(settings.FILE_STORAGE_DIR / cast(str, self.filename))
         description = f"{self.title} by {self.author}"
         return [extract.DataChunk(data=[image, description])]
 

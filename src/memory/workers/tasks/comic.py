@@ -75,6 +75,7 @@ def sync_comic(
     published_date: datetime | None = None,
 ):
     """Synchronize a comic from a URL."""
+    logger.info(f"syncing comic {url}")
     with make_session() as session:
         existing_comic = check_content_exists(session, Comic, url=url)
         if existing_comic:
@@ -101,7 +102,7 @@ def sync_comic(
         url=url,
         published=published_date,
         author=author,
-        filename=filename.resolve().as_posix(),
+        filename=filename.resolve().relative_to(settings.FILE_STORAGE_DIR).as_posix(),
         mime_type=mime_type,
         size=len(response.content),
         sha256=create_content_hash(f"{image_url}{published_date}"),
