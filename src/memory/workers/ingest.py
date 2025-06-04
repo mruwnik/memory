@@ -5,6 +5,8 @@ from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
     REINGEST_MISSING_CHUNKS,
+    SYNC_ALL_COMICS,
+    SYNC_ALL_ARTICLE_FEEDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,11 +26,11 @@ app.conf.beat_schedule = {
         "schedule": settings.EMAIL_SYNC_INTERVAL,
     },
     "sync-all-comics": {
-        "task": "memory.workers.tasks.comic.sync_all_comics",
+        "task": SYNC_ALL_COMICS,
         "schedule": settings.COMIC_SYNC_INTERVAL,
     },
     "sync-all-article-feeds": {
-        "task": "memory.workers.tasks.blogs.sync_all_article_feeds",
+        "task": SYNC_ALL_ARTICLE_FEEDS,
         "schedule": settings.ARTICLE_FEED_SYNC_INTERVAL,
     },
 }

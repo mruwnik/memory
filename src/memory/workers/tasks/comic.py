@@ -91,7 +91,9 @@ def sync_comic(
     file_type = image_url.split(".")[-1]
     mime_type = f"image/{file_type}"
     filename = (
-        settings.COMIC_STORAGE_DIR / clean_filename(author) / f"{title}.{file_type}"
+        settings.COMIC_STORAGE_DIR
+        / clean_filename(author)
+        / f"{clean_filename(title)}.{file_type}"
     )
 
     filename.parent.mkdir(parents=True, exist_ok=True)

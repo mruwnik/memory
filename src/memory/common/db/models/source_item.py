@@ -81,7 +81,7 @@ def handle_duplicate_sha256(session, flush_context, instances):
 
 
 def clean_filename(filename: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")
+    return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")[:30]
 
 
 def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
