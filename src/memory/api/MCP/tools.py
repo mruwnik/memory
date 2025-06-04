@@ -5,6 +5,7 @@ MCP tools for the epistemic sparring partner system.
 import logging
 import pathlib
 from datetime import datetime, timezone
+import mimetypes
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
@@ -385,20 +386,67 @@ async def note_files(path: str = "/"):
 
 
 @mcp.tool()
-def fetch_file(filename: str):
+def fetch_file(filename: str) -> dict:
     """
-    Read file content from user's storage.
-    Use when you need to access specific content of a file that's been referenced.
-
-    Args:
-        filename: Path to file (e.g., "/notes/project.md", "/documents/report.pdf")
-        Path should start with "/" and use forward slashes
-
-    Returns: Raw bytes content (decode as UTF-8 for text files)
-    Raises FileNotFoundError if file doesn't exist.
+    Read file content with automatic type detection.
+    Returns dict with content, mime_type, is_text, file_size.
+    Text content as string, binary as base64.
     """
     path = settings.FILE_STORAGE_DIR / filename.lstrip("/")
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
-    return path.read_bytes()
+    mime_type, _ = mimetypes.guess_type(str(path))
+    mime_type = mime_type or "application/octet-stream"
+
+    text_extensions = {
+        ".md",
+        ".txt",
+        ".py",
+        ".js",
+        ".html",
+        ".css",
+        ".json",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+    }
+    text_mimes = {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/x-yaml",
+        "application/yaml",
+    }
+    is_text = (
+        mime_type.startswith("text/")
+        or mime_type in text_mimes
+        or path.suffix.lower() in text_extensions
+    )
+
+    try:
+        content = (
+            path.read_text(encoding="utf-8")
+            if is_text
+            else __import__("base64").b64encode(path.read_bytes()).decode("ascii")
+        )
+    except UnicodeDecodeError:
+        import base64
+
+        content = base64.b64encode(path.read_bytes()).decode("ascii")
+        is_text = False
+        mime_type = (
+            "application/octet-stream" if mime_type.startswith("text/") else mime_type
+        )
+
+    return {
+        "content": content,
+        "mime_type": mime_type,
+        "is_text": is_text,
+        "file_size": path.stat().st_size,
+        "filename": filename,
+    }
