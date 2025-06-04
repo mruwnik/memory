@@ -564,9 +564,7 @@ class AgentObservation(SourceItem):
     id = Column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    session_id = Column(
-        UUID(as_uuid=True)
-    )  # Groups observations from same conversation
+    session_id = Column(Text, nullable=True)
     observation_type = Column(
         Text, nullable=False
     )  # belief, preference, pattern, contradiction, behavior
