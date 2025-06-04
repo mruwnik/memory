@@ -162,13 +162,9 @@ services:
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
     networks: [kbnet]
-    depends_on: [api]
     environment:
       <<: *env
-      PROXY_EMAIL: "${PROXY_EMAIL}"
-      PROXY_PASSWORD: "${PROXY_PASSWORD}"
-      PROXY_REMOTE_SERVER: "http://api:8000"
-    command: ["python", "/app/tools/simple_proxy.py", "--remote-server", "http://api:8000", "--email", "${PROXY_EMAIL}", "--password", "${PROXY_PASSWORD}", "--port", "8001"]
+    command: ["python", "/app/tools/simple_proxy.py", "--remote-server", "${PROXY_REMOTE_SERVER:-http://api:8000}", "--email", "${PROXY_EMAIL}", "--password", "${PROXY_PASSWORD}", "--port", "8001"]
     volumes:
       - ./tools:/app/tools:ro
     ports:

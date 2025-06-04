@@ -92,9 +92,13 @@ async def proxy_request(request: Request) -> Response:
             resp = Response(
                 content=response.content,
                 status_code=response.status_code,
-                headers=dict(response.headers),
+                headers={
+                    k: v.replace(state.remote_server, f"http://localhost:{state.port}")
+                    for k, v in response.headers.items()
+                },
                 media_type=response.headers.get("content-type"),
             )
+            print(resp.headers)
             return resp
 
         except httpx.RequestError as e:
