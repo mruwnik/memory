@@ -213,12 +213,15 @@ def mock_file_storage(tmp_path: Path):
     email_storage_dir.mkdir(parents=True, exist_ok=True)
     notes_storage_dir = tmp_path / "notes"
     notes_storage_dir.mkdir(parents=True, exist_ok=True)
+    comic_storage_dir = tmp_path / "comics"
+    comic_storage_dir.mkdir(parents=True, exist_ok=True)
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "CHUNK_STORAGE_DIR", chunk_storage_dir),
         patch.object(settings, "WEBPAGE_STORAGE_DIR", image_storage_dir),
         patch.object(settings, "EMAIL_STORAGE_DIR", email_storage_dir),
         patch.object(settings, "NOTES_STORAGE_DIR", notes_storage_dir),
+        patch.object(settings, "COMIC_STORAGE_DIR", comic_storage_dir),
     ):
         yield
 
@@ -256,7 +259,7 @@ def mock_openai_client():
                 choices=[
                     Mock(
                         message=Mock(
-                            content='{"summary": "test summary", "tags": ["tag1", "tag2"]}'
+                            content="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
                         )
                     )
                 ]
@@ -273,8 +276,16 @@ def mock_anthropic_client():
         client.messages.create = Mock(
             return_value=Mock(
                 content=[
-                    Mock(text='{"summary": "test summary", "tags": ["tag1", "tag2"]}')
+                    Mock(
+                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
+                    )
                 ]
             )
         )
         yield client
+
+
+@pytest.fixture(autouse=True)
+def mock_discord_client():
+    with patch.object(settings, "DISCORD_NOTIFICATIONS_ENABLED", False):
+        yield

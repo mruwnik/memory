@@ -55,7 +55,7 @@ def generate_temporal_text(
         f"Observation: {content}",
     ]
 
-    return " | ".join(parts)
+    return " | ".join(parts).strip()
 
 
 # TODO: Add more embedding dimensions here:

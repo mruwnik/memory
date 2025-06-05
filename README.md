@@ -92,6 +92,27 @@ curl -X POST http://localhost:8000/auth/login \
 
 This returns a session ID that should be included in subsequent requests as the `X-Session-ID` header.
 
+## Discord integration
+
+If you want to have notifications sent to discord, you'll have to [create a bot for that](https://discord.com/developers/applications).
+Once you have the bot's token, run
+
+```bash
+python tools/discord_setup.py generate-invite --bot-token <your bot token>
+```
+
+to get an url that can be used to connect your Discord bot.
+
+Next you'll have to set at least the following in your `.env` file:
+
+```
+DISCORD_BOT_TOKEN=<your bot token>
+DISCORD_NOTIFICATIONS_ENABLED=True
+```
+
+When the worker starts it will automatically attempt to create the appropriate channels. You
+can change what they will be called by setting the various `DISCORD_*_CHANNEL` settings.
+
 ## MCP Proxy Setup
 
 Since MCP doesn't support basic authentication, use the included proxy for AI assistants that need to connect:

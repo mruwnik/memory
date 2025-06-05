@@ -138,3 +138,17 @@ SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
 REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False) or True
+DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
+
+# Discord notification settings
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+DISCORD_ERROR_CHANNEL = os.getenv("DISCORD_ERROR_CHANNEL", "memory-errors")
+DISCORD_ACTIVITY_CHANNEL = os.getenv("DISCORD_ACTIVITY_CHANNEL", "memory-activity")
+DISCORD_DISCOVERY_CHANNEL = os.getenv("DISCORD_DISCOVERY_CHANNEL", "memory-discoveries")
+DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", "memory-chat")
+
+
+# Enable Discord notifications if bot token is set
+DISCORD_NOTIFICATIONS_ENABLED = (
+    boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True) and DISCORD_BOT_TOKEN
+)

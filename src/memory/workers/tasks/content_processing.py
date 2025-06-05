@@ -12,8 +12,9 @@ import traceback
 import logging
 from typing import Any, Callable, Iterable, Sequence, cast
 
-from memory.common import embedding, qdrant
+from memory.common import embedding, qdrant, settings
 from memory.common.db.models import SourceItem, Chunk
+from memory.common.discord import notify_task_failure
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,17 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
             return func(*args, **kwargs)
         except Exception as e:
             logger.error(f"Task {func.__name__} failed: {e}")
-            logger.error(traceback.format_exc())
+            traceback_str = traceback.format_exc()
+            logger.error(traceback_str)
+
+            notify_task_failure(
+                task_name=func.__name__,
+                error_message=str(e),
+                task_args=args,
+                task_kwargs=kwargs,
+                traceback_str=traceback_str,
+            )
+
             return {"status": "error", "error": str(e)}
 
     return wrapper

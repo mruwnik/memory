@@ -83,5 +83,7 @@ app.conf.update(
 @app.on_after_configure.connect  # type: ignore[attr-defined]
 def ensure_qdrant_initialised(sender, **_):
     from memory.common import qdrant
+    from memory.common.discord import load_servers
 
     qdrant.setup_qdrant()
+    load_servers()

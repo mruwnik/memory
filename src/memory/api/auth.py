@@ -195,6 +195,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: Request, call_next):
+        if settings.DISABLE_AUTH:
+            return await call_next(request)
+
         path = request.url.path
 
         # Skip authentication for whitelisted endpoints

@@ -47,9 +47,20 @@ Text to summarize:
 
 def parse_response(response: str) -> dict[str, Any]:
     """Parse the response from the summarizer."""
-    soup = BeautifulSoup(response, "xml")
-    summary = soup.find("summary").text
-    tags = [tag.text for tag in soup.find_all("tag")]
+    if not response or not response.strip():
+        return {"summary": "", "tags": []}
+
+    # Use html.parser instead of xml parser for better compatibility
+    soup = BeautifulSoup(response, "html.parser")
+
+    # Safely extract summary
+    summary_element = soup.find("summary")
+    summary = summary_element.text if summary_element else ""
+
+    # Safely extract tags
+    tag_elements = soup.find_all("tag")
+    tags = [tag.text for tag in tag_elements if tag.text is not None]
+
     return {"summary": summary, "tags": tags}
 
 
@@ -68,7 +79,6 @@ def _call_openai(prompt: str) -> dict[str, Any]:
                 },
                 {"role": "user", "content": prompt},
             ],
-            response_format={"type": "json_object"},
             temperature=0.3,
             max_tokens=2048,
         )
