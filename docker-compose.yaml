@@ -159,20 +159,6 @@ services:
     ports:
       - "8000:8000"
 
-  proxy:
-    build:
-      context: .
-      dockerfile: docker/api/Dockerfile
-    restart: unless-stopped
-    networks: [kbnet]
-    environment:
-      <<: *env
-    command: ["python", "/app/tools/simple_proxy.py", "--remote-server", "${PROXY_REMOTE_SERVER:-http://api:8000}", "--email", "${PROXY_EMAIL}", "--password", "${PROXY_PASSWORD}", "--port", "8001"]
-    volumes:
-      - ./tools:/app/tools:ro
-    ports:
-      - "8001:8001"
-
   # ------------------------------------------------------------ Celery workers
   worker:
     <<: *worker-base

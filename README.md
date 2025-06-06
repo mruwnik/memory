@@ -80,18 +80,6 @@ python tools/run_celery_task.py notes setup-git-notes --origin ssh://git@github.
 For this to work you need to make sure you have set up the ssh keys in `secrets` (see the README.md
 in that folder), and you will need to add the public key that is generated there to your git server.
 
-### Authentication
-
-The API uses session-based authentication. Login via:
-
-```bash
-curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "yourpassword"}'
-```
-
-This returns a session ID that should be included in subsequent requests as the `X-Session-ID` header.
-
 ## Discord integration
 
 If you want to have notifications sent to discord, you'll have to [create a bot for that](https://discord.com/developers/applications).
