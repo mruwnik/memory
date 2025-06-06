@@ -5,18 +5,20 @@ MCP tools for the epistemic sparring partner system.
 import logging
 from datetime import datetime, timezone
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.middleware.auth_context import get_access_token
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentObservation, SourceItem
+from memory.common.db.models import (
+    AgentObservation,
+    SourceItem,
+    UserSession,
+)
+from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
-
-# Create MCP server instance
-mcp = FastMCP("memory", stateless_http=True)
 
 
 def filter_observation_source_ids(
@@ -67,4 +69,42 @@ def filter_source_ids(
 @mcp.tool()
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
+    logger.info("get_current_time tool called")
     return {"current_time": datetime.now(timezone.utc).isoformat()}
+
+
+@mcp.tool()
+async def get_authenticated_user() -> dict:
+    """Get information about the authenticated user."""
+    logger.info("🔧 get_authenticated_user tool called")
+    access_token = get_access_token()
+    logger.info(f"🔧 Access token from MCP context: {access_token}")
+
+    if not access_token:
+        logger.warning("❌ No access token found in MCP context!")
+        return {"error": "Not authenticated"}
+
+    logger.info(
+        f"🔧 MCP context token details - scopes: {access_token.scopes}, client_id: {access_token.client_id}, token: {access_token.token[:20]}..."
+    )
+
+    # Look up the actual user from the session token
+    with make_session() as session:
+        user_session = (
+            session.query(UserSession)
+            .filter(UserSession.id == access_token.token)
+            .first()
+        )
+
+        if user_session and user_session.user:
+            user_info = user_session.user.serialize()
+        else:
+            user_info = {"error": "User not found"}
+
+    return {
+        "authenticated": True,
+        "token_type": "Bearer",
+        "scopes": access_token.scopes,
+        "client_id": access_token.client_id,
+        "user": user_info,
+    }

@@ -3,7 +3,16 @@ import secrets
 from typing import cast
 import uuid
 from memory.common.db.models.base import Base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    ForeignKey,
+    Boolean,
+    ARRAY,
+    Numeric,
+)
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -35,6 +44,9 @@ class User(Base):
     sessions = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan"
     )
+    oauth_states = relationship(
+        "OAuthState", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def serialize(self) -> dict:
         return {
@@ -57,9 +69,92 @@ class UserSession(Base):
     __tablename__ = "user_sessions"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    oauth_state_id = Column(String, ForeignKey("oauth_states.state"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     expires_at = Column(DateTime, nullable=False)
 
     # Relationship to user
     user = relationship("User", back_populates="sessions")
+    oauth_state = relationship("OAuthState", back_populates="session")
+
+
+class OAuthClientInformation(Base):
+    __tablename__ = "oauth_client"
+
+    client_id = Column(String, primary_key=True)
+    client_secret = Column(String, nullable=True)
+    client_id_issued_at = Column(Numeric, nullable=False)
+    client_secret_expires_at = Column(Numeric, nullable=True)
+
+    redirect_uris = Column(ARRAY(String), nullable=False)
+    token_endpoint_auth_method = Column(String, nullable=False)
+    grant_types = Column(ARRAY(String), nullable=False)
+    response_types = Column(ARRAY(String), nullable=False)
+    scope = Column(String, nullable=False)
+    client_name = Column(String, nullable=False)
+    client_uri = Column(String, nullable=True)
+    logo_uri = Column(String, nullable=True)
+    contacts = Column(ARRAY(String), nullable=True)
+    tos_uri = Column(String, nullable=True)
+    policy_uri = Column(String, nullable=True)
+    jwks_uri = Column(String, nullable=True)
+
+    sessions = relationship(
+        "OAuthState", back_populates="client", cascade="all, delete-orphan"
+    )
+
+    def serialize(self) -> dict:
+        return {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "client_id_issued_at": self.client_id_issued_at,
+            "client_secret_expires_at": self.client_secret_expires_at,
+            "redirect_uris": self.redirect_uris,
+            "token_endpoint_auth_method": self.token_endpoint_auth_method,
+            "grant_types": self.grant_types,
+            "response_types": self.response_types,
+            "scope": self.scope,
+            "client_name": self.client_name,
+            "client_uri": self.client_uri,
+            "logo_uri": self.logo_uri,
+            "contacts": self.contacts,
+            "tos_uri": self.tos_uri,
+            "policy_uri": self.policy_uri,
+            "jwks_uri": self.jwks_uri,
+        }
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+
+    state = Column(String, primary_key=True)
+    client_id = Column(String, ForeignKey("oauth_client.client_id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    code = Column(String, nullable=True)
+    redirect_uri = Column(String, nullable=False)
+    redirect_uri_provided_explicitly = Column(Boolean, nullable=False)
+    code_challenge = Column(String, nullable=True)
+    scopes = Column(ARRAY(String), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+    stale = Column(Boolean, nullable=False, default=False)
+
+    def serialize(self, code: bool = False) -> dict:
+        data = {
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "redirect_uri_provided_explicitly": self.redirect_uri_provided_explicitly,
+            "code_challenge": self.code_challenge,
+            "scopes": self.scopes,
+        }
+        if code:
+            data |= {
+                "code": self.code,
+                "expires_at": self.expires_at.timestamp(),
+            }
+        return data
+
+    client = relationship("OAuthClientInformation", back_populates="sessions")
+    session = relationship("UserSession", back_populates="oauth_state", uselist=False)
+    user = relationship("User", back_populates="oauth_states")

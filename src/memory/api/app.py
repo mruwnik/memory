@@ -16,22 +16,19 @@ from fastapi import (
     Query,
     Form,
     Depends,
+    Request,
 )
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqladmin import Admin
 
-from memory.common import settings
-from memory.common import extract
+from memory.common import extract, settings
 from memory.common.db.connection import get_engine
 from memory.common.db.models import User
 from memory.api.admin import setup_admin
 from memory.api.search import search, SearchResult
-from memory.api.MCP.tools import mcp
-from memory.api.auth import (
-    router as auth_router,
-    get_current_user,
-    AuthenticationMiddleware,
-)
+from memory.api.MCP.base import mcp
+from memory.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +42,43 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
 
+
+# Add request logging middleware
+# @app.middleware("http")
+# async def log_requests(request, call_next):
+#     logger.info(f"Main app: {request.method} {request.url.path}")
+#     if request.url.path.startswith("/mcp"):
+#         logger.info(f"Request headers: {dict(request.headers)}")
+#     response = await call_next(request)
+#     return response
+
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # SQLAdmin setup
 engine = get_engine()
 admin = Admin(app, engine)
 setup_admin(admin)
 
-# Include auth router
-app.add_middleware(AuthenticationMiddleware)
-app.include_router(auth_router)
+
+# Add health check to MCP server instead of main app
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request):
+    """Simple health check endpoint on MCP server"""
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"status": "healthy", "mcp_oauth": "enabled"})
+
+
+# Mount MCP server at root - OAuth endpoints need to be at root level
 app.mount("/", mcp.streamable_http_app())
-
-
-@app.get("/health")
-def health_check():
-    """Simple health check endpoint"""
-    return {"status": "healthy"}
 
 
 async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:

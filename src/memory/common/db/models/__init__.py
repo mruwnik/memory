@@ -35,6 +35,8 @@ from memory.common.db.models.sources import (
 from memory.common.db.models.users import (
     User,
     UserSession,
+    OAuthClientInformation,
+    OAuthState,
 )
 
 __all__ = [
@@ -69,4 +71,6 @@ __all__ = [
     # Users
     "User",
     "UserSession",
+    "OAuthClientInformation",
+    "OAuthState",
 ]
