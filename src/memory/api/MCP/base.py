@@ -97,7 +97,9 @@ async def login_page(request: Request):
 
     state = form_data.get("state")
     with make_session() as session:
-        oauth_state = session.query(OAuthState).get(state)
+        oauth_state = (
+            session.query(OAuthState).filter(OAuthState.state == state).first()
+        )
         if not oauth_state:
             logger.error(f"State {state} not found in database")
             raise ValueError("Invalid state parameter")

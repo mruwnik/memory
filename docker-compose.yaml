@@ -147,6 +147,7 @@ services:
       <<: *env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       QDRANT_URL: http://qdrant:6333
+      SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
     secrets: [postgres_password]
     volumes:
       - ./memory_files:/app/memory_files:rw

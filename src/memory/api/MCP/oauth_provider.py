@@ -10,8 +10,10 @@ from memory.common.db.models.users import (
     UserSession,
     OAuthClientInformation,
     OAuthState,
+    OAuthRefreshToken,
+    OAuthToken as TokenBase,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import make_session, scoped_session
 from memory.common import settings
 from mcp.server.auth.provider import (
     AccessToken,
@@ -24,6 +26,101 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 logger = logging.getLogger(__name__)
+
+
+# Token configuration constants
+ACCESS_TOKEN_LIFETIME = 3600 * 30 * 24  # 30 days
+REFRESH_TOKEN_LIFETIME = 30 * 24 * 3600  # 30 days
+
+
+def create_expiration(lifetime_seconds: int) -> datetime:
+    """Create expiration datetime from lifetime in seconds."""
+    return datetime.fromtimestamp(time.time() + lifetime_seconds)
+
+
+def generate_refresh_token() -> str:
+    """Generate a new refresh token."""
+    return f"rt_{secrets.token_hex(32)}"
+
+
+def create_access_token_session(
+    user_id: int, oauth_state_id: str | None = None
+) -> UserSession:
+    """Create a new access token session."""
+    return UserSession(
+        user_id=user_id,
+        oauth_state_id=oauth_state_id,
+        expires_at=create_expiration(ACCESS_TOKEN_LIFETIME),
+    )
+
+
+def create_refresh_token_record(
+    client_id: str,
+    user_id: int,
+    scopes: list[str],
+    access_token_session_id: Optional[str] = None,
+) -> OAuthRefreshToken:
+    """Create a new refresh token record."""
+    return OAuthRefreshToken(
+        token=generate_refresh_token(),
+        client_id=client_id,
+        user_id=user_id,
+        scopes=scopes,
+        expires_at=create_expiration(REFRESH_TOKEN_LIFETIME),
+        access_token_session_id=access_token_session_id,
+    )
+
+
+def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
+    """Validate a refresh token, raising ValueError if invalid."""
+    now = datetime.now()
+    if db_refresh_token.expires_at < now:  # type: ignore
+        logger.error(f"Refresh token expired: {db_refresh_token.token[:20]}...")
+        db_refresh_token.revoked = True  # type: ignore
+        raise ValueError("Refresh token expired")
+
+
+def create_oauth_token(
+    access_token: str, scopes: list[str], refresh_token: Optional[str] = None
+) -> OAuthToken:
+    """Create an OAuth token response."""
+    return OAuthToken(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_LIFETIME,
+        refresh_token=refresh_token,
+        scope=" ".join(scopes),
+    )
+
+
+def make_token(
+    db: scoped_session,
+    auth_state: TokenBase,
+    scopes: list[str],
+) -> OAuthToken:
+    new_session = UserSession(
+        user_id=auth_state.user_id,
+        oauth_state_id=auth_state.id,
+        expires_at=create_expiration(ACCESS_TOKEN_LIFETIME),
+    )
+
+    # Create refresh token
+    refresh_token = create_refresh_token_record(
+        cast(str, auth_state.client_id),
+        cast(int, auth_state.user_id),
+        scopes,
+        cast(str, new_session.id),
+    )
+
+    db.add(new_session)
+    db.add(refresh_token)
+    db.commit()
+
+    return create_oauth_token(
+        str(new_session.id),
+        scopes,
+        cast(str, refresh_token.token),
+    )
 
 
 class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
@@ -102,7 +199,9 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
 
         with make_session() as session:
             # Load OAuth state from database
-            oauth_state = session.query(OAuthState).get(state)
+            oauth_state = (
+                session.query(OAuthState).filter(OAuthState.state == state).first()
+            )
             if not oauth_state:
                 logger.error(f"State {state} not found in database")
                 raise ValueError("Invalid state parameter")
@@ -111,19 +210,21 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
             now = datetime.fromtimestamp(time.time())
             if oauth_state.expires_at < now:
                 logger.error(f"State {state} has expired")
-                oauth_state.stale = True
+                oauth_state.stale = True  # type: ignore
                 session.commit()
                 raise ValueError("State has expired")
 
-            oauth_state.code = f"code_{secrets.token_hex(16)}"
-            oauth_state.stale = False
+            oauth_state.code = f"code_{secrets.token_hex(16)}"  # type: ignore
+            oauth_state.stale = False  # type: ignore
             oauth_state.user_id = user.id
 
             session.add(oauth_state)
             session.commit()
 
             return construct_redirect_uri(
-                oauth_state.redirect_uri, code=oauth_state.code, state=state
+                cast(str, oauth_state.redirect_uri),
+                code=cast(str, oauth_state.code),
+                state=state,
             )
 
     async def load_authorization_code(
@@ -156,29 +257,11 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
                 logger.error(f"Invalid authorization code: {authorization_code.code}")
                 raise ValueError("Invalid authorization code")
 
-            # Get the user associated with this auth code
             if not auth_code.user:
                 logger.error(f"No user found for auth code: {authorization_code.code}")
                 raise ValueError("Invalid authorization code")
 
-            # Create a UserSession to serve as access token
-            expires_at = datetime.fromtimestamp(time.time() + 3600)
-
-            auth_code.session = UserSession(
-                user_id=auth_code.user_id,
-                oauth_state_id=auth_code.state,
-                expires_at=expires_at,
-            )
-            auth_code.stale = True  # type: ignore
-            session.commit()
-            access_token = str(auth_code.session.id)
-
-        return OAuthToken(
-            access_token=access_token,
-            token_type="bearer",
-            expires_in=3600,
-            scope=" ".join(authorization_code.scopes),
-        )
+            return make_token(session, auth_code, authorization_code.scopes)
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
         """Load and validate an access token."""
@@ -192,6 +275,9 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
             if not user_session or user_session.expires_at < now:
                 return None
 
+            logger.info(
+                f"Loading access token: {token}, state: {user_session.oauth_state}"
+            )
             return AccessToken(
                 token=token,
                 client_id=user_session.oauth_state.client_id,
@@ -202,8 +288,34 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> Optional[RefreshToken]:
-        """Load a refresh token - not supported in this simple implementation."""
-        return None
+        """Load and validate a refresh token."""
+        with make_session() as session:
+            now = datetime.now()
+
+            # Query for the refresh token
+            db_refresh_token = (
+                session.query(OAuthRefreshToken)
+                .filter(
+                    OAuthRefreshToken.token == refresh_token,
+                    OAuthRefreshToken.client_id == client.client_id,
+                    OAuthRefreshToken.revoked == False,  # noqa: E712
+                    OAuthRefreshToken.expires_at > now,
+                )
+                .first()
+            )
+
+            if not db_refresh_token:
+                logger.error(
+                    f"Invalid or expired refresh token: {refresh_token[:20]}..."
+                )
+                return None
+
+            return RefreshToken(
+                token=refresh_token,
+                client_id=client.client_id,
+                scopes=cast(list[str], db_refresh_token.scopes),
+                expires_at=int(db_refresh_token.expires_at.timestamp()),
+            )
 
     async def exchange_refresh_token(
         self,
@@ -211,18 +323,71 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        """Exchange refresh token - not supported in this simple implementation."""
-        raise NotImplementedError("Refresh tokens not supported")
+        """Exchange refresh token for new access token."""
+        with make_session() as session:
+            # Load the refresh token from database
+            db_refresh_token = (
+                session.query(OAuthRefreshToken)
+                .filter(
+                    OAuthRefreshToken.token == refresh_token.token,
+                    OAuthRefreshToken.client_id == client.client_id,
+                    OAuthRefreshToken.revoked == False,  # noqa: E712
+                )
+                .first()
+            )
+
+            if not db_refresh_token:
+                logger.error(f"Refresh token not found: {refresh_token.token[:20]}...")
+                raise ValueError("Invalid refresh token")
+
+            # Validate refresh token
+            validate_refresh_token(db_refresh_token)
+
+            # Validate requested scopes are subset of original scopes
+            original_scopes = set(cast(list[str], db_refresh_token.scopes))
+            requested_scopes = set(scopes) if scopes else original_scopes
+
+            if not requested_scopes.issubset(original_scopes):
+                logger.error(
+                    f"Requested scopes {requested_scopes} exceed original scopes {original_scopes}"
+                )
+                raise ValueError("Requested scopes exceed original authorization")
+
+            return make_token(session, db_refresh_token, scopes)
 
     async def revoke_token(
         self, token: str, token_type_hint: Optional[str] = None
     ) -> None:
-        """Revoke a token."""
+        """Revoke a token (access token or refresh token)."""
         with make_session() as session:
-            user_session = session.query(UserSession).get(token)
-            if user_session:
-                session.delete(user_session)
+            revoked = False
+
+            # Try to revoke as access token (UserSession)
+            if not token_type_hint or token_type_hint == "access_token":
+                user_session = session.query(UserSession).get(token)
+                if user_session:
+                    session.delete(user_session)
+                    revoked = True
+                    logger.info(f"Revoked access token: {token[:20]}...")
+
+            # Try to revoke as refresh token
+            if not revoked and (
+                not token_type_hint or token_type_hint == "refresh_token"
+            ):
+                refresh_token = (
+                    session.query(OAuthRefreshToken)
+                    .filter(OAuthRefreshToken.token == token)
+                    .first()
+                )
+                if refresh_token:
+                    refresh_token.revoked = True  # type: ignore
+                    revoked = True
+                    logger.info(f"Revoked refresh token: {token[:20]}...")
+
+            if revoked:
                 session.commit()
+            else:
+                logger.warning(f"Token not found for revocation: {token[:20]}...")
 
     def get_protected_resource_metadata(self) -> dict[str, Any]:
         """Return metadata about the protected resource."""
@@ -231,6 +396,9 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
             "scopes_supported": ["read", "write"],
             "bearer_methods_supported": ["header"],
             "resource_documentation": f"{settings.SERVER_URL}/docs",
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
+            "refresh_token_rotation_enabled": True,
             "protected_resources": [
                 {
                     "resource_uri": f"{settings.SERVER_URL}/mcp",

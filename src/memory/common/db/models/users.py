@@ -15,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from datetime import datetime
 
 
 def hash_password(password: str) -> str:
@@ -69,7 +70,7 @@ class UserSession(Base):
     __tablename__ = "user_sessions"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    oauth_state_id = Column(String, ForeignKey("oauth_states.state"), nullable=True)
+    oauth_state_id = Column(Integer, ForeignKey("oauth_states.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     expires_at = Column(DateTime, nullable=False)
@@ -125,29 +126,38 @@ class OAuthClientInformation(Base):
         }
 
 
-class OAuthState(Base):
-    __tablename__ = "oauth_states"
-
-    state = Column(String, primary_key=True)
+class OAuthToken:
+    id = Column(Integer, primary_key=True)
     client_id = Column(String, ForeignKey("oauth_client.client_id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    scopes = Column(ARRAY(String), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+
+    def serialize(self) -> dict:
+        return {
+            "client_id": self.client_id,
+            "scopes": self.scopes,
+            "expires_at": self.expires_at.timestamp(),
+        }
+
+
+class OAuthState(Base, OAuthToken):
+    __tablename__ = "oauth_states"
+
+    state = Column(String, nullable=False)
     code = Column(String, nullable=True)
     redirect_uri = Column(String, nullable=False)
     redirect_uri_provided_explicitly = Column(Boolean, nullable=False)
     code_challenge = Column(String, nullable=True)
-    scopes = Column(ARRAY(String), nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime, nullable=False)
     stale = Column(Boolean, nullable=False, default=False)
 
     def serialize(self, code: bool = False) -> dict:
         data = {
-            "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "redirect_uri_provided_explicitly": self.redirect_uri_provided_explicitly,
             "code_challenge": self.code_challenge,
-            "scopes": self.scopes,
-        }
+        } | super().serialize()
         if code:
             data |= {
                 "code": self.code,
@@ -158,3 +168,29 @@ class OAuthState(Base):
     client = relationship("OAuthClientInformation", back_populates="sessions")
     session = relationship("UserSession", back_populates="oauth_state", uselist=False)
     user = relationship("User", back_populates="oauth_states")
+
+
+class OAuthRefreshToken(Base, OAuthToken):
+    __tablename__ = "oauth_refresh_tokens"
+
+    token = Column(
+        String, nullable=False, default=lambda: f"rt_{secrets.token_hex(32)}"
+    )
+    revoked = Column(Boolean, nullable=False, default=False)
+
+    # Optional: link to the access token session that was created with this refresh token
+    access_token_session_id = Column(
+        String, ForeignKey("user_sessions.id"), nullable=True
+    )
+
+    # Relationships
+    client = relationship("OAuthClientInformation")
+    user = relationship("User")
+    access_token_session = relationship("UserSession")
+
+    def serialize(self) -> dict:
+        return {
+            "token": self.token,
+            "expires_at": self.expires_at.timestamp(),
+            "revoked": self.revoked,
+        } | super().serialize()
