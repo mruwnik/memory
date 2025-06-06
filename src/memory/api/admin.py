@@ -2,8 +2,16 @@
 SQLAdmin views for the knowledge base database models.
 """
 
+import uuid
 from sqladmin import Admin, ModelView
-
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
+import logging
+from mcp.server.auth.provider import OAuthAuthorizationServerProvider
+from memory.api.MCP.oauth_provider import create_expiration, ACCESS_TOKEN_LIFETIME
+from memory.common import settings
+from memory.common.db.connection import make_session
 from memory.common.db.models import (
     Chunk,
     SourceItem,
@@ -21,8 +29,11 @@ from memory.common.db.models import (
     AgentObservation,
     Note,
     User,
+    UserSession,
+    OAuthState,
 )
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_COLUMNS = (
     "modality",
@@ -218,7 +229,7 @@ class UserAdmin(ModelView, model=User):
 
 
 def setup_admin(admin: Admin):
-    """Add all admin views to the admin instance."""
+    """Add all admin views to the admin instance with OAuth protection."""
     admin.add_view(SourceItemAdmin)
     admin.add_view(AgentObservationAdmin)
     admin.add_view(NoteAdmin)

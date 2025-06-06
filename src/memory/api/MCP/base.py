@@ -1,5 +1,6 @@
 import logging
 import os
+import pathlib
 from typing import cast
 
 from mcp.server.auth.handlers.authorize import AuthorizationRequest
@@ -53,7 +54,7 @@ validate_metadata(TokenRequest)
 
 
 # Setup templates
-template_dir = os.path.join(os.path.dirname(__file__), "templates")
+template_dir = pathlib.Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=template_dir)
 
 
@@ -86,7 +87,12 @@ async def oauth_protected_resource(request: Request):
 def login_form(request: Request, form_data: dict, error: str | None = None):
     return templates.TemplateResponse(
         "login.html",
-        {"request": request, "form_data": form_data, "error": error},
+        {
+            "request": request,
+            "form_data": form_data,
+            "error": error,
+            "action": "/oauth/login",
+        },
     )
 
 

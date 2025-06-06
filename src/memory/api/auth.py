@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
-import textwrap
 from typing import cast
 import logging
+import pathlib
 
 from fastapi import HTTPException, Depends, Request, Response, APIRouter, Form
-from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from memory.common import settings
 from sqlalchemy.orm import Session as DBSession, scoped_session
@@ -52,28 +52,35 @@ def create_user_session(
     return str(session.id)
 
 
-def get_session_user(session_id: str, db: DBSession | scoped_session) -> User | None:
-    """Get user from session ID if session is valid"""
+def get_user_session(
+    request: Request, db: DBSession | scoped_session
+) -> UserSession | None:
+    """Get session ID from request"""
+    session_id = request.cookies.get(settings.SESSION_COOKIE_NAME)
+
+    if not session_id:
+        return None
+
     session = db.query(UserSession).get(session_id)
     if not session:
         return None
+
     now = datetime.now(timezone.utc)
-    if session.expires_at.replace(tzinfo=timezone.utc) > now:
+    if session.expires_at.replace(tzinfo=timezone.utc) < now:
+        return None
+    return session
+
+
+def get_session_user(request: Request, db: DBSession | scoped_session) -> User | None:
+    """Get user from session ID if session is valid"""
+    if session := get_user_session(request, db):
         return session.user
     return None
 
 
 def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> User:
     """FastAPI dependency to get current authenticated user"""
-    # Check for session ID in header or cookie
-    session_id = request.headers.get(
-        settings.SESSION_HEADER_NAME
-    ) or request.cookies.get(settings.SESSION_COOKIE_NAME)
-
-    if not session_id:
-        raise HTTPException(status_code=401, detail="No session provided")
-
-    user = get_session_user(session_id, db)
+    user = get_session_user(request, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
@@ -117,21 +124,18 @@ def register(request: RegisterRequest, db: DBSession = Depends(get_session)):
 
 
 @router.get("/login", response_model=LoginResponse)
-def login_page():
+def login_page(request: Request):
     """Login page"""
-    return HTMLResponse(
-        content=textwrap.dedent("""
-            <html>
-                <body>
-                    <h1>Login</h1>
-                    <form method="post" action="/auth/login-form">
-                        <input type="email" name="email" placeholder="Email" />
-                        <input type="password" name="password" placeholder="Password" />
-                        <button type="submit">Login</button>
-                    </form>
-                </body>
-            </html>
-    """),
+    template_dir = pathlib.Path(__file__).parent / "templates"
+    templates = Jinja2Templates(directory=template_dir)
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "action": router.url_path_for("login_form"),
+            "error": None,
+            "form_data": {},
+        },
     )
 
 
@@ -170,9 +174,17 @@ def login_form(
     return LoginResponse(session_id=session_id, **user.serialize())
 
 
-@router.post("/logout")
-def logout(response: Response, user: User = Depends(get_current_user)):
+@router.api_route("/logout", methods=["GET", "POST"])
+def logout(
+    request: Request,
+    response: Response,
+    db: DBSession = Depends(get_session),
+):
     """Logout and clear session"""
+    session = get_user_session(request, db)
+    if session:
+        db.delete(session)
+        db.commit()
     response.delete_cookie(settings.SESSION_COOKIE_NAME)
     return {"message": "Logged out successfully"}
 
@@ -192,6 +204,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/auth/login",
         "/auth/login-form",
         "/auth/register",
+        "/register",
+        "/token",
+        "/mcp",
+        "/oauth/",
+        "/.well-known/",
     }
 
     async def dispatch(self, request: Request, call_next):
@@ -205,10 +222,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Check for session ID in header or cookie
-        session_id = request.headers.get(
-            settings.SESSION_HEADER_NAME
-        ) or request.cookies.get(settings.SESSION_COOKIE_NAME)
-
+        session_id = request.cookies.get(settings.SESSION_COOKIE_NAME)
         if not session_id:
             return Response(
                 content="Authentication required",
@@ -218,7 +232,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Validate session and get user
         with make_session() as session:
-            user = get_session_user(session_id, session)
+            user = get_session_user(request, session)
             if not user:
                 return Response(
                     content="Invalid or expired session",

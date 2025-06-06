@@ -133,7 +133,6 @@ SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 HTTPS = boolean_env("HTTPS", False)
-SESSION_HEADER_NAME = os.getenv("SESSION_HEADER_NAME", "X-Session-ID")
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))

@@ -136,7 +136,7 @@
         </div>
         {% endif %}
 
-        <form method="post" action="/oauth/login">
+        <form method="post" action="{{ action }}">
             {% for key, value in form_data.items() %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
             {% endfor %}

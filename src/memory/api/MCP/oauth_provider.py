@@ -275,9 +275,6 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
             if not user_session or user_session.expires_at < now:
                 return None
 
-            logger.info(
-                f"Loading access token: {token}, state: {user_session.oauth_state}"
-            )
             return AccessToken(
                 token=token,
                 client_id=user_session.oauth_state.client_id,

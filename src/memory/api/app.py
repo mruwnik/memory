@@ -27,8 +27,12 @@ from memory.common.db.connection import get_engine
 from memory.common.db.models import User
 from memory.api.admin import setup_admin
 from memory.api.search import search, SearchResult
+from memory.api.auth import (
+    get_current_user,
+    AuthenticationMiddleware,
+    router as auth_router,
+)
 from memory.api.MCP.base import mcp
-from memory.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +45,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
-
-
-# Add request logging middleware
-# @app.middleware("http")
-# async def log_requests(request, call_next):
-#     logger.info(f"Main app: {request.method} {request.url.path}")
-#     if request.url.path.startswith("/mcp"):
-#         logger.info(f"Request headers: {dict(request.headers)}")
-#     response = await call_next(request)
-#     return response
-
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, specify actual origins
@@ -62,10 +53,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# SQLAdmin setup
+# SQLAdmin setup with OAuth protection
 engine = get_engine()
 admin = Admin(app, engine)
+
+# Setup admin with OAuth protection using existing OAuth provider
 setup_admin(admin)
+app.include_router(auth_router)
+app.add_middleware(AuthenticationMiddleware)
 
 
 # Add health check to MCP server instead of main app
