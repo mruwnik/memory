@@ -127,6 +127,7 @@ async def handle_login(request: Request):
             return login_form(request, oauth_params, "Invalid email or password")
 
         redirect_url = await oauth_provider.complete_authorization(oauth_params, user)
+        print("redirect_url", redirect_url)
         if redirect_url.startswith("http://anysphere.cursor-retrieval"):
             redirect_url = redirect_url.replace("http://", "cursor://")
         return RedirectResponse(url=redirect_url, status_code=302)

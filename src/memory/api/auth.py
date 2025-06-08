@@ -1,14 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from typing import cast
 import logging
-import pathlib
 
-from fastapi import HTTPException, Depends, Request, Response, APIRouter, Form
-from fastapi.templating import Jinja2Templates
+from fastapi import HTTPException, Depends, Request, Response, APIRouter
 from starlette.middleware.base import BaseHTTPMiddleware
 from memory.common import settings
 from sqlalchemy.orm import Session as DBSession, scoped_session
-from pydantic import BaseModel
 
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models.users import User, UserSession
@@ -16,27 +12,35 @@ from memory.common.db.models.users import User, UserSession
 logger = logging.getLogger(__name__)
 
 
-# Pydantic models
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    name: str
-
-
-class LoginResponse(BaseModel):
-    session_id: str
-    user_id: int
-    email: str
-    name: str
-
-
 # Create router
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Endpoints that don't require authentication
+WHITELIST = {
+    "/health",
+    "/register",
+    "/authorize",
+    "/token",
+    "/mcp",
+    "/oauth/",
+    "/.well-known/",
+    "/ui",
+}
+
+
+def get_bearer_token(request: Request) -> str | None:
+    """Get bearer token from request"""
+    bearer_token = request.headers.get("Authorization", "").split(" ")
+    if len(bearer_token) != 2:
+        return None
+    return bearer_token[1]
+
+
+def get_token(request: Request) -> str | None:
+    """Get token from request"""
+    return get_bearer_token(request) or request.cookies.get(
+        settings.SESSION_COOKIE_NAME
+    )
 
 
 def create_user_session(
@@ -56,7 +60,7 @@ def get_user_session(
     request: Request, db: DBSession | scoped_session
 ) -> UserSession | None:
     """Get session ID from request"""
-    session_id = request.cookies.get(settings.SESSION_COOKIE_NAME)
+    session_id = get_token(request)
 
     if not session_id:
         return None
@@ -110,82 +114,13 @@ def authenticate_user(email: str, password: str, db: DBSession) -> User | None:
     return None
 
 
-# Auth endpoints
-@router.post("/register", response_model=LoginResponse)
-def register(request: RegisterRequest, db: DBSession = Depends(get_session)):
-    """Register a new user"""
-    if not settings.REGISTER_ENABLED:
-        raise HTTPException(status_code=403, detail="Registration is disabled")
-
-    user = create_user(request.email, request.password, request.name, db)
-    session_id = create_user_session(user.id, db)  # type: ignore
-
-    return LoginResponse(session_id=session_id, **user.serialize())
-
-
-@router.get("/login", response_model=LoginResponse)
-def login_page(request: Request):
-    """Login page"""
-    template_dir = pathlib.Path(__file__).parent / "templates"
-    templates = Jinja2Templates(directory=template_dir)
-    return templates.TemplateResponse(
-        "login.html",
-        {
-            "request": request,
-            "action": router.url_path_for("login_form"),
-            "error": None,
-            "form_data": {},
-        },
-    )
-
-
-@router.post("/login", response_model=LoginResponse)
-def login(
-    request: LoginRequest, response: Response, db: DBSession = Depends(get_session)
-):
-    """Login and create a session"""
-    return login_form(response, db, request.email, request.password)
-
-
-@router.post("/login-form", response_model=LoginResponse)
-def login_form(
-    response: Response,
-    db: DBSession = Depends(get_session),
-    email: str = Form(),
-    password: str = Form(),
-):
-    """Login with form data and create a session"""
-    user = authenticate_user(email, password, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    session_id = create_user_session(cast(int, user.id), db)
-
-    # Set session cookie
-    response.set_cookie(
-        key=settings.SESSION_COOKIE_NAME,
-        value=session_id,
-        httponly=True,
-        secure=settings.HTTPS,
-        samesite="lax",
-        max_age=settings.SESSION_COOKIE_MAX_AGE,
-    )
-
-    return LoginResponse(session_id=session_id, **user.serialize())
-
-
 @router.api_route("/logout", methods=["GET", "POST"])
-def logout(
-    request: Request,
-    response: Response,
-    db: DBSession = Depends(get_session),
-):
+def logout(request: Request, db: DBSession = Depends(get_session)):
     """Logout and clear session"""
     session = get_user_session(request, db)
     if session:
         db.delete(session)
         db.commit()
-    response.delete_cookie(settings.SESSION_COOKIE_NAME)
     return {"message": "Logged out successfully"}
 
 
@@ -198,19 +133,6 @@ def get_me(user: User = Depends(get_current_user)):
 class AuthenticationMiddleware(BaseHTTPMiddleware):
     """Middleware to require authentication for all endpoints except whitelisted ones."""
 
-    # Endpoints that don't require authentication
-    WHITELIST = {
-        "/health",
-        "/auth/login",
-        "/auth/login-form",
-        "/auth/register",
-        "/register",
-        "/token",
-        "/mcp",
-        "/oauth/",
-        "/.well-known/",
-    }
-
     async def dispatch(self, request: Request, call_next):
         if settings.DISABLE_AUTH:
             return await call_next(request)
@@ -218,11 +140,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Skip authentication for whitelisted endpoints
-        if any(path.startswith(whitelist_path) for whitelist_path in self.WHITELIST):
+        if (
+            any(path.startswith(whitelist_path) for whitelist_path in WHITELIST)
+            or path == "/"
+        ):
             return await call_next(request)
 
         # Check for session ID in header or cookie
-        session_id = request.cookies.get(settings.SESSION_COOKIE_NAME)
+        session_id = get_token(request)
         if not session_id:
             return Response(
                 content="Authentication required",

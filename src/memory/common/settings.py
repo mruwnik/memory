@@ -139,6 +139,12 @@ SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
 REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False) or True
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
+STATIC_DIR = pathlib.Path(
+    os.getenv(
+        "STATIC_DIR",
+        pathlib.Path(__file__).parent.parent.parent.parent / "frontend" / "dist",
+    )
+)
 
 # Discord notification settings
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")

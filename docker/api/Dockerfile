@@ -1,3 +1,13 @@
+# Frontend build stage
+FROM node:18-alpine AS frontend-builder
+
+WORKDIR /frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# Backend build stage
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -19,6 +29,9 @@ RUN pip install -e ".[api]"
 # Install the package with common dependencies
 COPY src/ ./src/
 RUN pip install -e ".[api]"
+
+# Copy frontend build output from previous stage
+COPY --from=frontend-builder /frontend/dist ./static/
 
 # Run as non-root user
 RUN useradd -m appuser

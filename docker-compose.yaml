@@ -148,6 +148,8 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       QDRANT_URL: http://qdrant:6333
       SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
+      VITE_SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
+      STATIC_DIR: "/app/static"
     secrets: [postgres_password]
     volumes:
       - ./memory_files:/app/memory_files:rw
