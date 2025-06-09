@@ -115,6 +115,9 @@ export const useMCP = () => {
     }
 
     const resp = await parseJsonRpcResponse(response)
+    if (resp?.result?.isError) {
+      throw new Error(resp?.result?.content[0].text)
+    }
     return resp?.result?.content.map((item: any) => JSON.parse(item.text))
   }, [apiCall])
 

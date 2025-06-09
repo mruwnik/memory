@@ -1,5 +1,6 @@
 import base64
 import pathlib
+import textwrap
 from datetime import datetime
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -100,12 +101,9 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
 
     assert result is not None
     assert not cast(str, result.content)
-    assert cast(str, result.filename) == str(
-        settings.FILE_STORAGE_DIR
-        / "emails"
-        / "sender_example_com"
-        / "INBOX"
-        / "test_with_special_chars.txt"
+    assert (
+        cast(str, result.filename)
+        == "emails/sender_example_com/INBOX/test_with_special_chars.txt"
     )
 
 
@@ -183,13 +181,7 @@ def test_process_attachments_mixed():
     assert cast(str, results[2].content) == "c" * 30
 
     # Verify large attachment has a path
-    assert cast(str, results[1].filename) == str(
-        settings.FILE_STORAGE_DIR
-        / "emails"
-        / "sender_example_com"
-        / "INBOX"
-        / "large.txt"
-    )
+    assert cast(str, results[1].filename) == "emails/sender_example_com/INBOX/large.txt"
 
 
 def test_extract_email_uid_valid():
@@ -256,8 +248,19 @@ def test_create_mail_message(db_session):
     assert cast(list[str], mail_message.recipients) == ["recipient@example.com"]
     assert mail_message.sent_at.isoformat()[:-6] == "2023-01-01T12:00:00"
     assert cast(str, mail_message.content) == raw_email
-    assert mail_message.body == "Test body content\n"
+    assert mail_message.body == "Test body content"
     assert mail_message.attachments == attachments
+    assert mail_message.display_contents == {
+        "content": "Test body content",
+        "subject": "Test Subject",
+        "sender": "sender@example.com",
+        "recipients": ["recipient@example.com"],
+        "date": "2023-01-01T12:00:00+00:00",
+        "mime_type": "message/rfc822",
+        "size": 412,
+        "tags": ["test"],
+        "filename": None,
+    }
 
 
 def test_fetch_email(email_provider):

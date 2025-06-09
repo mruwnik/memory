@@ -8,6 +8,7 @@ from memory.common import settings, chunker
 
 logger = logging.getLogger(__name__)
 
+MAX_TOKENS = 200000
 TAGS_PROMPT = """
 The following text is already concise. Please identify 3-5 relevant tags that capture the main topics or themes.
 
@@ -147,6 +148,12 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
             target_chars=target_tokens * chunker.CHARS_PER_TOKEN,
             content=content,
         )
+
+    if chunker.approx_token_count(prompt) > MAX_TOKENS:
+        logger.warning(
+            f"Prompt too long ({chunker.approx_token_count(prompt)} tokens), truncating"
+        )
+        prompt = truncate(prompt, MAX_TOKENS - 20)
 
     try:
         if settings.SUMMARIZER_MODEL.startswith("anthropic"):

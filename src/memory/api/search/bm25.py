@@ -23,7 +23,8 @@ async def search_bm25(
 ) -> list[tuple[SourceData, AnnotatedChunk]]:
     with make_session() as db:
         items_query = db.query(Chunk.id, Chunk.content).filter(
-            Chunk.collection_name.in_(modalities)
+            Chunk.collection_name.in_(modalities),
+            Chunk.content.isnot(None),
         )
 
         if source_ids := filters.get("source_ids"):
@@ -46,6 +47,7 @@ async def search_bm25(
         item_ids = {
             sha256(item.content.lower().strip().encode("utf-8")).hexdigest(): item.id
             for item in items
+            if item.content
         }
         corpus = [item.content.lower().strip() for item in items]
 

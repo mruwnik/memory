@@ -6,7 +6,7 @@ import contextlib
 import os
 import logging
 
-from fastapi import FastAPI, UploadFile, Request
+from fastapi import FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqladmin import Admin
@@ -50,6 +50,24 @@ async def serve_react_app(full_path: str):
     return FileResponse(settings.STATIC_DIR / "index.html")
 
 
+@app.get("/files/{path:path}")
+async def serve_file(path: str):
+    file_path = settings.FILE_STORAGE_DIR / path
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
+
+
+async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
+    if not item:
+        return []
+
+    if isinstance(item, str):
+        return extract.extract_text(item)
+    content_type = item.content_type or "application/octet-stream"
+    return extract.extract_data_chunks(content_type, await item.read())
+
+
 # SQLAdmin setup with OAuth protection
 engine = get_engine()
 admin = Admin(app, engine)
@@ -70,16 +88,6 @@ async def health_check(request: Request):
 
 # Mount MCP server at root - OAuth endpoints need to be at root level
 app.mount("/", mcp.streamable_http_app())
-
-
-async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
-    if not item:
-        return []
-
-    if isinstance(item, str):
-        return extract.extract_text(item)
-    content_type = item.content_type or "application/octet-stream"
-    return extract.extract_data_chunks(content_type, await item.read())
 
 
 def main(reload: bool = False):

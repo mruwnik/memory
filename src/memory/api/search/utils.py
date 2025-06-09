@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 from datetime import datetime
 import logging
 from collections import defaultdict
@@ -28,7 +29,7 @@ class SourceData(BaseModel):
     mime_type: str | None
     filename: str | None
     content_length: int
-    contents: dict | None
+    contents: dict | str | None
     created_at: datetime | None
 
     @staticmethod
@@ -87,6 +88,7 @@ async def with_timeout(
         logger.warning(f"Search timed out after {timeout}s")
         return []
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Search failed: {e}")
         return []
 
@@ -109,8 +111,14 @@ def group_chunks(
 
     def make_result(source: SourceData, chunks: list[AnnotatedChunk]) -> SearchResult:
         contents = source.contents or {}
-        tags = contents.pop("tags", [])
-        content = contents.pop("content", None)
+        tags = []
+        if isinstance(contents, dict):
+            tags = contents.pop("tags", [])
+            content = contents.pop("content", None)
+            print(content)
+        else:
+            content = contents
+            contents = {}
 
         return SearchResult(
             id=source.id,

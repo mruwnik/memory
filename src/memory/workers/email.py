@@ -61,7 +61,7 @@ def process_attachment(
         mime_type=attachment["content_type"],
         mail_message=message,
         content=content,
-        filename=file_path and str(file_path),
+        filename=file_path and str(file_path.relative_to(settings.FILE_STORAGE_DIR)),
     )
 
 
@@ -149,7 +149,7 @@ def extract_email_uid(
 
 def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> RawEmailResponse | None:
     try:
-        status, msg_data = conn.fetch(uid, "(UID RFC822)")
+        status, msg_data = conn.fetch(uid, "(UID BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
             logger.error(f"Error fetching message {uid}")
             return None

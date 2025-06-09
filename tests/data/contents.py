@@ -237,6 +237,40 @@ SAMPLE_TEXT = BeautifulSoup(SAMPLE_HTML, "html.parser").get_text()
 SECOND_PAGE_MARKDOWN = markdownify(SECOND_PAGE)
 SECOND_PAGE_TEXT = BeautifulSoup(SECOND_PAGE, "html.parser").get_text()
 
+SAMPLE_EMAIL = f"""From: john.doe@techcorp.com
+To: research-team@techcorp.com, jane.smith@university.edu
+CC: newsletter@programming-weekly.com
+Subject: The Evolution of Programming Languages - Research Article
+Date: Wed, 15 Jan 2025 14:30:00 +0000
+Message-ID: <20250115143000.12345@techcorp.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_NextPart_000_0001_01DA1234.56789ABC"
+
+This is a multi-part message in MIME format.
+
+------=_NextPart_000_0001_01DA1234.56789ABC
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+{SAMPLE_HTML}
+
+------=_NextPart_000_0001_01DA1234.56789ABC
+Content-Type: image/png
+Content-Disposition: attachment; filename="lang_timeline.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+
+------=_NextPart_000_0001_01DA1234.56789ABC
+Content-Type: image/jpeg
+Content-Disposition: attachment; filename="code_complexity.jpg"
+Content-Transfer-Encoding: base64
+
+/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB
+
+------=_NextPart_000_0001_01DA1234.56789ABC--
+"""
+
 
 def image_hash(image: Image.Image) -> str:
     return hashlib.sha256(image.tobytes()).hexdigest()

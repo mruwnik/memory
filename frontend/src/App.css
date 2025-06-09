@@ -433,6 +433,14 @@ body {
   background: #e2e8f0;
 }
 
+.metadata {
+  margin-top: 1rem;
+  padding: 1rem 2rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
   .app-header {

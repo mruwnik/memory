@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { useMCP } from '../hooks/useMCP'
-import { useAuth } from '../hooks/useAuth'
 import Loading from './Loading'
 
 type SearchItem = {
@@ -24,7 +23,7 @@ const Tag = ({ tags }: { tags: string[] }) => {
     )
 }
 
-const formatText = ({ filename, content, chunks, tags }: SearchItem) => {
+const TextResult = ({ filename, content, chunks, tags }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
@@ -45,11 +44,12 @@ const formatText = ({ filename, content, chunks, tags }: SearchItem) => {
     )
 }
 
-const formatMarkdown = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
+const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
             <Tag tags={tags} />
+            <Metadata metadata={metadata} />
             <div className="markdown-content">
                 <ReactMarkdown>{content || 'No content available'}</ReactMarkdown>
             </div>
@@ -70,7 +70,7 @@ const formatMarkdown = ({ filename, content, chunks, tags, metadata }: SearchIte
     )
 }
 
-const formatImage = ({ filename, chunks, tags, metadata }: SearchItem) => {
+const ImageResult = ({ filename, chunks, tags, metadata }: SearchItem) => {
     const title = metadata?.title || filename || 'Untitled'
     const { fetchFile } = useMCP()
     const [mime_type, setMimeType] = useState<string>()
@@ -95,17 +95,66 @@ const formatImage = ({ filename, chunks, tags, metadata }: SearchItem) => {
     )
 }
 
+const Metadata = ({ metadata }: { metadata: any }) => {
+    if (!metadata) return null
+    return (
+        <div className="metadata">
+            <ul>    
+                {Object.entries(metadata).map(([key, value]) => (
+                    <li key={key}>{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</li>
+                ))}
+            </ul>
+        </div>
+    )
+}
+
+const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
+    return (
+        <div className="search-result-card">
+            <h4>{filename || 'Untitled'}</h4>
+            <Tag tags={tags} />
+            <a href={`http://localhost:8000/files/${filename}`}>View PDF</a>
+            <Metadata metadata={metadata} />
+            {content && <div className="markdown-content">
+                <details>
+                    <summary>View Source</summary>
+                    <ReactMarkdown>{content}</ReactMarkdown>
+                </details>
+            </div>}
+        </div>
+    )
+}
+
+const EmailResult = ({ content, tags, metadata }: SearchItem) => {
+    return (
+        <div className="search-result-card">
+            <h4>{metadata?.title || metadata?.subject || 'Untitled'}</h4>
+            <Tag tags={tags} />
+            <Metadata metadata={metadata} />
+            {content && <div className="markdown-content">
+                <ReactMarkdown>{content}</ReactMarkdown>
+            </div>}
+        </div>
+    )
+}
+
 const SearchResult = ({ result }: { result: SearchItem }) => {
     if (result.mime_type.startsWith('image/')) {
-        return formatImage(result)
+        return <ImageResult {...result} />
     }
     if (result.mime_type.startsWith('text/markdown')) {
-        console.log(result)
-        return formatMarkdown(result)
+        return <MarkdownResult {...result} /> 
     }
     if (result.mime_type.startsWith('text/')) {
-        return formatText(result)
+        return <TextResult {...result} />
     }
+    if (result.mime_type.startsWith('application/pdf')) {
+        return <PDFResult {...result} />
+    }
+    if (result.mime_type.startsWith('message/rfc822')) {
+        return <EmailResult {...result} />
+    }
+    console.log(result)
     return null
 }
 

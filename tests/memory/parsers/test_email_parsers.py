@@ -246,12 +246,11 @@ def test_parse_simple_email():
         "subject": "Test Subject",
         "sender": "sender@example.com",
         "recipients": ["recipient@example.com"],
-        "body": "Test body content\n",
+        "body": "Test body content",
         "attachments": [],
         "sent_at": ANY,
         "raw_email": msg.as_string(),
-        "hash": b"\xed\xa0\x9b\xd4\t4\x06\xb9l\xa4\xb3*\xe4NpZ\x19\xc2\x9b\x87"
-        + b"\xa6\x12\r\x7fS\xb6\xf1\xbe\x95\x9c\x99\xf1",
+        "hash": b"\xa8\x8c\xa9\x16\xae\xe7\x99\xca\xc9\xd1q\x8e\xcb\xfc5+ \x03aZLz\xea\xd2\x05\xb9B\xf1i\xde\xa6\xe2",
     }
     assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400  # type: ignore
 

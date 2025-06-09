@@ -93,34 +93,75 @@ class MailMessage(SourceItem):
         }
 
     @property
-    def parsed_content(self):
+    def parsed_content(self) -> dict[str, Any]:
         from memory.parsers.email import parse_email_message
 
-        return parse_email_message(cast(str, self.content), cast(str, self.message_id))
+        return cast(
+            dict[str, Any],
+            parse_email_message(cast(str, self.content), cast(str, self.message_id)),
+        )
 
     @property
     def body(self) -> str:
         return self.parsed_content["body"]
 
-    @property
-    def display_contents(self) -> str | None:
-        content = self.parsed_content
-        return textwrap.dedent(
-            """
+    def format_content(self, content: dict[str, Any]) -> str:
+        sender = (
+            cast(str, self.sender) or content.get("from") or content.get("sender", "")
+        )
+        recipients = (
+            cast(list[str], self.recipients)
+            or content.get("to")
+            or content.get("recipients", [])
+        )
+        date = (
+            cast(datetime, self.sent_at) and self.sent_at.isoformat()
+        ) or content.get("date", "")
+
+        return (
+            textwrap.dedent(
+                """
             Subject: {subject}
             From: {sender}
             To: {recipients}
             Date: {date}
-            Body: 
+            Body:
             {body}
             """
-        ).format(
-            subject=content.get("subject", ""),
-            sender=content.get("from", ""),
-            recipients=content.get("to", ""),
-            date=content.get("date", ""),
-            body=content.get("body", ""),
+            )
+            .format(
+                subject=cast(str, self.subject) or content.get("subject", ""),
+                sender=sender,
+                recipients=", ".join(recipients),
+                date=date,
+                body=content.get("body", ""),
+            )
+            .strip()
         )
+
+    @property
+    def display_contents(self) -> dict | None:
+        return {
+            **cast(dict, super().display_contents),
+            "content": self.body,
+            "subject": self.subject,
+            "sender": self.sender,
+            "recipients": self.recipients,
+            "date": cast(datetime | None, self.sent_at) and self.sent_at.isoformat(),
+        }
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        content = self.parsed_content
+        chunks = extract.extract_text(cast(str, self.body))
+
+        def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
+            if isinstance(item, str):
+                return self.format_content(content | {"body": item}).strip()
+            return item
+
+        for chunk in chunks:
+            chunk.data = [add_header(item) for item in chunk.data]
+        return chunks
 
     # Add indexes
     __table_args__ = (
@@ -161,12 +202,21 @@ class EmailAttachment(SourceItem):
 
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
         if cast(str | None, self.filename):
-            contents = pathlib.Path(cast(str, self.filename)).read_bytes()
+            contents = (
+                settings.FILE_STORAGE_DIR / cast(str, self.filename)
+            ).read_bytes()
         else:
             contents = cast(str, self.content)
 
         chunks = extract.extract_data_chunks(cast(str, self.mime_type), contents)
         return [self._make_chunk(c, metadata) for c in chunks]
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            **cast(dict, super().display_contents),
+            **self.mail_message.display_contents,
+        }
 
     # Add indexes
     __table_args__ = (Index("email_attachment_message_idx", "mail_message_id"),)

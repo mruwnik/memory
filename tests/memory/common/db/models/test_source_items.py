@@ -183,13 +183,27 @@ Subject: Test Subject
 Test Body Content"""
 
     mail_message = MailMessage(
-        sha256=b"test", content=email_content, message_id="<test@example.com>"
+        sha256=b"test",
+        content=email_content,
+        message_id="<test@example.com>",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        subject="Test Subject",
+        size=1024,
+        sent_at=datetime(2023, 1, 1, 12, 0, 0),
     )
 
-    expected = (
-        "\nSubject: Test Subject\nFrom: \nTo: \nDate: \nBody: \nTest Body Content\n"
-    )
-    assert mail_message.display_contents == expected
+    assert mail_message.display_contents == {
+        "content": "Test Body Content",
+        "date": "2023-01-01T12:00:00",
+        "filename": None,
+        "mime_type": None,
+        "size": 1024,
+        "subject": "Test Subject",
+        "sender": "sender@example.com",
+        "recipients": ["recipient@example.com"],
+        "tags": None,
+    }
 
 
 @pytest.mark.parametrize(

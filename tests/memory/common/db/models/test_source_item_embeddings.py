@@ -1,4 +1,5 @@
 import hashlib
+import textwrap
 from datetime import datetime
 from typing import Sequence, cast
 from unittest.mock import ANY, Mock, call
@@ -20,6 +21,7 @@ from memory.common.db.models.source_items import (
 from memory.common.db.models.sources import Book
 from memory.common.embedding import embed_source_item
 from memory.common.extract import page_to_image
+from memory.parsers.email import parse_email_message
 from tests.data.contents import (
     CHUNKS,
     DATA_DIR,
@@ -27,6 +29,7 @@ from tests.data.contents import (
     LANG_TIMELINE_HASH,
     CODE_COMPLEXITY,
     CODE_COMPLEXITY_HASH,
+    SAMPLE_EMAIL,
     SAMPLE_MARKDOWN,
     SAMPLE_TEXT,
     SECOND_PAGE,
@@ -127,31 +130,41 @@ def test_base_source_item_mixed_embeddings(mock_voyage_client):
     ] == [LANG_TIMELINE_HASH]
 
 
-def test_mail_message_embeddings(mock_voyage_client):
+def test_mail_message_with_attachments_embeddings(mock_voyage_client):
+    email = parse_email_message(SAMPLE_EMAIL, "123")
     item = MailMessage(
         id=1,
-        content=SAMPLE_MARKDOWN,
+        content=SAMPLE_EMAIL,
         mime_type="text/html",
         modality="text",
-        sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
-        size=len(SAMPLE_MARKDOWN),
+        sha256=hashlib.sha256(email["body"].encode("utf-8")).hexdigest(),
+        size=len(email["body"]),
         tags=["bla"],
         message_id="123",
-        subject="Test Subject",
-        sender="test@example.com",
-        recipients=["test@example.com"],
+        subject=email["subject"],
+        sender=email["sender"],
+        recipients=email["recipients"],
         folder="INBOX",
         sent_at=datetime(2025, 1, 1, 12, 0, 0),
     )
+    email_header = textwrap.dedent(
+        f"""
+        Subject: {email["subject"]}
+        From: {email["sender"]}
+        To: {", ".join(email["recipients"])}
+        Date: 2025-01-01T12:00:00
+        Body:
+        """
+    ).lstrip()
     metadata = item.as_payload()
-    metadata["tags"] = {"bla", "test@example.com"}
+    metadata["tags"] = {"bla", "john.doe@techcorp.com"} | set(email["recipients"])
     expected = [
-        (CHUNKS[0].strip(), [], metadata),
-        (CHUNKS[1].strip(), [], metadata),
+        (email_header + CHUNKS[0].strip(), [], metadata),
+        (email_header + CHUNKS[1].strip().replace("—", "\\\\u2014"), [], metadata),
         (
-            "test summary",
+            email_header + "test summary",
             [],
-            metadata | {"tags": {"tag1", "tag2", "bla", "test@example.com"}},
+            metadata | {"tags": {"tag1", "tag2"} | metadata["tags"]},
         ),
     ]
 
@@ -166,7 +179,11 @@ def test_mail_message_embeddings(mock_voyage_client):
     assert not mock_voyage_client.multimodal_embed.call_count
 
     assert mock_voyage_client.embed.call_args == call(
-        [CHUNKS[0].strip(), CHUNKS[1].strip(), "test summary"],
+        [
+            email_header + CHUNKS[0].strip(),
+            email_header + CHUNKS[1].strip().replace("—", "\\\\u2014"),
+            email_header + "test summary",
+        ],
         model=settings.TEXT_EMBEDDING_MODEL,
         input_type="document",
     )

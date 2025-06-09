@@ -1,10 +1,13 @@
 import email
+import email.message
 import hashlib
 import logging
 import pathlib
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import TypedDict
+
+from markdownify import markdownify
 
 logger = logging.getLogger(__name__)
 
@@ -71,33 +74,60 @@ def extract_date(msg: email.message.Message) -> datetime | None:  # type: ignore
 
 def extract_body(msg: email.message.Message) -> str:  # type: ignore
     """
-    Extract plain text body from email message.
+    Extract body from email message, preferring HTML converted to markdown.
 
     Args:
         msg: Email message object
 
     Returns:
-        Plain text body content
+        Body content as markdown (if HTML found) or plain text
     """
-    body = ""
+    html_body = ""
+    plain_body = ""
 
     if not msg.is_multipart():
         try:
-            return msg.get_payload(decode=True).decode(errors="replace")
+            payload = msg.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                content = payload.decode(errors="replace")
+            else:
+                content = str(payload)
+            content_type = msg.get_content_type()
+            if content_type == "text/html":
+                return markdownify(content).strip()
+            else:
+                return content
         except Exception as e:
             logger.error(f"Error decoding message body: {str(e)}")
             return ""
 
+    # Extract both HTML and plain text parts
     for part in msg.walk():
         content_type = part.get_content_type()
         content_disposition = str(part.get("Content-Disposition", ""))
 
-        if content_type == "text/plain" and "attachment" not in content_disposition:
-            try:
-                body += part.get_payload(decode=True).decode(errors="replace") + "\n"
-            except Exception as e:
-                logger.error(f"Error decoding message part: {str(e)}")
-    return body
+        if "attachment" in content_disposition:
+            continue
+
+        try:
+            payload = part.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                content = payload.decode(errors="replace")
+            else:
+                content = str(payload)
+
+            if content_type == "text/html":
+                html_body += content + "\n"
+            elif content_type == "text/plain":
+                plain_body += content + "\n"
+        except Exception as e:
+            logger.error(f"Error decoding message part: {str(e)}")
+
+    # Prefer HTML (converted to markdown) over plain text
+    if html_body.strip():
+        return markdownify(html_body).strip()
+    else:
+        return plain_body.strip()
 
 
 def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type: ignore
