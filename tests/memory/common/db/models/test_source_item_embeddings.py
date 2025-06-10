@@ -198,6 +198,14 @@ def test_email_attachment_embeddings_text(mock_voyage_client):
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
         size=len(SAMPLE_MARKDOWN),
         tags=["bla"],
+        mail_message=MailMessage(
+            sent_at=datetime(2025, 1, 1, 12, 0, 0),
+            message_id="123",
+            subject="Test",
+            sender="john.doe@techcorp.com",
+            recipients=["john.doe@techcorp.com"],
+            folder="INBOX",
+        ),
     )
     metadata = item.as_payload()
     metadata["tags"] = {"bla"}
@@ -238,6 +246,14 @@ def test_email_attachment_embeddings_photo(mock_voyage_client):
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
         size=len(SAMPLE_MARKDOWN),
         tags=["bla"],
+        mail_message=MailMessage(
+            sent_at=datetime(2025, 1, 1, 12, 0, 0),
+            message_id="123",
+            subject="Test",
+            sender="john.doe@techcorp.com",
+            recipients=["john.doe@techcorp.com"],
+            folder="INBOX",
+        ),
     )
     metadata = item.as_payload()
     metadata["tags"] = {"bla"}
@@ -275,6 +291,14 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
         size=len(SAMPLE_MARKDOWN),
         tags=["bla"],
+        mail_message=MailMessage(
+            sent_at=datetime(2025, 1, 1, 12, 0, 0),
+            message_id="123",
+            subject="Test",
+            sender="john.doe@techcorp.com",
+            recipients=["john.doe@techcorp.com"],
+            folder="INBOX",
+        ),
     )
     metadata = item.as_payload()
     metadata["tags"] = {"bla"}
@@ -314,7 +338,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     ] == [page for _, page, _ in expected]
 
 
-def test_email_attachment_embeddings_comic(mock_voyage_client):
+def test_embeddings_comic(mock_voyage_client):
     item = Comic(
         id=1,
         content=SAMPLE_MARKDOWN,

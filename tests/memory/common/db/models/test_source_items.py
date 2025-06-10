@@ -223,6 +223,14 @@ def test_email_attachment_as_payload(created_at, expected_date):
         mail_message_id=123,
         created_at=created_at,
         tags=["pdf", "document"],
+        mail_message=MailMessage(
+            sent_at=datetime(2025, 1, 1, 12, 0, 0),
+            message_id="123",
+            subject="Test",
+            sender="john.doe@techcorp.com",
+            recipients=["john.doe@techcorp.com"],
+            folder="INBOX",
+        ),
     )
     # Manually set id for testing
     object.__setattr__(attachment, "id", 456)
@@ -237,6 +245,7 @@ def test_email_attachment_as_payload(created_at, expected_date):
         "created_at": expected_date,
         "mail_message_id": 123,
         "tags": ["pdf", "document"],
+        "sent_at": "2025-01-01T12:00:00",
     }
     assert payload == expected
 

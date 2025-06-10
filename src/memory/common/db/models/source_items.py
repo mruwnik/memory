@@ -166,7 +166,7 @@ class MailMessage(SourceItem):
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = self.parsed_content
-        chunks = extract.extract_text(cast(str, self.body), modality="email")
+        chunks = extract.extract_text(cast(str, self.body), modality="mail")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
@@ -194,6 +194,7 @@ class EmailAttachmentPayload(SourceItemPayload):
     content_type: Annotated[str, "MIME type of the document"]
     mail_message_id: Annotated[int, "Associated email message ID"]
     sent_at: Annotated[str | None, "Document creation timestamp"]
+    created_at: Annotated[str | None, "Document creation timestamp"]
 
 
 class EmailAttachment(SourceItem):
@@ -218,6 +219,7 @@ class EmailAttachment(SourceItem):
     def as_payload(self) -> EmailAttachmentPayload:
         return EmailAttachmentPayload(
             **super().as_payload(),
+            created_at=(self.created_at and self.created_at.isoformat() or None),  # type: ignore
             filename=cast(str, self.filename),
             content_type=cast(str, self.mime_type),
             mail_message_id=cast(int, self.mail_message_id),

@@ -45,7 +45,6 @@ async def search(
     - List of search results sorted by score
     """
     allowed_modalities = modalities & ALL_COLLECTIONS.keys()
-    print(allowed_modalities)
 
     searches = []
     if settings.ENABLE_EMBEDDING_SEARCH:

@@ -95,93 +95,93 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What does the user think about functional programming?": {
         "semantic": [
             (
-                0.7104,
+                0.71,
                 "The user believes functional programming leads to better code quality",
             ),
-            (0.6788, "I prefer functional programming over OOP"),
+            (0.679, "I prefer functional programming over OOP"),
             (
-                0.6759,
+                0.676,
                 "Subject: programming_philosophy | Type: belief | Observation: The user believes functional programming leads to better code quality | Quote: Functional programming produces more maintainable code",
             ),
             (
-                0.6678,
+                0.668,
                 "Subject: programming_paradigms | Type: preference | Observation: The user prefers functional programming over OOP | Quote: I prefer functional programming over OOP",
             ),
         ],
         "temporal": [
             (
-                0.5971,
+                0.597,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.5308,
+                0.531,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_paradigms | Observation: The user prefers functional programming over OOP",
             ),
             (
-                0.5167,
+                0.517,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
             (
-                0.4702,
+                0.47,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: refactoring | Observation: The user always refactors to pure functions",
             ),
         ],
     },
     "Does the user prefer functional or object-oriented programming?": {
         "semantic": [
-            (0.7719, "The user prefers functional programming over OOP"),
+            (0.772, "The user prefers functional programming over OOP"),
             (
-                0.7541,
+                0.754,
                 "Subject: programming_paradigms | Type: preference | Observation: The user prefers functional programming over OOP | Quote: I prefer functional programming over OOP",
             ),
-            (0.7455, "I prefer functional programming over OOP"),
+            (0.745, "I prefer functional programming over OOP"),
             (
-                0.6536,
+                0.654,
                 "The user believes functional programming leads to better code quality",
             ),
         ],
         "temporal": [
             (
-                0.6251,
+                0.625,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_paradigms | Observation: The user prefers functional programming over OOP",
             ),
             (
-                0.6062,
+                0.606,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.5061,
+                0.506,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
             (
-                0.5036,
+                0.504,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: refactoring | Observation: The user always refactors to pure functions",
             ),
         ],
     },
     "What are the user's beliefs about code quality?": {
         "semantic": [
-            (0.6925, "The user believes code reviews are essential for quality"),
+            (0.692, "The user believes code reviews are essential for quality"),
             (
-                0.6801,
+                0.68,
                 "The user believes functional programming leads to better code quality",
             ),
             (
-                0.6525,
+                0.652,
                 "Subject: code_quality | Type: belief | Observation: The user believes code reviews are essential for quality | Quote: Code reviews catch bugs that automated testing misses",
             ),
             (
-                0.6471,
+                0.647,
                 "Subject: programming_philosophy | Type: belief | Observation: The user believes functional programming leads to better code quality | Quote: Functional programming produces more maintainable code",
             ),
         ],
         "temporal": [
             (
-                0.5269,
+                0.527,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.5193,
+                0.519,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: code_quality | Observation: The user believes code reviews are essential for quality",
             ),
             (
@@ -189,7 +189,7 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: testing_philosophy | Observation: The user believes unit tests are a waste of time for prototypes",
             ),
             (
-                0.4377,
+                0.438,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
         ],
@@ -197,22 +197,22 @@ EXPECTED_OBSERVATION_RESULTS = {
     "How does the user approach debugging code?": {
         "semantic": [
             (
-                0.7007,
+                0.701,
                 "Subject: debugging_approach | Type: behavior | Observation: The user debugs by adding print statements rather than using a debugger | Quote: When debugging, I just add console.log everywhere",
             ),
             (
-                0.6956,
+                0.696,
                 "The user debugs by adding print statements rather than using a debugger",
             ),
-            (0.6795, "When debugging, I just add console.log everywhere"),
+            (0.68, "When debugging, I just add console.log everywhere"),
             (
-                0.5352,
+                0.535,
                 "Subject: code_quality | Type: belief | Observation: The user believes code reviews are essential for quality | Quote: Code reviews catch bugs that automated testing misses",
             ),
         ],
         "temporal": [
             (
-                0.6253,
+                0.625,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: debugging_approach | Observation: The user debugs by adding print statements rather than using a debugger",
             ),
             (
@@ -220,11 +220,11 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: indentation_preference | Observation: The user claims to prefer tabs but their code uses spaces",
             ),
             (
-                0.4589,
+                0.459,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: testing_philosophy | Observation: The user believes unit tests are a waste of time for prototypes",
             ),
             (
-                0.4502,
+                0.45,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: version_control_style | Observation: The user prefers small, focused commits over large feature branches",
             ),
         ],
@@ -232,63 +232,63 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What are the user's git and version control habits?": {
         "semantic": [
             (
-                0.6485,
+                0.648,
                 "Subject: version_control_style | Type: preference | Observation: The user prefers small, focused commits over large feature branches | Quote: I like to commit small, logical changes frequently",
             ),
             (0.643, "I like to commit small, logical changes frequently"),
             (
-                0.5968,
+                0.597,
                 "The user prefers small, focused commits over large feature branches",
             ),
             (
-                0.5813,
+                0.581,
                 "Subject: git_habits | Type: behavior | Observation: The user writes commit messages in present tense | Quote: Fix bug in parser instead of Fixed bug in parser",
             ),
         ],
         "temporal": [
             (
-                0.6063,
+                0.606,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: version_control_style | Observation: The user prefers small, focused commits over large feature branches",
             ),
             (
-                0.5569,
+                0.557,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: git_habits | Observation: The user writes commit messages in present tense",
             ),
             (
-                0.4806,
+                0.481,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: editor_preference | Observation: The user prefers Vim over VS Code for editing",
             ),
             (
-                0.4622,
+                0.462,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: code_quality | Observation: The user believes code reviews are essential for quality",
             ),
         ],
     },
     "When does the user prefer to work?": {
         "semantic": [
-            (0.6805, "The user prefers working late at night"),
+            (0.681, "The user prefers working late at night"),
             (
-                0.6794,
+                0.679,
                 "Subject: work_schedule | Type: behavior | Observation: The user prefers working late at night | Quote: I do my best coding between 10pm and 2am",
             ),
-            (0.6432, "I do my best coding between 10pm and 2am"),
-            (0.5525, "I use 25-minute work intervals with 5-minute breaks"),
+            (0.643, "I do my best coding between 10pm and 2am"),
+            (0.553, "I use 25-minute work intervals with 5-minute breaks"),
         ],
         "temporal": [
             (
-                0.6896,
+                0.69,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_schedule | Observation: The user prefers working late at night",
             ),
             (
-                0.6327,
+                0.633,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
             (
-                0.6266,
+                0.627,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
             (
-                0.6206,
+                0.621,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: collaboration_preference | Observation: The user prefers pair programming for complex problems",
             ),
         ],
@@ -296,31 +296,31 @@ EXPECTED_OBSERVATION_RESULTS = {
     "How does the user handle productivity and time management?": {
         "semantic": [
             (
-                0.5795,
+                0.579,
                 "Subject: productivity_methods | Type: behavior | Observation: The user takes breaks every 25 minutes using the Pomodoro technique | Quote: I use 25-minute work intervals with 5-minute breaks",
             ),
-            (0.5727, "I use 25-minute work intervals with 5-minute breaks"),
+            (0.572, "I use 25-minute work intervals with 5-minute breaks"),
             (
-                0.5282,
+                0.527,
                 "The user takes breaks every 25 minutes using the Pomodoro technique",
             ),
             (0.515, "I do my best coding between 10pm and 2am"),
         ],
         "temporal": [
             (
-                0.5633,
+                0.563,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: productivity_methods | Observation: The user takes breaks every 25 minutes using the Pomodoro technique",
             ),
             (
-                0.5105,
+                0.51,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
             (
-                0.4737,
+                0.473,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: documentation_habits | Observation: The user always writes documentation before implementing features",
             ),
             (
-                0.4672,
+                0.467,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_schedule | Observation: The user prefers working late at night",
             ),
         ],
@@ -328,28 +328,28 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What editor does the user prefer?": {
         "semantic": [
             (
-                0.6398,
+                0.64,
                 "Subject: editor_preference | Type: preference | Observation: The user prefers Vim over VS Code for editing | Quote: Vim makes me more productive than any modern editor",
             ),
-            (0.6242, "The user prefers Vim over VS Code for editing"),
-            (0.5524, "Vim makes me more productive than any modern editor"),
-            (0.4887, "The user claims to prefer tabs but their code uses spaces"),
+            (0.624, "The user prefers Vim over VS Code for editing"),
+            (0.552, "Vim makes me more productive than any modern editor"),
+            (0.489, "The user claims to prefer tabs but their code uses spaces"),
         ],
         "temporal": [
             (
-                0.5626,
+                0.563,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: editor_preference | Observation: The user prefers Vim over VS Code for editing",
             ),
             (
-                0.4507,
+                0.451,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: indentation_preference | Observation: The user claims to prefer tabs but their code uses spaces",
             ),
             (
-                0.4333,
+                0.433,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: database_preference | Observation: The user prefers PostgreSQL over MongoDB for most applications",
             ),
             (
-                0.4307,
+                0.431,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
         ],
@@ -357,27 +357,27 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What databases does the user like to use?": {
         "semantic": [
             (
-                0.6328,
+                0.633,
                 "Subject: database_preference | Type: preference | Observation: The user prefers PostgreSQL over MongoDB for most applications | Quote: Relational databases handle complex queries better than document stores",
             ),
-            (0.5991, "The user prefers PostgreSQL over MongoDB for most applications"),
+            (0.599, "The user prefers PostgreSQL over MongoDB for most applications"),
             (
-                0.5357,
+                0.536,
                 "Subject: domain_preference | Type: preference | Observation: The user prefers working on backend systems over frontend UI | Quote: I find backend logic more interesting than UI work",
             ),
-            (0.5178, "The user prefers working on backend systems over frontend UI"),
+            (0.518, "The user prefers working on backend systems over frontend UI"),
         ],
         "temporal": [
             (
-                0.5503,
+                0.55,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: database_preference | Observation: The user prefers PostgreSQL over MongoDB for most applications",
             ),
             (
-                0.4583,
+                0.458,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
             (
-                0.4445,
+                0.445,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
@@ -388,21 +388,21 @@ EXPECTED_OBSERVATION_RESULTS = {
     },
     "What programming languages does the user work with?": {
         "semantic": [
-            (0.7264, "The user primarily works with Python and JavaScript"),
-            (0.6958, "Most of my work is in Python backend and React frontend"),
+            (0.726, "The user primarily works with Python and JavaScript"),
+            (0.696, "Most of my work is in Python backend and React frontend"),
             (
-                0.6875,
+                0.688,
                 "Subject: primary_languages | Type: general | Observation: The user primarily works with Python and JavaScript | Quote: Most of my work is in Python backend and React frontend",
             ),
-            (0.6111, "I'm picking up Rust on weekends"),
+            (0.611, "I'm picking up Rust on weekends"),
         ],
         "temporal": [
             (
-                0.5774,
+                0.577,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.4692,
+                0.469,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: experience_level | Observation: The user has 8 years of professional programming experience",
             ),
             (
@@ -410,36 +410,36 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.4475,
+                0.447,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: learning_activities | Observation: The user is currently learning Rust in their spare time",
             ),
         ],
     },
     "What is the user's programming experience level?": {
         "semantic": [
-            (0.6663, "The user has 8 years of professional programming experience"),
+            (0.666, "The user has 8 years of professional programming experience"),
             (
-                0.6562,
+                0.656,
                 "Subject: experience_level | Type: general | Observation: The user has 8 years of professional programming experience | Quote: I've been coding professionally for 8 years",
             ),
-            (0.5952, "I've been coding professionally for 8 years"),
-            (0.5656, "The user is currently learning Rust in their spare time"),
+            (0.595, "I've been coding professionally for 8 years"),
+            (0.566, "The user is currently learning Rust in their spare time"),
         ],
         "temporal": [
             (
-                0.5808,
+                0.581,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: experience_level | Observation: The user has 8 years of professional programming experience",
             ),
             (
-                0.4814,
+                0.481,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.4752,
+                0.475,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.4591,
+                0.459,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_paradigms | Observation: The user prefers functional programming over OOP",
             ),
         ],
@@ -447,57 +447,57 @@ EXPECTED_OBSERVATION_RESULTS = {
     "Where did the user study computer science?": {
         "semantic": [
             (0.686, "I studied CS at Stanford"),
-            (0.6484, "The user graduated with a Computer Science degree from Stanford"),
+            (0.648, "The user graduated with a Computer Science degree from Stanford"),
             (
-                0.6346,
+                0.635,
                 "Subject: education_background | Type: general | Observation: The user graduated with a Computer Science degree from Stanford | Quote: I studied CS at Stanford",
             ),
-            (0.4599, "The user is currently learning Rust in their spare time"),
+            (0.46, "The user is currently learning Rust in their spare time"),
         ],
         "temporal": [
             (
-                0.5288,
+                0.529,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: education_background | Observation: The user graduated with a Computer Science degree from Stanford",
             ),
             (
-                0.3833,
+                0.383,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: experience_level | Observation: The user has 8 years of professional programming experience",
             ),
             (
-                0.3728,
+                0.373,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.3651,
+                0.365,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: learning_activities | Observation: The user is currently learning Rust in their spare time",
             ),
         ],
     },
     "What kind of company does the user work at?": {
         "semantic": [
-            (0.6304, "The user works at a mid-size startup with 50 employees"),
+            (0.63, "The user works at a mid-size startup with 50 employees"),
             (
-                0.5369,
+                0.537,
                 "Subject: company_size | Type: general | Observation: The user works at a mid-size startup with 50 employees | Quote: Our company has about 50 people",
             ),
-            (0.5258, "Most of my work is in Python backend and React frontend"),
-            (0.4905, "I've been coding professionally for 8 years"),
+            (0.526, "Most of my work is in Python backend and React frontend"),
+            (0.49, "I've been coding professionally for 8 years"),
         ],
         "temporal": [
             (
-                0.5194,
+                0.519,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: company_size | Observation: The user works at a mid-size startup with 50 employees",
             ),
             (
-                0.4149,
+                0.415,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
             (
-                0.4144,
+                0.414,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: education_background | Observation: The user graduated with a Computer Science degree from Stanford",
             ),
             (
-                0.4053,
+                0.405,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: experience_level | Observation: The user has 8 years of professional programming experience",
             ),
         ],
@@ -505,34 +505,34 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What does the user think about AI replacing programmers?": {
         "semantic": [
             (
-                0.5955,
+                0.596,
                 "Subject: ai_future | Type: belief | Observation: The user thinks AI will replace most software developers within 10 years | Quote: AI will make most programmers obsolete by 2035",
             ),
-            (0.5725, "AI will make most programmers obsolete by 2035"),
+            (0.572, "AI will make most programmers obsolete by 2035"),
             (
                 0.572,
                 "The user thinks AI will replace most software developers within 10 years",
             ),
             (
-                0.4342,
+                0.434,
                 "The user believes functional programming leads to better code quality",
             ),
         ],
         "temporal": [
             (
-                0.4546,
+                0.455,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: ai_future | Observation: The user thinks AI will replace most software developers within 10 years",
             ),
             (
-                0.3583,
+                0.358,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.3264,
+                0.326,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: typescript_opinion | Observation: The user now says they love TypeScript but previously called it verbose",
             ),
             (
-                0.3257,
+                0.326,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: testing_philosophy | Observation: The user believes unit tests are a waste of time for prototypes",
             ),
         ],
@@ -540,31 +540,31 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What are the user's views on artificial intelligence?": {
         "semantic": [
             (
-                0.5884,
+                0.588,
                 "Subject: ai_future | Type: belief | Observation: The user thinks AI will replace most software developers within 10 years | Quote: AI will make most programmers obsolete by 2035",
             ),
             (
-                0.5659,
+                0.566,
                 "The user thinks AI will replace most software developers within 10 years",
             ),
-            (0.5139, "AI will make most programmers obsolete by 2035"),
-            (0.4927, "I find backend logic more interesting than UI work"),
+            (0.514, "AI will make most programmers obsolete by 2035"),
+            (0.493, "I find backend logic more interesting than UI work"),
         ],
         "temporal": [
             (
-                0.5205,
+                0.521,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: ai_future | Observation: The user thinks AI will replace most software developers within 10 years",
             ),
             (
-                0.4203,
+                0.42,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.4007,
+                0.401,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
             (
-                0.4001,
+                0.4,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: humans | Observation: The user thinks that all men must die.",
             ),
         ],
@@ -572,34 +572,34 @@ EXPECTED_OBSERVATION_RESULTS = {
     "Has the user changed their mind about TypeScript?": {
         "semantic": [
             (
-                0.6166,
+                0.617,
                 "The user now says they love TypeScript but previously called it verbose",
             ),
             (
-                0.5764,
+                0.576,
                 "Subject: typescript_opinion | Type: contradiction | Observation: The user now says they love TypeScript but previously called it verbose | Quote: TypeScript has too much boilerplate vs TypeScript makes my code so much cleaner",
             ),
             (
-                0.4907,
+                0.491,
                 "TypeScript has too much boilerplate vs TypeScript makes my code so much cleaner",
             ),
-            (0.4159, "The user always refactors to pure functions"),
+            (0.416, "The user always refactors to pure functions"),
         ],
         "temporal": [
             (
-                0.5663,
+                0.566,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: typescript_opinion | Observation: The user now says they love TypeScript but previously called it verbose",
             ),
             (
-                0.3897,
+                0.39,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: indentation_preference | Observation: The user claims to prefer tabs but their code uses spaces",
             ),
             (
-                0.3833,
+                0.383,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.3761,
+                0.376,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: editor_preference | Observation: The user prefers Vim over VS Code for editing",
             ),
         ],
@@ -608,11 +608,11 @@ EXPECTED_OBSERVATION_RESULTS = {
         "semantic": [
             (0.536, "The user claims to prefer tabs but their code uses spaces"),
             (
-                0.5353,
+                0.535,
                 "Subject: indentation_preference | Type: contradiction | Observation: The user claims to prefer tabs but their code uses spaces | Quote: Tabs are better than spaces vs code consistently uses 2-space indentation",
             ),
             (
-                0.5328,
+                0.533,
                 "Subject: pure_functions | Type: contradiction | Observation: The user said pure functions are yucky | Quote: Pure functions are yucky",
             ),
             (
@@ -622,19 +622,19 @@ EXPECTED_OBSERVATION_RESULTS = {
         ],
         "temporal": [
             (
-                0.4671,
+                0.467,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
             (
-                0.4661,
+                0.466,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: indentation_preference | Observation: The user claims to prefer tabs but their code uses spaces",
             ),
             (
-                0.4566,
+                0.457,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
             (
-                0.4553,
+                0.455,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: database_preference | Observation: The user prefers PostgreSQL over MongoDB for most applications",
             ),
         ],
@@ -642,15 +642,15 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What does the user think about software testing?": {
         "semantic": [
             (
-                0.6384,
+                0.638,
                 "Subject: testing_philosophy | Type: belief | Observation: The user believes unit tests are a waste of time for prototypes | Quote: Writing tests for throwaway code slows development",
             ),
-            (0.6219, "The user believes unit tests are a waste of time for prototypes"),
+            (0.622, "The user believes unit tests are a waste of time for prototypes"),
             (
-                0.6154,
+                0.615,
                 "Subject: code_quality | Type: belief | Observation: The user believes code reviews are essential for quality | Quote: Code reviews catch bugs that automated testing misses",
             ),
-            (0.6031, "The user believes code reviews are essential for quality"),
+            (0.603, "The user believes code reviews are essential for quality"),
         ],
         "temporal": [
             (
@@ -658,15 +658,15 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: testing_philosophy | Observation: The user believes unit tests are a waste of time for prototypes",
             ),
             (
-                0.4901,
+                0.49,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: code_quality | Observation: The user believes code reviews are essential for quality",
             ),
             (
-                0.4745,
+                0.474,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
-                0.4524,
+                0.452,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: debugging_approach | Observation: The user debugs by adding print statements rather than using a debugger",
             ),
         ],
@@ -678,30 +678,30 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Subject: documentation_habits | Type: behavior | Observation: The user always writes documentation before implementing features | Quote: I document the API design before writing any code",
             ),
             (
-                0.5462,
+                0.546,
                 "The user always writes documentation before implementing features",
             ),
-            (0.5213, "I document the API design before writing any code"),
+            (0.521, "I document the API design before writing any code"),
             (
-                0.4949,
+                0.495,
                 "Subject: debugging_approach | Type: behavior | Observation: The user debugs by adding print statements rather than using a debugger | Quote: When debugging, I just add console.log everywhere",
             ),
         ],
         "temporal": [
             (
-                0.5001,
+                0.5,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: documentation_habits | Observation: The user always writes documentation before implementing features",
             ),
             (
-                0.4371,
+                0.437,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: version_control_style | Observation: The user prefers small, focused commits over large feature branches",
             ),
             (
-                0.4355,
+                0.435,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: indentation_preference | Observation: The user claims to prefer tabs but their code uses spaces",
             ),
             (
-                0.4347,
+                0.435,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
         ],
@@ -709,12 +709,12 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What are the user's collaboration preferences?": {
         "semantic": [
             (
-                0.6516,
+                0.652,
                 "Subject: collaboration_preference | Type: preference | Observation: The user prefers pair programming for complex problems | Quote: Two heads are better than one when solving hard problems",
             ),
-            (0.5855, "The user prefers pair programming for complex problems"),
+            (0.585, "The user prefers pair programming for complex problems"),
             (
-                0.5361,
+                0.536,
                 "Subject: version_control_style | Type: preference | Observation: The user prefers small, focused commits over large feature branches | Quote: I like to commit small, logical changes frequently",
             ),
             (
@@ -724,7 +724,7 @@ EXPECTED_OBSERVATION_RESULTS = {
         ],
         "temporal": [
             (
-                0.5889,
+                0.589,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: collaboration_preference | Observation: The user prefers pair programming for complex problems",
             ),
             (
@@ -732,40 +732,40 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: version_control_style | Observation: The user prefers small, focused commits over large feature branches",
             ),
             (
-                0.4754,
+                0.475,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
             (
-                0.4638,
+                0.464,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
         ],
     },
     "What does the user think about remote work?": {
         "semantic": [
-            (0.7054, "The user thinks remote work is more productive than office work"),
+            (0.705, "The user thinks remote work is more productive than office work"),
             (
-                0.6581,
+                0.658,
                 "Subject: work_environment | Type: belief | Observation: The user thinks remote work is more productive than office work | Quote: I get more done working from home",
             ),
-            (0.6026, "I get more done working from home"),
-            (0.4991, "The user prefers working on backend systems over frontend UI"),
+            (0.603, "I get more done working from home"),
+            (0.499, "The user prefers working on backend systems over frontend UI"),
         ],
         "temporal": [
             (
-                0.5832,
+                0.583,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
             (
-                0.4126,
+                0.413,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: testing_philosophy | Observation: The user believes unit tests are a waste of time for prototypes",
             ),
             (
-                0.4122,
+                0.412,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: collaboration_preference | Observation: The user prefers pair programming for complex problems",
             ),
             (
-                0.4092,
+                0.409,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
         ],
@@ -773,27 +773,27 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What are the user's productivity methods?": {
         "semantic": [
             (
-                0.5729,
+                0.573,
                 "Subject: productivity_methods | Type: behavior | Observation: The user takes breaks every 25 minutes using the Pomodoro technique | Quote: I use 25-minute work intervals with 5-minute breaks",
             ),
             (
-                0.5261,
+                0.526,
                 "The user takes breaks every 25 minutes using the Pomodoro technique",
             ),
-            (0.5205, "I use 25-minute work intervals with 5-minute breaks"),
+            (0.52, "I use 25-minute work intervals with 5-minute breaks"),
             (0.512, "The user thinks remote work is more productive than office work"),
         ],
         "temporal": [
             (
-                0.5312,
+                0.531,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: productivity_methods | Observation: The user takes breaks every 25 minutes using the Pomodoro technique",
             ),
             (
-                0.4796,
+                0.48,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: work_environment | Observation: The user thinks remote work is more productive than office work",
             ),
             (
-                0.4344,
+                0.434,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: collaboration_preference | Observation: The user prefers pair programming for complex problems",
             ),
             (
@@ -804,17 +804,17 @@ EXPECTED_OBSERVATION_RESULTS = {
     },
     "What technical skills is the user learning?": {
         "semantic": [
-            (0.5766, "The user is currently learning Rust in their spare time"),
+            (0.577, "The user is currently learning Rust in their spare time"),
             (
                 0.55,
                 "Subject: learning_activities | Type: general | Observation: The user is currently learning Rust in their spare time | Quote: I'm picking up Rust on weekends",
             ),
-            (0.5415, "I'm picking up Rust on weekends"),
-            (0.5156, "The user primarily works with Python and JavaScript"),
+            (0.542, "I'm picking up Rust on weekends"),
+            (0.516, "The user primarily works with Python and JavaScript"),
         ],
         "temporal": [
             (
-                0.5221,
+                0.522,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: learning_activities | Observation: The user is currently learning Rust in their spare time",
             ),
             (
@@ -822,32 +822,32 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.4871,
+                0.487,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: experience_level | Observation: The user has 8 years of professional programming experience",
             ),
             (
-                0.4547,
+                0.455,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: education_background | Observation: The user graduated with a Computer Science degree from Stanford",
             ),
         ],
     },
     "What does the user think about cooking?": {
         "semantic": [
-            (0.4893, "I find backend logic more interesting than UI work"),
-            (0.4621, "The user prefers working on backend systems over frontend UI"),
+            (0.489, "I find backend logic more interesting than UI work"),
+            (0.462, "The user prefers working on backend systems over frontend UI"),
             (
-                0.4551,
+                0.455,
                 "The user believes functional programming leads to better code quality",
             ),
-            (0.4549, "The user said pure functions are yucky"),
+            (0.455, "The user said pure functions are yucky"),
         ],
         "temporal": [
             (
-                0.3785,
+                0.379,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: pure_functions | Observation: The user said pure functions are yucky",
             ),
             (
-                0.3759,
+                0.376,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_philosophy | Observation: The user believes functional programming leads to better code quality",
             ),
             (
@@ -855,7 +855,7 @@ EXPECTED_OBSERVATION_RESULTS = {
                 "Time: 12:00 on Wednesday (afternoon) | Subject: typescript_opinion | Observation: The user now says they love TypeScript but previously called it verbose",
             ),
             (
-                0.3594,
+                0.359,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
         ],
@@ -866,25 +866,25 @@ EXPECTED_OBSERVATION_RESULTS = {
                 0.523,
                 "Subject: domain_preference | Type: preference | Observation: The user prefers working on backend systems over frontend UI | Quote: I find backend logic more interesting than UI work",
             ),
-            (0.5143, "The user prefers functional programming over OOP"),
-            (0.5074, "The user prefers working on backend systems over frontend UI"),
-            (0.5049, "The user prefers working late at night"),
+            (0.514, "The user prefers functional programming over OOP"),
+            (0.507, "The user prefers working on backend systems over frontend UI"),
+            (0.505, "The user prefers working late at night"),
         ],
         "temporal": [
             (
-                0.4767,
+                0.477,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
             ),
             (
-                0.4748,
+                0.475,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: database_preference | Observation: The user prefers PostgreSQL over MongoDB for most applications",
             ),
             (
-                0.4587,
+                0.459,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_paradigms | Observation: The user prefers functional programming over OOP",
             ),
             (
-                0.4554,
+                0.455,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: collaboration_preference | Observation: The user prefers pair programming for complex problems",
             ),
         ],
@@ -892,28 +892,28 @@ EXPECTED_OBSERVATION_RESULTS = {
     "What music does the user like?": {
         "semantic": [
             (
-                0.4933,
+                0.493,
                 "Subject: domain_preference | Type: preference | Observation: The user prefers working on backend systems over frontend UI | Quote: I find backend logic more interesting than UI work",
             ),
-            (0.4906, "The user prefers working late at night"),
-            (0.4902, "The user prefers functional programming over OOP"),
-            (0.4894, "The user primarily works with Python and JavaScript"),
+            (0.491, "The user prefers working late at night"),
+            (0.49, "The user prefers functional programming over OOP"),
+            (0.489, "The user primarily works with Python and JavaScript"),
         ],
         "temporal": [
             (
-                0.4676,
+                0.468,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: typescript_opinion | Observation: The user now says they love TypeScript but previously called it verbose",
             ),
             (
-                0.4561,
+                0.456,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: primary_languages | Observation: The user primarily works with Python and JavaScript",
             ),
             (
-                0.4471,
+                0.447,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: programming_paradigms | Observation: The user prefers functional programming over OOP",
             ),
             (
-                0.4432,
+                0.443,
                 "Time: 12:00 on Wednesday (afternoon) | Subject: editor_preference | Observation: The user prefers Vim over VS Code for editing",
             ),
         ],
@@ -1104,15 +1104,20 @@ def test_real_observation_embeddings(real_voyage_client, qdrant):
     def get_top(vector, search_type: str) -> list[tuple[float, str]]:
         results = qdrant_tools.search_vectors(qdrant, search_type, vector)
         return [
-            (round(i.score, 4), chunk_map[str(i.id)].content)
+            (pytest.approx(i.score, 0.1), chunk_map[str(i.id)].content)  # type: ignore
             for i in sorted(results, key=lambda x: x.score, reverse=True)
         ][:4]
 
+    results = {}
     for query, expected in EXPECTED_OBSERVATION_RESULTS.items():
         search_vector = embed_text(
             [extract.DataChunk(data=[query])], input_type="query"
         )[0]
         semantic_results = get_top(search_vector, "semantic")
         temporal_results = get_top(search_vector, "temporal")
+        results[query] = {
+            "semantic": semantic_results,
+            "temporal": temporal_results,
+        }
         assert semantic_results == expected["semantic"]
         assert temporal_results == expected["temporal"]

@@ -173,7 +173,6 @@ async def search_embeddings(
     for key, val in filters.items():
         search_filters = merge_filters(search_filters, key, val)
 
-    print(search_filters)
     client = qdrant.get_qdrant_client()
     results = query_chunks(
         client,
