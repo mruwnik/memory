@@ -49,6 +49,7 @@ x-worker-base: &worker-base
     QDRANT_URL: http://qdrant:6333
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
     ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+    VOYAGE_API_KEY: ${VOYAGE_API_KEY}
   secrets: [ postgres_password, openai_key, anthropic_key, ssh_private_key, ssh_public_key, ssh_known_hosts ]
   read_only: true
   tmpfs: 
@@ -150,6 +151,7 @@ services:
       SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       VITE_SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       STATIC_DIR: "/app/static"
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     secrets: [postgres_password]
     volumes:
       - ./memory_files:/app/memory_files:rw
