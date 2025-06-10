@@ -1,6 +1,4 @@
-import React from 'react'
-
-const Loading = ({ message = "Loading..." }) => {
+const Loading = ({ message = "Loading..." }: { message?: string }) => {
     return (
         <div className="loading">
             <h2>{message}</h2>

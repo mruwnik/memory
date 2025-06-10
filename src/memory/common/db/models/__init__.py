@@ -4,6 +4,7 @@ from memory.common.db.models.source_item import (
     SourceItem,
     ConfidenceScore,
     clean_filename,
+    SourceItemPayload,
 )
 from memory.common.db.models.source_items import (
     MailMessage,
@@ -19,6 +20,14 @@ from memory.common.db.models.source_items import (
     Photo,
     MiscDoc,
     Note,
+    MailMessagePayload,
+    EmailAttachmentPayload,
+    AgentObservationPayload,
+    BlogPostPayload,
+    ComicPayload,
+    BookSectionPayload,
+    NotePayload,
+    ForumPostPayload,
 )
 from memory.common.db.models.observations import (
     ObservationContradiction,
@@ -38,6 +47,18 @@ from memory.common.db.models.users import (
     OAuthClientInformation,
     OAuthState,
     OAuthRefreshToken,
+)
+
+Payload = (
+    SourceItemPayload
+    | AgentObservationPayload
+    | NotePayload
+    | BlogPostPayload
+    | ComicPayload
+    | BookSectionPayload
+    | ForumPostPayload
+    | EmailAttachmentPayload
+    | MailMessagePayload
 )
 
 __all__ = [
@@ -75,4 +96,6 @@ __all__ = [
     "OAuthClientInformation",
     "OAuthState",
     "OAuthRefreshToken",
+    # Payloads
+    "Payload",
 ]

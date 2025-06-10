@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useAuth } from './useAuth'
+import { useAuth } from '@/hooks/useAuth'
 
 const parseServerSentEvents = async (response: Response): Promise<any> => {
   const reader = response.body?.getReader()
@@ -91,10 +91,10 @@ const parseJsonRpcResponse = async (response: Response): Promise<any> => {
 }
 
 export const useMCP = () => {
-  const { apiCall, isAuthenticated, isLoading, checkAuth } = useAuth()
+  const { apiCall, checkAuth } = useAuth()
 
-  const mcpCall = useCallback(async (path: string, method: string, params: any = {}) => {
-    const response = await apiCall(`/mcp${path}`, {
+  const mcpCall = useCallback(async (method: string, params: any = {}) => {
+    const response = await apiCall(`/mcp/${method}`, {
       method: 'POST',
       headers: {
         'Accept': 'application/json, text/event-stream',
@@ -118,22 +118,46 @@ export const useMCP = () => {
     if (resp?.result?.isError) {
       throw new Error(resp?.result?.content[0].text)
     }
-    return resp?.result?.content.map((item: any) => JSON.parse(item.text))
+    return resp?.result?.content.map((item: any) => {
+      try {
+        return JSON.parse(item.text)
+      } catch (e) {
+        return item.text
+      }
+    })
   }, [apiCall])
 
   const listNotes = useCallback(async (path: string = "/") => {
-    return await mcpCall('/note_files', 'note_files', { path })
+    return await mcpCall('note_files', { path })
   }, [mcpCall])
 
   const fetchFile = useCallback(async (filename: string) => {
-    return await mcpCall('/fetch_file', 'fetch_file', { filename })
+    return await mcpCall('fetch_file', { filename })
   }, [mcpCall])
 
-  const searchKnowledgeBase = useCallback(async (query: string, previews: boolean = true, limit: number = 10) => {
-    return await mcpCall('/search_knowledge_base', 'search_knowledge_base', {
+  const getTags = useCallback(async () => {
+    return await mcpCall('get_all_tags')
+  }, [mcpCall])
+
+  const getSubjects = useCallback(async () => {
+    return await mcpCall('get_all_subjects')
+  }, [mcpCall])
+
+  const getObservationTypes = useCallback(async () => {
+    return await mcpCall('get_all_observation_types')
+  }, [mcpCall])
+
+  const getMetadataSchemas = useCallback(async () => {
+    return (await mcpCall('get_metadata_schemas'))[0]
+  }, [mcpCall])
+
+  const searchKnowledgeBase = useCallback(async (query: string, previews: boolean = true, limit: number = 10, filters: Record<string, any> = {}, modalities: string[] = []) => {
+    return await mcpCall('search_knowledge_base', {
       query,
+      filters,
+      modalities,
       previews,
-      limit
+      limit,
     })
   }, [mcpCall])
 
@@ -146,5 +170,9 @@ export const useMCP = () => {
     fetchFile,
     listNotes,
     searchKnowledgeBase,
+    getTags,
+    getSubjects,
+    getObservationTypes,
+    getMetadataSchemas,
   }
 } 

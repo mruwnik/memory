@@ -2,9 +2,9 @@ import { useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 
-import { useAuth } from './hooks/useAuth'
-import { useOAuth } from './hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search } from './components'
+import { useAuth } from '@/hooks/useAuth'
+import { useOAuth } from '@/hooks/useOAuth'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search } from '@/components'
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
@@ -31,7 +31,10 @@ const AuthWrapper = () => {
   // Handle redirects based on auth state changes
   useEffect(() => {
     if (!isLoading) {
-      if (isAuthenticated) {
+      if (location.pathname === '/ui/logout') {
+        logout()
+        navigate('/ui/login', { replace: true })
+      } else if (isAuthenticated) {
         // If authenticated and on login page, redirect to dashboard
         if (location.pathname === '/ui/login' || location.pathname === '/ui') {
           navigate('/ui/dashboard', { replace: true })

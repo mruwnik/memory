@@ -71,6 +71,13 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
 # SQLAdmin setup with OAuth protection
 engine = get_engine()
 admin = Admin(app, engine)
+admin.app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # [settings.SERVER_URL],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Setup admin with OAuth protection using existing OAuth provider
 setup_admin(admin)

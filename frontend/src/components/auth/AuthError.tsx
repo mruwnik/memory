@@ -1,6 +1,4 @@
-import React from 'react'
-
-const AuthError = ({ error, onRetry }) => {
+const AuthError = ({ error, onRetry }: { error: string, onRetry: () => void }) => {
     return (
         <div className="error">
             <h2>Authentication Error</h2>

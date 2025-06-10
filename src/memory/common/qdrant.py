@@ -224,6 +224,15 @@ def get_collection_info(
     return info.model_dump()
 
 
+def get_collection_sizes(client: qdrant_client.QdrantClient) -> dict[str, int]:
+    """Get the size of each collection."""
+    collections = [i.name for i in client.get_collections().collections]
+    return {
+        collection_name: client.count(collection_name).count  # type: ignore
+        for collection_name in collections
+    }
+
+
 def batch_ids(
     client: qdrant_client.QdrantClient, collection_name: str, batch_size: int = 1000
 ) -> Generator[list[str], None, None]:

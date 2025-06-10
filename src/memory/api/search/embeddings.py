@@ -1,7 +1,7 @@
 import base64
 import io
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import qdrant_client
 from PIL import Image
@@ -90,13 +90,71 @@ def query_chunks(
     }
 
 
+def merge_range_filter(
+    filters: list[dict[str, Any]], key: str, val: Any
+) -> list[dict[str, Any]]:
+    direction, field = key.split("_", maxsplit=1)
+    item = next((f for f in filters if f["key"] == field), None)
+    if not item:
+        item = {"key": field, "range": {}}
+        filters.append(item)
+
+    if direction == "min":
+        item["range"]["gte"] = val
+    elif direction == "max":
+        item["range"]["lte"] = val
+    return filters
+
+
+def merge_filters(
+    filters: list[dict[str, Any]], key: str, val: Any
+) -> list[dict[str, Any]]:
+    if not val and val != 0:
+        return filters
+
+    list_filters = ["tags", "recipients", "observation_types", "authors"]
+    range_filters = [
+        "min_sent_at",
+        "max_sent_at",
+        "min_published",
+        "max_published",
+        "min_size",
+        "max_size",
+        "min_created_at",
+        "max_created_at",
+    ]
+    if key in list_filters:
+        filters.append({"key": key, "match": {"any": val}})
+
+    elif key in range_filters:
+        return merge_range_filter(filters, key, val)
+
+    elif key == "min_confidences":
+        confidence_filters = [
+            {
+                "key": f"confidence.{confidence_type}",
+                "range": {"gte": min_confidence_score},
+            }
+            for confidence_type, min_confidence_score in cast(dict, val).items()
+        ]
+        filters.extend(confidence_filters)
+
+    elif key == "source_ids":
+        filters.append({"key": "id", "match": {"any": val}})
+
+    else:
+        filters.append({"key": key, "match": val})
+
+    return filters
+
+
 async def search_embeddings(
     data: list[extract.DataChunk],
     previews: Optional[bool] = False,
     modalities: set[str] = set(),
     limit: int = 10,
     min_score: float = 0.3,
-    filters: SearchFilters = SearchFilters(),
+    filters: SearchFilters = {},
     multimodal: bool = False,
 ) -> list[tuple[SourceData, AnnotatedChunk]]:
     """
@@ -111,27 +169,11 @@ async def search_embeddings(
     - filters: Filters to apply to the search results
     - multimodal: Whether to search in multimodal collections
     """
-    query_filters = {"must": []}
+    search_filters = []
+    for key, val in filters.items():
+        search_filters = merge_filters(search_filters, key, val)
 
-    # Handle structured confidence filtering
-    if min_confidences := filters.get("min_confidences"):
-        confidence_filters = [
-            {
-                "key": f"confidence.{confidence_type}",
-                "range": {"gte": min_confidence_score},
-            }
-            for confidence_type, min_confidence_score in min_confidences.items()
-        ]
-        query_filters["must"].extend(confidence_filters)
-
-    if tags := filters.get("tags"):
-        query_filters["must"].append({"key": "tags", "match": {"any": tags}})
-
-    if observation_types := filters.get("observation_types"):
-        query_filters["must"].append(
-            {"key": "observation_type", "match": {"any": observation_types}}
-        )
-
+    print(search_filters)
     client = qdrant.get_qdrant_client()
     results = query_chunks(
         client,
@@ -140,7 +182,7 @@ async def search_embeddings(
         embedding.embed_text if not multimodal else embedding.embed_mixed,
         min_score=min_score,
         limit=limit,
-        filters=query_filters if query_filters["must"] else None,
+        filters={"must": search_filters} if search_filters else None,
     )
     search_results = {k: results.get(k, []) for k in modalities}
 

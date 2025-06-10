@@ -1,6 +1,4 @@
-import React from 'react'
-
-const LoginPrompt = ({ onLogin }) => {
+const LoginPrompt = ({ onLogin }: { onLogin: () => void }) => {
     return (
         <div className="login-prompt">
             <h1>Memory App</h1>

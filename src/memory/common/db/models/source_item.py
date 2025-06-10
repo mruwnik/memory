@@ -4,7 +4,7 @@ Database models for the knowledge base system.
 
 import pathlib
 import re
-from typing import Any, Sequence, cast
+from typing import Any, Annotated, Sequence, TypedDict, cast
 import uuid
 
 from PIL import Image
@@ -34,6 +34,17 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
+
+
+class MetadataSchema(TypedDict):
+    type: str
+    description: str
+
+
+class SourceItemPayload(TypedDict):
+    source_id: Annotated[int, "Unique identifier of the source item"]
+    tags: Annotated[list[str], "List of tags for categorization"]
+    size: Annotated[int | None, "Size of the content in bytes"]
 
 
 @event.listens_for(Session, "before_flush")
@@ -344,12 +355,17 @@ class SourceItem(Base):
     def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
         return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
 
-    def as_payload(self) -> dict:
-        return {
-            "source_id": self.id,
-            "tags": self.tags,
-            "size": self.size,
-        }
+    def as_payload(self) -> SourceItemPayload:
+        return SourceItemPayload(
+            source_id=cast(int, self.id),
+            tags=cast(list[str], self.tags),
+            size=cast(int | None, self.size),
+        )
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        """Return the list of Qdrant collections this SourceItem type can be stored in."""
+        return [cls.__tablename__]
 
     @property
     def display_contents(self) -> str | dict | None:

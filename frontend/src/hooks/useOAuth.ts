@@ -14,7 +14,7 @@ const generateCodeVerifier = () => {
     .replace(/=/g, '')
 }
 
-const generateCodeChallenge = async (verifier) => {
+const generateCodeChallenge = async (verifier: string) => {
   const data = new TextEncoder().encode(verifier)
   const digest = await crypto.subtle.digest('SHA-256', data)
   return btoa(String.fromCharCode(...new Uint8Array(digest)))
@@ -33,7 +33,7 @@ const generateState = () => {
 }
 
 // Storage utilities
-const setCookie = (name, value, days = 30) => {
+const setCookie = (name: string, value: string, days = 30) => {
   const expires = new Date()
   expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
   document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`

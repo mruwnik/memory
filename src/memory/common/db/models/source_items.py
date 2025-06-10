@@ -5,7 +5,7 @@ Database models for the knowledge base system.
 import pathlib
 import textwrap
 from datetime import datetime
-from typing import Any, Sequence, cast
+from typing import Any, Annotated, Sequence, cast
 
 from PIL import Image
 from sqlalchemy import (
@@ -32,9 +32,19 @@ import memory.common.formatters.observation as observation
 from memory.common.db.models.source_item import (
     SourceItem,
     Chunk,
+    SourceItemPayload,
     clean_filename,
     chunk_mixed,
 )
+
+
+class MailMessagePayload(SourceItemPayload):
+    message_id: Annotated[str, "Unique email message identifier"]
+    subject: Annotated[str, "Email subject line"]
+    sender: Annotated[str, "Email sender address"]
+    recipients: Annotated[list[str], "List of recipient email addresses"]
+    folder: Annotated[str, "Email folder name"]
+    date: Annotated[str | None, "Email sent date in ISO format"]
 
 
 class MailMessage(SourceItem):
@@ -80,17 +90,21 @@ class MailMessage(SourceItem):
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def as_payload(self) -> dict:
-        return {
-            **super().as_payload(),
-            "message_id": self.message_id,
-            "subject": self.subject,
-            "sender": self.sender,
-            "recipients": self.recipients,
-            "folder": self.folder,
-            "tags": self.tags + [self.sender] + self.recipients,
-            "date": (self.sent_at and self.sent_at.isoformat() or None),  # type: ignore
+    def as_payload(self) -> MailMessagePayload:
+        base_payload = super().as_payload() | {
+            "tags": cast(list[str], self.tags)
+            + [cast(str, self.sender)]
+            + cast(list[str], self.recipients)
         }
+        return MailMessagePayload(
+            **cast(dict, base_payload),
+            message_id=cast(str, self.message_id),
+            subject=cast(str, self.subject),
+            sender=cast(str, self.sender),
+            recipients=cast(list[str], self.recipients),
+            folder=cast(str, self.folder),
+            date=(self.sent_at and self.sent_at.isoformat() or None),  # type: ignore
+        )
 
     @property
     def parsed_content(self) -> dict[str, Any]:
@@ -152,7 +166,7 @@ class MailMessage(SourceItem):
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = self.parsed_content
-        chunks = extract.extract_text(cast(str, self.body))
+        chunks = extract.extract_text(cast(str, self.body), modality="email")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
@@ -163,12 +177,23 @@ class MailMessage(SourceItem):
             chunk.data = [add_header(item) for item in chunk.data]
         return chunks
 
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["mail"]
+
     # Add indexes
     __table_args__ = (
         Index("mail_sent_idx", "sent_at"),
         Index("mail_recipients_idx", "recipients", postgresql_using="gin"),
         Index("mail_tsv_idx", "tsv", postgresql_using="gin"),
     )
+
+
+class EmailAttachmentPayload(SourceItemPayload):
+    filename: Annotated[str, "Name of the document file"]
+    content_type: Annotated[str, "MIME type of the document"]
+    mail_message_id: Annotated[int, "Associated email message ID"]
+    sent_at: Annotated[str | None, "Document creation timestamp"]
 
 
 class EmailAttachment(SourceItem):
@@ -190,17 +215,20 @@ class EmailAttachment(SourceItem):
         "polymorphic_identity": "email_attachment",
     }
 
-    def as_payload(self) -> dict:
-        return {
+    def as_payload(self) -> EmailAttachmentPayload:
+        return EmailAttachmentPayload(
             **super().as_payload(),
-            "filename": self.filename,
-            "content_type": self.mime_type,
-            "size": self.size,
-            "created_at": (self.created_at and self.created_at.isoformat() or None),  # type: ignore
-            "mail_message_id": self.mail_message_id,
-        }
+            filename=cast(str, self.filename),
+            content_type=cast(str, self.mime_type),
+            mail_message_id=cast(int, self.mail_message_id),
+            sent_at=(
+                self.mail_message.sent_at
+                and self.mail_message.sent_at.isoformat()
+                or None
+            ),  # type: ignore
+        )
 
-    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         if cast(str | None, self.filename):
             contents = (
                 settings.FILE_STORAGE_DIR / cast(str, self.filename)
@@ -208,8 +236,7 @@ class EmailAttachment(SourceItem):
         else:
             contents = cast(str, self.content)
 
-        chunks = extract.extract_data_chunks(cast(str, self.mime_type), contents)
-        return [self._make_chunk(c, metadata) for c in chunks]
+        return extract.extract_data_chunks(cast(str, self.mime_type), contents)
 
     @property
     def display_contents(self) -> dict:
@@ -220,6 +247,11 @@ class EmailAttachment(SourceItem):
 
     # Add indexes
     __table_args__ = (Index("email_attachment_message_idx", "mail_message_id"),)
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        """EmailAttachment can go to different collections based on mime_type"""
+        return ["doc", "text", "blog", "photo", "book"]
 
 
 class ChatMessage(SourceItem):
@@ -285,6 +317,16 @@ class Photo(SourceItem):
     __table_args__ = (Index("photo_taken_idx", "exif_taken_at"),)
 
 
+class ComicPayload(SourceItemPayload):
+    title: Annotated[str, "Title of the comic"]
+    author: Annotated[str | None, "Author of the comic"]
+    published: Annotated[str | None, "Publication date in ISO format"]
+    volume: Annotated[str | None, "Volume number"]
+    issue: Annotated[str | None, "Issue number"]
+    page: Annotated[int | None, "Page number"]
+    url: Annotated[str | None, "URL of the comic"]
+
+
 class Comic(SourceItem):
     __tablename__ = "comic"
 
@@ -305,23 +347,33 @@ class Comic(SourceItem):
 
     __table_args__ = (Index("comic_author_idx", "author"),)
 
-    def as_payload(self) -> dict:
-        payload = {
+    def as_payload(self) -> ComicPayload:
+        return ComicPayload(
             **super().as_payload(),
-            "title": self.title,
-            "author": self.author,
-            "published": self.published,
-            "volume": self.volume,
-            "issue": self.issue,
-            "page": self.page,
-            "url": self.url,
-        }
-        return {k: v for k, v in payload.items() if v is not None}
+            title=cast(str, self.title),
+            author=cast(str | None, self.author),
+            published=(self.published and self.published.isoformat() or None),  # type: ignore
+            volume=cast(str | None, self.volume),
+            issue=cast(str | None, self.issue),
+            page=cast(int | None, self.page),
+            url=cast(str | None, self.url),
+        )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         image = Image.open(settings.FILE_STORAGE_DIR / cast(str, self.filename))
         description = f"{self.title} by {self.author}"
         return [extract.DataChunk(data=[image, description])]
+
+
+class BookSectionPayload(SourceItemPayload):
+    title: Annotated[str, "Title of the book"]
+    author: Annotated[str | None, "Author of the book"]
+    book_id: Annotated[int, "Unique identifier of the book"]
+    section_title: Annotated[str, "Title of the section"]
+    section_number: Annotated[int, "Number of the section"]
+    section_level: Annotated[int, "Level of the section"]
+    start_page: Annotated[int, "Starting page number"]
+    end_page: Annotated[int, "Ending page number"]
 
 
 class BookSection(SourceItem):
@@ -361,19 +413,22 @@ class BookSection(SourceItem):
         Index("book_section_level_idx", "section_level", "section_number"),
     )
 
-    def as_payload(self) -> dict:
-        vals = {
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["book"]
+
+    def as_payload(self) -> BookSectionPayload:
+        return BookSectionPayload(
             **super().as_payload(),
-            "title": self.book.title,
-            "author": self.book.author,
-            "book_id": self.book_id,
-            "section_title": self.section_title,
-            "section_number": self.section_number,
-            "section_level": self.section_level,
-            "start_page": self.start_page,
-            "end_page": self.end_page,
-        }
-        return {k: v for k, v in vals.items() if v}
+            title=cast(str, self.book.title),
+            author=cast(str | None, self.book.author),
+            book_id=cast(int, self.book_id),
+            section_title=cast(str, self.section_title),
+            section_number=cast(int, self.section_number),
+            section_level=cast(int, self.section_level),
+            start_page=cast(int, self.start_page),
+            end_page=cast(int, self.end_page),
+        )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = cast(str, self.content.strip())
@@ -395,6 +450,16 @@ class BookSection(SourceItem):
                 data=[summary], metadata={"type": "summary", "tags": tags}
             ),
         ]
+
+
+class BlogPostPayload(SourceItemPayload):
+    url: Annotated[str, "URL of the blog post"]
+    title: Annotated[str, "Title of the blog post"]
+    author: Annotated[str | None, "Author of the blog post"]
+    published: Annotated[str | None, "Publication date in ISO format"]
+    description: Annotated[str | None, "Description of the blog post"]
+    domain: Annotated[str | None, "Domain of the blog post"]
+    word_count: Annotated[int | None, "Word count of the blog post"]
 
 
 class BlogPost(SourceItem):
@@ -428,25 +493,37 @@ class BlogPost(SourceItem):
         Index("blog_post_word_count_idx", "word_count"),
     )
 
-    def as_payload(self) -> dict:
+    def as_payload(self) -> BlogPostPayload:
         published_date = cast(datetime | None, self.published)
         metadata = cast(dict | None, self.webpage_metadata) or {}
 
-        payload = {
+        return BlogPostPayload(
             **super().as_payload(),
-            "url": self.url,
-            "title": self.title,
-            "author": self.author,
-            "published": published_date and published_date.isoformat(),
-            "description": self.description,
-            "domain": self.domain,
-            "word_count": self.word_count,
+            url=cast(str, self.url),
+            title=cast(str, self.title),
+            author=cast(str | None, self.author),
+            published=(published_date and published_date.isoformat() or None),  # type: ignore
+            description=cast(str | None, self.description),
+            domain=cast(str | None, self.domain),
+            word_count=cast(int | None, self.word_count),
             **metadata,
-        }
-        return {k: v for k, v in payload.items() if v}
+        )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
+
+
+class ForumPostPayload(SourceItemPayload):
+    url: Annotated[str, "URL of the forum post"]
+    title: Annotated[str, "Title of the forum post"]
+    description: Annotated[str | None, "Description of the forum post"]
+    authors: Annotated[list[str] | None, "Authors of the forum post"]
+    published: Annotated[str | None, "Publication date in ISO format"]
+    slug: Annotated[str | None, "Slug of the forum post"]
+    karma: Annotated[int | None, "Karma score of the forum post"]
+    votes: Annotated[int | None, "Number of votes on the forum post"]
+    score: Annotated[int | None, "Score of the forum post"]
+    comments: Annotated[int | None, "Number of comments on the forum post"]
 
 
 class ForumPost(SourceItem):
@@ -479,20 +556,20 @@ class ForumPost(SourceItem):
         Index("forum_post_title_idx", "title"),
     )
 
-    def as_payload(self) -> dict:
-        return {
+    def as_payload(self) -> ForumPostPayload:
+        return ForumPostPayload(
             **super().as_payload(),
-            "url": self.url,
-            "title": self.title,
-            "description": self.description,
-            "authors": self.authors,
-            "published_at": self.published_at,
-            "slug": self.slug,
-            "karma": self.karma,
-            "votes": self.votes,
-            "score": self.score,
-            "comments": self.comments,
-        }
+            url=cast(str, self.url),
+            title=cast(str, self.title),
+            description=cast(str | None, self.description),
+            authors=cast(list[str] | None, self.authors),
+            published=(self.published_at and self.published_at.isoformat() or None),  # type: ignore
+            slug=cast(str | None, self.slug),
+            karma=cast(int | None, self.karma),
+            votes=cast(int | None, self.votes),
+            score=cast(int | None, self.score),
+            comments=cast(int | None, self.comments),
+        )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
@@ -545,6 +622,12 @@ class GithubItem(SourceItem):
     )
 
 
+class NotePayload(SourceItemPayload):
+    note_type: Annotated[str | None, "Category of the note"]
+    subject: Annotated[str | None, "What the note is about"]
+    confidence: Annotated[dict[str, float], "Confidence scores for the note"]
+
+
 class Note(SourceItem):
     """A quick note of something of interest."""
 
@@ -565,13 +648,13 @@ class Note(SourceItem):
         Index("note_subject_idx", "subject"),
     )
 
-    def as_payload(self) -> dict:
-        return {
+    def as_payload(self) -> NotePayload:
+        return NotePayload(
             **super().as_payload(),
-            "note_type": self.note_type,
-            "subject": self.subject,
-            "confidence": self.confidence_dict,
-        }
+            note_type=cast(str | None, self.note_type),
+            subject=cast(str | None, self.subject),
+            confidence=self.confidence_dict,
+        )
 
     @property
     def display_contents(self) -> dict:
@@ -601,6 +684,19 @@ class Note(SourceItem):
         return extract.extract_text(
             self.as_text(cast(str, self.content), cast(str | None, self.subject))
         )
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["text"]  # Notes go to the text collection
+
+
+class AgentObservationPayload(SourceItemPayload):
+    session_id: Annotated[str | None, "Session ID for the observation"]
+    observation_type: Annotated[str, "Type of observation"]
+    subject: Annotated[str, "What/who the observation is about"]
+    confidence: Annotated[dict[str, float], "Confidence scores for the observation"]
+    evidence: Annotated[dict | None, "Supporting context, quotes, etc."]
+    agent_model: Annotated[str, "Which AI model made this observation"]
 
 
 class AgentObservation(SourceItem):
@@ -652,18 +748,16 @@ class AgentObservation(SourceItem):
             kwargs["modality"] = "observation"
         super().__init__(**kwargs)
 
-    def as_payload(self) -> dict:
-        payload = {
+    def as_payload(self) -> AgentObservationPayload:
+        return AgentObservationPayload(
             **super().as_payload(),
-            "observation_type": self.observation_type,
-            "subject": self.subject,
-            "confidence": self.confidence_dict,
-            "evidence": self.evidence,
-            "agent_model": self.agent_model,
-        }
-        if self.session_id is not None:
-            payload["session_id"] = str(self.session_id)
-        return payload
+            observation_type=cast(str, self.observation_type),
+            subject=cast(str, self.subject),
+            confidence=self.confidence_dict,
+            evidence=cast(dict | None, self.evidence),
+            agent_model=cast(str, self.agent_model),
+            session_id=cast(str | None, self.session_id) and str(self.session_id),
+        )
 
     @property
     def all_contradictions(self):
@@ -759,3 +853,7 @@ class AgentObservation(SourceItem):
         # ))
 
         return chunks
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["semantic", "temporal"]

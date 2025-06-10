@@ -6,6 +6,8 @@ load_dotenv()
 
 
 def boolean_env(key: str, default: bool = False) -> bool:
+    if key not in os.environ:
+        return default
     return os.getenv(key, "0").lower() in ("1", "true", "yes")
 
 
@@ -129,6 +131,10 @@ if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
 else:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240307")
+
+# Search settings
+ENABLE_EMBEDDING_SEARCH = boolean_env("ENABLE_EMBEDDING_SEARCH", True)
+ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")

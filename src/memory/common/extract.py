@@ -53,7 +53,9 @@ def page_to_image(page: pymupdf.Page) -> Image.Image:
     return image
 
 
-def doc_to_images(content: bytes | str | pathlib.Path) -> list[DataChunk]:
+def doc_to_images(
+    content: bytes | str | pathlib.Path, modality: str = "doc"
+) -> list[DataChunk]:
     with as_file(content) as file_path:
         with pymupdf.open(file_path) as pdf:
             return [
@@ -65,6 +67,7 @@ def doc_to_images(content: bytes | str | pathlib.Path) -> list[DataChunk]:
                         "height": page.rect.height,
                     },
                     mime_type="image/jpeg",
+                    modality=modality,
                 )
                 for page in pdf.pages()
             ]
@@ -122,6 +125,7 @@ def extract_text(
     content: bytes | str | pathlib.Path,
     chunk_size: int | None = None,
     metadata: dict[str, Any] = {},
+    modality: str = "text",
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
         content = content.read_text()
@@ -130,7 +134,7 @@ def extract_text(
 
     content = cast(str, content)
     chunks = [
-        DataChunk(data=[c], modality="text", metadata=metadata)
+        DataChunk(data=[c], modality=modality, metadata=metadata)
         for c in chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
     ]
     if content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
@@ -139,7 +143,7 @@ def extract_text(
             DataChunk(
                 data=[summary],
                 metadata=merge_metadata(metadata, {"tags": tags}),
-                modality="text",
+                modality=modality,
             )
         )
     return chunks
@@ -158,9 +162,7 @@ def extract_data_chunks(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
     ]:
-        logger.info(f"Extracting content from {content}")
         chunks = extract_docx(content)
-        logger.info(f"Extracted {len(chunks)} pages from {content}")
     elif mime_type.startswith("text/"):
         chunks = extract_text(content, chunk_size)
     elif mime_type.startswith("image/"):

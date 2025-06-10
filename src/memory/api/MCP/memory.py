@@ -3,23 +3,25 @@ MCP tools for the epistemic sparring partner system.
 """
 
 import logging
+import mimetypes
 import pathlib
 from datetime import datetime, timezone
-import mimetypes
+from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Text, func
+from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.api.MCP.tools import mcp
 from memory.api.search.search import SearchFilters, search
 from memory.common import extract, settings
+from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
+from memory.common.celery_app import app as celery_app
 from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentObservation, SourceItem
+from memory.common.db.models import SourceItem, AgentObservation
 from memory.common.formatters import observation
-from memory.common.celery_app import app as celery_app, SYNC_OBSERVATION, SYNC_NOTE
-from memory.api.MCP.tools import mcp
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +49,13 @@ def filter_observation_source_ids(
     return source_ids
 
 
-def filter_source_ids(
-    modalities: set[str],
-    tags: list[str] | None = None,
-):
-    if not tags:
+def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int] | None:
+    if source_ids := filters.get("source_ids"):
+        return source_ids
+
+    tags = filters.get("tags")
+    size = filters.get("size")
+    if not (tags or size):
         return None
 
     with make_session() as session:
@@ -62,6 +66,8 @@ def filter_source_ids(
             items_query = items_query.filter(
                 SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
             )
+        if size:
+            items_query = items_query.filter(SourceItem.size == size)
         if modalities:
             items_query = items_query.filter(SourceItem.modality.in_(modalities))
         source_ids = [item.id for item in items_query.all()]
@@ -70,50 +76,11 @@ def filter_source_ids(
 
 
 @mcp.tool()
-async def get_all_tags() -> list[str]:
-    """
-    Get all unique tags used across the entire knowledge base.
-    Returns sorted list of tags from both observations and content.
-    """
-    with make_session() as session:
-        tags_query = session.query(func.unnest(SourceItem.tags)).distinct()
-        return sorted({row[0] for row in tags_query if row[0] is not None})
-
-
-@mcp.tool()
-async def get_all_subjects() -> list[str]:
-    """
-    Get all unique subjects from observations about the user.
-    Returns sorted list of subject identifiers used in observations.
-    """
-    with make_session() as session:
-        return sorted(
-            r.subject for r in session.query(AgentObservation.subject).distinct()
-        )
-
-
-@mcp.tool()
-async def get_all_observation_types() -> list[str]:
-    """
-    Get all observation types that have been used.
-    Standard types are belief, preference, behavior, contradiction, general, but there can be more.
-    """
-    with make_session() as session:
-        return sorted(
-            {
-                r.observation_type
-                for r in session.query(AgentObservation.observation_type).distinct()
-                if r.observation_type is not None
-            }
-        )
-
-
-@mcp.tool()
 async def search_knowledge_base(
     query: str,
-    previews: bool = False,
+    filters: dict[str, Any],
     modalities: set[str] = set(),
-    tags: list[str] = [],
+    previews: bool = False,
     limit: int = 10,
 ) -> list[dict]:
     """
@@ -125,7 +92,7 @@ async def search_knowledge_base(
         query: Natural language search query - be descriptive about what you're looking for
         previews: Include actual content in results - when false only a snippet is returned
         modalities: Filter by type: email, blog, book, forum, photo, comic, webpage (empty = all)
-        tags: Filter by tags - content must have at least one matching tag
+        filters: Filter by tags, source_ids, etc.
         limit: Max results (1-100)
 
     Returns: List of search results with id, score, chunks, content, filename
@@ -137,6 +104,9 @@ async def search_knowledge_base(
         modalities = set(ALL_COLLECTIONS.keys())
     modalities = set(modalities) & ALL_COLLECTIONS.keys() - OBSERVATION_COLLECTIONS
 
+    search_filters = SearchFilters(**filters)
+    search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
+
     upload_data = extract.extract_text(query)
     results = await search(
         upload_data,
@@ -145,10 +115,7 @@ async def search_knowledge_base(
         limit=limit,
         min_text_score=0.4,
         min_multimodal_score=0.25,
-        filters=SearchFilters(
-            tags=tags,
-            source_ids=filter_source_ids(tags=tags, modalities=modalities),
-        ),
+        filters=search_filters,
     )
 
     return [result.model_dump() for result in results]

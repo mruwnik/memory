@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { useMCP } from '../hooks/useMCP'
-import Loading from './Loading'
+import { useMCP } from '@/hooks/useMCP'
 
-type SearchItem = {
+export type SearchItem = {
     filename: string
     content: string
     chunks: any[]
@@ -13,7 +11,7 @@ type SearchItem = {
     metadata: any
 }
 
-const Tag = ({ tags }: { tags: string[] }) => {
+export const Tag = ({ tags }: { tags: string[] }) => {
     return (
         <div className="tags">
             {tags?.map((tag: string, index: number) => (
@@ -23,11 +21,12 @@ const Tag = ({ tags }: { tags: string[] }) => {
     )
 }
 
-const TextResult = ({ filename, content, chunks, tags }: SearchItem) => {
+export const TextResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
             <Tag tags={tags} />
+            <Metadata metadata={metadata} />
             <p className="result-content">{content || 'No content available'}</p>
             {chunks && chunks.length > 0 && (
                 <details className="result-chunks">
@@ -44,7 +43,7 @@ const TextResult = ({ filename, content, chunks, tags }: SearchItem) => {
     )
 }
 
-const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
+export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
@@ -70,7 +69,7 @@ const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchIte
     )
 }
 
-const ImageResult = ({ filename, chunks, tags, metadata }: SearchItem) => {
+export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
     const title = metadata?.title || filename || 'Untitled'
     const { fetchFile } = useMCP()
     const [mime_type, setMimeType] = useState<string>()
@@ -95,7 +94,7 @@ const ImageResult = ({ filename, chunks, tags, metadata }: SearchItem) => {
     )
 }
 
-const Metadata = ({ metadata }: { metadata: any }) => {
+export const Metadata = ({ metadata }: { metadata: any }) => {
     if (!metadata) return null
     return (
         <div className="metadata">
@@ -108,7 +107,7 @@ const Metadata = ({ metadata }: { metadata: any }) => {
     )
 }
 
-const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
+export const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
@@ -125,7 +124,7 @@ const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
     )
 }
 
-const EmailResult = ({ content, tags, metadata }: SearchItem) => {
+export const EmailResult = ({ content, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
             <h4>{metadata?.title || metadata?.subject || 'Untitled'}</h4>
@@ -138,7 +137,7 @@ const EmailResult = ({ content, tags, metadata }: SearchItem) => {
     )
 }
 
-const SearchResult = ({ result }: { result: SearchItem }) => {
+export const SearchResult = ({ result }: { result: SearchItem }) => {
     if (result.mime_type.startsWith('image/')) {
         return <ImageResult {...result} />
     }
@@ -158,86 +157,4 @@ const SearchResult = ({ result }: { result: SearchItem }) => {
     return null
 }
 
-const SearchResults = ({ results, isLoading }: { results: any[], isLoading: boolean }) => {
-    if (isLoading) {
-        return <Loading message="Searching..." />
-    }
-    return (
-        <div className="search-results">
-            {results.length > 0 && (
-                <div className="results-count">
-                    Found {results.length} result{results.length !== 1 ? 's' : ''}
-                </div>
-            )}
-
-            {results.map((result, index) => <SearchResult key={index} result={result} />)}
-
-            {results.length === 0 && (
-                <div className="no-results">
-                    No results found
-                </div>
-            )}
-        </div>
-    )
-}
-
-const SearchForm = ({ isLoading, onSearch }: { isLoading: boolean, onSearch: (query: string) => void }) => {
-    const [query, setQuery] = useState('')
-    return (
-        <form onSubmit={(e) => {
-            e.preventDefault()
-            onSearch(query)
-        }} className="search-form">
-            <div className="search-input-group">
-                <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search your knowledge base..."
-                    className="search-input"
-                />
-                <button type="submit" disabled={isLoading} className="search-btn">
-                    {isLoading ? 'Searching...' : 'Search'}
-                </button>
-            </div>
-        </form>
-    )
-}
-
-const Search = () => {
-    const navigate = useNavigate()
-    const [results, setResults] = useState([])
-    const [isLoading, setIsLoading] = useState(false)
-    const { searchKnowledgeBase } = useMCP()
-
-    const handleSearch = async (query: string) => {
-        if (!query.trim()) return
-
-        setIsLoading(true)
-        try {
-            const searchResults = await searchKnowledgeBase(query)
-            setResults(searchResults || [])
-        } catch (error) {
-            console.error('Search error:', error)
-            setResults([])
-        } finally {
-            setIsLoading(false)
-        }
-    }
-
-    return (
-        <div className="search-view">
-            <header className="search-header">
-                <button onClick={() => navigate('/ui/dashboard')} className="back-btn">
-                    ← Back to Dashboard
-                </button>
-                <h2>🔍 Search Knowledge Base</h2>
-            </header>
-
-            <SearchForm isLoading={isLoading} onSearch={handleSearch} />
-            <SearchResults results={results} isLoading={isLoading} />
-        </div>
-    )
-}
-
-export default Search 
+export default SearchResult

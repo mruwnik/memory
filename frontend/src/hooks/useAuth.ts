@@ -4,20 +4,20 @@ const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8000'
 const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
 
 // Cookie utilities
-const getCookie = (name) => {
+const getCookie = (name: string) => {
   const value = `; ${document.cookie}`
   const parts = value.split(`; ${name}=`)
   if (parts.length === 2) return parts.pop().split(';').shift()
   return null
 }
 
-const setCookie = (name, value, days = 30) => {
+const setCookie = (name: string, value: string, days = 30) => {
   const expires = new Date()
   expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
   document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`
 }
 
-const deleteCookie = (name) => {
+const deleteCookie = (name: string) => {
   document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:01 GMT;path=/`
 }
 
@@ -68,6 +68,7 @@ export const useAuth = () => {
     deleteCookie('access_token')
     deleteCookie('refresh_token')
     deleteCookie(SESSION_COOKIE_NAME)
+    localStorage.removeItem('oauth_client_id')
     setIsAuthenticated(false)
   }, [])
 
@@ -110,7 +111,7 @@ export const useAuth = () => {
   }, [logout])
 
   // Make authenticated API calls with automatic token refresh
-  const apiCall = useCallback(async (endpoint, options = {}) => {
+  const apiCall = useCallback(async (endpoint: string, options: RequestInit = {}) => {
     let accessToken = getCookie('access_token')
 
     if (!accessToken) {
@@ -122,7 +123,7 @@ export const useAuth = () => {
       'Content-Type': 'application/json',
     }
 
-    const requestOptions = {
+    const requestOptions: RequestInit & { headers: Record<string, string> } = {
       ...options,
       headers: { ...defaultHeaders, ...options.headers },
     }

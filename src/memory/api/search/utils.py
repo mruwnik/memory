@@ -65,9 +65,9 @@ class SearchResult(BaseModel):
 
 
 class SearchFilters(TypedDict):
-    subject: NotRequired[str | None]
+    min_size: NotRequired[int]
+    max_size: NotRequired[int]
     min_confidences: NotRequired[dict[str, float]]
-    tags: NotRequired[list[str] | None]
     observation_types: NotRequired[list[str] | None]
     source_ids: NotRequired[list[int] | None]
 
@@ -115,7 +115,6 @@ def group_chunks(
         if isinstance(contents, dict):
             tags = contents.pop("tags", [])
             content = contents.pop("content", None)
-            print(content)
         else:
             content = contents
             contents = {}

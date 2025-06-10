@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useMCP } from '../hooks/useMCP'
+import { useMCP } from '@/hooks/useMCP'
 
 const Dashboard = ({ onLogout }) => {
     const { listNotes } = useMCP()
