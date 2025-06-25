@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useMCP } from '@/hooks/useMCP'
+import { SERVER_URL } from '@/hooks/useAuth'
 
 export type SearchItem = {
     filename: string
@@ -24,10 +25,10 @@ export const Tag = ({ tags }: { tags: string[] }) => {
 export const TextResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
-            <h4>{filename || 'Untitled'}</h4>
+            <h4>{filename || metadata?.title || metadata?.url || 'Untitled'}</h4>
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
-            <p className="result-content">{content || 'No content available'}</p>
+            {content && <p className="result-content">{content}</p>}
             {chunks && chunks.length > 0 && (
                 <details className="result-chunks">
                     <summary>Relevant sections:</summary>
@@ -46,12 +47,14 @@ export const TextResult = ({ filename, content, chunks, tags, metadata }: Search
 export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
         <div className="search-result-card">
-            <h4>{filename || 'Untitled'}</h4>
+            <h4>{filename || metadata?.title || metadata?.url || 'Untitled'}</h4>
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
-            <div className="markdown-content">
-                <ReactMarkdown>{content || 'No content available'}</ReactMarkdown>
-            </div>
+            {content && (
+                <div className="markdown-content">
+                    <ReactMarkdown>{content}</ReactMarkdown>
+                </div>
+            )}
             {chunks && chunks.length > 0 && (
                 <details className="result-chunks">
                     <summary>Relevant sections:</summary>
@@ -76,7 +79,7 @@ export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
     const [content, setContent] = useState<string>()
     useEffect(() => {
         const fetchImage = async () => {
-            const files = await fetchFile(filename.replace('/app/memory_files/', ''))
+            const files = await fetchFile(filename)
             const {mime_type, content} = files[0]
             setMimeType(mime_type)
             setContent(content)
@@ -94,13 +97,26 @@ export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
     )
 }
 
+const MetadataItem = ({ item, value }: { item: string, value: any }) => {
+    if (item === "url") {
+        return <li><a href={value}>{value}</a></li>
+    }
+    if (item === "filename") {
+        return <li><a href={`${SERVER_URL}/files/${value}`}>{value}</a></li>
+    }
+    if (typeof value === 'string') {
+        return <li>{item}: {value}</li>
+    }
+    return <li>{item}: {JSON.stringify(value)}</li>
+}
+
 export const Metadata = ({ metadata }: { metadata: any }) => {
     if (!metadata) return null
     return (
         <div className="metadata">
             <ul>    
                 {Object.entries(metadata).map(([key, value]) => (
-                    <li key={key}>{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</li>
+                    <MetadataItem key={key} item={key} value={value} />
                 ))}
             </ul>
         </div>
@@ -112,7 +128,7 @@ export const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => 
         <div className="search-result-card">
             <h4>{filename || 'Untitled'}</h4>
             <Tag tags={tags} />
-            <a href={`http://localhost:8000/files/${filename}`}>View PDF</a>
+            <a href={`${SERVER_URL}/files/${filename}`}>View PDF</a>
             <Metadata metadata={metadata} />
             {content && <div className="markdown-content">
                 <details>

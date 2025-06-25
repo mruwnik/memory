@@ -30,7 +30,7 @@ def create_book_from_ebook(ebook, tags: Iterable[str] = []) -> Book:
         publisher=ebook.metadata.get("creator"),
         language=ebook.metadata.get("language"),
         total_pages=ebook.n_pages,
-        file_path=ebook.file_path.as_posix(),
+        file_path=ebook.file_path.relative_to(settings.FILE_STORAGE_DIR).as_posix(),
         book_metadata=ebook.metadata,
         tags=tags,
     )

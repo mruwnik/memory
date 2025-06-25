@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8000'
-const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
+export const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8000'
+export const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
 
 // Cookie utilities
 const getCookie = (name: string) => {

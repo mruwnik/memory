@@ -42,7 +42,7 @@ class SourceData(BaseModel):
             mime_type=source.mime_type,
             filename=source.filename,
             content_length=len(source.content) if source.content else 0,
-            contents=display_contents,
+            contents={k: v for k, v in display_contents.items() if v is not None},
             created_at=source.inserted_at,
         )
 
@@ -104,10 +104,9 @@ def group_chunks(
         source_lookup[source.id] = source
 
     def get_content(text: str | dict | None) -> str | dict | None:
-        if preview or not text or not isinstance(text, str) or len(text) < 250:
-            return text
-
-        return text[:250] + "..."
+        if isinstance(text, str) and len(text) > settings.MAX_PREVIEW_LENGTH:
+            return None
+        return text
 
     def make_result(source: SourceData, chunks: list[AnnotatedChunk]) -> SearchResult:
         contents = source.contents or {}

@@ -135,6 +135,8 @@ SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240
 # Search settings
 ENABLE_EMBEDDING_SEARCH = boolean_env("ENABLE_EMBEDDING_SEARCH", True)
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
+MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 8))
+MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")

@@ -96,6 +96,7 @@ class EmailAttachmentAdmin(ModelView, model=EmailAttachment):
     column_searchable_list = [
         "filename",
         "mime_type",
+        "id",
     ]
 
 
@@ -103,7 +104,7 @@ class BlogPostAdmin(ModelView, model=BlogPost):
     column_list = source_columns(
         BlogPost, "title", "author", "url", "published", "domain"
     )
-    column_searchable_list = ["title", "author", "domain"]
+    column_searchable_list = ["title", "author", "domain", "id", "url"]
 
 
 class ForumPostAdmin(ModelView, model=ForumPost):
@@ -118,7 +119,7 @@ class ForumPostAdmin(ModelView, model=ForumPost):
         "comments",
         "score",
     )
-    column_searchable_list = ["title", "authors"]
+    column_searchable_list = ["title", "authors", "id"]
 
 
 class PhotoAdmin(ModelView, model=Photo):
@@ -127,7 +128,7 @@ class PhotoAdmin(ModelView, model=Photo):
 
 class ComicAdmin(ModelView, model=Comic):
     column_list = source_columns(Comic, "title", "author", "published", "volume")
-    column_searchable_list = ["title", "author"]
+    column_searchable_list = ["title", "author", "id"]
 
 
 class BookSectionAdmin(ModelView, model=BookSection):
@@ -139,12 +140,12 @@ class BookSectionAdmin(ModelView, model=BookSection):
         "start_page",
         "end_page",
     )
-    column_searchable_list = ["section_title"]
+    column_searchable_list = ["section_title", "id"]
 
 
 class MiscDocAdmin(ModelView, model=MiscDoc):
     column_list = source_columns(MiscDoc, "path")
-    column_searchable_list = ["path"]
+    column_searchable_list = ["path", "id"]
 
 
 class BookAdmin(ModelView, model=Book):
@@ -156,7 +157,7 @@ class BookAdmin(ModelView, model=Book):
         "series_number",
         "published",
     ]
-    column_searchable_list = ["title", "author"]
+    column_searchable_list = ["title", "author", "id"]
 
 
 class ArticleFeedAdmin(ModelView, model=ArticleFeed):
@@ -170,7 +171,7 @@ class ArticleFeedAdmin(ModelView, model=ArticleFeed):
         "created_at",
         "updated_at",
     ]
-    column_searchable_list = ["title", "url"]
+    column_searchable_list = ["title", "url", "id"]
 
 
 class EmailAccountAdmin(ModelView, model=EmailAccount):
@@ -186,7 +187,7 @@ class EmailAccountAdmin(ModelView, model=EmailAccount):
         "created_at",
         "updated_at",
     ]
-    column_searchable_list = ["name", "email_address"]
+    column_searchable_list = ["name", "email_address", "id"]
 
 
 class AgentObservationAdmin(ModelView, model=AgentObservation):
@@ -199,7 +200,7 @@ class AgentObservationAdmin(ModelView, model=AgentObservation):
         "evidence",
         "inserted_at",
     ]
-    column_searchable_list = ["subject", "observation_type"]
+    column_searchable_list = ["subject", "observation_type", "id"]
     column_default_sort = [("inserted_at", True)]
     column_sortable_list = ["inserted_at"]
 
@@ -214,7 +215,7 @@ class NoteAdmin(ModelView, model=Note):
         "tags",
         "inserted_at",
     ]
-    column_searchable_list = ["subject", "content"]
+    column_searchable_list = ["subject", "content", "id"]
     column_default_sort = [("inserted_at", True)]
     column_sortable_list = ["inserted_at"]
 

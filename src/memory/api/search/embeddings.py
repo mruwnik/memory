@@ -8,7 +8,7 @@ import qdrant_client
 from PIL import Image
 from qdrant_client.http import models as qdrant_models
 
-from memory.common import embedding, extract, qdrant
+from memory.common import embedding, extract, qdrant, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk
 from memory.api.search.utils import SourceData, AnnotatedChunk, SearchFilters
@@ -22,9 +22,16 @@ def annotated_chunk(
     def serialize_item(item: bytes | str | Image.Image) -> str | None:
         if not previews and not isinstance(item, str):
             return None
-        if not previews and isinstance(item, str):
-            return item[:100]
-
+        if (
+            not previews
+            and isinstance(item, str)
+            and len(item) > settings.MAX_NON_PREVIEW_LENGTH
+        ):
+            return item[: settings.MAX_NON_PREVIEW_LENGTH] + "..."
+        elif isinstance(item, str):
+            if len(item) > settings.MAX_PREVIEW_LENGTH:
+                return None
+            return item
         if isinstance(item, Image.Image):
             buffer = io.BytesIO()
             format = item.format or "PNG"
@@ -33,8 +40,6 @@ def annotated_chunk(
             return f"data:{mime_type};base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
         elif isinstance(item, bytes):
             return base64.b64encode(item).decode("utf-8")
-        elif isinstance(item, str):
-            return item
         else:
             raise ValueError(f"Unsupported item type: {type(item)}")
 

@@ -5,6 +5,7 @@ FastAPI application for the knowledge base.
 import contextlib
 import os
 import logging
+import mimetypes
 
 from fastapi import FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse
@@ -55,7 +56,12 @@ async def serve_file(path: str):
     file_path = settings.FILE_STORAGE_DIR / path
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path)
+
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    return FileResponse(file_path, media_type=mime_type)
 
 
 async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
@@ -71,13 +77,6 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
 # SQLAdmin setup with OAuth protection
 engine = get_engine()
 admin = Admin(app, engine)
-admin.app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # [settings.SERVER_URL],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Setup admin with OAuth protection using existing OAuth provider
 setup_admin(admin)
