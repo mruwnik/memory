@@ -532,6 +532,36 @@ class NadiaXyzParser(BaseHTMLParser):
     ]
 
 
+class SlateStarCodexParser(BaseHTMLParser):
+    """Parser for slatestarcodex.com (Scott Alexander's blog)."""
+
+    article_selector = ".post, .hentry, [id^='post-']"
+    title_selector = "h1.pjgm-posttitle, h1"
+    author_selector = ".author.vcard a, .url.fn.n"
+    date_selector = ".entry-date"
+    date_format = "%B %d, %Y"  # "January 21, 2021" format
+    content_selector = ".pjgm-postcontent"
+    author = "Scott Alexander"
+
+    remove_selectors = BaseHTMLParser.remove_selectors + [
+        ".pjgm-postmeta",
+        ".pjgm-postutility",
+        ".pjgm-navigation",
+        "#pjgm-navbelow",
+        "#comments",
+        ".commentlist",
+        ".widget-area",
+        "#left-sidebar",
+        "#primary",
+        ".sidebar-toggle",
+        ".aar_div",  # Advertisement divs
+        ".pjgm-header",
+        ".pjgm-footer",
+        "#pjgm-menubar",
+        "#pjgm-bigtitle",
+    ]
+
+
 class BloombergParser(BaseHTMLParser):
     """Parser for bloomberg.com."""
 
@@ -578,6 +608,7 @@ PARSER_REGISTRY = {
     r"theredhandfiles\.com": TheRedHandFilesParser,
     r"rachelbythebay\.com": RachelByTheBayParser,
     r"nadia\.xyz": NadiaXyzParser,
+    r"slatestarcodex\.com": SlateStarCodexParser,
 }
 
 
