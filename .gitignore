@@ -1,4 +1,5 @@
 memory_files
+venv
 .env
 .DS_Store
 secrets/

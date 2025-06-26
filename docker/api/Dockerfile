@@ -1,14 +1,5 @@
-# Frontend build stage
-FROM node:18-alpine AS frontend-builder
-
-WORKDIR /frontend
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
-
-# Backend build stage
-FROM python:3.11-slim
+# Backend base stage
+FROM python:3.11-slim AS backend-base
 
 WORKDIR /app
 
@@ -19,18 +10,30 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements files and setup
+# Copy and install Python requirements
 COPY requirements ./requirements/
 RUN mkdir src
 COPY setup.py ./
 # Do an initial install to get the dependencies cached
 RUN pip install -e ".[api]"
 
-# Install the package with common dependencies
+# Frontend build stage
+FROM node:18-alpine AS frontend-builder
+
+WORKDIR /frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# Final stage
+FROM backend-base
+
+# Install the package with Python source code
 COPY src/ ./src/
 RUN pip install -e ".[api]"
 
-# Copy frontend build output from previous stage
+# Copy frontend build output from frontend stage
 COPY --from=frontend-builder /frontend/dist ./static/
 
 # Run as non-root user
