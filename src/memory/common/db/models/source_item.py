@@ -370,7 +370,7 @@ class SourceItem(Base):
     @property
     def display_contents(self) -> str | dict | None:
         payload = self.as_payload()
-        payload.pop("id", None)  # type: ignore
+        payload.pop("source_id", None)  # type: ignore
         return {
             **payload,
             "tags": self.tags,

@@ -4,8 +4,10 @@ from typing import cast
 import pytest
 from PIL import Image
 from memory.common import settings, chunker, extract
-from memory.common.db.models.source_items import (
+from memory.common.db.models.source_item import (
     Chunk,
+)
+from memory.common.db.models.source_items import (
     MailMessage,
 )
 from memory.common.db.models.source_item import (

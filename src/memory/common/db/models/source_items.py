@@ -91,9 +91,9 @@ class MailMessage(SourceItem):
 
     def as_payload(self) -> MailMessagePayload:
         base_payload = super().as_payload() | {
-            "tags": cast(list[str], self.tags)
+            "tags": (cast(list[str], self.tags) or [])
             + [cast(str, self.sender)]
-            + cast(list[str], self.recipients)
+            + (cast(list[str], self.recipients) or [])
         }
         return MailMessagePayload(
             **cast(dict, base_payload),

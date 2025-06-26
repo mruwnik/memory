@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 
 from memory.common.db.models import Book, BookSection
+from memory.common import settings
 from memory.parsers.ebook import Ebook, Section
 from memory.workers.tasks import ebook
 
@@ -46,7 +47,7 @@ def mock_ebook():
                 end_page=20,
             ),
         ],
-        file_path=Path("/test/book.epub"),
+        file_path=settings.FILE_STORAGE_DIR / "test/book.epub",
         n_pages=20,
     )
 
@@ -70,7 +71,7 @@ def test_create_book_from_ebook(mock_ebook):
     assert book.author == "Test Author"  # type: ignore
     assert book.publisher == "Test Publisher"  # type: ignore
     assert book.language == "en"  # type: ignore
-    assert book.file_path == "/test/book.epub"  # type: ignore
+    assert book.file_path == "test/book.epub"  # type: ignore
     assert book.total_pages == 20  # type: ignore
     assert book.book_metadata == {  # type: ignore
         "language": "en",

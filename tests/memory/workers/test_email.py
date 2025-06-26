@@ -257,6 +257,8 @@ def test_create_mail_message(db_session):
         "recipients": ["recipient@example.com"],
         "date": "2023-01-01T12:00:00+00:00",
         "mime_type": "message/rfc822",
+        "folder": "INBOX",
+        "message_id": "321",
         "size": 412,
         "tags": ["test"],
         "filename": None,

@@ -203,6 +203,8 @@ Test Body Content"""
         "sender": "sender@example.com",
         "recipients": ["recipient@example.com"],
         "tags": None,
+        "folder": None,
+        "message_id": "<test@example.com>",
     }
 
 
