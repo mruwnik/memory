@@ -6,18 +6,23 @@ import asyncio
 import logging
 from typing import Optional
 
-from memory.api.search.embeddings import search_embeddings
-from memory.api.search.bm25 import search_bm25
-from memory.api.search.utils import SearchFilters, SearchResult
-
-from memory.api.search.utils import group_chunks, with_timeout
-from memory.common import extract
+from memory.common import extract, settings
 from memory.common.collections import (
     ALL_COLLECTIONS,
     MULTIMODAL_COLLECTIONS,
     TEXT_COLLECTIONS,
 )
-from memory.common import settings
+from memory.api.search.embeddings import search_embeddings
+
+if settings.ENABLE_BM25_SEARCH:
+    from memory.api.search.bm25 import search_bm25
+
+from memory.api.search.utils import (
+    SearchFilters,
+    SearchResult,
+    group_chunks,
+    with_timeout,
+)
 
 logger = logging.getLogger(__name__)
 

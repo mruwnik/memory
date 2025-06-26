@@ -21,7 +21,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import relationship
 
 from memory.common import settings
@@ -31,7 +31,6 @@ import memory.common.formatters.observation as observation
 
 from memory.common.db.models.source_item import (
     SourceItem,
-    Chunk,
     SourceItemPayload,
     clean_filename,
     chunk_mixed,
@@ -575,6 +574,11 @@ class ForumPost(SourceItem):
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        # Very sad that I didn't keep the names consistent... Qdrant doesn't allow renaming collections
+        return ["forum"]
 
 
 class MiscDoc(SourceItem):
