@@ -141,6 +141,9 @@ services:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
+      args:
+        SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
+        SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
     restart: unless-stopped
     networks: [kbnet]
     depends_on: [postgres, rabbitmq, qdrant]
@@ -152,6 +155,7 @@ services:
       VITE_SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       STATIC_DIR: "/app/static"
       VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      ENABLE_BM25_SEARCH: false
     secrets: [postgres_password]
     volumes:
       - ./memory_files:/app/memory_files:rw
