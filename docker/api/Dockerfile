@@ -24,6 +24,13 @@ WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
+
+# Set Vite environment variables for build from build args
+ARG SERVER_URL
+ARG SESSION_COOKIE_NAME
+ENV VITE_SERVER_URL=${SERVER_URL}
+ENV VITE_SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME}
+
 RUN npm run build
 
 # Final stage
