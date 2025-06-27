@@ -1,12 +1,14 @@
 from dataclasses import dataclass, field
 import io
 import logging
+import mimetypes
 import pathlib
 import tempfile
 from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
 from memory.common import chunker, summarizer
+from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 import pypandoc
 from PIL import Image
@@ -14,6 +16,70 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 MulitmodalChunk = Image.Image | str
+
+TEXT_EXTENSIONS = {
+    ".md",
+    ".txt",
+    ".py",
+    ".js",
+    ".html",
+    ".css",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+}
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+}
+CUSTOM_EXTENSIONS = {
+    ".epub": "application/epub+zip",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
+def get_mime_type(path: pathlib.Path) -> str:
+    mime_type, _ = mimetypes.guess_type(str(path))
+    if mime_type:
+        print(f"mime_type: {mime_type}")
+        return mime_type
+    ext = path.suffix.lower()
+    return CUSTOM_EXTENSIONS.get(ext, "application/octet-stream")
+
+
+def is_text_file(path: pathlib.Path) -> bool:
+    mime_type = get_mime_type(path)
+    text_mimes = {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/x-yaml",
+        "application/yaml",
+    }
+    return (
+        mime_type.startswith("text/")
+        or mime_type in text_mimes
+        or path.suffix.lower() in TEXT_EXTENSIONS
+    )
+
+
+def is_image_file(path: pathlib.Path) -> bool:
+    mime_type = get_mime_type(path)
+    return mime_type.startswith("image/") or path.suffix.lower() in IMAGE_EXTENSIONS
 
 
 def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:
@@ -126,6 +192,7 @@ def extract_text(
     chunk_size: int | None = None,
     metadata: dict[str, Any] = {},
     modality: str = "text",
+    skip_summary: bool = False,
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
         content = content.read_text()
@@ -137,7 +204,7 @@ def extract_text(
         DataChunk(data=[c], modality=modality, metadata=metadata)
         for c in chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
     ]
-    if content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
+    if not skip_summary and content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
         summary, tags = summarizer.summarize(content)
         chunks.append(
             DataChunk(
@@ -149,10 +216,26 @@ def extract_text(
     return chunks
 
 
+def extract_ebook(file_path: str | pathlib.Path) -> list[DataChunk]:
+    book = ebook.parse_ebook(file_path)
+    return [
+        DataChunk(
+            mime_type="text/plain",
+            data=[
+                page.strip()
+                for section in book.sections
+                for page in section.pages
+                if page.strip()
+            ],
+        )
+    ]
+
+
 def extract_data_chunks(
     mime_type: str,
     content: bytes | str | pathlib.Path,
     chunk_size: int | None = None,
+    skip_summary: bool = False,
 ) -> list[DataChunk]:
     chunks = []
     logger.info(f"Extracting content from {mime_type}")
@@ -164,7 +247,9 @@ def extract_data_chunks(
     ]:
         chunks = extract_docx(content)
     elif mime_type.startswith("text/"):
-        chunks = extract_text(content, chunk_size)
+        chunks = extract_text(content, chunk_size, skip_summary=skip_summary)
     elif mime_type.startswith("image/"):
         chunks = extract_image(content)
+    elif mime_type == "application/epub+zip":
+        chunks = extract_ebook(cast(pathlib.Path, content))
     return chunks

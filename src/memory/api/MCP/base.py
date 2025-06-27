@@ -61,6 +61,7 @@ templates = Jinja2Templates(directory=template_dir)
 oauth_provider = SimpleOAuthProvider()
 auth_settings = AuthSettings(
     issuer_url=cast(AnyHttpUrl, settings.SERVER_URL),
+    resource_server_url=cast(AnyHttpUrl, settings.SERVER_URL),
     client_registration_options=ClientRegistrationOptions(
         enabled=True,
         valid_scopes=["read", "write"],

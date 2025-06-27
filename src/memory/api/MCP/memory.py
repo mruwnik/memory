@@ -2,16 +2,18 @@
 MCP tools for the epistemic sparring partner system.
 """
 
+import base64
 import logging
-import mimetypes
 import pathlib
 from datetime import datetime, timezone
 from typing import Any
+from PIL import Image
 
 from pydantic import BaseModel
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
+from mcp.server.fastmcp.resources.base import Resource
 
 from memory.api.MCP.tools import mcp
 from memory.api.search.search import SearchFilters, search
@@ -350,61 +352,30 @@ def fetch_file(filename: str) -> dict:
     Returns dict with content, mime_type, is_text, file_size.
     Text content as string, binary as base64.
     """
-    path = settings.FILE_STORAGE_DIR / filename.lstrip("/")
+    path = settings.FILE_STORAGE_DIR / filename.strip().lstrip("/")
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
-    mime_type, _ = mimetypes.guess_type(str(path))
-    mime_type = mime_type or "application/octet-stream"
+    mime_type = extract.get_mime_type(path)
+    chunks = extract.extract_data_chunks(mime_type, path, skip_summary=True)
 
-    text_extensions = {
-        ".md",
-        ".txt",
-        ".py",
-        ".js",
-        ".html",
-        ".css",
-        ".json",
-        ".xml",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".ini",
-        ".cfg",
-        ".conf",
-    }
-    text_mimes = {
-        "application/json",
-        "application/xml",
-        "application/javascript",
-        "application/x-yaml",
-        "application/yaml",
-    }
-    is_text = (
-        mime_type.startswith("text/")
-        or mime_type in text_mimes
-        or path.suffix.lower() in text_extensions
-    )
+    def serialize_chunk(
+        chunk: extract.DataChunk, data: extract.MulitmodalChunk
+    ) -> dict:
+        contents = data
+        if isinstance(data, Image.Image):
+            contents = data.tobytes()
+        if isinstance(contents, bytes):
+            contents = base64.b64encode(contents).decode("ascii")
 
-    try:
-        content = (
-            path.read_text(encoding="utf-8")
-            if is_text
-            else __import__("base64").b64encode(path.read_bytes()).decode("ascii")
-        )
-    except UnicodeDecodeError:
-        import base64
-
-        content = base64.b64encode(path.read_bytes()).decode("ascii")
-        is_text = False
-        mime_type = (
-            "application/octet-stream" if mime_type.startswith("text/") else mime_type
-        )
+        return {
+            "type": "text" if isinstance(data, str) else "image",
+            "mime_type": chunk.mime_type,
+            "data": contents,
+        }
 
     return {
-        "content": content,
-        "mime_type": mime_type,
-        "is_text": is_text,
-        "file_size": path.stat().st_size,
-        "filename": filename,
+        "content": [
+            serialize_chunk(chunk, data) for chunk in chunks for data in chunk.data
+        ]
     }
