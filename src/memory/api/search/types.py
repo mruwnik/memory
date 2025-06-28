@@ -32,6 +32,7 @@ class SearchResult(BaseModel):
     tags: list[str] | None = None
     metadata: dict | None = None
     created_at: datetime | None = None
+    search_score: float | None = None
 
     @classmethod
     def from_source_item(
@@ -40,6 +41,8 @@ class SearchResult(BaseModel):
         metadata = source.display_contents or {}
         metadata.pop("content", None)
         chunk_size = settings.DEFAULT_CHUNK_TOKENS * 4
+
+        search_score = sum(chunk.relevance_score for chunk in chunks)
 
         return cls(
             id=cast(int, source.id),
@@ -56,6 +59,7 @@ class SearchResult(BaseModel):
             tags=cast(list[str], source.tags),
             metadata=metadata,
             created_at=cast(datetime | None, source.inserted_at),
+            search_score=search_score,
         )
 
 

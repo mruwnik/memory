@@ -101,4 +101,7 @@ async def search(
     )
     if settings.ENABLE_SEARCH_SCORING:
         chunks = await scorer.rank_chunks(data[0].data[0], chunks, min_score=0.3)
-    return await search_sources(chunks, previews)
+
+    sources = await search_sources(chunks, previews)
+    sources.sort(key=lambda x: x.search_score or 0, reverse=True)
+    return sources
