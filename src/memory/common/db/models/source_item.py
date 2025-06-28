@@ -156,9 +156,11 @@ class Chunk(Base):
     collection_name = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     checked_at = Column(DateTime(timezone=True), server_default=func.now())
+
     vector: list[float] = []
     item_metadata: dict[str, Any] = {}
     images: list[Image.Image] = []
+    relevance_score: float = 0.0
 
     # One of file_path or content must be populated
     __table_args__ = (

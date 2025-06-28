@@ -12,6 +12,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.embeddings import search_chunks_embeddings
+from memory.api.search import scorer
 
 if settings.ENABLE_BM25_SEARCH:
     from memory.api.search.bm25 import search_bm25_chunks
@@ -40,7 +41,14 @@ async def search_chunks(
     with make_session() as db:
         chunks = (
             db.query(Chunk)
-            .options(load_only(Chunk.id, Chunk.source_id, Chunk.content))  # type: ignore
+            .options(
+                load_only(
+                    Chunk.id,  # type: ignore
+                    Chunk.source_id,  # type: ignore
+                    Chunk.content,  # type: ignore
+                    Chunk.file_paths,  # type: ignore
+                )
+            )
             .filter(Chunk.id.in_(all_ids))
             .all()
         )
@@ -91,4 +99,6 @@ async def search(
         filters,
         timeout,
     )
+    if settings.ENABLE_SEARCH_SCORING:
+        chunks = await scorer.rank_chunks(data[0].data[0], chunks, min_score=0.3)
     return await search_sources(chunks, previews)

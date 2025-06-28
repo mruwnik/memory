@@ -2,7 +2,7 @@ import logging
 from typing import Iterable, Any
 import re
 
-from memory.common import settings
+from memory.common import settings, tokens
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MAX_TOKENS = settings.EMBEDDING_MAX_TOKENS
 DEFAULT_CHUNK_TOKENS = settings.DEFAULT_CHUNK_TOKENS
 OVERLAP_TOKENS = settings.OVERLAP_TOKENS
-CHARS_PER_TOKEN = 4
 
 
 Vector = list[float]
@@ -20,10 +19,6 @@ Embedding = tuple[str, Vector, dict[str, Any]]
 
 # Regex for sentence splitting
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def approx_token_count(s: str) -> int:
-    return len(s) // CHARS_PER_TOKEN
 
 
 def yield_word_chunks(
@@ -36,7 +31,7 @@ def yield_word_chunks(
     current = ""
     for word in words:
         new_chunk = f"{current} {word}".strip()
-        if current and approx_token_count(new_chunk) > max_tokens:
+        if current and tokens.approx_token_count(new_chunk) > max_tokens:
             yield current
             current = word
         else:
@@ -65,7 +60,7 @@ def yield_spans(text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS) -> Iterable[s
         if not paragraph.strip():
             continue
 
-        if approx_token_count(paragraph) <= max_tokens:
+        if tokens.approx_token_count(paragraph) <= max_tokens:
             yield paragraph
             continue
 
@@ -73,7 +68,7 @@ def yield_spans(text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS) -> Iterable[s
             if not sentence.strip():
                 continue
 
-            if approx_token_count(sentence) <= max_tokens:
+            if tokens.approx_token_count(sentence) <= max_tokens:
                 yield sentence
                 continue
 
@@ -99,16 +94,16 @@ def chunk_text(
     if not text:
         return
 
-    if approx_token_count(text) <= max_tokens:
+    if tokens.approx_token_count(text) <= max_tokens:
         yield text
         return
 
-    overlap_chars = overlap * CHARS_PER_TOKEN
+    overlap_chars = overlap * tokens.CHARS_PER_TOKEN
     current = ""
 
     for span in yield_spans(text, max_tokens):
         current = f"{current} {span}".strip()
-        if approx_token_count(current) < max_tokens:
+        if tokens.approx_token_count(current) < max_tokens:
             continue
 
         if overlap <= 0:

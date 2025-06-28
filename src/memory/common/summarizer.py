@@ -4,7 +4,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from memory.common import settings, chunker
+from memory.common import settings, tokens, llms
 
 logger = logging.getLogger(__name__)
 
@@ -65,57 +65,6 @@ def parse_response(response: str) -> dict[str, Any]:
     return {"summary": summary, "tags": tags}
 
 
-def _call_openai(prompt: str) -> dict[str, Any]:
-    """Call OpenAI API for summarization."""
-    import openai
-
-    client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
-    try:
-        response = client.chat.completions.create(
-            model=settings.SUMMARIZER_MODEL.split("/")[1],
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that creates concise summaries and identifies key topics.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.3,
-            max_tokens=2048,
-        )
-        return parse_response(response.choices[0].message.content or "")
-    except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
-        raise
-
-
-def _call_anthropic(prompt: str) -> dict[str, Any]:
-    """Call Anthropic API for summarization."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    try:
-        response = client.messages.create(
-            model=settings.SUMMARIZER_MODEL.split("/")[1],
-            messages=[{"role": "user", "content": prompt}],
-            system="You are a helpful assistant that creates concise summaries and identifies key topics. Always respond with valid XML.",
-            temperature=0.3,
-            max_tokens=2048,
-        )
-        return parse_response(response.content[0].text)
-    except Exception as e:
-        logger.error(f"Anthropic API error: {e}")
-        logger.error(response.content[0].text)
-        raise
-
-
-def truncate(content: str, target_tokens: int) -> str:
-    target_chars = target_tokens * chunker.CHARS_PER_TOKEN
-    if len(content) > target_chars:
-        return content[:target_chars].rsplit(" ", 1)[0] + "..."
-    return content
-
-
 def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list[str]]:
     """
     Summarize content to approximately target_tokens length and generate tags.
@@ -136,7 +85,7 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
     summary, tags = content, []
 
     # If content is already short enough, just extract tags
-    current_tokens = chunker.approx_token_count(content)
+    current_tokens = tokens.approx_token_count(content)
     if current_tokens <= target_tokens:
         logger.info(
             f"Content already under {target_tokens} tokens, extracting tags only"
@@ -145,21 +94,19 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
     else:
         prompt = SUMMARY_PROMPT.format(
             target_tokens=target_tokens,
-            target_chars=target_tokens * chunker.CHARS_PER_TOKEN,
+            target_chars=target_tokens * tokens.CHARS_PER_TOKEN,
             content=content,
         )
 
-    if chunker.approx_token_count(prompt) > MAX_TOKENS:
+    if tokens.approx_token_count(prompt) > MAX_TOKENS:
         logger.warning(
-            f"Prompt too long ({chunker.approx_token_count(prompt)} tokens), truncating"
+            f"Prompt too long ({tokens.approx_token_count(prompt)} tokens), truncating"
         )
-        prompt = truncate(prompt, MAX_TOKENS - 20)
+        prompt = llms.truncate(prompt, MAX_TOKENS - 20)
 
     try:
-        if settings.SUMMARIZER_MODEL.startswith("anthropic"):
-            result = _call_anthropic(prompt)
-        else:
-            result = _call_openai(prompt)
+        response = llms.call(prompt, settings.SUMMARIZER_MODEL)
+        result = parse_response(response)
 
         summary = result.get("summary", "")
         tags = result.get("tags", [])
@@ -167,9 +114,9 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
         traceback.print_exc()
         logger.error(f"Summarization failed: {e}")
 
-    tokens = chunker.approx_token_count(summary)
-    if tokens > target_tokens * 1.5:
-        logger.warning(f"Summary too long ({tokens} tokens), truncating")
-        summary = truncate(content, target_tokens)
+    summary_tokens = tokens.approx_token_count(summary)
+    if summary_tokens > target_tokens * 1.5:
+        logger.warning(f"Summary too long ({summary_tokens} tokens), truncating")
+        summary = llms.truncate(content, target_tokens)
 
     return summary, tags

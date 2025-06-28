@@ -131,10 +131,13 @@ if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
 else:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240307")
+RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", 200000))
 
 # Search settings
 ENABLE_EMBEDDING_SEARCH = boolean_env("ENABLE_EMBEDDING_SEARCH", True)
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
+ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
