@@ -1,4 +1,4 @@
 from .search import search
-from .utils import SearchResult, SearchFilters
+from .types import SearchResult, SearchFilters
 
 __all__ = ["search", "SearchResult", "SearchFilters"]

@@ -109,14 +109,12 @@ async def search_knowledge_base(
     search_filters = SearchFilters(**filters)
     search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
 
-    upload_data = extract.extract_text(query)
+    upload_data = extract.extract_text(query, skip_summary=True)
     results = await search(
         upload_data,
         previews=previews,
         modalities=modalities,
         limit=limit,
-        min_text_score=0.4,
-        min_multimodal_score=0.25,
         filters=search_filters,
     )
 

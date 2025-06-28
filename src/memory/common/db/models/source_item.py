@@ -368,7 +368,7 @@ class SourceItem(Base):
         return [cls.__tablename__]
 
     @property
-    def display_contents(self) -> str | dict | None:
+    def display_contents(self) -> dict | None:
         payload = self.as_payload()
         payload.pop("source_id", None)  # type: ignore
         return {

@@ -1,63 +1,18 @@
-import base64
-import io
 import logging
 import asyncio
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, cast
 
 import qdrant_client
-from PIL import Image
 from qdrant_client.http import models as qdrant_models
 
-from memory.common import embedding, extract, qdrant, settings
-from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk
-from memory.api.search.utils import SourceData, AnnotatedChunk, SearchFilters
+from memory.common import embedding, extract, qdrant
+from memory.common.collections import (
+    MULTIMODAL_COLLECTIONS,
+    TEXT_COLLECTIONS,
+)
+from memory.api.search.types import SearchFilters
 
 logger = logging.getLogger(__name__)
-
-
-def annotated_chunk(
-    chunk: Chunk, search_result: qdrant_models.ScoredPoint, previews: bool
-) -> tuple[SourceData, AnnotatedChunk]:
-    def serialize_item(item: bytes | str | Image.Image) -> str | None:
-        if not previews and not isinstance(item, str):
-            return None
-        if (
-            not previews
-            and isinstance(item, str)
-            and len(item) > settings.MAX_NON_PREVIEW_LENGTH
-        ):
-            return item[: settings.MAX_NON_PREVIEW_LENGTH] + "..."
-        elif isinstance(item, str):
-            if len(item) > settings.MAX_PREVIEW_LENGTH:
-                return None
-            return item
-        if isinstance(item, Image.Image):
-            buffer = io.BytesIO()
-            format = item.format or "PNG"
-            item.save(buffer, format=format)
-            mime_type = f"image/{format.lower()}"
-            return f"data:{mime_type};base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
-        elif isinstance(item, bytes):
-            return base64.b64encode(item).decode("utf-8")
-        else:
-            raise ValueError(f"Unsupported item type: {type(item)}")
-
-    metadata = search_result.payload or {}
-    metadata = {
-        k: v
-        for k, v in metadata.items()
-        if k not in ["content", "filename", "size", "content_type", "tags"]
-    }
-
-    # Prefetch all needed source data while in session
-    return SourceData.from_chunk(chunk), AnnotatedChunk(
-        id=str(chunk.id),
-        score=search_result.score,
-        metadata=metadata,
-        preview=serialize_item(chunk.data[0]) if chunk.data else None,
-        search_method="embeddings",
-    )
 
 
 async def query_chunks(
@@ -178,15 +133,14 @@ def merge_filters(
     return filters
 
 
-async def search_embeddings(
+async def search_chunks(
     data: list[extract.DataChunk],
-    previews: Optional[bool] = False,
     modalities: set[str] = set(),
     limit: int = 10,
     min_score: float = 0.3,
     filters: SearchFilters = {},
     multimodal: bool = False,
-) -> list[tuple[SourceData, AnnotatedChunk]]:
+) -> list[str]:
     """
     Search across knowledge base using text query and optional files.
 
@@ -218,9 +172,38 @@ async def search_embeddings(
     found_chunks = {
         str(r.id): r for results in search_results.values() for r in results
     }
-    with make_session() as db:
-        chunks = db.query(Chunk).filter(Chunk.id.in_(found_chunks.keys())).all()
-        return [
-            annotated_chunk(chunk, found_chunks[str(chunk.id)], previews or False)
-            for chunk in chunks
-        ]
+    return list(found_chunks.keys())
+
+
+async def search_chunks_embeddings(
+    data: list[extract.DataChunk],
+    modalities: set[str] = set(),
+    limit: int = 10,
+    filters: SearchFilters = SearchFilters(),
+    timeout: int = 2,
+) -> list[str]:
+    all_ids = await asyncio.gather(
+        asyncio.wait_for(
+            search_chunks(
+                data,
+                modalities & TEXT_COLLECTIONS,
+                limit,
+                0.4,
+                filters,
+                False,
+            ),
+            timeout,
+        ),
+        asyncio.wait_for(
+            search_chunks(
+                data,
+                modalities & MULTIMODAL_COLLECTIONS,
+                limit,
+                0.25,
+                filters,
+                True,
+            ),
+            timeout,
+        ),
+    )
+    return list({id for ids in all_ids for id in ids})

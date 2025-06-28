@@ -90,6 +90,7 @@ export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
         <div className="search-result-card">
             <h4>{title}</h4>
             <Tag tags={tags} />
+            <Metadata metadata={metadata} />
             <div className="image-container">
                 {mime_type && mime_type?.startsWith('image/') && <img src={`data:${mime_type};base64,${content}`} alt={title} className="search-result-image"/>}
             </div>
@@ -115,7 +116,7 @@ export const Metadata = ({ metadata }: { metadata: any }) => {
     return (
         <div className="metadata">
             <ul>    
-                {Object.entries(metadata).map(([key, value]) => (
+                {Object.entries(metadata).filter(([key, value]) => ![null, undefined].includes(value as any)).map(([key, value]) => (
                     <MetadataItem key={key} item={key} value={value} />
                 ))}
             </ul>
@@ -154,19 +155,19 @@ export const EmailResult = ({ content, tags, metadata }: SearchItem) => {
 }
 
 export const SearchResult = ({ result }: { result: SearchItem }) => {
-    if (result.mime_type.startsWith('image/')) {
+    if (result.mime_type?.startsWith('image/')) {
         return <ImageResult {...result} />
     }
-    if (result.mime_type.startsWith('text/markdown')) {
+    if (result.mime_type?.startsWith('text/markdown')) {
         return <MarkdownResult {...result} /> 
     }
-    if (result.mime_type.startsWith('text/')) {
+    if (result.mime_type?.startsWith('text/')) {
         return <TextResult {...result} />
     }
-    if (result.mime_type.startsWith('application/pdf')) {
+    if (result.mime_type?.startsWith('application/pdf')) {
         return <PDFResult {...result} />
     }
-    if (result.mime_type.startsWith('message/rfc822')) {
+    if (result.mime_type?.startsWith('message/rfc822')) {
         return <EmailResult {...result} />
     }
     console.log(result)

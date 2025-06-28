@@ -4,27 +4,63 @@ Search endpoints for the knowledge base API.
 
 import asyncio
 import logging
+from collections import defaultdict
 from typing import Optional
-
+from sqlalchemy.orm import load_only
 from memory.common import extract, settings
-from memory.common.collections import (
-    ALL_COLLECTIONS,
-    MULTIMODAL_COLLECTIONS,
-    TEXT_COLLECTIONS,
-)
-from memory.api.search.embeddings import search_embeddings
+from memory.common.db.connection import make_session
+from memory.common.db.models import Chunk, SourceItem
+from memory.common.collections import ALL_COLLECTIONS
+from memory.api.search.embeddings import search_chunks_embeddings
 
 if settings.ENABLE_BM25_SEARCH:
-    from memory.api.search.bm25 import search_bm25
+    from memory.api.search.bm25 import search_bm25_chunks
 
-from memory.api.search.utils import (
-    SearchFilters,
-    SearchResult,
-    group_chunks,
-    with_timeout,
-)
+from memory.api.search.types import SearchFilters, SearchResult
 
 logger = logging.getLogger(__name__)
+
+
+async def search_chunks(
+    data: list[extract.DataChunk],
+    modalities: set[str] = set(),
+    limit: int = 10,
+    filters: SearchFilters = {},
+    timeout: int = 2,
+) -> list[Chunk]:
+    funcs = [search_chunks_embeddings]
+    if settings.ENABLE_BM25_SEARCH:
+        funcs.append(search_bm25_chunks)
+
+    all_ids = await asyncio.gather(
+        *[func(data, modalities, limit, filters, timeout) for func in funcs]
+    )
+    all_ids = {id for ids in all_ids for id in ids}
+
+    with make_session() as db:
+        chunks = (
+            db.query(Chunk)
+            .options(load_only(Chunk.id, Chunk.source_id, Chunk.content))  # type: ignore
+            .filter(Chunk.id.in_(all_ids))
+            .all()
+        )
+        db.expunge_all()
+        return chunks
+
+
+async def search_sources(
+    chunks: list[Chunk], previews: Optional[bool] = False
+) -> list[SearchResult]:
+    by_source = defaultdict(list)
+    for chunk in chunks:
+        by_source[chunk.source_id].append(chunk)
+
+    with make_session() as db:
+        sources = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys())).all()
+        return [
+            SearchResult.from_source_item(source, by_source[source.id], previews)
+            for source in sources
+        ]
 
 
 async def search(
@@ -32,8 +68,6 @@ async def search(
     previews: Optional[bool] = False,
     modalities: set[str] = set(),
     limit: int = 10,
-    min_text_score: float = 0.4,
-    min_multimodal_score: float = 0.25,
     filters: SearchFilters = {},
     timeout: int = 2,
 ) -> list[SearchResult]:
@@ -50,56 +84,11 @@ async def search(
     - List of search results sorted by score
     """
     allowed_modalities = modalities & ALL_COLLECTIONS.keys()
-
-    searches = []
-    if settings.ENABLE_EMBEDDING_SEARCH:
-        searches = [
-            with_timeout(
-                search_embeddings(
-                    data,
-                    previews,
-                    allowed_modalities & TEXT_COLLECTIONS,
-                    limit,
-                    min_text_score,
-                    filters,
-                    multimodal=False,
-                ),
-                timeout,
-            ),
-            with_timeout(
-                search_embeddings(
-                    data,
-                    previews,
-                    allowed_modalities & MULTIMODAL_COLLECTIONS,
-                    limit,
-                    min_multimodal_score,
-                    filters,
-                    multimodal=True,
-                ),
-                timeout,
-            ),
-        ]
-    if settings.ENABLE_BM25_SEARCH:
-        searches.append(
-            with_timeout(
-                search_bm25(
-                    " ".join(
-                        [c for chunk in data for c in chunk.data if isinstance(c, str)]
-                    ),
-                    modalities,
-                    limit=limit,
-                    filters=filters,
-                ),
-                timeout,
-            )
-        )
-
-    search_results = await asyncio.gather(*searches, return_exceptions=False)
-    all_results = []
-    for results in search_results:
-        if len(all_results) >= limit:
-            break
-        all_results.extend(results)
-
-    results = group_chunks(all_results, previews or False)
-    return sorted(results, key=lambda x: max(c.score for c in x.chunks), reverse=True)
+    chunks = await search_chunks(
+        data,
+        allowed_modalities,
+        limit,
+        filters,
+        timeout,
+    )
+    return await search_sources(chunks, previews)

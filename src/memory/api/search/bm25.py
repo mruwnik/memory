@@ -2,13 +2,15 @@
 Search endpoints for the knowledge base API.
 """
 
+import asyncio
 from hashlib import sha256
 import logging
 
 import bm25s
 import Stemmer
-from memory.api.search.utils import SourceData, AnnotatedChunk, SearchFilters
+from memory.api.search.types import SearchFilters
 
+from memory.common import extract
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore
 
@@ -20,7 +22,7 @@ async def search_bm25(
     modalities: set[str],
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
-) -> list[tuple[SourceData, AnnotatedChunk]]:
+) -> list[str]:
     with make_session() as db:
         items_query = db.query(Chunk.id, Chunk.content).filter(
             Chunk.collection_name.in_(modalities),
@@ -65,21 +67,18 @@ async def search_bm25(
         item_ids[sha256(doc.encode("utf-8")).hexdigest()]: score
         for doc, score in zip(results[0], scores[0])
     }
+    return list(item_scores.keys())
 
-    with make_session() as db:
-        chunks = db.query(Chunk).filter(Chunk.id.in_(item_scores.keys())).all()
-        results = []
-        for chunk in chunks:
-            # Prefetch all needed source data while in session
-            source_data = SourceData.from_chunk(chunk)
 
-            annotated = AnnotatedChunk(
-                id=str(chunk.id),
-                score=item_scores[chunk.id],
-                metadata=chunk.source.as_payload(),
-                preview=None,
-                search_method="bm25",
-            )
-            results.append((source_data, annotated))
-
-        return results
+async def search_bm25_chunks(
+    data: list[extract.DataChunk],
+    modalities: set[str] = set(),
+    limit: int = 10,
+    filters: SearchFilters = SearchFilters(),
+    timeout: int = 2,
+) -> list[str]:
+    query = " ".join([c for chunk in data for c in chunk.data if isinstance(c, str)])
+    return await asyncio.wait_for(
+        search_bm25(query, modalities, limit, filters),
+        timeout,
+    )
