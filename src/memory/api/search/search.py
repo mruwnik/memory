@@ -77,7 +77,7 @@ async def search(
     modalities: set[str] = set(),
     limit: int = 10,
     filters: SearchFilters = {},
-    timeout: int = 2,
+    timeout: int = 20,
 ) -> list[SearchResult]:
     """
     Search across knowledge base using text query and optional files.

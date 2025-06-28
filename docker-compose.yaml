@@ -156,7 +156,9 @@ services:
       STATIC_DIR: "/app/static"
       VOYAGE_API_KEY: ${VOYAGE_API_KEY}
       ENABLE_BM25_SEARCH: false
-    secrets: [postgres_password]
+      OPENAI_API_KEY_FILE: /run/secrets/openai_key
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+    secrets: [postgres_password, openai_key, anthropic_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
     healthcheck:

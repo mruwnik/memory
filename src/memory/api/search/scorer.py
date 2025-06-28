@@ -29,17 +29,26 @@ Please always return a summary of any images provided.
 
 
 async def score_chunk(query: str, chunk: Chunk) -> Chunk:
-    data = chunk.data
+    try:
+        data = chunk.data
+    except Exception as e:
+        print(f"Error getting chunk data: {e}, {type(e)}")
+        return chunk
+
     chunk_text = "\n".join(text for text in data if isinstance(text, str))
     images = [image for image in data if isinstance(image, Image.Image)]
     prompt = SCORE_CHUNK_PROMPT.format(query=query, chunk=chunk_text)
-    response = await asyncio.to_thread(
-        llms.call,
-        prompt,
-        settings.RANKER_MODEL,
-        images=images,
-        system_prompt=SCORE_CHUNK_SYSTEM_PROMPT,
-    )
+    try:
+        response = await asyncio.to_thread(
+            llms.call,
+            prompt,
+            settings.RANKER_MODEL,
+            images=images,
+            system_prompt=SCORE_CHUNK_SYSTEM_PROMPT,
+        )
+    except Exception as e:
+        print(f"Error scoring chunk: {e}, {type(e)}")
+        return chunk
 
     soup = BeautifulSoup(response, "html.parser")
     if not (score := soup.find("score")):
