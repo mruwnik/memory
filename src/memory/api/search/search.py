@@ -104,4 +104,4 @@ async def search(
 
     sources = await search_sources(chunks, previews)
     sources.sort(key=lambda x: x.search_score or 0, reverse=True)
-    return sources
+    return sources[:limit]

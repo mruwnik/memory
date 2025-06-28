@@ -351,11 +351,14 @@ def fetch_file(filename: str) -> dict:
     Text content as string, binary as base64.
     """
     path = settings.FILE_STORAGE_DIR / filename.strip().lstrip("/")
+    print("fetching file", path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
     mime_type = extract.get_mime_type(path)
     chunks = extract.extract_data_chunks(mime_type, path, skip_summary=True)
+    print("mime_type", mime_type)
+    print("chunks", chunks)
 
     def serialize_chunk(
         chunk: extract.DataChunk, data: extract.MulitmodalChunk

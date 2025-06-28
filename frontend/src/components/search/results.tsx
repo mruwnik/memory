@@ -1,6 +1,4 @@
-import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { useMCP } from '@/hooks/useMCP'
 import { SERVER_URL } from '@/hooks/useAuth'
 
 export type SearchItem = {
@@ -74,25 +72,14 @@ export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: Se
 
 export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
     const title = metadata?.title || filename || 'Untitled'
-    const { fetchFile } = useMCP()
-    const [mime_type, setMimeType] = useState<string>()
-    const [content, setContent] = useState<string>()
-    useEffect(() => {
-        const fetchImage = async () => {
-            const files = await fetchFile(filename)
-            const {mime_type, content} = files[0]
-            setMimeType(mime_type)
-            setContent(content)
-        }
-        fetchImage()
-    }, [filename])
+
     return (
         <div className="search-result-card">
             <h4>{title}</h4>
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
             <div className="image-container">
-                {mime_type && mime_type?.startsWith('image/') && <img src={`data:${mime_type};base64,${content}`} alt={title} className="search-result-image"/>}
+                <img src={`${SERVER_URL}/files/${filename}`} alt={title} className="search-result-image"/>
             </div>
         </div>
     )

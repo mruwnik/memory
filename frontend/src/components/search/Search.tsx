@@ -9,7 +9,6 @@ const SearchResults = ({ results, isLoading }: { results: any[], isLoading: bool
     if (isLoading) {
         return <Loading message="Searching..." />
     }
-    console.log("results",results)
     return (
         <div className="search-results">
             {results.length > 0 && (
