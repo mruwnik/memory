@@ -151,13 +151,12 @@ export const useMCP = () => {
     return (await mcpCall('get_metadata_schemas'))[0]
   }, [mcpCall])
 
-  const searchKnowledgeBase = useCallback(async (query: string, previews: boolean = true, limit: number = 10, filters: Record<string, any> = {}, modalities: string[] = []) => {
+  const searchKnowledgeBase = useCallback(async (query: string, modalities: string[] = [], filters: Record<string, any> = {}, config: Record<string, any> = {}) => {
     return await mcpCall('search_knowledge_base', {
       query,
       filters,
+      config,
       modalities,
-      previews,
-      limit,
     })
   }, [mcpCall])
 

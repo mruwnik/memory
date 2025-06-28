@@ -17,7 +17,7 @@ from memory.api.search import scorer
 if settings.ENABLE_BM25_SEARCH:
     from memory.api.search.bm25 import search_bm25_chunks
 
-from memory.api.search.types import SearchFilters, SearchResult
+from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ async def search_chunks(
 
 
 async def search_sources(
-    chunks: list[Chunk], previews: Optional[bool] = False
+    chunks: list[Chunk], previews: bool = False
 ) -> list[SearchResult]:
     by_source = defaultdict(list)
     for chunk in chunks:
@@ -73,11 +73,9 @@ async def search_sources(
 
 async def search(
     data: list[extract.DataChunk],
-    previews: Optional[bool] = False,
     modalities: set[str] = set(),
-    limit: int = 10,
     filters: SearchFilters = {},
-    timeout: int = 20,
+    config: SearchConfig = SearchConfig(),
 ) -> list[SearchResult]:
     """
     Search across knowledge base using text query and optional files.
@@ -95,13 +93,13 @@ async def search(
     chunks = await search_chunks(
         data,
         allowed_modalities,
-        limit,
+        config.limit,
         filters,
-        timeout,
+        config.timeout,
     )
-    if settings.ENABLE_SEARCH_SCORING:
+    if settings.ENABLE_SEARCH_SCORING and config.useScores:
         chunks = await scorer.rank_chunks(data[0].data[0], chunks, min_score=0.3)
 
-    sources = await search_sources(chunks, previews)
+    sources = await search_sources(chunks, config.previews)
     sources.sort(key=lambda x: x.search_score or 0, reverse=True)
-    return sources[:limit]
+    return sources[: config.limit]

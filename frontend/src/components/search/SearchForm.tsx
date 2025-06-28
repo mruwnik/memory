@@ -10,12 +10,17 @@ type Filter = {
     [key: string]: any
 }
 
+type SearchConfig = {
+    previews: boolean
+    useScores: boolean
+    limit: number
+}
+
 export interface SearchParams {
     query: string
-    previews: boolean
     modalities: string[]
     filters: Filter
-    limit: number
+    config: SearchConfig
 }
 
 interface SearchFormProps {
@@ -40,6 +45,7 @@ const cleanFilters = (filters: Record<string, any>): Record<string, any> =>
 export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     const [query, setQuery] = useState('')
     const [previews, setPreviews] = useState(false)
+    const [useScores, setUseScores] = useState(false)
     const [modalities, setModalities] = useState<Record<string, boolean>>({})
     const [schemas, setSchemas] = useState<Record<string, CollectionMetadata>>({})
     const [tags, setTags] = useState<Record<string, boolean>>({})
@@ -68,13 +74,16 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
         
         onSearch({
             query,
-            previews,
             modalities: getSelectedItems(modalities),
+            config: {
+                previews,
+                useScores,
+                limit
+            },
             filters: {
                 tags: getSelectedItems(tags),
                 ...cleanFilters(dynamicFilters)
             },
-            limit
         })
     }
     
@@ -103,6 +112,16 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                             onChange={(e) => setPreviews(e.target.checked)}
                         />
                         Include content previews
+                    </label>
+                </div>
+                <div className="search-option">
+                    <label>
+                        <input
+                            type="checkbox"
+                            checked={useScores}
+                            onChange={(e) => setUseScores(e.target.checked)}
+                        />
+                        Score results with a LLM before returning
                     </label>
                 </div>
 

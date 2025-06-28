@@ -2,10 +2,9 @@ from datetime import datetime
 import logging
 from typing import Optional, TypedDict, NotRequired, cast
 
-from memory.common.db.models.source_item import SourceItem
 from pydantic import BaseModel
 
-from memory.common.db.models import Chunk
+from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
 
 logger = logging.getLogger(__name__)
@@ -69,3 +68,10 @@ class SearchFilters(TypedDict):
     min_confidences: NotRequired[dict[str, float]]
     observation_types: NotRequired[list[str] | None]
     source_ids: NotRequired[list[int] | None]
+
+
+class SearchConfig(BaseModel):
+    limit: int = 10
+    timeout: int = 20
+    previews: bool = False
+    useScores: bool = False

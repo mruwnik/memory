@@ -40,8 +40,7 @@ const Search = () => {
 
         setIsLoading(true)
         try {
-            console.log(params)
-            const searchResults = await searchKnowledgeBase(params.query, params.previews, params.limit, params.filters, params.modalities)
+            const searchResults = await searchKnowledgeBase(params.query, params.modalities, params.filters, params.config)
             setResults(searchResults || [])
         } catch (error) {
             console.error('Search error:', error)

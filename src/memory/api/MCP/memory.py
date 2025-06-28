@@ -6,17 +6,16 @@ import base64
 import logging
 import pathlib
 from datetime import datetime, timezone
-from typing import Any
 from PIL import Image
 
 from pydantic import BaseModel
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
-from mcp.server.fastmcp.resources.base import Resource
 
 from memory.api.MCP.tools import mcp
-from memory.api.search.search import SearchFilters, search
+from memory.api.search.search import search
+from memory.api.search.types import SearchFilters, SearchConfig
 from memory.common import extract, settings
 from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
@@ -80,22 +79,32 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
 @mcp.tool()
 async def search_knowledge_base(
     query: str,
-    filters: dict[str, Any],
+    filters: SearchFilters,
+    config: SearchConfig = SearchConfig(),
     modalities: set[str] = set(),
-    previews: bool = False,
-    limit: int = 10,
 ) -> list[dict]:
     """
     Search user's stored content including emails, documents, articles, books.
     Use to find specific information the user has saved or received.
     Combine with search_observations for complete user context.
+    Use the `get_metadata_schemas` tool to get the metadata schema for each collection, from which you can infer the keys for the filters dictionary.
+
+    If you know what kind of data you're looking for, it's worth explicitly filtering by that modality, as this gives better results.
 
     Args:
         query: Natural language search query - be descriptive about what you're looking for
-        previews: Include actual content in results - when false only a snippet is returned
         modalities: Filter by type: email, blog, book, forum, photo, comic, webpage (empty = all)
-        filters: Filter by tags, source_ids, etc.
-        limit: Max results (1-100)
+        filters: a dictionary with the following keys:
+            - tags: a list of tags to filter by
+            - source_ids: a list of source ids to filter by
+            - min_size: the minimum size of the content to filter by
+            - max_size: the maximum size of the content to filter by
+            - min_created_at: the minimum created_at date to filter by
+            - max_created_at: the maximum created_at date to filter by
+        config: a dictionary with the following keys:
+            - limit: the maximum number of results to return
+            - previews: whether to include the actual content in the results (up to MAX_PREVIEW_LENGTH characters)
+            - useScores: whether to score the results with a LLM before returning - this results in better results but is slower
 
     Returns: List of search results with id, score, chunks, content, filename
     Higher scores (>0.7) indicate strong matches.
@@ -112,10 +121,9 @@ async def search_knowledge_base(
     upload_data = extract.extract_text(query, skip_summary=True)
     results = await search(
         upload_data,
-        previews=previews,
         modalities=modalities,
-        limit=limit,
         filters=search_filters,
+        config=config,
     )
 
     return [result.model_dump() for result in results]
@@ -211,7 +219,7 @@ async def search_observations(
     tags: list[str] | None = None,
     observation_types: list[str] | None = None,
     min_confidences: dict[str, float] = {},
-    limit: int = 10,
+    config: SearchConfig = SearchConfig(),
 ) -> list[dict]:
     """
     Search recorded observations about the user.
@@ -224,7 +232,7 @@ async def search_observations(
         tags: Filter by tags (must have at least one matching tag)
         observation_types: Filter by: belief, preference, behavior, contradiction, general
         min_confidences: Minimum confidence thresholds, e.g. {"observation_accuracy": 0.8}
-        limit: Max results (1-100)
+        config: SearchConfig
 
     Returns: List with content, tags, created_at, metadata
     Results sorted by relevance to your query.
@@ -246,9 +254,7 @@ async def search_observations(
             extract.DataChunk(data=[semantic_text]),
             extract.DataChunk(data=[temporal]),
         ],
-        previews=True,
         modalities={"semantic", "temporal"},
-        limit=limit,
         filters=SearchFilters(
             subject=subject,
             min_confidences=min_confidences,
@@ -256,7 +262,7 @@ async def search_observations(
             observation_types=observation_types,
             source_ids=filter_observation_source_ids(tags=tags),
         ),
-        timeout=2,
+        config=config,
     )
 
     return [
