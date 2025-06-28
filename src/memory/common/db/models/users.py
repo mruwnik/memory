@@ -15,7 +15,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from datetime import datetime
 
 
 def hash_password(password: str) -> str:

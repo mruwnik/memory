@@ -547,3 +547,141 @@ def test_subclass_deletion_cascades_from_source_item(db_session: Session):
     # Verify both the MailMessage and SourceItem records are deleted
     assert db_session.query(MailMessage).filter_by(id=mail_message_id).first() is None
     assert db_session.query(SourceItem).filter_by(id=source_item_id).first() is None
+
+
+@pytest.mark.parametrize(
+    "content,image_paths,expected_chunks",
+    [
+        ("", [], 0),  # Empty content returns empty list
+        ("   \n  ", [], 0),  # Whitespace-only content returns empty list
+        ("Short content", [], 1),  # Short content returns just full_text chunk
+        ("A" * 10, [], 1),  # Very short content returns just full_text chunk
+    ],
+)
+def test_chunk_mixed_basic_cases(tmp_path, content, image_paths, expected_chunks):
+    """Test chunk_mixed function with basic cases"""
+    from memory.common.db.models.source_item import chunk_mixed
+
+    # Create test images if needed
+    actual_image_paths = []
+    for i, _ in enumerate(image_paths):
+        image_file = tmp_path / f"test{i}.png"
+        img = Image.new("RGB", (1, 1), color="red")
+        img.save(image_file)
+        actual_image_paths.append(image_file.name)
+
+    # Mock settings.FILE_STORAGE_DIR to point to tmp_path
+    with patch.object(settings, "FILE_STORAGE_DIR", tmp_path):
+        result = chunk_mixed(content, actual_image_paths)
+
+    assert len(result) == expected_chunks
+
+
+def test_chunk_mixed_with_images(tmp_path):
+    """Test chunk_mixed function with images"""
+    from memory.common.db.models.source_item import chunk_mixed
+
+    # Create test images
+    image1 = tmp_path / "image1.png"
+    image2 = tmp_path / "image2.jpg"
+    Image.new("RGB", (1, 1), color="red").save(image1)
+    Image.new("RGB", (1, 1), color="blue").save(image2)
+
+    content = "This content mentions image1.png and image2.jpg"
+    image_paths = [image1.name, image2.name]
+
+    with patch.object(settings, "FILE_STORAGE_DIR", tmp_path):
+        result = chunk_mixed(content, image_paths)
+
+    assert len(result) >= 1
+    # First chunk should contain the full text and images
+    assert content.strip() in result[0].data
+    assert len([d for d in result[0].data if isinstance(d, Image.Image)]) == 2
+
+
+def test_chunk_mixed_long_content(tmp_path):
+    """Test chunk_mixed function with long content that gets chunked"""
+    from memory.common.db.models.source_item import chunk_mixed
+
+    # Create long content
+    long_content = "Lorem ipsum dolor sit amet, " * 50  # About 150 words
+
+    # Mock the chunker functions to force chunking behavior
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(chunker, "DEFAULT_CHUNK_TOKENS", 10),
+        patch.object(chunker, "approx_token_count", return_value=100),
+    ):  # Force it to be > 2 * 10
+        result = chunk_mixed(long_content, [])
+
+    # Should have multiple chunks: full_text + chunked pieces + summary
+    assert len(result) > 1
+
+    # First chunk should be full text
+    assert long_content.strip() in result[0].data
+
+    # Last chunk should be summary
+    # (we can't easily test the exact summary without mocking summarizer)
+    assert result[-1].data  # Should have some data
+
+
+@pytest.mark.parametrize(
+    "sha256_values,expected_committed",
+    [
+        ([b"unique1", b"unique2", b"unique3"], 3),  # All unique
+        ([b"duplicate", b"duplicate", b"unique"], 2),  # One duplicate pair
+        ([b"same", b"same", b"same"], 1),  # All duplicates
+        ([b"dup1", b"dup1", b"dup2", b"dup2"], 2),  # Two duplicate pairs
+    ],
+)
+def test_handle_duplicate_sha256_behavior(
+    db_session: Session, sha256_values, expected_committed
+):
+    """Test that handle_duplicate_sha256 event listener prevents duplicate sha256 values"""
+    # Create SourceItems with the given sha256 values
+    items = []
+    for i, sha256 in enumerate(sha256_values):
+        item = SourceItem(sha256=sha256, content=f"test content {i}", modality="text")
+        items.append(item)
+        db_session.add(item)
+
+    # Commit should trigger the event listener
+    db_session.commit()
+
+    # Query how many items were actually committed
+    committed_count = db_session.query(SourceItem).count()
+    assert committed_count == expected_committed
+
+    # Verify all sha256 values in database are unique
+    sha256_in_db = [row[0] for row in db_session.query(SourceItem.sha256).all()]
+    assert len(sha256_in_db) == len(set(sha256_in_db))  # All unique
+
+
+def test_handle_duplicate_sha256_with_existing_data(db_session: Session):
+    """Test duplicate handling when items already exist in database"""
+    # Add initial items
+    existing_item = SourceItem(sha256=b"existing", content="original", modality="text")
+    db_session.add(existing_item)
+    db_session.commit()
+
+    # Try to add new items with same and different sha256
+    new_items = [
+        SourceItem(
+            sha256=b"existing", content="duplicate", modality="text"
+        ),  # Should be rejected
+        SourceItem(
+            sha256=b"new_unique", content="new content", modality="text"
+        ),  # Should be kept
+    ]
+    for item in new_items:
+        db_session.add(item)
+
+    db_session.commit()
+
+    # Should have 2 items total (original + new unique)
+    assert db_session.query(SourceItem).count() == 2
+
+    # Original content should be preserved
+    existing_in_db = db_session.query(SourceItem).filter_by(sha256=b"existing").first()
+    assert existing_in_db is not None
+    assert str(existing_in_db.content) == "original"  # Original should be preserved

@@ -347,7 +347,7 @@ class SourceItem(Base):
             collection_name=modality,
             embedding_model=collections.collection_model(modality, text, images),
             item_metadata=extract.merge_metadata(
-                self.as_payload(), data.metadata, metadata
+                cast(dict[str, Any], self.as_payload()), data.metadata, metadata
             ),
         )
         return chunk
