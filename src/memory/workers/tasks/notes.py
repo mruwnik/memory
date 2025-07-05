@@ -85,6 +85,7 @@ def sync_note(
     note_type: str | None = None,
     confidences: dict[str, float] = {},
     tags: list[str] = [],
+    save_to_file: bool = True,
 ):
     logger.info(f"Syncing note {subject}")
     text = Note.as_text(content, subject)
@@ -123,10 +124,11 @@ def sync_note(
             note.tags = tags  # type: ignore
 
         note.update_confidences(confidences)
-        with git_tracking(
-            settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
-        ):
-            note.save_to_file()
+        if save_to_file:
+            with git_tracking(
+                settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
+            ):
+                note.save_to_file()
         return process_content_item(note, session)
 
 
@@ -145,7 +147,7 @@ def sync_notes(folder: str):
                 sync_note.delay(
                     subject=filename.stem,
                     content=filename.read_text(),
-                    filename=filename.as_posix(),
+                    filename=filename.relative_to(path).as_posix(),
                 )
 
     return {
@@ -207,19 +209,25 @@ def track_git_changes():
     )
     if diff_result and diff_result.returncode == 0:
         changed_files = [
-            f.strip() for f in diff_result.stdout.strip().split("\n") if f.strip()
+            filename
+            for f in diff_result.stdout.strip().split("\n")
+            if (filename := f.strip()) and filename.endswith(".md")
         ]
         logger.info(f"Changed files: {changed_files}")
     else:
         logger.error("Failed to get changed files")
         return {"status": "error", "error": "Failed to get changed files"}
 
-    for file in changed_files:
-        file = pathlib.Path(file)
+    for filename in changed_files:
+        file = settings.NOTES_STORAGE_DIR / filename
+        if not file.exists():
+            logger.warning(f"File not found: {filename}")
+            continue
         sync_note.delay(
             subject=file.stem,
             content=file.read_text(),
-            filename=file.as_posix(),
+            filename=filename,
+            save_to_file=False,
         )
 
     return {
