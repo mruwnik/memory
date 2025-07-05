@@ -475,3 +475,573 @@ def test_sync_notes_handles_file_read_errors(mock_sync_note, db_session):
     # Should catch the error and return error status
     assert result["status"] == "error"
     assert "File read error" in result["error"]
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_success(mock_git_command):
+    """Test check_git_command with successful git command execution."""
+    # Mock successful git command
+    mock_result = Mock()
+    mock_result.returncode = 0
+    mock_result.stdout = "  main  \n"  # Test that it strips whitespace
+    mock_result.stderr = ""
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+    result = notes.check_git_command(repo_root, "branch", "--show-current")
+
+    assert result == "main"
+    mock_git_command.assert_called_once_with(
+        repo_root, "branch", "--show-current", force=False
+    )
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_with_force(mock_git_command):
+    """Test check_git_command with force=True parameter."""
+    mock_result = Mock()
+    mock_result.returncode = 0
+    mock_result.stdout = "output"
+    mock_result.stderr = ""
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+    result = notes.check_git_command(repo_root, "status", force=True)
+
+    assert result == "output"
+    mock_git_command.assert_called_once_with(repo_root, "status", force=True)
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_no_git_repo(mock_git_command):
+    """Test check_git_command when git_command returns None (no git repo)."""
+    mock_git_command.return_value = None
+
+    repo_root = pathlib.Path("/test/repo")
+
+    with pytest.raises(RuntimeError, match=r"`status` failed"):
+        notes.check_git_command(repo_root, "status")
+
+    mock_git_command.assert_called_once_with(repo_root, "status", force=False)
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_git_failure(mock_git_command):
+    """Test check_git_command when git command fails with non-zero return code."""
+    mock_result = Mock()
+    mock_result.returncode = 1
+    mock_result.stdout = "fatal: not a git repository"
+    mock_result.stderr = "error: unknown command"
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+
+    with pytest.raises(
+        RuntimeError, match=r"`branch --invalid` failed with return code 1"
+    ):
+        notes.check_git_command(repo_root, "branch", "--invalid")
+
+    mock_git_command.assert_called_once_with(
+        repo_root, "branch", "--invalid", force=False
+    )
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_multiple_args(mock_git_command):
+    """Test check_git_command with multiple arguments."""
+    mock_result = Mock()
+    mock_result.returncode = 0
+    mock_result.stdout = "commit-hash"
+    mock_result.stderr = ""
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+    result = notes.check_git_command(repo_root, "rev-parse", "--short", "HEAD")
+
+    assert result == "commit-hash"
+    mock_git_command.assert_called_once_with(
+        repo_root, "rev-parse", "--short", "HEAD", force=False
+    )
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_empty_stdout(mock_git_command):
+    """Test check_git_command when git command succeeds but returns empty stdout."""
+    mock_result = Mock()
+    mock_result.returncode = 0
+    mock_result.stdout = ""
+    mock_result.stderr = ""
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+    result = notes.check_git_command(repo_root, "diff", "--exit-code")
+
+    assert result == ""
+    mock_git_command.assert_called_once_with(
+        repo_root, "diff", "--exit-code", force=False
+    )
+
+
+@patch("memory.workers.tasks.notes.git_command")
+def test_check_git_command_whitespace_handling(mock_git_command):
+    """Test check_git_command properly strips whitespace from stdout."""
+    mock_result = Mock()
+    mock_result.returncode = 0
+    mock_result.stdout = "\n\n  some output with spaces  \n\n"
+    mock_result.stderr = ""
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+    result = notes.check_git_command(repo_root, "log", "--oneline", "-1")
+
+    assert result == "some output with spaces"
+    mock_git_command.assert_called_once_with(
+        repo_root, "log", "--oneline", "-1", force=False
+    )
+
+
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.logger")
+def test_check_git_command_logs_errors(mock_logger, mock_git_command):
+    """Test check_git_command logs error details when git command fails."""
+    mock_result = Mock()
+    mock_result.returncode = 128
+    mock_result.stdout = "some output"
+    mock_result.stderr = "fatal: repository not found"
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+
+    with pytest.raises(RuntimeError):
+        notes.check_git_command(repo_root, "clone", "invalid-url")
+
+    # Verify error logging
+    mock_logger.error.assert_any_call("Git command failed: 128")
+    mock_logger.error.assert_any_call("stderr: fatal: repository not found")
+    mock_logger.error.assert_any_call("stdout: some output")
+
+
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.logger")
+def test_check_git_command_logs_errors_no_stdout(mock_logger, mock_git_command):
+    """Test check_git_command logs appropriately when there's no stdout."""
+    mock_result = Mock()
+    mock_result.returncode = 1
+    mock_result.stdout = ""
+    mock_result.stderr = "error: command failed"
+    mock_git_command.return_value = mock_result
+
+    repo_root = pathlib.Path("/test/repo")
+
+    with pytest.raises(RuntimeError):
+        notes.check_git_command(repo_root, "invalid-command")
+
+    # Verify error logging - should not log stdout when empty
+    mock_logger.error.assert_any_call("Git command failed: 1")
+    mock_logger.error.assert_any_call("stderr: error: command failed")
+    # stdout logging should not have been called since stdout is empty
+    stdout_calls = [
+        call for call in mock_logger.error.call_args_list if "stdout:" in str(call)
+    ]
+    assert len(stdout_calls) == 0
+
+
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_no_git_repo(mock_settings):
+    """Test track_git_changes when no git repository exists."""
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = False
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    result = notes.track_git_changes()
+
+    assert result == {"status": "no_git_repo"}
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_no_changes(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes when there are no new changes."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands to return same commit hash
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin (no return needed)
+        "abc123",  # latest commit (same as current)
+    ]
+    mock_git_command.return_value = Mock()  # pull command
+
+    result = notes.track_git_changes()
+
+    assert result == {
+        "status": "no_changes",
+        "current_commit": "abc123",
+        "latest_commit": "abc123",
+        "changed_files": [],
+    }
+
+    # Should not call sync_note when no changes
+    mock_sync_note.delay.assert_not_called()
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_with_changes_success(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes when there are changes and diff succeeds."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different from current)
+    ]
+
+    # Mock pull command
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        Mock(returncode=0, stdout="file1.md\nfile2.md\n"),  # diff command
+    ]
+
+    # Mock file reading
+    mock_file1 = Mock()
+    mock_file1.stem = "file1"
+    mock_file1.read_text.return_value = "Content of file 1"
+    mock_file1.as_posix.return_value = "file1.md"
+
+    mock_file2 = Mock()
+    mock_file2.stem = "file2"
+    mock_file2.read_text.return_value = "Content of file 2"
+    mock_file2.as_posix.return_value = "file2.md"
+
+    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
+        mock_path.side_effect = [mock_file1, mock_file2]
+
+        result = notes.track_git_changes()
+
+    assert result == {
+        "status": "success",
+        "current_commit": "abc123",
+        "latest_commit": "def456",
+        "changed_files": ["file1.md", "file2.md"],
+    }
+
+    # Should call sync_note for each changed file
+    assert mock_sync_note.delay.call_count == 2
+    mock_sync_note.delay.assert_any_call(
+        subject="file1",
+        content="Content of file 1",
+        filename="file1.md",
+    )
+    mock_sync_note.delay.assert_any_call(
+        subject="file2",
+        content="Content of file 2",
+        filename="file2.md",
+    )
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_diff_failure(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes when diff command fails."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different from current)
+    ]
+
+    # Mock pull command success, diff command failure
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        Mock(returncode=1, stdout="", stderr="diff failed"),  # diff command fails
+    ]
+
+    result = notes.track_git_changes()
+
+    assert result == {
+        "status": "error",
+        "error": "Failed to get changed files",
+    }
+
+    # Should not call sync_note when diff fails
+    mock_sync_note.delay.assert_not_called()
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_diff_returns_none(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes when diff command returns None."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different from current)
+    ]
+
+    # Mock pull command success, diff command returns None
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        None,  # diff command returns None
+    ]
+
+    result = notes.track_git_changes()
+
+    assert result == {
+        "status": "error",
+        "error": "Failed to get changed files",
+    }
+
+    # Should not call sync_note when diff returns None
+    mock_sync_note.delay.assert_not_called()
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_empty_diff(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes when diff returns empty (no actual file changes)."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different from current)
+    ]
+
+    # Mock pull command success, diff command returns empty
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        Mock(returncode=0, stdout=""),  # diff command returns empty
+    ]
+
+    result = notes.track_git_changes()
+
+    assert result == {
+        "status": "success",
+        "current_commit": "abc123",
+        "latest_commit": "def456",
+        "changed_files": [],
+    }
+
+    # Should not call sync_note when no files changed
+    mock_sync_note.delay.assert_not_called()
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_whitespace_in_filenames(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes handles whitespace in filenames correctly."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different from current)
+    ]
+
+    # Mock diff with whitespace and empty lines
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        Mock(
+            returncode=0, stdout="  file1.md  \n\n  file2.md  \n\n"
+        ),  # diff with whitespace
+    ]
+
+    # Mock file reading
+    mock_file1 = Mock()
+    mock_file1.stem = "file1"
+    mock_file1.read_text.return_value = "Content 1"
+    mock_file1.as_posix.return_value = "file1.md"
+
+    mock_file2 = Mock()
+    mock_file2.stem = "file2"
+    mock_file2.read_text.return_value = "Content 2"
+    mock_file2.as_posix.return_value = "file2.md"
+
+    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
+        mock_path.side_effect = [mock_file1, mock_file2]
+
+        result = notes.track_git_changes()
+
+    assert result == {
+        "status": "success",
+        "current_commit": "abc123",
+        "latest_commit": "def456",
+        "changed_files": ["file1.md", "file2.md"],
+    }
+
+    # Should call sync_note for each non-empty file
+    assert mock_sync_note.delay.call_count == 2
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+def test_track_git_changes_feature_branch(
+    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes works with feature branches."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Mock git commands for feature branch
+    mock_check_git.side_effect = [
+        "feature/notes-sync",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit from origin/feature/notes-sync
+    ]
+
+    mock_git_command.side_effect = [
+        Mock(),  # pull origin feature/notes-sync
+        Mock(returncode=0, stdout="feature_file.md\n"),  # diff command
+    ]
+
+    # Mock file reading
+    mock_file = Mock()
+    mock_file.stem = "feature_file"
+    mock_file.read_text.return_value = "Feature content"
+    mock_file.as_posix.return_value = "feature_file.md"
+
+    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
+        mock_path.return_value = mock_file
+
+        result = notes.track_git_changes()
+
+    assert result == {
+        "status": "success",
+        "current_commit": "abc123",
+        "latest_commit": "def456",
+        "changed_files": ["feature_file.md"],
+    }
+
+    # Verify correct branch was used in git commands
+    mock_git_command.assert_any_call(
+        mock_repo_root, "pull", "origin", "feature/notes-sync"
+    )
+    mock_check_git.assert_any_call(
+        mock_repo_root, "rev-parse", "origin/feature/notes-sync"
+    )
+
+
+@patch("memory.workers.tasks.notes.sync_note")
+@patch("memory.workers.tasks.notes.git_command")
+@patch("memory.workers.tasks.notes.check_git_command")
+@patch("memory.workers.tasks.notes.settings")
+@patch("memory.workers.tasks.notes.logger")
+def test_track_git_changes_logging(
+    mock_logger, mock_settings, mock_check_git, mock_git_command, mock_sync_note
+):
+    """Test track_git_changes logs appropriately."""
+    # Mock git repo exists
+    mock_repo_root = Mock()
+    mock_repo_root.__truediv__ = Mock(return_value=Mock())
+    mock_repo_root.__truediv__.return_value.exists.return_value = True
+    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+
+    # Test no changes scenario
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "abc123",  # latest commit (same as current)
+    ]
+    mock_git_command.return_value = Mock()  # pull command
+
+    notes.track_git_changes()
+
+    # Verify logging
+    mock_logger.info.assert_any_call("Tracking git changes")
+    mock_logger.info.assert_any_call("No new changes")
+
+    # Reset mocks for changes scenario
+    mock_logger.reset_mock()
+    mock_check_git.side_effect = [
+        "main",  # current branch
+        "abc123",  # current commit
+        None,  # fetch origin
+        "def456",  # latest commit (different)
+    ]
+    mock_git_command.side_effect = [
+        Mock(),  # pull command
+        Mock(returncode=0, stdout="test.md\n"),  # diff command
+    ]
+
+    mock_file = Mock()
+    mock_file.stem = "test"
+    mock_file.read_text.return_value = "Test content"
+    mock_file.as_posix.return_value = "test.md"
+
+    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
+        mock_path.return_value = mock_file
+        notes.track_git_changes()
+
+    # Verify logging for changes scenario
+    mock_logger.info.assert_any_call("Tracking git changes")
+    mock_logger.info.assert_any_call("Changed files: ['test.md']")

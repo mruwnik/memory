@@ -7,7 +7,13 @@ import shlex
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
-from memory.common.celery_app import app, SYNC_NOTE, SYNC_NOTES, SETUP_GIT_NOTES
+from memory.common.celery_app import (
+    app,
+    SYNC_NOTE,
+    SYNC_NOTES,
+    SETUP_GIT_NOTES,
+    TRACK_GIT_CHANGES,
+)
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -39,6 +45,22 @@ def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
         if res.stdout:
             logger.error(f"stdout: {res.stdout}")
     return res
+
+
+def check_git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
+    res = git_command(repo_root, *args, force=force)
+    if not res:
+        raise RuntimeError(f"`{' '.join(args)}` failed")
+
+    if res.returncode != 0:
+        logger.error(f"Git command failed: {res.returncode}")
+        logger.error(f"stderr: {res.stderr}")
+        if res.stdout:
+            logger.error(f"stdout: {res.stdout}")
+        raise RuntimeError(
+            f"`{' '.join(args)}` failed with return code {res.returncode}"
+        )
+    return res.stdout.strip()
 
 
 @contextlib.contextmanager
@@ -148,3 +170,61 @@ def setup_git_notes(origin: str, email: str, name: str):
     git_command(settings.NOTES_STORAGE_DIR, "commit", "-m", "Initial commit")
     git_command(settings.NOTES_STORAGE_DIR, "push", "-u", "origin", "main")
     return {"status": "success"}
+
+
+@app.task(name=TRACK_GIT_CHANGES)
+@safe_task_execution
+def track_git_changes():
+    """Track git changes by noting current commit, pulling new commits, and listing changed files."""
+    logger.info("Tracking git changes")
+
+    repo_root = settings.NOTES_STORAGE_DIR
+    if not (repo_root / ".git").exists():
+        logger.warning("Git repository not found")
+        return {"status": "no_git_repo"}
+
+    current_branch = check_git_command(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+    current_commit = check_git_command(repo_root, "rev-parse", "HEAD")
+    check_git_command(repo_root, "fetch", "origin")
+    git_command(repo_root, "pull", "origin", current_branch)
+    latest_commit = check_git_command(
+        repo_root, "rev-parse", f"origin/{current_branch}"
+    )
+
+    # Check if there are any changes
+    if current_commit == latest_commit:
+        logger.info("No new changes")
+        return {
+            "status": "no_changes",
+            "current_commit": current_commit,
+            "latest_commit": latest_commit,
+            "changed_files": [],
+        }
+
+    # Get list of changed files between current and latest commit
+    diff_result = git_command(
+        repo_root, "diff", "--name-only", f"{current_commit}..{latest_commit}"
+    )
+    if diff_result and diff_result.returncode == 0:
+        changed_files = [
+            f.strip() for f in diff_result.stdout.strip().split("\n") if f.strip()
+        ]
+        logger.info(f"Changed files: {changed_files}")
+    else:
+        logger.error("Failed to get changed files")
+        return {"status": "error", "error": "Failed to get changed files"}
+
+    for file in changed_files:
+        file = pathlib.Path(file)
+        sync_note.delay(
+            subject=file.stem,
+            content=file.read_text(),
+            filename=file.as_posix(),
+        )
+
+    return {
+        "status": "success",
+        "current_commit": current_commit,
+        "latest_commit": latest_commit,
+        "changed_files": changed_files,
+    }
