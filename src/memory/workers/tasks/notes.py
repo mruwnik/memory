@@ -215,7 +215,10 @@ def track_git_changes():
         return {"status": "error", "error": "Failed to get changed files"}
 
     for file in changed_files:
-        file = pathlib.Path(file)
+        file = settings.NOTES_STORAGE_DIR / file
+        if not file.exists():
+            logger.warning(f"File not found: {file}")
+            continue
         sync_note.delay(
             subject=file.stem,
             content=file.read_text(),
