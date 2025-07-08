@@ -1,5 +1,4 @@
 import logging
-import os
 import pathlib
 from typing import cast
 
@@ -18,7 +17,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
-from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+from memory.api.MCP.oauth_provider import (
+    SimpleOAuthProvider,
+    ALLOWED_SCOPES,
+    BASE_SCOPES,
+)
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import OAuthState
@@ -61,13 +64,13 @@ templates = Jinja2Templates(directory=template_dir)
 oauth_provider = SimpleOAuthProvider()
 auth_settings = AuthSettings(
     issuer_url=cast(AnyHttpUrl, settings.SERVER_URL),
-    resource_server_url=cast(AnyHttpUrl, settings.SERVER_URL),
+    resource_server_url=cast(AnyHttpUrl, settings.SERVER_URL),  # type: ignore
     client_registration_options=ClientRegistrationOptions(
         enabled=True,
-        valid_scopes=["read", "write"],
-        default_scopes=["read"],
+        valid_scopes=ALLOWED_SCOPES,
+        default_scopes=BASE_SCOPES,
     ),
-    required_scopes=["read", "write"],
+    required_scopes=BASE_SCOPES,
 )
 
 mcp = FastMCP(
@@ -81,8 +84,8 @@ mcp = FastMCP(
 @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
 async def oauth_protected_resource(request: Request):
     """OAuth 2.0 Protected Resource Metadata."""
-    logger.info("Protected resource metadata requested")
-    return JSONResponse(oauth_provider.get_protected_resource_metadata())
+    metadata = oauth_provider.get_protected_resource_metadata()
+    return JSONResponse(metadata)
 
 
 def login_form(request: Request, form_data: dict, error: str | None = None):
