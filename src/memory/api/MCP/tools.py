@@ -108,10 +108,3 @@ async def get_authenticated_user() -> dict:
         "client_id": access_token.client_id,
         "user": user_info,
     }
-
-
-@mcp.tool()
-async def send_response(response: str) -> dict:
-    """Send a response to the user."""
-    logger.info(f"Sending response: {response}")
-    return {"response": response}

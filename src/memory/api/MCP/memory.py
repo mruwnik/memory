@@ -180,6 +180,7 @@ async def observe(
         session_id: UUID to group observations from same conversation
         agent_model: AI model making observations (for quality tracking)
     """
+    logger.info("MCP: Observing")
     tasks = [
         (
             observation,
@@ -237,6 +238,7 @@ async def search_observations(
     Returns: List with content, tags, created_at, metadata
     Results sorted by relevance to your query.
     """
+    logger.info("MCP: Searching observations for %s", query)
     semantic_text = observation.generate_semantic_text(
         subject=subject or "",
         observation_type="".join(observation_types or []),
@@ -297,6 +299,7 @@ async def create_note(
         confidences: Dict of scores (0.0-1.0), e.g. {"observation_accuracy": 0.9}
         tags: Organization tags for filtering and discovery
     """
+    logger.info("MCP: creating note: %s", subject)
     if filename:
         path = pathlib.Path(filename)
         if not path.is_absolute():

@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.orm import Session, relationship
 from sqlalchemy.types import Numeric
 
-from memory.common import settings
+from memory.common import settings, tokens
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -125,8 +125,7 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
     )
 
     chunks: list[extract.DataChunk] = [full_text]
-    tokens = chunker.approx_token_count(content)
-    if tokens > chunker.DEFAULT_CHUNK_TOKENS * 2:
+    if tokens.approx_token_count(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
         chunks += [
             extract.DataChunk(data=add_pics(c, images), metadata={"tags": tags})
             for c in chunker.chunk_text(content)
