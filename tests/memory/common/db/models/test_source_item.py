@@ -3,7 +3,7 @@ from unittest.mock import patch
 from typing import cast
 import pytest
 from PIL import Image
-from memory.common import settings, chunker, extract
+from memory.common import settings, chunker, extract, tokens
 from memory.common.db.models.source_item import (
     Chunk,
 )
@@ -610,7 +610,7 @@ def test_chunk_mixed_long_content(tmp_path):
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(chunker, "DEFAULT_CHUNK_TOKENS", 10),
-        patch.object(chunker, "approx_token_count", return_value=100),
+        patch.object(tokens, "approx_token_count", return_value=100),
     ):  # Force it to be > 2 * 10
         result = chunk_mixed(long_content, [])
 
