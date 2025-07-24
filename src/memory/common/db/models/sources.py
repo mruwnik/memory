@@ -50,9 +50,9 @@ class Book(Base):
         Index("book_title_idx", "title"),
     )
 
-    def as_payload(self) -> dict:
-        return {
-            **super().as_payload(),
+    def as_payload(self, sections: bool = False) -> dict:
+        data = {
+            "id": self.id,
             "isbn": self.isbn,
             "title": self.title,
             "author": self.author,
@@ -63,6 +63,9 @@ class Book(Base):
             "series": self.series,
             "series_number": self.series_number,
         } | (cast(dict, self.book_metadata) or {})
+        if sections:
+            data["sections"] = [section.as_payload() for section in self.sections]
+        return data
 
 
 class ArticleFeed(Base):

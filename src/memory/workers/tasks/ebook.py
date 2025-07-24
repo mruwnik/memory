@@ -1,12 +1,13 @@
 import logging
 import pathlib
+from datetime import datetime
 from typing import Iterable, cast
 
 import memory.common.settings as settings
-from memory.parsers.ebook import Ebook, parse_ebook, Section
-from memory.common.db.models import Book, BookSection
+from memory.common.celery_app import SYNC_BOOK, app
 from memory.common.db.connection import make_session
-from memory.common.celery_app import app, SYNC_BOOK
+from memory.common.db.models import Book, BookSection
+from memory.parsers.ebook import Ebook, Section, parse_ebook
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -143,7 +144,18 @@ def embed_sections(all_sections: list[BookSection]) -> int:
 
 @app.task(name=SYNC_BOOK)
 @safe_task_execution
-def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
+def sync_book(
+    file_path: str,
+    tags: Iterable[str] = [],
+    title: str = "",
+    author: str = "",
+    publisher: str = "",
+    published: str = "",
+    language: str = "",
+    edition: str = "",
+    series: str = "",
+    series_number: int | None = None,
+) -> dict:
     """
     Synchronize a book from a file path.
 
@@ -154,12 +166,13 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
         dict: Summary of what was processed
     """
     ebook = validate_and_parse_book(file_path)
-    logger.info(f"Ebook parsed: {ebook.title}")
+    logger.info(f"Ebook parsed: {ebook.title}, {ebook.file_path.as_posix()}")
 
     with make_session() as session:
         # Check for existing book
+        logger.info(f"Checking for existing book: {ebook.relative_path.as_posix()}")
         existing_book = check_content_exists(
-            session, Book, file_path=ebook.file_path.as_posix()
+            session, Book, file_path=ebook.relative_path.as_posix()
         )
         if existing_book:
             logger.info(f"Book already exists: {existing_book.title}")
@@ -174,6 +187,24 @@ def sync_book(file_path: str, tags: Iterable[str] = []) -> dict:
         logger.info("Creating book and sections with relationships")
         # Create book and sections with relationships
         book, all_sections = create_book_and_sections(ebook, session, tags)
+
+        if title:
+            book.title = title  # type: ignore
+        if author:
+            book.author = author  # type: ignore
+        if publisher:
+            book.publisher = publisher  # type: ignore
+        if published:
+            book.published = datetime.fromisoformat(published)  # type: ignore
+        if language:
+            book.language = language  # type: ignore
+        if edition:
+            book.edition = edition  # type: ignore
+        if series:
+            book.series = series  # type: ignore
+        if series_number:
+            book.series_number = series_number  # type: ignore
+        session.add(book)
 
         # Embed sections
         logger.info("Embedding sections")
