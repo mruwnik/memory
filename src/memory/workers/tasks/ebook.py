@@ -53,6 +53,7 @@ def section_processor(
         if len(content) >= MIN_SECTION_LENGTH:
             book_section = BookSection(
                 book_id=book.id,
+                book=book,
                 section_title=section.title,
                 section_number=section.number,
                 section_level=level,
@@ -187,6 +188,8 @@ def sync_book(
         logger.info("Creating book and sections with relationships")
         # Create book and sections with relationships
         book, all_sections = create_book_and_sections(ebook, session, tags)
+        for section in all_sections:
+            print(section.section_title, section.book)
 
         if title:
             book.title = title  # type: ignore
@@ -196,10 +199,16 @@ def sync_book(
             book.publisher = publisher  # type: ignore
         if published:
             book.published = datetime.fromisoformat(published)  # type: ignore
+        if isinstance(book.published, str):
+            book.published = datetime.fromisoformat(book.published)  # type: ignore
+
         if language:
             book.language = language  # type: ignore
         if edition:
             book.edition = edition  # type: ignore
+
+        if isinstance(series, dict):
+            series = series.get("name")
         if series:
             book.series = series  # type: ignore
         if series_number:
