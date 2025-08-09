@@ -41,6 +41,7 @@ UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
 SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
+ADD_ARTICLE_FEED = f"{BLOGS_ROOT}.add_article_feed"
 SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
 

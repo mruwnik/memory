@@ -12,6 +12,7 @@ from memory.common.celery_app import (
     SYNC_WEBPAGE,
     SYNC_ARTICLE_FEED,
     SYNC_ALL_ARTICLE_FEEDS,
+    ADD_ARTICLE_FEED,
     SYNC_WEBSITE_ARCHIVE,
 )
 from memory.workers.tasks.content_processing import (
@@ -169,10 +170,52 @@ def sync_all_article_feeds() -> list[dict]:
         return results
 
 
+@app.task(name=ADD_ARTICLE_FEED)
+def add_article_feed(
+    url: str,
+    title: str | None = None,
+    description: str | None = None,
+    tags: Iterable[str] = [],
+    active: bool = True,
+    check_interval: int = 60 * 24,  # 24 hours
+) -> dict:
+    """
+    Add a new ArticleFeed.
+
+    Args:
+        url: URL of the feed
+        title: Title of the feed (optional)
+        description: Description of the feed (optional)
+        tags: Tags to apply to the feed
+        active: Whether the feed is active
+        check_interval: Interval in minutes to check the feed
+
+    Returns:
+        dict: Summary of the added feed
+    """
+    with make_session() as session:
+        feed = session.query(ArticleFeed).filter(ArticleFeed.url == url).first()
+        if feed:
+            logger.info(f"Feed already exists: {url}")
+            return {"status": "error", "error": "Feed already exists"}
+
+        feed = ArticleFeed(
+            url=url,
+            title=title or url,
+            description=description,
+            active=active,
+            check_interval=check_interval,
+            tags=tags,
+        )
+        session.add(feed)
+        session.commit()
+        return {"status": "success", "feed_id": feed.id}
+
+
 @app.task(name=SYNC_WEBSITE_ARCHIVE)
 @safe_task_execution
 def sync_website_archive(
-    url: str, tags: Iterable[str] = [], max_pages: int = 100
+    url: str, tags: Iterable[str] = [], max_pages: int = 100, add_feed: bool = True
 ) -> dict:
     """
     Synchronize all articles from a website's archive.
@@ -187,6 +230,16 @@ def sync_website_archive(
     """
     logger.info(f"Starting archive sync for: {url}")
 
+    if add_feed:
+        with make_session() as session:
+            feed = session.query(ArticleFeed).filter(ArticleFeed.url == url).first()
+            if not feed:
+                feed = ArticleFeed(
+                    url=url,
+                    title=url,
+                    active=True,
+                )
+
     # Get archive fetcher for the website
     fetcher = get_archive_fetcher(url)
     if not fetcher:
@@ -200,10 +253,10 @@ def sync_website_archive(
     new_articles = 0
     task_ids = []
 
-    for feed_item in fetcher.fetch_all_items():
-        articles_found += 1
+    with make_session() as session:
+        for feed_item in fetcher.fetch_all_items():
+            articles_found += 1
 
-        with make_session() as session:
             existing = check_content_exists(session, BlogPost, url=feed_item.url)
             if existing:
                 continue

@@ -27,6 +27,7 @@ from memory.common import settings
 from memory.common.celery_app import (
     SYNC_ALL_ARTICLE_FEEDS,
     SYNC_ARTICLE_FEED,
+    ADD_ARTICLE_FEED,
     SYNC_WEBPAGE,
     SYNC_WEBSITE_ARCHIVE,
     SYNC_ALL_COMICS,
@@ -49,6 +50,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     SETUP_GIT_NOTES,
+    TRACK_GIT_CHANGES,
     app,
 )
 
@@ -78,6 +80,7 @@ TASK_MAPPINGS = {
         "sync_article_feed": SYNC_ARTICLE_FEED,
         "sync_all_article_feeds": SYNC_ALL_ARTICLE_FEEDS,
         "sync_website_archive": SYNC_WEBSITE_ARCHIVE,
+        "add_article_feed": ADD_ARTICLE_FEED,
     },
     "comic": {
         "sync_all_comics": SYNC_ALL_COMICS,
@@ -92,6 +95,7 @@ TASK_MAPPINGS = {
     },
     "notes": {
         "setup_git_notes": SETUP_GIT_NOTES,
+        "track_git_changes": TRACK_GIT_CHANGES,
     },
 }
 QUEUE_MAPPINGS = {
@@ -249,6 +253,13 @@ def notes_setup_git_notes(ctx, origin, email, name):
     execute_task(ctx, "notes", "setup_git_notes", origin=origin, email=email, name=name)
 
 
+@notes.command("track-git-changes")
+@click.pass_context
+def notes_track_git_changes(ctx):
+    """Track git changes."""
+    execute_task(ctx, "notes", "track_git_changes")
+
+
 @cli.group()
 @click.pass_context
 def maintenance(ctx):
@@ -374,6 +385,34 @@ def blogs_sync_all_article_feeds(ctx):
 def blogs_sync_website_archive(ctx, url):
     """Sync a website archive."""
     execute_task(ctx, "blogs", "sync_website_archive", url=url)
+
+
+@blogs.command("add-article-feed")
+@click.option("--url", required=True, help="URL of the feed")
+@click.option("--title", help="Title of the feed")
+@click.option("--description", help="Description of the feed")
+@click.option("--tags", help="Comma-separated tags to apply to the feed", default="")
+@click.option("--active", is_flag=True, help="Whether the feed is active")
+@click.option(
+    "--check-interval",
+    type=int,
+    help="Interval in minutes to check the feed",
+    default=60 * 24,  # 24 hours
+)
+@click.pass_context
+def blogs_add_article_feed(ctx, url, title, description, tags, active, check_interval):
+    """Add a new article feed."""
+    execute_task(
+        ctx,
+        "blogs",
+        "add_article_feed",
+        url=url,
+        title=title,
+        description=description,
+        tags=tags.split(","),
+        active=active,
+        check_interval=check_interval,
+    )
 
 
 @cli.group()
