@@ -609,6 +609,9 @@ PARSER_REGISTRY = {
     r"rachelbythebay\.com": RachelByTheBayParser,
     r"nadia\.xyz": NadiaXyzParser,
     r"slatestarcodex\.com": SlateStarCodexParser,
+    r"nayafia\.substack\.com": SubstackParser,
+    r"homosabiens\.substack\.com": SubstackParser,
+    r"usefulfictions\.substack\.com": SubstackParser,
 }
 
 

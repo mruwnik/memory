@@ -8,6 +8,7 @@ from memory.common.celery_app import (
     SYNC_ALL_COMICS,
     SYNC_ALL_ARTICLE_FEEDS,
     TRACK_GIT_CHANGES,
+    SYNC_LESSWRONG,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,5 +38,9 @@ app.conf.beat_schedule = {
     "sync-notes-changes": {
         "task": TRACK_GIT_CHANGES,
         "schedule": settings.NOTES_SYNC_INTERVAL,
+    },
+    "sync-lesswrong": {
+        "task": SYNC_LESSWRONG,
+        "schedule": settings.LESSWRONG_SYNC_INTERVAL,
     },
 }

@@ -237,6 +237,7 @@ def fetch_lesswrong(
 
 def fetch_lesswrong_posts(
     since: datetime | None = None,
+    until: datetime | None = None,
     min_karma: int = 10,
     limit: int = 50,
     cooldown: float = 0.5,
@@ -280,6 +281,9 @@ def fetch_lesswrong_posts(
             break
 
         for post in page_posts:
+            published_at = post.get("published_at")
+            if published_at and until and published_at > until:
+                break
             yield post
 
         last_item = page_posts[-1]

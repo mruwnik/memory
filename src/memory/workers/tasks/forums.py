@@ -49,7 +49,8 @@ def sync_lesswrong_post(
 @app.task(name=SYNC_LESSWRONG)
 @safe_task_execution
 def sync_lesswrong(
-    since: str = (datetime.now() - timedelta(days=30)).isoformat(),
+    since: str | None = None,
+    until: str | None = None,
     min_karma: int = 10,
     limit: int = 50,
     cooldown: float = 0.5,
@@ -57,9 +58,27 @@ def sync_lesswrong(
     af: bool = False,
     tags: list[str] = [],
 ):
+    if until:
+        end_date = datetime.fromisoformat(until)
+    else:
+        end_date = datetime.now() - timedelta(hours=8)
+
     logger.info(f"Syncing LessWrong posts since {since}")
-    start_date = datetime.fromisoformat(since)
-    posts = fetch_lesswrong_posts(start_date, min_karma, limit, cooldown, max_items, af)
+
+    if since:
+        start_date = datetime.fromisoformat(since)
+    else:
+        start_date = end_date - timedelta(days=30)
+
+    posts = fetch_lesswrong_posts(
+        since=start_date,
+        until=end_date,
+        min_karma=min_karma,
+        limit=limit,
+        cooldown=cooldown,
+        max_items=max_items,
+        af=af,
+    )
 
     posts_num, new_posts = 0, 0
     with make_session() as session:

@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import ForumPost
@@ -228,17 +228,19 @@ def test_sync_lesswrong_success(mock_fetch, mock_lesswrong_post, db_session):
         assert result["since"] == "2024-01-01T00:00:00"
         assert result["min_karma"] == 10
         assert result["max_items"] == 100
-        assert result["af"] == False
+        assert not result["af"]
 
-        # Verify fetch_lesswrong_posts was called with correct arguments
-        mock_fetch.assert_called_once_with(
-            datetime.fromisoformat("2024-01-01T00:00:00"),
-            10,  # min_karma
-            50,  # limit
-            0.1,  # cooldown
-            100,  # max_items
-            False,  # af
-        )
+        # Verify fetch_lesswrong_posts was called with correct arguments (kwargs)
+        mock_fetch.assert_called_once()
+        kwargs = mock_fetch.call_args.kwargs
+        assert kwargs["since"] == datetime.fromisoformat("2024-01-01T00:00:00")
+        assert kwargs["min_karma"] == 10
+        assert kwargs["limit"] == 50
+        assert kwargs["cooldown"] == 0.1
+        assert kwargs["max_items"] == 100
+        assert kwargs["af"] is False
+        assert "until" in kwargs
+        assert isinstance(kwargs["until"], datetime)
 
         # Verify sync_lesswrong_post was called for the new post
         mock_sync_post.delay.assert_called_once_with(mock_lesswrong_post, ["test"])
@@ -343,11 +345,14 @@ def test_sync_lesswrong_since_parameter(mock_fetch, db_session):
     forums.sync_lesswrong(since="2024-01-01T00:00:00")
     expected_since = datetime.fromisoformat("2024-01-01T00:00:00")
 
-    # Verify fetch was called with correct since date
-    call_args = mock_fetch.call_args[0]
-    actual_since = call_args[0]
+    # Verify fetch was called with correct since date (kwargs)
+    kwargs = mock_fetch.call_args.kwargs
+    actual_since = kwargs["since"]
 
     assert actual_since == expected_since
+    assert "until" in kwargs
+    assert isinstance(kwargs["until"], datetime)
+    assert kwargs["until"] >= actual_since
 
 
 @pytest.mark.parametrize(
@@ -373,14 +378,14 @@ def test_sync_lesswrong_parameters(
         max_items=500,
     )
 
-    # Verify fetch was called with correct parameters
-    call_args = mock_fetch.call_args[0]
+    # Verify fetch was called with correct parameters (kwargs)
+    kwargs = mock_fetch.call_args.kwargs
 
-    assert call_args[1] == min_karma  # min_karma
-    assert call_args[2] == limit  # limit
-    assert call_args[3] == cooldown  # cooldown
-    assert call_args[4] == 500  # max_items
-    assert call_args[5] == af_value  # af
+    assert kwargs["min_karma"] == min_karma
+    assert kwargs["limit"] == limit
+    assert kwargs["cooldown"] == cooldown
+    assert kwargs["max_items"] == 500
+    assert kwargs["af"] == af_value
 
     assert result["min_karma"] == min_karma
     assert result["af"] == af_value
