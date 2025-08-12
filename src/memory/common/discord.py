@@ -1,6 +1,7 @@
 import logging
 import requests
-from typing import Any, Dict, List
+import re
+from typing import Any
 
 from memory.common import settings
 
@@ -19,6 +20,7 @@ class DiscordServer(requests.Session):
         self.channels = {}
         super().__init__(*args, **kwargs)
         self.setup_channels()
+        self.members = self.fetch_all_members()
 
     def setup_channels(self):
         resp = self.get(self.channels_url)
@@ -63,9 +65,20 @@ class DiscordServer(requests.Session):
         return channel_id
 
     def send_message(self, channel_id: str, content: str):
-        self.post(
+        payload: dict[str, Any] = {"content": content}
+        mentions = re.findall(r"@(\S*)", content)
+        users = {u: i for u, i in self.members.items() if u in mentions}
+        if users:
+            for u, i in users.items():
+                payload["content"] = payload["content"].replace(f"@{u}", f"<@{i}>")
+            payload["allowed_mentions"] = {
+                "parse": [],
+                "users": list(users.values()),
+            }
+
+        return self.post(
             f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            json={"content": content},
+            json=payload,
         )
 
     def create_channel(self, channel_name: str, channel_type: int = 0) -> str | None:
@@ -91,8 +104,64 @@ class DiscordServer(requests.Session):
     def channels_url(self) -> str:
         return f"https://discord.com/api/v10/guilds/{self.server_id}/channels"
 
+    @property
+    def members_url(self) -> str:
+        return f"https://discord.com/api/v10/guilds/{self.server_id}/members"
 
-def get_bot_servers() -> List[Dict]:
+    @property
+    def dm_create_url(self) -> str:
+        return "https://discord.com/api/v10/users/@me/channels"
+
+    def list_members(
+        self, limit: int = 1000, after: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List up to `limit` members in this guild, starting after a user ID.
+
+        Requires the bot to have the Server Members Intent enabled in the Discord developer portal.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if after:
+            params["after"] = after
+        resp = self.get(self.members_url, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_all_members(self, page_size: int = 1000) -> dict[str, str]:
+        """Retrieve all members in the guild by paginating the members list.
+
+        Note: Large guilds may take multiple requests. Rate limits are respected by requests.Session automatically.
+        """
+        members: dict[str, str] = {}
+        after: str | None = None
+        while batch := self.list_members(limit=page_size, after=after):
+            for member in batch:
+                user = member.get("user", {})
+                members[user.get("global_name") or user.get("username", "")] = user.get(
+                    "id", ""
+                )
+            after = user.get("id", "")
+        return members
+
+    def create_dm_channel(self, user_id: str) -> str:
+        """Create (or retrieve) a DM channel with the given user and return the channel ID.
+
+        The bot must share a guild with the user, and the user's privacy settings must allow DMs from server members.
+        """
+        resp = self.post(self.dm_create_url, json={"recipient_id": user_id})
+        resp.raise_for_status()
+        data = resp.json()
+        return data["id"]
+
+    def send_dm(self, user_id: str, content: str):
+        """Send a direct message to a specific user by ID."""
+        channel_id = self.create_dm_channel(self.members.get(user_id) or user_id)
+        return self.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            json={"content": content},
+        )
+
+
+def get_bot_servers() -> list[dict[str, Any]]:
     """Get list of servers the bot is in."""
     if not settings.DISCORD_BOT_TOKEN:
         return []
@@ -139,6 +208,14 @@ def send_discovery_message(message: str):
 
 def send_chat_message(message: str):
     broadcast_message(CHAT_CHANNEL, message)
+
+
+def send_dm(user_id: str, message: str):
+    for server in servers.values():
+        if not server.members.get(user_id) and user_id not in server.members.values():
+            continue
+
+        server.send_dm(user_id, message)
 
 
 def notify_task_failure(

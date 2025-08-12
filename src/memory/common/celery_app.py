@@ -11,6 +11,7 @@ EBOOK_ROOT = "memory.workers.tasks.ebook"
 MAINTENANCE_ROOT = "memory.workers.tasks.maintenance"
 NOTES_ROOT = "memory.workers.tasks.notes"
 OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
+SCHEDULED_CALLS_ROOT = "memory.workers.tasks.scheduled_calls"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
@@ -43,6 +44,10 @@ SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
 SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
 ADD_ARTICLE_FEED = f"{BLOGS_ROOT}.add_article_feed"
 SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
+
+# Scheduled calls tasks
+EXECUTE_SCHEDULED_CALL = f"{SCHEDULED_CALLS_ROOT}.execute_scheduled_call"
+RUN_SCHEDULED_CALLS = f"{SCHEDULED_CALLS_ROOT}.run_scheduled_calls"
 
 
 def get_broker_url() -> str:
@@ -78,6 +83,9 @@ app.conf.update(
         },
         f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
+        f"{SCHEDULED_CALLS_ROOT}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"
+        },
     },
 )
 

@@ -1,8 +1,6 @@
-import logging
 import pytest
 from unittest.mock import Mock, patch
 import requests
-import json
 
 from memory.common import discord, settings
 

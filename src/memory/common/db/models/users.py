@@ -2,6 +2,8 @@ import hashlib
 import secrets
 from typing import cast
 import uuid
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
 from memory.common.db.models.base import Base
 from sqlalchemy import (
     Column,
@@ -39,6 +41,7 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, nullable=False, unique=True)
     password_hash = Column(String, nullable=False)
+    discord_user_id = Column(String, nullable=True)
 
     # Relationship to sessions
     sessions = relationship(
@@ -53,6 +56,7 @@ class User(Base):
             "user_id": self.id,
             "name": self.name,
             "email": self.email,
+            "discord_user_id": self.discord_user_id,
         }
 
     def is_valid_password(self, password: str) -> bool:
@@ -193,3 +197,15 @@ class OAuthRefreshToken(Base, OAuthToken):
             "expires_at": self.expires_at.timestamp(),
             "revoked": self.revoked,
         } | super().serialize()
+
+
+def purge_oauth(session: Session):
+    for token in session.query(OAuthRefreshToken).all():
+        session.delete(token)
+    for user_session in session.query(UserSession).all():
+        session.delete(user_session)
+
+    for oauth_state in session.query(OAuthState).all():
+        session.delete(oauth_state)
+    for oauth_client in session.query(OAuthClientInformation).all():
+        session.delete(oauth_client)

@@ -48,6 +48,9 @@ from memory.common.db.models.users import (
     OAuthState,
     OAuthRefreshToken,
 )
+from memory.common.db.models.scheduled_calls import (
+    ScheduledLLMCall,
+)
 
 Payload = (
     SourceItemPayload
@@ -96,6 +99,8 @@ __all__ = [
     "OAuthClientInformation",
     "OAuthState",
     "OAuthRefreshToken",
+    # Scheduled Calls
+    "ScheduledLLMCall",
     # Payloads
     "Payload",
 ]

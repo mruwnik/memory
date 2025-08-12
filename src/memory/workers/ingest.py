@@ -9,6 +9,7 @@ from memory.common.celery_app import (
     SYNC_ALL_ARTICLE_FEEDS,
     TRACK_GIT_CHANGES,
     SYNC_LESSWRONG,
+    RUN_SCHEDULED_CALLS,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,5 +43,9 @@ app.conf.beat_schedule = {
     "sync-lesswrong": {
         "task": SYNC_LESSWRONG,
         "schedule": settings.LESSWRONG_SYNC_INTERVAL,
+    },
+    "run-scheduled-calls": {
+        "task": RUN_SCHEDULED_CALLS,
+        "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,
     },
 }

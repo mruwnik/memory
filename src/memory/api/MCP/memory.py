@@ -13,7 +13,7 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.tools import mcp
+from memory.api.MCP.base import mcp
 from memory.api.search.search import search
 from memory.api.search.types import SearchFilters, SearchConfig
 from memory.common import extract, settings

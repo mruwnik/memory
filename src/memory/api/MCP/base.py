@@ -8,23 +8,24 @@ from mcp.server.auth.handlers.token import (
     RefreshTokenRequest,
     TokenRequest,
 )
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.auth import OAuthClientMetadata
-from memory.common.db.models.users import User
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from memory.api.MCP.oauth_provider import (
-    SimpleOAuthProvider,
     ALLOWED_SCOPES,
     BASE_SCOPES,
+    SimpleOAuthProvider,
 )
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import OAuthState
+from memory.common.db.models import OAuthState, UserSession
+from memory.common.db.models.users import User
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +135,30 @@ async def handle_login(request: Request):
         if redirect_url.startswith("http://anysphere.cursor-retrieval"):
             redirect_url = redirect_url.replace("http://", "cursor://")
         return RedirectResponse(url=redirect_url, status_code=302)
+
+
+def get_current_user() -> dict:
+    access_token = get_access_token()
+
+    if not access_token:
+        return {"authenticated": False}
+
+    with make_session() as session:
+        user_session = (
+            session.query(UserSession)
+            .filter(UserSession.id == access_token.token)
+            .first()
+        )
+
+        if user_session and user_session.user:
+            user_info = user_session.user.serialize()
+        else:
+            user_info = {"error": "User not found"}
+
+    return {
+        "authenticated": True,
+        "token_type": "Bearer",
+        "scopes": access_token.scopes,
+        "client_id": access_token.client_id,
+        "user": user_info,
+    }
