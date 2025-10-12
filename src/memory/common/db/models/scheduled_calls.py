@@ -70,7 +70,7 @@ class ScheduledLLMCall(Base):
             "created_at": print_datetime(cast(datetime, self.created_at)),
             "executed_at": print_datetime(cast(datetime, self.executed_at)),
             "model": self.model,
-            "prompt": self.message,
+            "message": self.message,
             "system_prompt": self.system_prompt,
             "allowed_tools": self.allowed_tools,
             "discord_channel": self.discord_channel,

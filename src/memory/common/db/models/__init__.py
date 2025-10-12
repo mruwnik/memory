@@ -11,6 +11,7 @@ from memory.common.db.models.source_items import (
     EmailAttachment,
     AgentObservation,
     ChatMessage,
+    DiscordMessage,
     BlogPost,
     Comic,
     BookSection,
@@ -40,6 +41,9 @@ from memory.common.db.models.sources import (
     Book,
     ArticleFeed,
     EmailAccount,
+    DiscordServer,
+    DiscordChannel,
+    DiscordUser,
 )
 from memory.common.db.models.users import (
     User,
@@ -74,6 +78,7 @@ __all__ = [
     "EmailAttachment",
     "AgentObservation",
     "ChatMessage",
+    "DiscordMessage",
     "BlogPost",
     "Comic",
     "BookSection",
@@ -93,6 +98,9 @@ __all__ = [
     "Book",
     "ArticleFeed",
     "EmailAccount",
+    "DiscordServer",
+    "DiscordChannel",
+    "DiscordUser",
     # Users
     "User",
     "UserSession",

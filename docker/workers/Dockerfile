@@ -44,7 +44,7 @@ RUN git config --global user.email "${GIT_USER_EMAIL}" && \
     git config --global user.name "${GIT_USER_NAME}"
 
 # Default queues to process
-ENV QUEUES="ebooks,email,comic,blogs,forums,photo_embed,maintenance"
+ENV QUEUES="ebooks,email,discord,comic,blogs,forums,photo_embed,maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["./entry.sh"] 

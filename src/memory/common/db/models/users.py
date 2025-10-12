@@ -50,6 +50,7 @@ class User(Base):
     oauth_states = relationship(
         "OAuthState", back_populates="user", cascade="all, delete-orphan"
     )
+    discord_users = relationship("DiscordUser", back_populates="system_user")
 
     def serialize(self) -> dict:
         return {

@@ -1,0 +1,398 @@
+"""
+Discord message collector.
+
+Core message collection functionality - stores Discord messages to database.
+"""
+
+import logging
+from datetime import datetime, timezone
+
+import discord
+from discord.ext import commands
+from sqlalchemy.orm import Session, scoped_session
+
+from memory.common import settings
+from memory.common.db.connection import make_session
+from memory.common.db.models.sources import (
+    DiscordServer,
+    DiscordChannel,
+    DiscordUser,
+)
+from memory.workers.tasks.discord import add_discord_message, edit_discord_message
+
+logger = logging.getLogger(__name__)
+
+
+# Pure functions for Discord entity creation/updates
+def create_or_update_server(
+    session: Session | scoped_session, guild: discord.Guild
+) -> DiscordServer:
+    """Get or create DiscordServer record (pure DB operation)"""
+    server = session.query(DiscordServer).get(guild.id)
+
+    if not server:
+        server = DiscordServer(
+            id=guild.id,
+            name=guild.name,
+            description=guild.description,
+            member_count=guild.member_count,
+        )
+        session.add(server)
+        session.flush()  # Get the ID
+        logger.info(f"Created server record for {guild.name} ({guild.id})")
+    else:
+        # Update metadata
+        server.name = guild.name
+        server.description = guild.description
+        server.member_count = guild.member_count
+        server.last_sync_at = datetime.now(timezone.utc)
+
+    return server
+
+
+def determine_channel_metadata(channel) -> tuple[str, int | None, str]:
+    """Pure function to determine channel type, server_id, and name"""
+    if isinstance(channel, discord.DMChannel):
+        return "dm", None, f"DM with {channel.recipient.name}"
+    elif isinstance(channel, discord.GroupChannel):
+        return "group_dm", None, channel.name or "Group DM"
+    elif isinstance(
+        channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+    ):
+        return (
+            channel.__class__.__name__.lower().replace("channel", ""),
+            channel.guild.id,
+            channel.name,
+        )
+    else:
+        guild = getattr(channel, "guild", None)
+        server_id = guild.id if guild else None
+        name = getattr(channel, "name", f"Unknown-{channel.id}")
+        return "unknown", server_id, name
+
+
+def create_or_update_channel(
+    session: Session | scoped_session, channel
+) -> DiscordChannel:
+    """Get or create DiscordChannel record (pure DB operation)"""
+    discord_channel = session.query(DiscordChannel).get(channel.id)
+
+    if not discord_channel:
+        channel_type, server_id, name = determine_channel_metadata(channel)
+        discord_channel = DiscordChannel(
+            id=channel.id,
+            server_id=server_id,
+            name=name,
+            channel_type=channel_type,
+        )
+        session.add(discord_channel)
+        session.flush()
+        logger.debug(f"Created channel: {name}")
+    elif hasattr(channel, "name"):
+        discord_channel.name = channel.name
+
+    return discord_channel
+
+
+def create_or_update_user(
+    session: Session | scoped_session, user: discord.User | discord.Member
+) -> DiscordUser:
+    """Get or create DiscordUser record (pure DB operation)"""
+    discord_user = session.query(DiscordUser).get(user.id)
+
+    if not discord_user:
+        discord_user = DiscordUser(
+            id=user.id,
+            username=user.name,
+            display_name=user.display_name,
+        )
+        session.add(discord_user)
+        session.flush()
+        logger.debug(f"Created user: {user.name}")
+    else:
+        # Update user info in case it changed
+        discord_user.username = user.name
+        discord_user.display_name = user.display_name
+
+    return discord_user
+
+
+def determine_message_metadata(
+    message: discord.Message,
+) -> tuple[str, int | None, int | None]:
+    """Pure function to determine message type, reply_to_id, and thread_id"""
+    message_type = "default"
+    reply_to_id = None
+    thread_id = None
+
+    if message.reference and message.reference.message_id:
+        message_type = "reply"
+        reply_to_id = message.reference.message_id
+
+    if hasattr(message.channel, "parent") and message.channel.parent:
+        thread_id = message.channel.id
+
+    return message_type, reply_to_id, thread_id
+
+
+def should_track_message(
+    server: DiscordServer | None,
+    channel: DiscordChannel,
+    user: DiscordUser,
+) -> bool:
+    """Pure function to determine if we should track this message"""
+    if server and not server.track_messages:  # type: ignore
+        return False
+
+    if not channel.track_messages:
+        return False
+
+    if channel.channel_type in ("dm", "group_dm"):
+        return bool(user.allow_dm_tracking)
+
+    # Default: track the message
+    return True
+
+
+def should_collect_bot_message(message: discord.Message) -> bool:
+    """Pure function to determine if we should collect bot messages"""
+    return not message.author.bot or settings.DISCORD_COLLECT_BOTS
+
+
+def sync_guild_metadata(guild: discord.Guild) -> None:
+    """Sync a single guild's metadata (functional approach)"""
+    with make_session() as session:
+        create_or_update_server(session, guild)
+
+        for channel in guild.channels:
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                create_or_update_channel(session, channel)
+
+        session.commit()
+
+
+class MessageCollector(commands.Bot):
+    """Discord bot that collects and stores messages (thin event handler)"""
+
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.guilds = True
+        intents.members = True
+        intents.dm_messages = True
+
+        super().__init__(
+            command_prefix="!memory_",  # Prefix to avoid conflicts
+            intents=intents,
+            help_command=None,  # Disable default help
+        )
+
+    async def on_ready(self):
+        """Called when bot connects to Discord"""
+        logger.info(f"Discord collector connected as {self.user}")
+        logger.info(f"Connected to {len(self.guilds)} servers")
+
+        # Sync server and channel metadata
+        await self.sync_servers_and_channels()
+
+        logger.info("Discord message collector ready")
+
+    async def on_message(self, message: discord.Message):
+        """Queue incoming message for database storage"""
+        try:
+            if should_collect_bot_message(message):
+                # Ensure Discord entities exist in database first
+                with make_session() as session:
+                    create_or_update_user(session, message.author)
+                    create_or_update_channel(session, message.channel)
+                    if message.guild:
+                        create_or_update_server(session, message.guild)
+
+                    session.commit()
+
+                # Queue the message for processing
+                add_discord_message.delay(
+                    message_id=message.id,
+                    channel_id=message.channel.id,
+                    author_id=message.author.id,
+                    server_id=message.guild.id if message.guild else None,
+                    content=message.content or "",
+                    sent_at=message.created_at.isoformat(),
+                    message_reference_id=message.reference.message_id
+                    if message.reference
+                    else None,
+                )
+        except Exception as e:
+            logger.error(f"Error queuing message {message.id}: {e}")
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        """Queue message edit for database update"""
+        try:
+            edit_time = after.edited_at or datetime.now(timezone.utc)
+            edit_discord_message.delay(
+                message_id=after.id,
+                content=after.content,
+                edited_at=edit_time.isoformat(),
+            )
+        except Exception as e:
+            logger.error(f"Error queuing message edit {after.id}: {e}")
+
+    async def sync_servers_and_channels(self):
+        """Sync server and channel metadata on startup"""
+        for guild in self.guilds:
+            sync_guild_metadata(guild)
+
+        logger.info(f"Synced {len(self.guilds)} servers and their channels")
+
+    async def refresh_metadata(self) -> dict[str, int]:
+        """Refresh server and channel metadata from Discord and update database"""
+        print("🔄 Refreshing Discord metadata...")
+
+        servers_updated = 0
+        channels_updated = 0
+        users_updated = 0
+
+        with make_session() as session:
+            # Refresh all servers
+            for guild in self.guilds:
+                create_or_update_server(session, guild)
+                servers_updated += 1
+
+                # Refresh all channels in this server
+                for channel in guild.channels:
+                    if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                        create_or_update_channel(session, channel)
+                        channels_updated += 1
+
+                # Refresh all members in this server (if members intent is enabled)
+                if self.intents.members:
+                    for member in guild.members:
+                        create_or_update_user(session, member)
+                        users_updated += 1
+
+            session.commit()
+
+        result = {
+            "servers_updated": servers_updated,
+            "channels_updated": channels_updated,
+            "users_updated": users_updated,
+        }
+
+        print(f"✅ Metadata refresh complete: {result}")
+        logger.info(f"Metadata refresh complete: {result}")
+
+        return result
+
+    async def get_user(self, user_identifier: int | str) -> discord.User | None:
+        """Get a Discord user by ID or username"""
+        if isinstance(user_identifier, int):
+            # Direct user ID lookup
+            if user := super().get_user(user_identifier):
+                return user
+            try:
+                return await self.fetch_user(user_identifier)
+            except discord.NotFound:
+                return None
+        else:
+            # Username lookup - search through all guilds
+            for guild in self.guilds:
+                for member in guild.members:
+                    if (
+                        member.name == user_identifier
+                        or member.display_name == user_identifier
+                        or f"{member.name}#{member.discriminator}" == user_identifier
+                    ):
+                        return member
+            return None
+
+    async def get_channel_by_name(
+        self, channel_name: str
+    ) -> discord.TextChannel | None:
+        """Get a Discord channel by name (does not create if missing)"""
+        # Search all guilds for the channel
+        for guild in self.guilds:
+            for ch in guild.channels:
+                if isinstance(ch, discord.TextChannel) and ch.name == channel_name:
+                    return ch
+        return None
+
+    async def create_channel(
+        self, channel_name: str, guild_id: int | None = None
+    ) -> discord.TextChannel | None:
+        """Create a Discord channel in the specified guild (or first guild if none specified)"""
+        target_guild = None
+
+        if guild_id:
+            target_guild = self.get_guild(guild_id)
+        elif self.guilds:
+            target_guild = self.guilds[0]  # Default to first guild
+
+        if not target_guild:
+            logger.error(f"No guild available to create channel {channel_name}")
+            return None
+
+        try:
+            channel = await target_guild.create_text_channel(channel_name)
+            logger.info(f"Created channel {channel_name} in {target_guild.name}")
+            return channel
+        except Exception as e:
+            logger.error(
+                f"Failed to create channel {channel_name} in {target_guild.name}: {e}"
+            )
+            return None
+
+    async def send_dm(self, user_identifier: int | str, message: str) -> bool:
+        """Send a DM using this collector's Discord client"""
+        try:
+            user = await self.get_user(user_identifier)
+            if not user:
+                logger.error(f"User {user_identifier} not found")
+                return False
+
+            await user.send(message)
+            logger.info(f"Sent DM to {user_identifier}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send DM to {user_identifier}: {e}")
+            return False
+
+    async def send_to_channel(self, channel_name: str, message: str) -> bool:
+        """Send a message to a channel by name across all guilds"""
+        if not settings.DISCORD_NOTIFICATIONS_ENABLED:
+            return False
+
+        try:
+            channel = await self.get_channel_by_name(channel_name)
+            if not channel:
+                logger.error(f"Channel {channel_name} not found")
+                return False
+
+            await channel.send(message)
+            logger.info(f"Sent message to channel {channel_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send message to channel {channel_name}: {e}")
+            return False
+
+
+async def run_collector():
+    """Run the Discord message collector"""
+    if not settings.DISCORD_BOT_TOKEN:
+        logger.error("DISCORD_BOT_TOKEN not configured")
+        return
+
+    collector = MessageCollector()
+
+    try:
+        await collector.start(settings.DISCORD_BOT_TOKEN)
+    except Exception as e:
+        logger.error(f"Discord collector failed: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(run_collector())

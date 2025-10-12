@@ -9,7 +9,6 @@ Create Date: 2025-10-12 10:12:57.421009
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -20,10 +19,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Rename prompt column to message in scheduled_llm_calls table
     op.alter_column("scheduled_llm_calls", "prompt", new_column_name="message")
 
 
 def downgrade() -> None:
-    # Rename message column back to prompt in scheduled_llm_calls table
     op.alter_column("scheduled_llm_calls", "message", new_column_name="prompt")

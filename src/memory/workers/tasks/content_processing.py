@@ -10,9 +10,9 @@ from collections import defaultdict
 import hashlib
 import traceback
 import logging
-from typing import Any, Callable, Iterable, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
-from memory.common import embedding, qdrant, settings
+from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
 
@@ -38,19 +38,12 @@ def check_content_exists(
     Returns:
         Existing SourceItem if found, None otherwise
     """
+    query = session.query(model_class)
     for key, value in kwargs.items():
-        if not hasattr(model_class, key):
-            continue
+        if hasattr(model_class, key):
+            query = query.filter(getattr(model_class, key) == value)
 
-        existing = (
-            session.query(model_class)
-            .filter(getattr(model_class, key) == value)
-            .first()
-        )
-        if existing:
-            return existing
-
-    return None
+    return query.first()
 
 
 def create_content_hash(content: str, *additional_data: str) -> bytes:
@@ -286,6 +279,6 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
                 traceback_str=traceback_str,
             )
 
-            return {"status": "error", "error": str(e)}
+            return {"status": "error", "error": str(e), "traceback": traceback_str}
 
     return wrapper

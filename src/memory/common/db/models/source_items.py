@@ -262,7 +262,7 @@ class ChatMessage(SourceItem):
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
     platform = Column(Text)
-    channel_id = Column(Text)
+    channel_id = Column(Text)  # Keep as Text for cross-platform compatibility
     author = Column(Text)
     sent_at = Column(DateTime(timezone=True))
 
@@ -272,6 +272,64 @@ class ChatMessage(SourceItem):
 
     # Add index
     __table_args__ = (Index("chat_channel_idx", "platform", "channel_id"),)
+
+
+class DiscordMessage(SourceItem):
+    """Discord-specific chat message with rich metadata"""
+
+    __tablename__ = "discord_message"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    sent_at = Column(DateTime(timezone=True), nullable=False)
+    server_id = Column(BigInteger, ForeignKey("discord_servers.id"), nullable=True)
+    channel_id = Column(BigInteger, ForeignKey("discord_channels.id"), nullable=False)
+    discord_user_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
+    message_id = Column(BigInteger, nullable=False)  # Discord message snowflake ID
+
+    # Discord-specific metadata
+    message_type = Column(
+        Text, server_default="default"
+    )  # "default", "reply", "thread_starter"
+    reply_to_message_id = Column(
+        BigInteger, nullable=True
+    )  # Discord message snowflake ID if replying
+    thread_id = Column(
+        BigInteger, nullable=True
+    )  # Discord thread snowflake ID if in thread
+    edited_at = Column(DateTime(timezone=True), nullable=True)
+
+    channel = relationship("DiscordChannel", foreign_keys=[channel_id])
+    server = relationship("DiscordServer", foreign_keys=[server_id])
+    discord_user = relationship("DiscordUser", foreign_keys=[discord_user_id])
+
+    @property
+    def title(self) -> str:
+        return f"{self.discord_user.username}: {self.content}"
+
+    __mapper_args__ = {
+        "polymorphic_identity": "discord_message",
+    }
+
+    __table_args__ = (
+        Index("discord_message_discord_id_idx", "message_id", unique=True),
+        Index(
+            "discord_message_server_channel_idx",
+            "server_id",
+            "channel_id",
+        ),
+        Index("discord_message_user_idx", "discord_user_id"),
+    )
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        content = cast(str | None, self.content)
+        if not content:
+            return []
+        prev = getattr(self, "messages_before", [])
+        content = "\n\n".join(prev) + "\n\n" + self.title
+        return extract.extract_text(content)
 
 
 class GitCommit(SourceItem):
