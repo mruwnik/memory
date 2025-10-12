@@ -5,4 +5,3 @@ python-multipart==0.0.9
 sqladmin==0.20.1
 mcp==1.10.0
 bm25s[full]==0.2.13
-discord.py==2.3.2

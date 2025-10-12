@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements ./requirements/
 COPY setup.py ./
 RUN mkdir src
-RUN pip install -e ".[common]"
+RUN pip install -e ".[ingesters]"
 
 COPY src/ ./src/
-RUN pip install -e ".[common]"
+RUN pip install -e ".[ingesters]"
 
 # Create and copy entrypoint script
 COPY docker/workers/entry.sh ./entry.sh

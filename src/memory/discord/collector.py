@@ -25,9 +25,12 @@ logger = logging.getLogger(__name__)
 
 # Pure functions for Discord entity creation/updates
 def create_or_update_server(
-    session: Session | scoped_session, guild: discord.Guild
-) -> DiscordServer:
+    session: Session | scoped_session, guild: discord.Guild | None
+) -> DiscordServer | None:
     """Get or create DiscordServer record (pure DB operation)"""
+    if not guild:
+        return None
+
     server = session.query(DiscordServer).get(guild.id)
 
     if not server:
@@ -53,7 +56,10 @@ def create_or_update_server(
 def determine_channel_metadata(channel) -> tuple[str, int | None, str]:
     """Pure function to determine channel type, server_id, and name"""
     if isinstance(channel, discord.DMChannel):
-        return "dm", None, f"DM with {channel.recipient.name}"
+        desc = (
+            f"DM with {channel.recipient.name}" if channel.recipient else "Unknown DM"
+        )
+        return ("dm", None, desc)
     elif isinstance(channel, discord.GroupChannel):
         return "group_dm", None, channel.name or "Group DM"
     elif isinstance(
@@ -73,8 +79,11 @@ def determine_channel_metadata(channel) -> tuple[str, int | None, str]:
 
 def create_or_update_channel(
     session: Session | scoped_session, channel
-) -> DiscordChannel:
+) -> DiscordChannel | None:
     """Get or create DiscordChannel record (pure DB operation)"""
+    if not channel:
+        return None
+
     discord_channel = session.query(DiscordChannel).get(channel.id)
 
     if not discord_channel:
@@ -98,6 +107,9 @@ def create_or_update_user(
     session: Session | scoped_session, user: discord.User | discord.Member
 ) -> DiscordUser:
     """Get or create DiscordUser record (pure DB operation)"""
+    if not user:
+        return None
+
     discord_user = session.query(DiscordUser).get(user.id)
 
     if not discord_user:

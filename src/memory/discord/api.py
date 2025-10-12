@@ -14,7 +14,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from memory.common import settings
-from memory.workers.discord.collector import MessageCollector
+from memory.discord.collector import MessageCollector
 
 logger = logging.getLogger(__name__)
 

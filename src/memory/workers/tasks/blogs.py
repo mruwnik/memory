@@ -115,6 +115,9 @@ def sync_article_feed(feed_id: int) -> dict:
 
         try:
             for feed_item in parser.parse_feed():
+                if not feed_item.url:
+                    continue
+
                 articles_found += 1
 
                 existing = check_content_exists(session, BlogPost, url=feed_item.url)
