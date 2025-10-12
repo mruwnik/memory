@@ -30,7 +30,7 @@ def pending_scheduled_call(db_session, sample_user):
         topic="Test Topic",
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="anthropic/claude-3-5-sonnet-20241022",
-        prompt="What is the weather like today?",
+        message="What is the weather like today?",
         system_prompt="You are a helpful assistant.",
         discord_user="123456789",
         status="pending",
@@ -50,7 +50,7 @@ def completed_scheduled_call(db_session, sample_user):
         scheduled_time=datetime.now(timezone.utc) - timedelta(hours=1),
         executed_at=datetime.now(timezone.utc) - timedelta(minutes=30),
         model="anthropic/claude-3-5-sonnet-20241022",
-        prompt="Tell me a joke.",
+        message="Tell me a joke.",
         system_prompt="You are a funny assistant.",
         discord_channel="987654321",
         status="completed",
@@ -70,7 +70,7 @@ def future_scheduled_call(db_session, sample_user):
         topic="Future Topic",
         scheduled_time=datetime.now(timezone.utc) + timedelta(hours=1),
         model="anthropic/claude-3-5-sonnet-20241022",
-        prompt="What will happen tomorrow?",
+        message="What will happen tomorrow?",
         discord_user="123456789",
         status="pending",
     )
@@ -195,7 +195,7 @@ def test_execute_scheduled_call_with_default_system_prompt(
         topic="No System Prompt",
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="anthropic/claude-3-5-sonnet-20241022",
-        prompt="Test prompt",
+        message="Test prompt",
         system_prompt=None,
         discord_user="123456789",
         status="pending",
@@ -288,7 +288,7 @@ def test_run_scheduled_calls_with_due_calls(
         user_id=sample_user.id,
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         model="test-model",
-        prompt="Test 1",
+        message="Test 1",
         discord_user="123",
         status="pending",
     )
@@ -297,7 +297,7 @@ def test_run_scheduled_calls_with_due_calls(
         user_id=sample_user.id,
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
-        prompt="Test 2",
+        message="Test 2",
         discord_user="123",
         status="pending",
     )
@@ -346,7 +346,7 @@ def test_run_scheduled_calls_mixed_statuses(
         user_id=sample_user.id,
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
-        prompt="Pending",
+        message="Pending",
         discord_user="123",
         status="pending",
     )
@@ -355,7 +355,7 @@ def test_run_scheduled_calls_mixed_statuses(
         user_id=sample_user.id,
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
-        prompt="Executing",
+        message="Executing",
         discord_user="123",
         status="executing",
     )
@@ -364,7 +364,7 @@ def test_run_scheduled_calls_mixed_statuses(
         user_id=sample_user.id,
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
-        prompt="Completed",
+        message="Completed",
         discord_user="123",
         status="completed",
     )
@@ -397,7 +397,7 @@ def test_run_scheduled_calls_timezone_handling(
         user_id=sample_user.id,
         scheduled_time=past_time.replace(tzinfo=None),  # Store as naive datetime
         model="test-model",
-        prompt="Due call",
+        message="Due call",
         discord_user="123",
         status="pending",
     )
@@ -409,7 +409,7 @@ def test_run_scheduled_calls_timezone_handling(
         user_id=sample_user.id,
         scheduled_time=future_time.replace(tzinfo=None),  # Store as naive datetime
         model="test-model",
-        prompt="Future call",
+        message="Future call",
         discord_user="123",
         status="pending",
     )
@@ -477,7 +477,7 @@ def test_discord_destination_priority(
         topic="Priority Test",
         scheduled_time=datetime.now(timezone.utc),
         model="test-model",
-        prompt="Test",
+        message="Test",
         discord_user=discord_user,
         discord_channel=discord_channel,
         status="pending",
@@ -568,7 +568,7 @@ def test_execute_scheduled_call_status_check(
         topic="Status Test",
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
-        prompt="Test",
+        message="Test",
         discord_user="123",
         status=status,
     )

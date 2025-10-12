@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-import textwrap
 from typing import cast
 
 from memory.common.db.connection import make_session
@@ -24,9 +23,15 @@ def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
         scheduled_call: The scheduled call object
         response: The LLM response to send
     """
-    message = response
+    # Format the message with topic, model, and response
+    message_parts = []
     if cast(str, scheduled_call.topic):
-        message = f"**{scheduled_call.topic}**\n\n{message}"
+        message_parts.append(f"**Topic:** {scheduled_call.topic}")
+    if cast(str, scheduled_call.model):
+        message_parts.append(f"**Model:** {scheduled_call.model}")
+    message_parts.append(f"**Response:** {response}")
+
+    message = "\n".join(message_parts)
 
     # Discord has a 2000 character limit, so we may need to split the message
     if len(message) > 1900:  # Leave some buffer
@@ -84,13 +89,13 @@ def execute_scheduled_call(self, scheduled_call_id: str):
         # Make the LLM call
         if scheduled_call.model:
             response = llms.call(
-                prompt=cast(str, scheduled_call.prompt),
+                prompt=cast(str, scheduled_call.message),
                 model=cast(str, scheduled_call.model),
                 system_prompt=cast(str, scheduled_call.system_prompt)
                 or llms.SYSTEM_PROMPT,
             )
         else:
-            response = cast(str, scheduled_call.prompt)
+            response = cast(str, scheduled_call.message)
 
         # Store the response
         scheduled_call.response = response

@@ -30,9 +30,9 @@ class ScheduledLLMCall(Base):
 
     # LLM call configuration
     model = Column(
-        String, nullable=True
-    )  # e.g., "anthropic/claude-3-5-sonnet-20241022"
-    prompt = Column(Text, nullable=False)
+        String, nullable=True, doc='e.g., "anthropic/claude-3-5-sonnet-20241022"'
+    )
+    message = Column(Text, nullable=False)
     system_prompt = Column(Text, nullable=True)
     allowed_tools = Column(JSON, nullable=True)  # List of allowed tool names
 
@@ -70,7 +70,7 @@ class ScheduledLLMCall(Base):
             "created_at": print_datetime(cast(datetime, self.created_at)),
             "executed_at": print_datetime(cast(datetime, self.executed_at)),
             "model": self.model,
-            "prompt": self.prompt,
+            "prompt": self.message,
             "system_prompt": self.system_prompt,
             "allowed_tools": self.allowed_tools,
             "discord_channel": self.discord_channel,

@@ -15,23 +15,29 @@ logger = logging.getLogger(__name__)
 
 
 @mcp.tool()
-async def schedule_llm_call(
+async def schedule_message(
     scheduled_time: str,
-    model: str,
-    prompt: str,
+    message: str | None = None,
+    model: str | None = None,
     topic: str | None = None,
     discord_channel: str | None = None,
     system_prompt: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Schedule an LLM call to be executed at a specific time with response sent to Discord.
+    Schedule an message to be sent to the user's Discord at specific time.
+
+    This can either be a string to be sent, or a prompt that should be
+    be first sent to an LLM to generate the final message to be sent.
+
+    If `model` is empty, the message will be sent as is. If a model is provided, the message will first be sent to that AI system, and the user
+    will be sent whatever the AI system generates.
 
     Args:
         scheduled_time: ISO format datetime string (e.g., "2024-12-20T15:30:00Z")
-        model: Model to use (e.g., "anthropic/claude-3-5-sonnet-20241022"). If not provided, the message will be sent to the user directly.
-        prompt: The prompt to send to the LLM
-        topic: The topic of the scheduled call. If not provided, the topic will be inferred from the prompt.
+        message: A raw message to be sent to the user, or prompt to the LLM if `model` is set
+        model: Model to use (e.g., "anthropic/claude-3-5-sonnet-20241022"). If not provided, the message will be sent to the user directly. Currently only OpenAI and Anthropic models are supported
+        topic: The topic of the scheduled call. If not provided, the topic will be inferred from the prompt (if provided).
         discord_channel: Discord channel name where the response should be sent. If not provided, the message will be sent to the user directly.
         system_prompt: Optional system prompt
         metadata: Optional metadata dict for tracking
@@ -39,7 +45,9 @@ async def schedule_llm_call(
     Returns:
         Dict with scheduled call ID and status
     """
-    logger.info("schedule_llm_call tool called")
+    logger.info("schedule_message tool called")
+    if not message:
+        raise ValueError("You must provide `message`")
 
     current_user = get_current_user()
     if not current_user["authenticated"]:
@@ -72,9 +80,9 @@ async def schedule_llm_call(
         scheduled_call = ScheduledLLMCall(
             user_id=user_id,
             scheduled_time=scheduled_dt,
+            message=message,
             topic=topic,
             model=model,
-            prompt=prompt,
             system_prompt=system_prompt,
             discord_channel=discord_channel,
             discord_user=discord_user,
