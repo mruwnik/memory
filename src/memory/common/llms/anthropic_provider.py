@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, AsyncIterator, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator
 
 import anthropic
 
@@ -14,9 +14,6 @@ from memory.common.llms.base import (
     MessageRole,
     StreamEvent,
     ToolDefinition,
-    ToolUseContent,
-    ThinkingContent,
-    TextContent,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +42,7 @@ class AnthropicProvider(BaseLLMProvider):
         """
         super().__init__(api_key, model)
         self.enable_thinking = enable_thinking
-        self._async_client: Optional[anthropic.AsyncAnthropic] = None
+        self._async_client: anthropic.AsyncAnthropic | None = None
 
     def _initialize_client(self) -> anthropic.Anthropic:
         """Initialize the Anthropic client."""
@@ -336,6 +333,7 @@ class AnthropicProvider(BaseLLMProvider):
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
 
+        print(kwargs)
         try:
             with self.client.messages.stream(**kwargs) as stream:
                 current_tool_use: dict[str, Any] | None = None
@@ -396,56 +394,3 @@ class AnthropicProvider(BaseLLMProvider):
         except Exception as e:
             logger.error(f"Anthropic streaming error: {e}")
             yield StreamEvent(type="error", data=str(e))
-
-    def stream_with_tools(
-        self,
-        messages: list[Message],
-        tools: dict[str, ToolDefinition],
-        settings: LLMSettings | None = None,
-        system_prompt: str | None = None,
-        max_iterations: int = 10,
-    ) -> Iterator[StreamEvent]:
-        if max_iterations <= 0:
-            return
-
-        response = TextContent(text="")
-        thinking = ThinkingContent(thinking="", signature="")
-
-        for event in self.stream(
-            messages=messages,
-            system_prompt=system_prompt,
-            tools=list(tools.values()),
-            settings=settings,
-        ):
-            if event.type == "text":
-                response.text += event.data
-                yield event
-            elif event.type == "thinking" and event.signature:
-                thinking.signature = event.signature
-            elif event.type == "thinking":
-                thinking.thinking += event.data
-                yield event
-            elif event.type == "tool_use":
-                yield event
-                tool_result = self.execute_tool(event.data, tools)
-                yield StreamEvent(type="tool_result", data=tool_result.to_dict())
-                messages.append(
-                    Message.assistant(
-                        response,
-                        thinking,
-                        ToolUseContent(
-                            id=event.data["id"],
-                            name=event.data["name"],
-                            input=event.data["input"],
-                        ),
-                    )
-                )
-                messages.append(Message.user(tool_result=tool_result))
-                yield from self.stream_with_tools(
-                    messages, tools, settings, system_prompt, max_iterations - 1
-                )
-            elif event.type == "tool_result":
-                yield event
-            elif event.type == "error":
-                logger.error(f"LLM error: {event.data}")
-                raise RuntimeError(f"LLM error: {event.data}")

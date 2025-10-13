@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncIterator, Iterator, Literal, Optional, Union
+from typing import Any, AsyncIterator, Iterator, Literal, Union, cast
 
 from PIL import Image
 
@@ -36,6 +36,10 @@ class TextContent:
         """Convert to dictionary format."""
         return {"type": "text", "text": self.text}
 
+    @property
+    def valid(self):
+        return self.text
+
 
 @dataclass
 class ImageContent:
@@ -43,12 +47,16 @@ class ImageContent:
 
     type: Literal["image"] = "image"
     image: Image.Image = None  # type: ignore
-    detail: Optional[str] = None  # For OpenAI: "low", "high", "auto"
+    detail: str | None = None  # For OpenAI: "low", "high", "auto"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format."""
         # Note: Image will be encoded by provider-specific implementation
         return {"type": "image", "image": self.image}
+
+    @property
+    def valid(self):
+        return self.image
 
 
 @dataclass
@@ -69,6 +77,10 @@ class ToolUseContent:
             "input": self.input,
         }
 
+    @property
+    def valid(self):
+        return self.id and self.name
+
 
 @dataclass
 class ToolResultContent:
@@ -88,6 +100,10 @@ class ToolResultContent:
             "is_error": self.is_error,
         }
 
+    @property
+    def valid(self):
+        return self.tool_use_id
+
 
 @dataclass
 class ThinkingContent:
@@ -104,6 +120,10 @@ class ThinkingContent:
             "thinking": self.thinking,
             "signature": self.signature,
         }
+
+    @property
+    def valid(self):
+        return self.thinking and self.signature
 
 
 MessageContent = Union[
@@ -135,18 +155,8 @@ class Message:
         return {"role": self.role.value, "content": content_list}
 
     @staticmethod
-    def assistant(
-        text: TextContent | None = None,
-        thinking: ThinkingContent | None = None,
-        tool_use: ToolUseContent | None = None,
-    ) -> "Message":
-        parts = []
-        if text:
-            parts.append(text)
-        if thinking:
-            parts.append(thinking)
-        if tool_use:
-            parts.append(tool_use)
+    def assistant(*content: MessageContent) -> "Message":
+        parts = [c for c in content if c.valid]
         return Message(role=MessageRole.ASSISTANT, content=parts)
 
     @staticmethod
@@ -295,13 +305,22 @@ class BaseLLMProvider(ABC):
         """Convert ThinkingContent to provider format. Override for custom format."""
         return content.to_dict()
 
-    def _convert_message_content(self, content: MessageContent) -> dict[str, Any]:
+    def _convert_message_content(
+        self, content: str | MessageContent | list[MessageContent]
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
         Convert a MessageContent item to provider format.
 
         Dispatches to type-specific converters that can be overridden.
         """
-        if isinstance(content, TextContent):
+        if isinstance(content, str):
+            return self._convert_text_content(TextContent(text=content))
+        elif isinstance(content, list):
+            return [
+                cast(dict[str, Any], self._convert_message_content(item))
+                for item in content
+            ]
+        elif isinstance(content, TextContent):
             return self._convert_text_content(content)
         elif isinstance(content, ImageContent):
             return self._convert_image_content(content)
@@ -318,9 +337,16 @@ class BaseLLMProvider(ABC):
         """
         Convert a Message to provider format.
 
-        Can be overridden for provider-specific handling (e.g., filtering system messages).
+        Handles both string content and list[MessageContent], using provider-specific
+        content converters for each content item.
+
+        Can be overridden for provider-specific handling (e.g., OpenAI's tool results).
         """
-        return message.to_dict()
+        # Handle simple string content
+        return {
+            "role": message.role.value,
+            "content": self._convert_message_content(message.content),
+        }
 
     def _should_include_message(self, message: Message) -> bool:
         """
@@ -362,7 +388,7 @@ class BaseLLMProvider(ABC):
 
     def _convert_tools(
         self, tools: list[ToolDefinition] | None
-    ) -> Optional[list[dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """Convert tool definitions to provider format."""
         if not tools:
             return None
@@ -456,7 +482,6 @@ class BaseLLMProvider(ABC):
         """
         pass
 
-    @abstractmethod
     def stream_with_tools(
         self,
         messages: list[Message],
@@ -465,7 +490,75 @@ class BaseLLMProvider(ABC):
         system_prompt: str | None = None,
         max_iterations: int = 10,
     ) -> Iterator[StreamEvent]:
-        pass
+        """
+        Stream response with automatic tool execution.
+
+        This method handles the tool call loop automatically, executing tools
+        and sending results back to the LLM until it produces a final response
+        or max_iterations is reached.
+
+        Args:
+            messages: Conversation history
+            tools: Dict mapping tool names to ToolDefinition handlers
+            settings: Optional settings for the generation
+            system_prompt: Optional system prompt
+            max_iterations: Maximum number of tool call iterations
+
+        Yields:
+            StreamEvent objects for text, tool calls, and tool results
+        """
+        if max_iterations <= 0:
+            return
+
+        response = TextContent(text="")
+        thinking = ThinkingContent(thinking="")
+
+        for event in self.stream(
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=list(tools.values()),
+            settings=settings,
+        ):
+            if event.type == "text":
+                response.text += event.data
+                yield event
+            elif event.type == "thinking":
+                thinking.thinking += event.data
+                yield event
+            elif event.type == "tool_use":
+                yield event
+                # Execute the tool and yield the result
+                tool_result = self.execute_tool(event.data, tools)
+                yield StreamEvent(type="tool_result", data=tool_result.to_dict())
+
+                # Add assistant message with tool call
+                messages.append(
+                    Message.assistant(
+                        response,
+                        thinking,
+                        ToolUseContent(
+                            id=event.data["id"],
+                            name=event.data["name"],
+                            input=event.data["input"],
+                        ),
+                    )
+                )
+
+                # Add user message with tool result
+                messages.append(Message.user(tool_result=tool_result))
+
+                # Recursively continue the conversation with reduced iterations
+                yield from self.stream_with_tools(
+                    messages, tools, settings, system_prompt, max_iterations - 1
+                )
+                return  # Exit after recursive call completes
+
+            elif event.type == "error":
+                logger.error(f"LLM error: {event.data}")
+                raise RuntimeError(f"LLM error: {event.data}")
+            elif event.type == "done":
+                # Stream completed without tool calls
+                yield event
 
     def run_with_tools(
         self,
@@ -550,12 +643,22 @@ def create_provider(
             api_key=api_key, model=model, enable_thinking=enable_thinking
         )
 
-    # Could add OpenAI support here in the future
-    # elif "gpt" in model_lower or model.startswith("openai"):
-    #     ...
+    elif provider == "openai":
+        # OpenAI models
+        if api_key is None:
+            api_key = settings.OPENAI_API_KEY
+
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY not found in settings. Please set it in your .env file."
+            )
+
+        from memory.common.llms.openai_provider import OpenAIProvider
+
+        return OpenAIProvider(api_key=api_key, model=model)
 
     else:
         raise ValueError(
             f"Unknown provider for model: {model}. "
-            f"Supported providers: Anthropic (claude-*)"
+            f"Supported providers: Anthropic (anthropic/*), OpenAI (openai/*)"
         )

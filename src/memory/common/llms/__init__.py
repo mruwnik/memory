@@ -22,10 +22,14 @@ from memory.common.llms.base import (
     ToolUseContent,
     create_provider,
 )
+from memory.common.llms.anthropic_provider import AnthropicProvider
+from memory.common.llms.openai_provider import OpenAIProvider
 from memory.common import tokens
 
 __all__ = [
     "BaseLLMProvider",
+    "AnthropicProvider",
+    "OpenAIProvider",
     "Message",
     "MessageRole",
     "MessageContent",
