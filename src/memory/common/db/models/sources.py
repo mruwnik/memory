@@ -127,7 +127,15 @@ class EmailAccount(Base):
     )
 
 
-class DiscordServer(Base):
+class MessageProcessor:
+    track_messages = Column(Boolean, nullable=False, server_default="true")
+    ignore_messages = Column(Boolean, nullable=True, default=False)
+
+    allowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+    disallowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+
+
+class DiscordServer(Base, MessageProcessor):
     """Discord server configuration and metadata"""
 
     __tablename__ = "discord_servers"
@@ -138,7 +146,6 @@ class DiscordServer(Base):
     member_count = Column(Integer)
 
     # Collection settings
-    track_messages = Column(Boolean, nullable=False, server_default="true")
     last_sync_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -152,7 +159,7 @@ class DiscordServer(Base):
     )
 
 
-class DiscordChannel(Base):
+class DiscordChannel(Base, MessageProcessor):
     """Discord channel metadata and configuration"""
 
     __tablename__ = "discord_channels"
@@ -163,7 +170,6 @@ class DiscordChannel(Base):
     channel_type = Column(Text, nullable=False)  # "text", "voice", "dm", "group_dm"
 
     # Collection settings (null = inherit from server)
-    track_messages = Column(Boolean, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -171,7 +177,7 @@ class DiscordChannel(Base):
     __table_args__ = (Index("discord_channels_server_idx", "server_id"),)
 
 
-class DiscordUser(Base):
+class DiscordUser(Base, MessageProcessor):
     """Discord user metadata and preferences"""
 
     __tablename__ = "discord_users"
@@ -184,7 +190,6 @@ class DiscordUser(Base):
     system_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Basic DM settings
-    allow_dm_tracking = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -16,7 +16,11 @@ from memory.workers.tasks.content_processing import (
     create_task_result,
     process_content_item,
 )
-from memory.common.celery_app import ADD_DISCORD_MESSAGE, EDIT_DISCORD_MESSAGE
+from memory.common.celery_app import (
+    ADD_DISCORD_MESSAGE,
+    EDIT_DISCORD_MESSAGE,
+    PROCESS_DISCORD_MESSAGE,
+)
 from memory.common import settings
 from sqlalchemy.orm import Session, scoped_session
 
@@ -38,6 +42,41 @@ def get_prev(
         .all()
     )
     return [f"{msg.username}: {msg.content}" for msg in prev[::-1]]
+
+
+def should_process(message: DiscordMessage) -> bool:
+    return (
+        settings.DISCORD_PROCESS_MESSAGES
+        and settings.DISCORD_NOTIFICATIONS_ENABLED
+        and not (
+            (message.server and message.server.ignore_messages)
+            or (message.channel and message.channel.ignore_messages)
+            or (message.discord_user and message.discord_user.ignore_messages)
+        )
+    )
+
+
+@app.task(name=PROCESS_DISCORD_MESSAGE)
+@safe_task_execution
+def process_discord_message(message_id: int) -> dict[str, Any]:
+    logger.info(f"Processing Discord message {message_id}")
+
+    with make_session() as session:
+        discord_message = session.query(DiscordMessage).get(message_id)
+        if not discord_message:
+            logger.info(f"Discord message not found: {message_id}")
+            return {
+                "status": "error",
+                "error": "Message not found",
+                "message_id": message_id,
+            }
+
+        print("Processing message", discord_message.id, discord_message.content)
+
+    return {
+        "status": "processed",
+        "message_id": message_id,
+    }
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
@@ -87,11 +126,8 @@ def add_discord_message(
             discord_message.messages_before = get_prev(session, channel_id, sent_at_dt)
 
         result = process_content_item(discord_message, session)
-
-        logger.info(
-            f"Discord message ID after process_content_item: {discord_message.id}"
-        )
-        logger.info(f"Process result: {result}")
+        if should_process(discord_message):
+            process_discord_message.delay(discord_message.id)
 
         return result
 

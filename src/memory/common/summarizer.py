@@ -105,7 +105,7 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
         prompt = llms.truncate(prompt, MAX_TOKENS - 20)
 
     try:
-        response = llms.call(prompt, settings.SUMMARIZER_MODEL)
+        response = llms.summarize(prompt, settings.SUMMARIZER_MODEL)
         result = parse_response(response)
 
         summary = result.get("summary", "")

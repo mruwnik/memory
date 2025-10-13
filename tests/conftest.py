@@ -273,6 +273,27 @@ def mock_anthropic_client():
     with patch.object(anthropic, "Anthropic", autospec=True) as mock_client:
         client = mock_client()
         client.messages = Mock()
+
+        # Mock stream as a context manager
+        mock_stream = Mock()
+        mock_stream.__enter__ = Mock(
+            return_value=Mock(
+                __iter__=lambda self: iter(
+                    [
+                        Mock(
+                            type="content_block_delta",
+                            delta=Mock(
+                                type="text_delta",
+                                text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                            ),
+                        )
+                    ]
+                )
+            )
+        )
+        mock_stream.__exit__ = Mock(return_value=False)
+        client.messages.stream = Mock(return_value=mock_stream)
+
         client.messages.create = Mock(
             return_value=Mock(
                 content=[

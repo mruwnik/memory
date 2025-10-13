@@ -26,9 +26,12 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("member_count", sa.Integer(), nullable=True),
+        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
         sa.Column(
-            "track_messages", sa.Boolean(), server_default="true", nullable=False
+            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
         ),
+        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
+        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column("last_sync_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
@@ -56,7 +59,12 @@ def upgrade() -> None:
         sa.Column("server_id", sa.BigInteger(), nullable=True),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("channel_type", sa.Text(), nullable=False),
-        sa.Column("track_messages", sa.Boolean(), nullable=True),
+        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
+        sa.Column(
+            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
+        ),
+        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
+        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -84,9 +92,12 @@ def upgrade() -> None:
         sa.Column("username", sa.Text(), nullable=False),
         sa.Column("display_name", sa.Text(), nullable=True),
         sa.Column("system_user_id", sa.Integer(), nullable=True),
+        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
         sa.Column(
-            "allow_dm_tracking", sa.Boolean(), server_default="true", nullable=False
+            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
         ),
+        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
+        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

@@ -160,7 +160,7 @@ def should_track_message(
         return False
 
     if channel.channel_type in ("dm", "group_dm"):
-        return bool(user.allow_dm_tracking)
+        return bool(user.track_messages)
 
     # Default: track the message
     return True

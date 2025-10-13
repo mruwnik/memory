@@ -88,11 +88,10 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
         # Make the LLM call
         if scheduled_call.model:
-            response = llms.call(
+            response = llms.summarize(
                 prompt=cast(str, scheduled_call.message),
                 model=cast(str, scheduled_call.model),
-                system_prompt=cast(str, scheduled_call.system_prompt)
-                or llms.SYSTEM_PROMPT,
+                system_prompt=cast(str, scheduled_call.system_prompt),
             )
         else:
             response = cast(str, scheduled_call.message)

@@ -15,6 +15,7 @@ SCHEDULED_CALLS_ROOT = "memory.workers.tasks.scheduled_calls"
 DISCORD_ROOT = "memory.workers.tasks.discord"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
+PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"

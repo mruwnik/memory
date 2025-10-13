@@ -40,7 +40,7 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
     prompt = SCORE_CHUNK_PROMPT.format(query=query, chunk=chunk_text)
     try:
         response = await asyncio.to_thread(
-            llms.call,
+            llms.summarize,
             prompt,
             settings.RANKER_MODEL,
             images=images,
