@@ -25,6 +25,7 @@ WHITELIST = {
     "/oauth/",
     "/.well-known/",
     "/ui",
+    "/admin/statics/",  # SQLAdmin static resources
 }
 
 

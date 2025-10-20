@@ -6,12 +6,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from memory.api.MCP.base import get_current_user
+from memory.api.MCP.base import get_current_user, mcp
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledLLMCall
-from memory.common.db.models.discord import DiscordChannel, DiscordUser
-from memory.api.MCP.base import mcp
-from memory.discord.schedule import schedule_discord_message
+from memory.discord.messages import schedule_discord_message
 
 logger = logging.getLogger(__name__)
 

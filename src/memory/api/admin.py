@@ -2,36 +2,29 @@
 SQLAdmin views for the knowledge base database models.
 """
 
-import uuid
-from sqladmin import Admin, ModelView
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse
 import logging
-from mcp.server.auth.provider import OAuthAuthorizationServerProvider
-from memory.api.MCP.oauth_provider import create_expiration, ACCESS_TOKEN_LIFETIME
-from memory.common import settings
-from memory.common.db.connection import make_session
+
+from sqladmin import Admin, ModelView
 from memory.common.db.models import (
-    Chunk,
-    SourceItem,
-    MailMessage,
-    EmailAttachment,
-    Photo,
-    Comic,
+    AgentObservation,
+    ArticleFeed,
+    BlogPost,
     Book,
     BookSection,
-    BlogPost,
-    MiscDoc,
-    ArticleFeed,
+    ScheduledLLMCall,
+    Chunk,
+    Comic,
     EmailAccount,
+    EmailAttachment,
     ForumPost,
-    AgentObservation,
+    MailMessage,
+    MiscDoc,
     Note,
+    Photo,
+    SourceItem,
     User,
-    UserSession,
-    OAuthState,
 )
+from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +216,79 @@ class NoteAdmin(ModelView, model=Note):
 class UserAdmin(ModelView, model=User):
     column_list = [
         "id",
+        "user_type",
         "email",
+        "api_key",
         "name",
         "created_at",
+        "discord_users",
+    ]
+
+
+class DiscordUserAdmin(ModelView, model=DiscordUser):
+    column_list = [
+        "id",
+        "username",
+        "display_name",
+        "track_messages",
+        "ignore_messages",
+        "allowed_tools",
+        "disallowed_tools",
+        "summary",
+        "created_at",
+        "updated_at",
+    ]
+
+
+class DiscordServerAdmin(ModelView, model=DiscordServer):
+    column_list = [
+        "id",
+        "name",
+        "description",
+        "member_count",
+        "last_sync_at",
+        "track_messages",
+        "ignore_messages",
+        "allowed_tools",
+        "disallowed_tools",
+        "summary",
+        "created_at",
+        "updated_at",
+    ]
+
+
+class DiscordChannelAdmin(ModelView, model=DiscordChannel):
+    column_list = [
+        "id",
+        "name",
+        "description",
+        "member_count",
+        "last_sync_at",
+        "track_messages",
+        "ignore_messages",
+        "allowed_tools",
+        "disallowed_tools",
+        "summary",
+        "created_at",
+        "updated_at",
+    ]
+
+
+class ScheduledLLMCallAdmin(ModelView, model=ScheduledLLMCall):
+    column_list = [
+        "id",
+        "user",
+        "topic",
+        "scheduled_time",
+        "model",
+        "status",
+        "error_message",
+        "response",
+        "discord_channel",
+        "discord_user",
+        "executed_at",
+        "created_at",
+        "updated_at",
     ]
 
 
@@ -247,3 +310,7 @@ def setup_admin(admin: Admin):
     admin.add_view(ComicAdmin)
     admin.add_view(PhotoAdmin)
     admin.add_view(UserAdmin)
+    admin.add_view(DiscordUserAdmin)
+    admin.add_view(DiscordServerAdmin)
+    admin.add_view(DiscordChannelAdmin)
+    admin.add_view(ScheduledLLMCallAdmin)
