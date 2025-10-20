@@ -4,6 +4,7 @@ Celery tasks for Discord message processing.
 
 import hashlib
 import logging
+import re
 import textwrap
 from datetime import datetime
 from typing import Any
@@ -50,45 +51,85 @@ def get_prev(
     return [f"{msg.username}: {msg.content}" for msg in prev[::-1]]
 
 
+def call_llm(
+    session,
+    message: DiscordMessage,
+    model: str,
+    msgs: list[str] = [],
+    allowed_tools: list[str] = [],
+) -> str | None:
+    tools = make_discord_tools(
+        message.recipient_user.system_user,
+        message.from_user,
+        message.channel,
+        model=model,
+    )
+    tools = {
+        name: tool
+        for name, tool in tools.items()
+        if message.tool_allowed(name) and name in allowed_tools
+    }
+    system_prompt = message.system_prompt or ""
+    system_prompt += comm_channel_prompt(
+        session, message.recipient_user, message.channel
+    )
+    provider = create_provider(model=model)
+    messages = previous_messages(
+        session,
+        message.recipient_user and message.recipient_user.id,
+        message.channel and message.channel.id,
+        max_messages=10,
+    )
+    return provider.run_with_tools(
+        messages=provider.as_messages([m.title for m in messages] + msgs),
+        tools=tools,
+        system_prompt=system_prompt,
+        max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
+    ).response
+
+
 def should_process(message: DiscordMessage) -> bool:
     if not (
         settings.DISCORD_PROCESS_MESSAGES
         and settings.DISCORD_NOTIFICATIONS_ENABLED
-        and not (
-            (message.server and message.server.ignore_messages)
-            or (message.channel and message.channel.ignore_messages)
-            or (message.from_user and message.from_user.ignore_messages)
-        )
+        and not message.ignore_messages
     ):
         return False
 
-    provider = create_provider(model=settings.SUMMARIZER_MODEL)
+    if message.from_user == message.recipient_user:
+        logger.info("Skipping message because from_user == recipient_user")
+        return False
+
     with make_session() as session:
-        system_prompt = comm_channel_prompt(
-            session, message.recipient_user, message.channel
-        )
-        messages = previous_messages(
-            session,
-            message.recipient_user and message.recipient_user.id,
-            message.channel and message.channel.id,
-            max_messages=10,
-        )
         msg = textwrap.dedent("""
             Should you continue the conversation with the user?
-            Please return "yes" or "no" as:
-        
-            <response>yes</response>
-        
-            or
-        
-            <response>no</response>
-        
+            Please return a number between 0 and 100 indicating how much you want to continue the conversation (0 is no, 100 is yes).
+            Please return the number in the following format:
+
+            <response>
+                <number>50</number>
+                <reason>I want to continue the conversation because I think it's important.</reason>
+            </response>
         """)
-        response = provider.generate(
-            messages=provider.as_messages([m.title for m in messages] + [msg]),
-            system_prompt=system_prompt,
+        response = call_llm(
+            session,
+            message,
+            settings.SUMMARIZER_MODEL,
+            [msg],
+            allowed_tools=[
+                "update_channel_summary",
+                "update_user_summary",
+                "update_server_summary",
+            ],
         )
-        return "<response>yes</response>" in "".join(response.lower().split())
+        if not response:
+            return False
+        if not (res := re.search(r"<number>(.*)</number>", response)):
+            return False
+        try:
+            return int(res.group(1)) > message.chattiness_threshold
+        except ValueError:
+            return False
 
 
 @app.task(name=PROCESS_DISCORD_MESSAGE)
@@ -111,39 +152,14 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
-        tools = make_discord_tools(
-            discord_message.recipient_user,
-            discord_message.from_user,
-            discord_message.channel,
-            model=settings.DISCORD_MODEL,
-        )
-        tools = {
-            name: tool
-            for name, tool in tools.items()
-            if discord_message.tool_allowed(name)
-        }
-        system_prompt = comm_channel_prompt(
-            session, discord_message.recipient_user, discord_message.channel
-        )
-        messages = previous_messages(
-            session,
-            discord_message.recipient_user and discord_message.recipient_user.id,
-            discord_message.channel and discord_message.channel.id,
-            max_messages=10,
-        )
-        provider = create_provider(model=settings.DISCORD_MODEL)
-        turn = provider.run_with_tools(
-            messages=provider.as_messages([m.title for m in messages]),
-            tools=tools,
-            system_prompt=system_prompt,
-            max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
-        )
-        if not turn.response:
+        response = call_llm(session, discord_message, settings.DISCORD_MODEL)
+
+        if not response:
             pass
         elif discord_message.channel.server:
-            discord.send_to_channel(discord_message.channel.name, turn.response)
+            discord.send_to_channel(discord_message.channel.name, response)
         else:
-            discord.send_dm(discord_message.from_user.username, turn.response)
+            discord.send_dm(discord_message.from_user.username, response)
 
     return {
         "status": "processed",

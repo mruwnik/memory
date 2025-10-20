@@ -329,6 +329,32 @@ class DiscordMessage(SourceItem):
         )
 
     @property
+    def ignore_messages(self) -> bool:
+        return (
+            (self.server and self.server.ignore_messages)
+            or (self.channel and self.channel.ignore_messages)
+            or (self.from_user and self.from_user.ignore_messages)
+        )
+
+    @property
+    def system_prompt(self) -> str:
+        return (
+            (self.from_user and self.from_user.system_prompt)
+            or (self.channel and self.channel.system_prompt)
+            or (self.server and self.server.system_prompt)
+        )
+
+    @property
+    def chattiness_threshold(self) -> int:
+        vals = [
+            (self.from_user and self.from_user.chattiness_threshold),
+            (self.channel and self.channel.chattiness_threshold),
+            (self.server and self.server.chattiness_threshold),
+            90,
+        ]
+        return min(val for val in vals if val is not None)
+
+    @property
     def title(self) -> str:
         return f"{self.from_user.username} ({self.sent_at.isoformat()[:19]}): {self.content}"
 

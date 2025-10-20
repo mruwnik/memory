@@ -8,6 +8,7 @@ providing HTTP endpoints for sending Discord messages.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+import traceback
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -81,20 +82,21 @@ async def send_dm_endpoint(request: SendDMRequest):
 
     try:
         success = await app_state.collector.send_dm(request.user, request.message)
-
-        if not success:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to send DM to {request.user}",
-            )
-        return {
-            "success": True,
-            "message": f"DM sent to {request.user}",
-            "user": request.user,
-        }
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Failed to send DM: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to send DM to {request.user}",
+        )
+    return {
+        "success": True,
+        "message": f"DM sent to {request.user}",
+        "user": request.user,
+    }
 
 
 @app.post("/send_channel")

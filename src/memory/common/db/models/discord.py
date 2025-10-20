@@ -28,6 +28,18 @@ class MessageProcessor:
     allowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
     disallowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
 
+    system_prompt = Column(
+        Text,
+        nullable=True,
+        doc="System prompt for this processor. The precedence is user -> channel -> server -> default.",
+    )
+    chattiness_threshold = Column(
+        Integer,
+        nullable=False,
+        default=50,
+        doc="The threshold for the bot to continue the conversation, between 0 and 100.",
+    )
+
     summary = Column(
         Text,
         nullable=True,
