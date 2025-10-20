@@ -37,12 +37,12 @@ def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
     if len(message) > 1900:  # Leave some buffer
         message = message[:1900] + "\n\n... (response truncated)"
 
-    if discord_user := cast(str, scheduled_call.discord_user):
-        logger.info(f"Sending DM to {discord_user}: {message}")
-        discord.send_dm(discord_user, message)
-    elif discord_channel := cast(str, scheduled_call.discord_channel):
-        logger.info(f"Broadcasting message to {discord_channel}: {message}")
-        discord.broadcast_message(discord_channel, message)
+    if discord_user := scheduled_call.discord_user:
+        logger.info(f"Sending DM to {discord_user.username}: {message}")
+        discord.send_dm(discord_user.username, message)
+    elif discord_channel := scheduled_call.discord_channel:
+        logger.info(f"Broadcasting message to {discord_channel.name}: {message}")
+        discord.broadcast_message(discord_channel.name, message)
     else:
         logger.warning(
             f"No Discord user or channel found for scheduled call {scheduled_call.id}"
@@ -62,11 +62,7 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
     with make_session() as session:
         # Fetch the scheduled call
-        scheduled_call = (
-            session.query(ScheduledLLMCall)
-            .filter(ScheduledLLMCall.id == scheduled_call_id)
-            .first()
-        )
+        scheduled_call = session.query(ScheduledLLMCall).get(scheduled_call_id)
 
         if not scheduled_call:
             logger.error(f"Scheduled call {scheduled_call_id} not found")

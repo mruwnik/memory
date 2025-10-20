@@ -30,6 +30,11 @@ from memory.common.db.models.source_items import (
     NotePayload,
     ForumPostPayload,
 )
+from memory.common.db.models.discord import (
+    DiscordServer,
+    DiscordChannel,
+    DiscordUser,
+)
 from memory.common.db.models.observations import (
     ObservationContradiction,
     ReactionPattern,
@@ -41,12 +46,12 @@ from memory.common.db.models.sources import (
     Book,
     ArticleFeed,
     EmailAccount,
-    DiscordServer,
-    DiscordChannel,
-    DiscordUser,
 )
 from memory.common.db.models.users import (
     User,
+    HumanUser,
+    BotUser,
+    DiscordBotUser,
     UserSession,
     OAuthClientInformation,
     OAuthState,
@@ -103,6 +108,9 @@ __all__ = [
     "DiscordUser",
     # Users
     "User",
+    "HumanUser",
+    "BotUser",
+    "DiscordBotUser",
     "UserSession",
     "OAuthClientInformation",
     "OAuthState",

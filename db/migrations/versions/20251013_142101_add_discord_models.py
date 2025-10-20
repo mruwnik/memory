@@ -1,8 +1,8 @@
 """add_discord_models
 
-Revision ID: a8c8e8b17179
+Revision ID: 7c6169fba146
 Revises: c86079073c1d
-Create Date: 2025-10-12 22:28:27.856164
+Create Date: 2025-10-13 14:21:01.080948
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "a8c8e8b17179"
+revision: str = "7c6169fba146"
 down_revision: Union[str, None] = "c86079073c1d"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -26,12 +26,6 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("member_count", sa.Integer(), nullable=True),
-        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
-        sa.Column(
-            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
-        ),
-        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
-        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column("last_sync_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
@@ -45,6 +39,17 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=True,
         ),
+        sa.Column(
+            "track_messages", sa.Boolean(), server_default="true", nullable=False
+        ),
+        sa.Column("ignore_messages", sa.Boolean(), nullable=True),
+        sa.Column(
+            "allowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column(
+            "disallowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column("summary", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -59,12 +64,6 @@ def upgrade() -> None:
         sa.Column("server_id", sa.BigInteger(), nullable=True),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("channel_type", sa.Text(), nullable=False),
-        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
-        sa.Column(
-            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
-        ),
-        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
-        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -77,6 +76,17 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=True,
         ),
+        sa.Column(
+            "track_messages", sa.Boolean(), server_default="true", nullable=False
+        ),
+        sa.Column("ignore_messages", sa.Boolean(), nullable=True),
+        sa.Column(
+            "allowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column(
+            "disallowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column("summary", sa.Text(), nullable=True),
         sa.ForeignKeyConstraint(
             ["server_id"],
             ["discord_servers.id"],
@@ -92,12 +102,6 @@ def upgrade() -> None:
         sa.Column("username", sa.Text(), nullable=False),
         sa.Column("display_name", sa.Text(), nullable=True),
         sa.Column("system_user_id", sa.Integer(), nullable=True),
-        sa.Column("track_messages", sa.Boolean(), server_default="true", nullable=True),
-        sa.Column(
-            "ignore_messages", sa.Boolean(), server_default="false", nullable=True
-        ),
-        sa.Column("allowed_tools", sa.ARRAY(sa.Text()), nullable=True),
-        sa.Column("disallowed_tools", sa.ARRAY(sa.Text()), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -110,6 +114,17 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=True,
         ),
+        sa.Column(
+            "track_messages", sa.Boolean(), server_default="true", nullable=False
+        ),
+        sa.Column("ignore_messages", sa.Boolean(), nullable=True),
+        sa.Column(
+            "allowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column(
+            "disallowed_tools", sa.ARRAY(sa.Text()), server_default="{}", nullable=False
+        ),
+        sa.Column("summary", sa.Text(), nullable=True),
         sa.ForeignKeyConstraint(
             ["system_user_id"],
             ["users.id"],

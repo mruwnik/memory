@@ -9,7 +9,9 @@ from typing import Any
 from memory.api.MCP.base import get_current_user
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledLLMCall
+from memory.common.db.models.discord import DiscordChannel, DiscordUser
 from memory.api.MCP.base import mcp
+from memory.discord.schedule import schedule_discord_message
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 @mcp.tool()
 async def schedule_message(
     scheduled_time: str,
-    message: str | None = None,
+    message: str,
     model: str | None = None,
     topic: str | None = None,
     discord_channel: str | None = None,
@@ -56,7 +58,8 @@ async def schedule_message(
     if not user_id:
         raise ValueError("User not found")
 
-    discord_user = current_user.get("user", {}).get("discord_user_id")
+    discord_users = current_user.get("user", {}).get("discord_users")
+    discord_user = discord_users and next(iter(discord_users.keys()), None)
     if not discord_user and not discord_channel:
         raise ValueError("Either discord_user or discord_channel must be provided")
 
@@ -69,27 +72,20 @@ async def schedule_message(
     except ValueError:
         raise ValueError("Invalid datetime format")
 
-    # Validate that the scheduled time is in the future
-    # Compare with naive datetime since we store naive in the database
-    current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-    if scheduled_dt <= current_time_naive:
-        raise ValueError("Scheduled time must be in the future")
-
     with make_session() as session:
-        # Create the scheduled call
-        scheduled_call = ScheduledLLMCall(
-            user_id=user_id,
+        scheduled_call = schedule_discord_message(
+            session=session,
             scheduled_time=scheduled_dt,
             message=message,
-            topic=topic,
+            user_id=current_user.get("user", {}).get("user_id"),
             model=model,
-            system_prompt=system_prompt,
+            topic=topic,
             discord_channel=discord_channel,
             discord_user=discord_user,
-            data=metadata or {},
+            system_prompt=system_prompt,
+            metadata=metadata,
         )
 
-        session.add(scheduled_call)
         session.commit()
 
         return {

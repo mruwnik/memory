@@ -254,17 +254,59 @@ def mock_openai_client():
     with patch.object(openai, "OpenAI", autospec=True) as mock_client:
         client = mock_client()
         client.chat = Mock()
+
+        # Mock non-streaming response
         client.chat.completions.create = Mock(
             return_value=Mock(
                 choices=[
                     Mock(
                         message=Mock(
                             content="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
-                        )
+                        ),
+                        finish_reason=None,
                     )
                 ]
             )
         )
+
+        # Store original side_effect for potential override
+        def streaming_response(*args, **kwargs):
+            if kwargs.get("stream"):
+                # Return mock streaming chunks
+                return iter(
+                    [
+                        Mock(
+                            choices=[
+                                Mock(
+                                    delta=Mock(content="test", tool_calls=None),
+                                    finish_reason=None,
+                                )
+                            ]
+                        ),
+                        Mock(
+                            choices=[
+                                Mock(
+                                    delta=Mock(content=" response", tool_calls=None),
+                                    finish_reason="stop",
+                                )
+                            ]
+                        ),
+                    ]
+                )
+            else:
+                # Return non-streaming response
+                return Mock(
+                    choices=[
+                        Mock(
+                            message=Mock(
+                                content="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
+                            ),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+
+        client.chat.completions.create.side_effect = streaming_response
         yield client
 
 

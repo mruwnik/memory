@@ -150,7 +150,7 @@ class OpenAIProvider(BaseLLMProvider):
 
     def _convert_tools(
         self, tools: list[ToolDefinition] | None
-    ) -> Optional[list[dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """
         Convert our tool definitions to OpenAI format.
 
@@ -179,7 +179,7 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         messages: list[Message],
         system_prompt: str | None,
-        tools: Optional[list[ToolDefinition]],
+        tools: list[ToolDefinition] | None,
         settings: LLMSettings,
         stream: bool = False,
     ) -> dict[str, Any]:
@@ -270,7 +270,7 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         chunk: Any,
         current_tool_call: dict[str, Any] | None,
-    ) -> tuple[list[StreamEvent], Optional[dict[str, Any]]]:
+    ) -> tuple[list[StreamEvent], dict[str, Any] | None]:
         """
         Handle a single streaming chunk and return events and updated tool state.
 
@@ -325,9 +325,9 @@ class OpenAIProvider(BaseLLMProvider):
     def generate(
         self,
         messages: list[Message],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[ToolDefinition]] = None,
-        settings: Optional[LLMSettings] = None,
+        system_prompt: str | None = None,
+        tools: list[ToolDefinition] | None = None,
+        settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response."""
         settings = settings or LLMSettings()
@@ -374,9 +374,9 @@ class OpenAIProvider(BaseLLMProvider):
     async def agenerate(
         self,
         messages: list[Message],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[ToolDefinition]] = None,
-        settings: Optional[LLMSettings] = None,
+        system_prompt: str | None = None,
+        tools: list[ToolDefinition] | None = None,
+        settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response asynchronously."""
         settings = settings or LLMSettings()
@@ -394,9 +394,9 @@ class OpenAIProvider(BaseLLMProvider):
     async def astream(
         self,
         messages: list[Message],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[ToolDefinition]] = None,
-        settings: Optional[LLMSettings] = None,
+        system_prompt: str | None = None,
+        tools: list[ToolDefinition] | None = None,
+        settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Generate a streaming response asynchronously."""
         settings = settings or LLMSettings()
@@ -406,7 +406,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         try:
             stream = await self.async_client.chat.completions.create(**kwargs)
-            current_tool_call: Optional[dict[str, Any]] = None
+            current_tool_call: dict[str, Any] | None = None
 
             async for chunk in stream:
                 events, current_tool_call = self._handle_stream_chunk(

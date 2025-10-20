@@ -333,7 +333,6 @@ class AnthropicProvider(BaseLLMProvider):
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
 
-        print(kwargs)
         try:
             with self.client.messages.stream(**kwargs) as stream:
                 current_tool_use: dict[str, Any] | None = None

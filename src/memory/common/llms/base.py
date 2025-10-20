@@ -599,6 +599,9 @@ class BaseLLMProvider(ABC):
             tool_calls=tool_calls or None,
         )
 
+    def as_messages(self, messages) -> list[Message]:
+        return [Message.user(text=msg) for msg in messages]
+
 
 def create_provider(
     model: str | None = None,

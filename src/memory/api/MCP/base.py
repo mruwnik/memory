@@ -25,7 +25,7 @@ from memory.api.MCP.oauth_provider import (
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import OAuthState, UserSession
-from memory.common.db.models.users import User
+from memory.common.db.models.users import HumanUser
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,11 @@ async def handle_login(request: Request):
         key: value for key, value in form.items() if key not in ["email", "password"]
     }
     with make_session() as session:
-        user = session.query(User).filter(User.email == form.get("email")).first()
+        user = (
+            session.query(HumanUser)
+            .filter(HumanUser.email == form.get("email"))
+            .first()
+        )
         if not user or not user.is_valid_password(str(form.get("password", ""))):
             logger.warning("Login failed - invalid credentials")
             return login_form(request, oauth_params, "Invalid email or password")
@@ -144,11 +148,7 @@ def get_current_user() -> dict:
         return {"authenticated": False}
 
     with make_session() as session:
-        user_session = (
-            session.query(UserSession)
-            .filter(UserSession.id == access_token.token)
-            .first()
-        )
+        user_session = session.query(UserSession).get(access_token.token)
 
         if user_session and user_session.user:
             user_info = user_session.user.serialize()

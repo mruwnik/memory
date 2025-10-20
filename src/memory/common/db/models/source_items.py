@@ -286,7 +286,8 @@ class DiscordMessage(SourceItem):
     sent_at = Column(DateTime(timezone=True), nullable=False)
     server_id = Column(BigInteger, ForeignKey("discord_servers.id"), nullable=True)
     channel_id = Column(BigInteger, ForeignKey("discord_channels.id"), nullable=False)
-    discord_user_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
+    from_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
+    recipient_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
     message_id = Column(BigInteger, nullable=False)  # Discord message snowflake ID
 
     # Discord-specific metadata
@@ -303,11 +304,33 @@ class DiscordMessage(SourceItem):
 
     channel = relationship("DiscordChannel", foreign_keys=[channel_id])
     server = relationship("DiscordServer", foreign_keys=[server_id])
-    discord_user = relationship("DiscordUser", foreign_keys=[discord_user_id])
+    from_user = relationship("DiscordUser", foreign_keys=[from_id])
+    recipient_user = relationship("DiscordUser", foreign_keys=[recipient_id])
+
+    @property
+    def allowed_tools(self) -> list[str]:
+        return (
+            (self.channel.allowed_tools if self.channel else [])
+            + (self.from_user.allowed_tools if self.from_user else [])
+            + (self.server.allowed_tools if self.server else [])
+        )
+
+    @property
+    def disallowed_tools(self) -> list[str]:
+        return (
+            (self.channel.disallowed_tools if self.channel else [])
+            + (self.from_user.disallowed_tools if self.from_user else [])
+            + (self.server.disallowed_tools if self.server else [])
+        )
+
+    def tool_allowed(self, tool: str) -> bool:
+        return not (self.disallowed_tools and tool in self.disallowed_tools) and (
+            not self.allowed_tools or tool in self.allowed_tools
+        )
 
     @property
     def title(self) -> str:
-        return f"{self.discord_user.username}: {self.content}"
+        return f"{self.from_user.username} ({self.sent_at.isoformat()[:19]}): {self.content}"
 
     __mapper_args__ = {
         "polymorphic_identity": "discord_message",
@@ -320,7 +343,8 @@ class DiscordMessage(SourceItem):
             "server_id",
             "channel_id",
         ),
-        Index("discord_message_user_idx", "discord_user_id"),
+        Index("discord_message_from_idx", "from_id"),
+        Index("discord_message_recipient_idx", "recipient_id"),
     )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:

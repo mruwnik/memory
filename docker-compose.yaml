@@ -50,6 +50,8 @@ x-worker-base: &worker-base
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
     ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
     VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+    DISCORD_COLLECTOR_SERVER_URL: ingest-hub
+    DISCORD_COLLECTOR_PORT: 8003
   secrets: [ postgres_password, openai_key, anthropic_key, ssh_private_key, ssh_public_key, ssh_known_hosts ]
   read_only: true
   tmpfs: 
@@ -183,7 +185,6 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
     environment:
       <<: *worker-env
-      DISCORD_API_PORT: 8000
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       DISCORD_NOTIFICATIONS_ENABLED: true
       DISCORD_COLLECTOR_ENABLED: true

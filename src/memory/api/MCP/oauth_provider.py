@@ -21,6 +21,7 @@ from memory.common.db.models.users import (
     OAuthRefreshToken,
     OAuthState,
     User,
+    BotUser,
     UserSession,
 )
 from memory.common.db.models.users import (
@@ -92,7 +93,7 @@ def create_oauth_token(
     """Create an OAuth token response."""
     return OAuthToken(
         access_token=access_token,
-        token_type="bearer",
+        token_type="Bearer",
         expires_in=ACCESS_TOKEN_LIFETIME,
         refresh_token=refresh_token,
         scope=" ".join(scopes),
@@ -310,26 +311,37 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
             return token
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
-        """Load and validate an access token."""
+        """Load and validate an access token (or bot API key)."""
         with make_session() as session:
-            now = datetime.now(timezone.utc).replace(
-                tzinfo=None
-            )  # Make naive for DB comparison
-
-            # Query for active (non-expired) session
+            # Try as OAuth access token first
             user_session = session.query(UserSession).get(token)
-            if not user_session:
-                return None
+            if user_session:
+                now = datetime.now(timezone.utc).replace(
+                    tzinfo=None
+                )  # Make naive for DB comparison
 
-            if user_session.expires_at < now:
-                return None
+                if user_session.expires_at < now:
+                    return None
 
-            return AccessToken(
-                token=token,
-                client_id=user_session.oauth_state.client_id,
-                scopes=user_session.oauth_state.scopes,
-                expires_at=int(user_session.expires_at.timestamp()),
-            )
+                return AccessToken(
+                    token=token,
+                    client_id=user_session.oauth_state.client_id,
+                    scopes=user_session.oauth_state.scopes,
+                    expires_at=int(user_session.expires_at.timestamp()),
+                )
+
+            # Try as bot API key
+            bot = session.query(User).filter(User.api_key == token).first()
+            if bot:
+                logger.info(f"Bot {bot.name} (id={bot.id}) authenticated via API key")
+                return AccessToken(
+                    token=token,
+                    client_id=cast(str, bot.name or bot.email),
+                    scopes=["read", "write"],  # Bots get full access
+                    expires_at=2147483647,  # Far future (2038)
+                )
+
+            return None
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str

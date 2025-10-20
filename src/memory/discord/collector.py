@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, scoped_session
 
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models.sources import (
+from memory.common.db.models import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
@@ -227,6 +227,7 @@ class MessageCollector(commands.Bot):
                     message_id=message.id,
                     channel_id=message.channel.id,
                     author_id=message.author.id,
+                    recipient_id=self.user and self.user.id,
                     server_id=message.guild.id if message.guild else None,
                     content=message.content or "",
                     sent_at=message.created_at.isoformat(),

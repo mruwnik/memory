@@ -7,7 +7,7 @@ from memory.common import settings
 from sqlalchemy.orm import Session as DBSession, scoped_session
 
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models.users import User, UserSession
+from memory.common.db.models.users import User, HumanUser, BotUser, UserSession
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,14 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def create_user(email: str, password: str, name: str, db: DBSession) -> User:
-    """Create a new user"""
+def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
+    """Create a new human user"""
     # Check if user already exists
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
-    user = User.create_with_password(email, name, password)
+    user = HumanUser.create_with_password(email, name, password)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -106,12 +106,17 @@ def create_user(email: str, password: str, name: str, db: DBSession) -> User:
     return user
 
 
-def authenticate_user(email: str, password: str, db: DBSession) -> User | None:
-    """Authenticate a user by email and password"""
-    user = db.query(User).filter(User.email == email).first()
+def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | None:
+    """Authenticate a human user by email and password"""
+    user = db.query(HumanUser).filter(HumanUser.email == email).first()
     if user and user.is_valid_password(password):
         return user
     return None
+
+
+def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
+    """Authenticate a bot by API key"""
+    return db.query(BotUser).filter(BotUser.api_key == api_key).first()
 
 
 @router.api_route("/logout", methods=["GET", "POST"])

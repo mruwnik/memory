@@ -2,7 +2,6 @@ import hashlib
 import secrets
 from typing import cast
 import uuid
-from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from memory.common.db.models.base import Base
 from sqlalchemy import (
@@ -14,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     ARRAY,
     Numeric,
+    CheckConstraint,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -36,12 +36,21 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "password_hash IS NOT NULL OR api_key IS NOT NULL",
+            name="user_has_auth_method",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     email = Column(String, nullable=False, unique=True)
-    password_hash = Column(String, nullable=False)
-    discord_user_id = Column(String, nullable=True)
+    user_type = Column(String, nullable=False)  # Discriminator column
+
+    # Make these nullable since subclasses will use them selectively
+    password_hash = Column(String, nullable=True)
+    api_key = Column(String, nullable=True, unique=True)
 
     # Relationship to sessions
     sessions = relationship(
@@ -52,22 +61,86 @@ class User(Base):
     )
     discord_users = relationship("DiscordUser", back_populates="system_user")
 
+    __mapper_args__ = {
+        "polymorphic_on": user_type,
+        "polymorphic_identity": "user",
+    }
+
     def serialize(self) -> dict:
         return {
             "user_id": self.id,
             "name": self.name,
             "email": self.email,
-            "discord_user_id": self.discord_user_id,
+            "user_type": self.user_type,
+            "discord_users": {
+                discord_user.id: discord_user.username
+                for discord_user in self.discord_users
+            },
         }
+
+
+class HumanUser(User):
+    """Human user with password authentication"""
+
+    __mapper_args__ = {
+        "polymorphic_identity": "human",
+    }
 
     def is_valid_password(self, password: str) -> bool:
         """Check if the provided password is valid for this user"""
         return verify_password(password, cast(str, self.password_hash))
 
     @classmethod
-    def create_with_password(cls, email: str, name: str, password: str) -> "User":
-        """Create a new user with a hashed password"""
-        return cls(email=email, name=name, password_hash=hash_password(password))
+    def create_with_password(cls, email: str, name: str, password: str) -> "HumanUser":
+        """Create a new human user with a hashed password"""
+        return cls(
+            email=email,
+            name=name,
+            password_hash=hash_password(password),
+            user_type="human",
+        )
+
+
+class BotUser(User):
+    """Bot user with API key authentication"""
+
+    __mapper_args__ = {
+        "polymorphic_identity": "bot",
+    }
+
+    @classmethod
+    def create_with_api_key(
+        cls, name: str, email: str, api_key: str | None = None
+    ) -> "BotUser":
+        """Create a new bot user with an API key"""
+        if api_key is None:
+            api_key = f"bot_{secrets.token_hex(32)}"
+        return cls(
+            name=name,
+            email=email,
+            api_key=api_key,
+            user_type=cls.__mapper_args__["polymorphic_identity"],
+        )
+
+
+class DiscordBotUser(BotUser):
+    """Bot user with API key authentication"""
+
+    __mapper_args__ = {
+        "polymorphic_identity": "discord_bot",
+    }
+
+    @classmethod
+    def create_with_api_key(
+        cls,
+        discord_users: list,
+        name: str,
+        email: str,
+        api_key: str | None = None,
+    ) -> "DiscordBotUser":
+        bot = super().create_with_api_key(name, email, api_key)
+        bot.discord_users = discord_users
+        return bot
 
 
 class UserSession(Base):

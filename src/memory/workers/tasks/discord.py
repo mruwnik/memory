@@ -4,25 +4,31 @@ Celery tasks for Discord message processing.
 
 import hashlib
 import logging
+import textwrap
 from datetime import datetime
 from typing import Any
 
-from memory.common.celery_app import app
-from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordMessage, DiscordUser
-from memory.workers.tasks.content_processing import (
-    safe_task_execution,
-    check_content_exists,
-    create_task_result,
-    process_content_item,
-)
+from sqlalchemy import exc as sqlalchemy_exc
+from sqlalchemy.orm import Session, scoped_session
+
+from memory.common import discord, settings
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
     EDIT_DISCORD_MESSAGE,
     PROCESS_DISCORD_MESSAGE,
+    app,
 )
-from memory.common import settings
-from sqlalchemy.orm import Session, scoped_session
+from memory.common.db.connection import make_session
+from memory.common.db.models import DiscordMessage, DiscordUser
+from memory.common.llms.base import create_provider
+from memory.common.llms.tools.discord import make_discord_tools
+from memory.discord.messages import comm_channel_prompt, previous_messages
+from memory.workers.tasks.content_processing import (
+    check_content_exists,
+    create_task_result,
+    process_content_item,
+    safe_task_execution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +38,7 @@ def get_prev(
 ) -> list[str]:
     prev = (
         session.query(DiscordUser.username, DiscordMessage.content)
-        .join(DiscordUser, DiscordMessage.discord_user_id == DiscordUser.id)
+        .join(DiscordUser, DiscordMessage.from_id == DiscordUser.id)
         .filter(
             DiscordMessage.channel_id == channel_id,
             DiscordMessage.sent_at < sent_at,
@@ -45,20 +51,54 @@ def get_prev(
 
 
 def should_process(message: DiscordMessage) -> bool:
-    return (
+    if not (
         settings.DISCORD_PROCESS_MESSAGES
         and settings.DISCORD_NOTIFICATIONS_ENABLED
         and not (
             (message.server and message.server.ignore_messages)
             or (message.channel and message.channel.ignore_messages)
-            or (message.discord_user and message.discord_user.ignore_messages)
+            or (message.from_user and message.from_user.ignore_messages)
         )
-    )
+    ):
+        return False
+
+    provider = create_provider(model=settings.SUMMARIZER_MODEL)
+    with make_session() as session:
+        system_prompt = comm_channel_prompt(
+            session, message.recipient_user, message.channel
+        )
+        messages = previous_messages(
+            session,
+            message.recipient_user and message.recipient_user.id,
+            message.channel and message.channel.id,
+            max_messages=10,
+        )
+        msg = textwrap.dedent("""
+            Should you continue the conversation with the user?
+            Please return "yes" or "no" as:
+        
+            <response>yes</response>
+        
+            or
+        
+            <response>no</response>
+        
+        """)
+        response = provider.generate(
+            messages=provider.as_messages([m.title for m in messages] + [msg]),
+            system_prompt=system_prompt,
+        )
+        return "<response>yes</response>" in "".join(response.lower().split())
 
 
 @app.task(name=PROCESS_DISCORD_MESSAGE)
 @safe_task_execution
 def process_discord_message(message_id: int) -> dict[str, Any]:
+    """
+    Process a Discord message.
+
+    This task is queued by the Discord collector when messages are received.
+    """
     logger.info(f"Processing Discord message {message_id}")
 
     with make_session() as session:
@@ -71,7 +111,39 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
-        print("Processing message", discord_message.id, discord_message.content)
+        tools = make_discord_tools(
+            discord_message.recipient_user,
+            discord_message.from_user,
+            discord_message.channel,
+            model=settings.DISCORD_MODEL,
+        )
+        tools = {
+            name: tool
+            for name, tool in tools.items()
+            if discord_message.tool_allowed(name)
+        }
+        system_prompt = comm_channel_prompt(
+            session, discord_message.recipient_user, discord_message.channel
+        )
+        messages = previous_messages(
+            session,
+            discord_message.recipient_user and discord_message.recipient_user.id,
+            discord_message.channel and discord_message.channel.id,
+            max_messages=10,
+        )
+        provider = create_provider(model=settings.DISCORD_MODEL)
+        turn = provider.run_with_tools(
+            messages=provider.as_messages([m.title for m in messages]),
+            tools=tools,
+            system_prompt=system_prompt,
+            max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
+        )
+        if not turn.response:
+            pass
+        elif discord_message.channel.server:
+            discord.send_to_channel(discord_message.channel.name, turn.response)
+        else:
+            discord.send_dm(discord_message.from_user.username, turn.response)
 
     return {
         "status": "processed",
@@ -88,6 +160,7 @@ def add_discord_message(
     content: str,
     sent_at: str,
     server_id: int | None = None,
+    recipient_id: int | None = None,
     message_reference_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -108,7 +181,8 @@ def add_discord_message(
             channel_id=channel_id,
             sent_at=sent_at_dt,
             server_id=server_id,
-            discord_user_id=author_id,
+            from_id=author_id,
+            recipient_id=recipient_id,
             message_id=message_id,
             message_type="reply" if message_reference_id else "default",
             reply_to_message_id=message_reference_id,
@@ -125,7 +199,15 @@ def add_discord_message(
         if channel_id:
             discord_message.messages_before = get_prev(session, channel_id, sent_at_dt)
 
-        result = process_content_item(discord_message, session)
+        try:
+            result = process_content_item(discord_message, session)
+        except sqlalchemy_exc.IntegrityError as e:
+            logger.error(f"Integrity error adding Discord message {message_id}: {e}")
+            return {
+                "status": "error",
+                "error": "Integrity error",
+                "message_id": message_id,
+            }
         if should_process(discord_message):
             process_discord_message.delay(discord_message.id)
 

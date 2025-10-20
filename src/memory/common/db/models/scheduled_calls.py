@@ -7,6 +7,7 @@ from sqlalchemy import (
     String,
     DateTime,
     ForeignKey,
+    BigInteger,
     JSON,
     Text,
 )
@@ -37,8 +38,10 @@ class ScheduledLLMCall(Base):
     allowed_tools = Column(JSON, nullable=True)  # List of allowed tool names
 
     # Discord configuration
-    discord_channel = Column(String, nullable=True)
-    discord_user = Column(String, nullable=True)
+    discord_channel_id = Column(
+        BigInteger, ForeignKey("discord_channels.id"), nullable=True
+    )
+    discord_user_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=True)
 
     # Execution status and results
     status = Column(
@@ -55,6 +58,8 @@ class ScheduledLLMCall(Base):
 
     # Relationships
     user = relationship("User")
+    discord_channel = relationship("DiscordChannel", foreign_keys=[discord_channel_id])
+    discord_user = relationship("DiscordUser", foreign_keys=[discord_user_id])
 
     def serialize(self) -> Dict[str, Any]:
         def print_datetime(dt: datetime | None) -> str | None:
@@ -73,8 +78,8 @@ class ScheduledLLMCall(Base):
             "message": self.message,
             "system_prompt": self.system_prompt,
             "allowed_tools": self.allowed_tools,
-            "discord_channel": self.discord_channel,
-            "discord_user": self.discord_user,
+            "discord_channel": self.discord_channel and self.discord_channel.name,
+            "discord_user": self.discord_user and self.discord_user.username,
             "status": self.status,
             "response": self.response,
             "error_message": self.error_message,

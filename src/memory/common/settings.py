@@ -133,7 +133,7 @@ if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
     ANTHROPIC_API_KEY = pathlib.Path(anthropic_key_file).read_text().strip()
 else:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-3-haiku-20240307")
+SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-4-5")
 RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", 200000))
 
@@ -173,11 +173,14 @@ DISCORD_NOTIFICATIONS_ENABLED = bool(
     boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True) and DISCORD_BOT_TOKEN
 )
 DISCORD_PROCESS_MESSAGES = boolean_env("DISCORD_PROCESS_MESSAGES", True)
+DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-sonnet-4-5")
+DISCORD_MAX_TOOL_CALLS = int(os.getenv("DISCORD_MAX_TOOL_CALLS", 10))
+
 
 # Discord collector settings
 DISCORD_COLLECTOR_ENABLED = boolean_env("DISCORD_COLLECTOR_ENABLED", True)
 DISCORD_COLLECT_DMS = boolean_env("DISCORD_COLLECT_DMS", True)
 DISCORD_COLLECT_BOTS = boolean_env("DISCORD_COLLECT_BOTS", True)
-DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8000))
-DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "127.0.0.1")
+DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
+DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
 DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))

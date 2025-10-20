@@ -25,7 +25,7 @@ def send_dm(user_identifier: str, message: str) -> bool:
     try:
         response = requests.post(
             f"{get_api_url()}/send_dm",
-            json={"user_identifier": user_identifier, "message": message},
+            json={"user": user_identifier, "message": message},
             timeout=10,
         )
         response.raise_for_status()
@@ -34,6 +34,24 @@ def send_dm(user_identifier: str, message: str) -> bool:
 
     except requests.RequestException as e:
         logger.error(f"Failed to send DM to {user_identifier}: {e}")
+        return False
+
+
+def send_to_channel(channel_name: str, message: str) -> bool:
+    """Send a DM via the Discord collector API"""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/send_channel",
+            json={"channel_name": channel_name, "message": message},
+            timeout=10,
+        )
+        response.raise_for_status()
+        result = response.json()
+        print("Result", result)
+        return result.get("success", False)
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to send to channel {channel_name}: {e}")
         return False
 
 
