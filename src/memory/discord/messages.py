@@ -27,11 +27,7 @@ def resolve_discord_user(
     if isinstance(entity, int):
         return session.get(DiscordUser, entity)
 
-    entity = session.query(DiscordUser).filter(DiscordUser.username == entity).first()
-    if not entity:
-        entity = DiscordUser(id=entity, username=entity)
-        session.add(entity)
-    return entity
+    return session.query(DiscordUser).filter(DiscordUser.username == entity).first()
 
 
 def resolve_discord_channel(

@@ -264,10 +264,10 @@ def sync_website_archive(
             if existing:
                 continue
 
-        task_ids.append(sync_webpage.delay(feed_item.url, list(tags)).id)
-        new_articles += 1
+            task_ids.append(sync_webpage.delay(feed_item.url, list(tags)).id)
+            new_articles += 1
 
-        logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")
+            logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")
 
     return {
         "status": "completed",

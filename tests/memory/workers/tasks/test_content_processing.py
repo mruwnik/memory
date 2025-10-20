@@ -733,6 +733,8 @@ def test_safe_task_execution_exception_logging(caplog):
 
     result = failing_task()
 
-    assert result == {"status": "error", "error": "Test runtime error"}
+    assert result["status"] == "error"
+    assert result["error"] == "Test runtime error"
+    assert "traceback" in result
     assert "Task failing_task failed:" in caplog.text
     assert "Test runtime error" in caplog.text

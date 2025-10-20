@@ -12,6 +12,7 @@ from memory.workers.tasks import ebook
 def mock_ebook():
     """Mock ebook data for testing."""
     return Ebook(
+        relative_path=Path("test/book.epub"),
         title="Test Book",
         author="Test Author",
         metadata={"language": "en", "creator": "Test Publisher"},
@@ -207,10 +208,11 @@ def test_sync_book_already_exists(mock_parse, mock_ebook, db_session, tmp_path):
     book_file = tmp_path / "test.epub"
     book_file.write_text("dummy content")
 
+    # Use the same relative path that mock_ebook has
     existing_book = Book(
         title="Existing Book",
         author="Author",
-        file_path=str(book_file),
+        file_path="test/book.epub",  # Must match mock_ebook.relative_path
     )
     db_session.add(existing_book)
     db_session.commit()
@@ -266,18 +268,18 @@ def test_sync_book_qdrant_failure(mock_parse, mock_ebook, db_session, tmp_path):
     # Since embedding is already failing, this test will complete without hitting Qdrant
     # So let's just verify that the function completes without raising an exception
     with patch.object(ebook, "push_to_qdrant", side_effect=Exception("Qdrant failed")):
-        assert ebook.sync_book(str(book_file)) == {
-            "status": "error",
-            "error": "Qdrant failed",
-        }
+        result = ebook.sync_book(str(book_file))
+        assert result["status"] == "error"
+        assert result["error"] == "Qdrant failed"
+        assert "traceback" in result
 
 
 def test_sync_book_file_not_found():
     """Test handling of missing files."""
-    assert ebook.sync_book("/nonexistent/file.epub") == {
-        "status": "error",
-        "error": "Book file not found: /nonexistent/file.epub",
-    }
+    result = ebook.sync_book("/nonexistent/file.epub")
+    assert result["status"] == "error"
+    assert result["error"] == "Book file not found: /nonexistent/file.epub"
+    assert "traceback" in result
 
 
 def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):

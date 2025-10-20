@@ -15,7 +15,7 @@ from memory.discord.collector import (
     sync_guild_metadata,
     MessageCollector,
 )
-from memory.common.db.models.sources import (
+from memory.common.db.models import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,

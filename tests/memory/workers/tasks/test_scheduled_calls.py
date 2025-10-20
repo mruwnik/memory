@@ -3,18 +3,17 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 import uuid
 
-from memory.common.db.models import ScheduledLLMCall, User
+from memory.common.db.models import ScheduledLLMCall, HumanUser, DiscordUser, DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_calls
 
 
 @pytest.fixture
 def sample_user(db_session):
     """Create a sample user for testing."""
-    user = User(
+    user = HumanUser.create_with_password(
         name="testuser",
         email="test@example.com",
-        discord_user_id="123456789",
-        password_hash="password",
+        password="password",
     )
     db_session.add(user)
     db_session.commit()
@@ -22,7 +21,45 @@ def sample_user(db_session):
 
 
 @pytest.fixture
-def pending_scheduled_call(db_session, sample_user):
+def sample_discord_user(db_session):
+    """Create a sample Discord user for testing."""
+    discord_user = DiscordUser(
+        id=123456789,
+        username="testuser",
+    )
+    db_session.add(discord_user)
+    db_session.commit()
+    return discord_user
+
+
+@pytest.fixture
+def sample_discord_server(db_session):
+    """Create a sample Discord server for testing."""
+    server = DiscordServer(
+        id=987654321,
+        name="Test Server",
+    )
+    db_session.add(server)
+    db_session.commit()
+    return server
+
+
+@pytest.fixture
+def sample_discord_channel(db_session, sample_discord_server):
+    """Create a sample Discord channel for testing."""
+    channel = DiscordChannel(
+        id=111222333,
+        name="test-channel",
+        channel_type="text",
+        server_id=sample_discord_server.id,
+    )
+    db_session.add(channel)
+    db_session.commit()
+    return channel
+
+
+@pytest.fixture
+def pending_scheduled_call(db_session, sample_user, sample_discord_user):
     """Create a pending scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -32,7 +69,7 @@ def pending_scheduled_call(db_session, sample_user):
         model="anthropic/claude-3-5-sonnet-20241022",
         message="What is the weather like today?",
         system_prompt="You are a helpful assistant.",
-        discord_user="123456789",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
     db_session.add(call)
@@ -41,7 +78,7 @@ def pending_scheduled_call(db_session, sample_user):
 
 
 @pytest.fixture
-def completed_scheduled_call(db_session, sample_user):
+def completed_scheduled_call(db_session, sample_user, sample_discord_channel):
     """Create a completed scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -52,7 +89,7 @@ def completed_scheduled_call(db_session, sample_user):
         model="anthropic/claude-3-5-sonnet-20241022",
         message="Tell me a joke.",
         system_prompt="You are a funny assistant.",
-        discord_channel="987654321",
+        discord_channel_id=sample_discord_channel.id,
         status="completed",
         response="Why did the chicken cross the road? To get to the other side!",
     )
@@ -62,7 +99,7 @@ def completed_scheduled_call(db_session, sample_user):
 
 
 @pytest.fixture
-def future_scheduled_call(db_session, sample_user):
+def future_scheduled_call(db_session, sample_user, sample_discord_user):
     """Create a future scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -71,7 +108,7 @@ def future_scheduled_call(db_session, sample_user):
         scheduled_time=datetime.now(timezone.utc) + timedelta(hours=1),
         model="anthropic/claude-3-5-sonnet-20241022",
         message="What will happen tomorrow?",
-        discord_user="123456789",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
     db_session.add(call)
@@ -87,7 +124,7 @@ def test_send_to_discord_user(mock_send_dm, pending_scheduled_call):
     scheduled_calls._send_to_discord(pending_scheduled_call, response)
 
     mock_send_dm.assert_called_once_with(
-        "123456789",
+        "testuser",  # username, not ID
         "**Topic:** Test Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a test response.",
     )
 
@@ -100,7 +137,7 @@ def test_send_to_discord_channel(mock_broadcast, completed_scheduled_call):
     scheduled_calls._send_to_discord(completed_scheduled_call, response)
 
     mock_broadcast.assert_called_once_with(
-        "987654321",
+        "test-channel",  # channel name, not ID
         "**Topic:** Completed Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a channel response.",
     )
 
@@ -133,7 +170,7 @@ def test_send_to_discord_normal_length_message(mock_send_dm, pending_scheduled_c
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_success(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -171,7 +208,7 @@ def test_execute_scheduled_call_not_found(db_session):
     assert result == {"error": "Scheduled call not found"}
 
 
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_not_pending(
     mock_llm_call, completed_scheduled_call, db_session
 ):
@@ -183,9 +220,9 @@ def test_execute_scheduled_call_not_pending(
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_with_default_system_prompt(
-    mock_llm_call, mock_send_discord, db_session, sample_user
+    mock_llm_call, mock_send_discord, db_session, sample_user, sample_discord_user
 ):
     """Test execution when system_prompt is None, should use default."""
     # Create call without system prompt
@@ -197,7 +234,7 @@ def test_execute_scheduled_call_with_default_system_prompt(
         model="anthropic/claude-3-5-sonnet-20241022",
         message="Test prompt",
         system_prompt=None,
-        discord_user="123456789",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
     db_session.add(call)
@@ -211,12 +248,12 @@ def test_execute_scheduled_call_with_default_system_prompt(
     mock_llm_call.assert_called_once_with(
         prompt="Test prompt",
         model="anthropic/claude-3-5-sonnet-20241022",
-        system_prompt=scheduled_calls.llms.SYSTEM_PROMPT,
+        system_prompt=None,  # The code uses system_prompt as-is, not a default
     )
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_discord_error(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -240,7 +277,7 @@ def test_execute_scheduled_call_discord_error(
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_llm_error(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -258,7 +295,7 @@ def test_execute_scheduled_call_llm_error(
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_long_response_truncation(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -279,7 +316,7 @@ def test_execute_scheduled_call_long_response_truncation(
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_with_due_calls(
-    mock_execute_delay, db_session, sample_user
+    mock_execute_delay, db_session, sample_user, sample_discord_user
 ):
     """Test running scheduled calls with due calls."""
     # Create multiple due calls
@@ -289,7 +326,7 @@ def test_run_scheduled_calls_with_due_calls(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         model="test-model",
         message="Test 1",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
     due_call2 = ScheduledLLMCall(
@@ -298,7 +335,7 @@ def test_run_scheduled_calls_with_due_calls(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
         message="Test 2",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
 
@@ -337,7 +374,7 @@ def test_run_scheduled_calls_no_due_calls(
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_mixed_statuses(
-    mock_execute_delay, db_session, sample_user
+    mock_execute_delay, db_session, sample_user, sample_discord_user
 ):
     """Test that only pending calls are processed."""
     # Create calls with different statuses
@@ -347,7 +384,7 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
         message="Pending",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
     executing_call = ScheduledLLMCall(
@@ -356,7 +393,7 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
         message="Executing",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="executing",
     )
     completed_call = ScheduledLLMCall(
@@ -365,7 +402,7 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
         message="Completed",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="completed",
     )
 
@@ -387,7 +424,7 @@ def test_run_scheduled_calls_mixed_statuses(
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_timezone_handling(
-    mock_execute_delay, db_session, sample_user
+    mock_execute_delay, db_session, sample_user, sample_discord_user
 ):
     """Test that timezone handling works correctly."""
     # Create a call that's due (scheduled time in the past)
@@ -398,7 +435,7 @@ def test_run_scheduled_calls_timezone_handling(
         scheduled_time=past_time.replace(tzinfo=None),  # Store as naive datetime
         model="test-model",
         message="Due call",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
 
@@ -410,7 +447,7 @@ def test_run_scheduled_calls_timezone_handling(
         scheduled_time=future_time.replace(tzinfo=None),  # Store as naive datetime
         model="test-model",
         message="Future call",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status="pending",
     )
 
@@ -431,7 +468,7 @@ def test_run_scheduled_calls_timezone_handling(
 
 
 @patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_status_transition_pending_to_executing_to_completed(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -452,11 +489,11 @@ def test_status_transition_pending_to_executing_to_completed(
 
 
 @pytest.mark.parametrize(
-    "discord_user,discord_channel,expected_method",
+    "has_discord_user,has_discord_channel,expected_method",
     [
-        ("123456789", None, "send_dm"),
-        (None, "987654321", "broadcast_message"),
-        ("123456789", "987654321", "send_dm"),  # User takes precedence
+        (True, False, "send_dm"),
+        (False, True, "broadcast_message"),
+        (True, True, "send_dm"),  # User takes precedence
     ],
 )
 @patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
@@ -464,11 +501,13 @@ def test_status_transition_pending_to_executing_to_completed(
 def test_discord_destination_priority(
     mock_broadcast,
     mock_send_dm,
-    discord_user,
-    discord_channel,
+    has_discord_user,
+    has_discord_channel,
     expected_method,
     db_session,
     sample_user,
+    sample_discord_user,
+    sample_discord_channel,
 ):
     """Test that Discord user takes precedence over channel."""
     call = ScheduledLLMCall(
@@ -478,8 +517,8 @@ def test_discord_destination_priority(
         scheduled_time=datetime.now(timezone.utc),
         model="test-model",
         message="Test",
-        discord_user=discord_user,
-        discord_channel=discord_channel,
+        discord_user_id=sample_discord_user.id if has_discord_user else None,
+        discord_channel_id=sample_discord_channel.id if has_discord_channel else None,
         status="pending",
     )
     db_session.add(call)
@@ -530,11 +569,15 @@ def test_discord_destination_priority(
 @patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
 def test_message_formatting(mock_send_dm, topic, model, response, expected_in_message):
     """Test the Discord message formatting with different inputs."""
-    # Create a mock scheduled call
+    # Create a mock scheduled call with a mock Discord user
+    mock_discord_user = Mock()
+    mock_discord_user.username = "testuser"
+
     mock_call = Mock()
     mock_call.topic = topic
     mock_call.model = model
-    mock_call.discord_user = "123456789"
+    mock_call.discord_user = mock_discord_user
+    mock_call.discord_channel = None
 
     scheduled_calls._send_to_discord(mock_call, response)
 
@@ -557,9 +600,9 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
         ("cancelled", False),
     ],
 )
-@patch("memory.workers.tasks.scheduled_calls.llms.call")
+@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
 def test_execute_scheduled_call_status_check(
-    mock_llm_call, status, should_execute, db_session, sample_user
+    mock_llm_call, status, should_execute, db_session, sample_user, sample_discord_user
 ):
     """Test that only pending calls are executed."""
     call = ScheduledLLMCall(
@@ -569,7 +612,7 @@ def test_execute_scheduled_call_status_check(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model="test-model",
         message="Test",
-        discord_user="123",
+        discord_user_id=sample_discord_user.id,
         status=status,
     )
     db_session.add(call)

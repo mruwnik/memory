@@ -12,6 +12,7 @@ import traceback
 import logging
 from typing import Any, Callable, Sequence, cast
 
+from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
@@ -29,6 +30,7 @@ def check_content_exists(
 
     Searches for existing content by any of the provided attributes
     (typically URL, file_path, or SHA256 hash).
+    Uses OR logic - returns content if ANY attribute matches.
 
     Args:
         session: Database session for querying
@@ -38,11 +40,21 @@ def check_content_exists(
     Returns:
         Existing SourceItem if found, None otherwise
     """
-    query = session.query(model_class)
+    # Return None if no search criteria provided
+    if not kwargs:
+        return None
+
+    filters = []
     for key, value in kwargs.items():
         if hasattr(model_class, key):
-            query = query.filter(getattr(model_class, key) == value)
+            filters.append(getattr(model_class, key) == value)
 
+    # Return None if none of the provided attributes exist on the model
+    if not filters:
+        return None
+
+    # Use OR logic to find content matching any of the provided attributes
+    query = session.query(model_class).filter(or_(*filters))
     return query.first()
 
 

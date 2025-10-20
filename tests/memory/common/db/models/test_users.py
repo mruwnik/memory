@@ -1,5 +1,12 @@
 import pytest
-from memory.common.db.models.users import hash_password, verify_password
+from memory.common.db.models.users import (
+    hash_password,
+    verify_password,
+    User,
+    HumanUser,
+    BotUser,
+    DiscordBotUser,
+)
 
 
 @pytest.mark.parametrize(
@@ -102,3 +109,144 @@ def test_hash_verify_roundtrip(test_password):
 
     # Wrong password should not verify
     assert not verify_password(test_password + "_wrong", password_hash)
+
+
+# Test User Model Hierarchy
+
+
+def test_create_human_user(db_session):
+    """Test creating a HumanUser with password"""
+    user = HumanUser.create_with_password(
+        email="human@example.com", name="Human User", password="test_password123"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    assert user.id is not None
+    assert user.email == "human@example.com"
+    assert user.name == "Human User"
+    assert user.user_type == "human"
+    assert user.password_hash is not None
+    assert user.api_key is None
+    assert user.is_valid_password("test_password123")
+    assert not user.is_valid_password("wrong_password")
+
+
+def test_create_bot_user(db_session):
+    """Test creating a BotUser with API key"""
+    user = BotUser.create_with_api_key(
+        name="Test Bot", email="bot@example.com", api_key="test_api_key_123"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    assert user.id is not None
+    assert user.email == "bot@example.com"
+    assert user.name == "Test Bot"
+    assert user.user_type == "bot"
+    assert user.api_key == "test_api_key_123"
+    assert user.password_hash is None
+
+
+def test_create_bot_user_auto_api_key(db_session):
+    """Test creating a BotUser with auto-generated API key"""
+    user = BotUser.create_with_api_key(name="Auto Bot", email="autobot@example.com")
+    db_session.add(user)
+    db_session.commit()
+
+    assert user.id is not None
+    assert user.api_key is not None
+    assert user.api_key.startswith("bot_")
+    assert len(user.api_key) == 68  # "bot_" + 32 bytes hex encoded (64 chars)
+
+
+def test_create_discord_bot_user(db_session):
+    """Test creating a DiscordBotUser"""
+    user = DiscordBotUser.create_with_api_key(
+        discord_users=[],
+        name="Discord Bot",
+        email="discordbot@example.com",
+        api_key="discord_key_123",
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    assert user.id is not None
+    assert user.email == "discordbot@example.com"
+    assert user.name == "Discord Bot"
+    assert user.user_type == "discord_bot"
+    assert user.api_key == "discord_key_123"
+
+
+def test_user_serialization_human(db_session):
+    """Test HumanUser serialization"""
+    user = HumanUser.create_with_password(
+        email="serialize@example.com", name="Serialize User", password="password123"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    serialized = user.serialize()
+    assert serialized["user_id"] == user.id
+    assert serialized["name"] == "Serialize User"
+    assert serialized["email"] == "serialize@example.com"
+    assert serialized["user_type"] == "human"
+    assert "password_hash" not in serialized  # Should not expose password hash
+
+
+def test_user_serialization_bot(db_session):
+    """Test BotUser serialization"""
+    user = BotUser.create_with_api_key(name="Bot", email="bot@example.com")
+    db_session.add(user)
+    db_session.commit()
+
+    serialized = user.serialize()
+    assert serialized["user_id"] == user.id
+    assert serialized["name"] == "Bot"
+    assert serialized["email"] == "bot@example.com"
+    assert serialized["user_type"] == "bot"
+    assert "api_key" not in serialized  # Should not expose API key
+
+
+def test_bot_user_api_key_uniqueness(db_session):
+    """Test that API keys must be unique"""
+    user1 = BotUser.create_with_api_key(
+        name="Bot 1", email="bot1@example.com", api_key="same_key"
+    )
+    user2 = BotUser.create_with_api_key(
+        name="Bot 2", email="bot2@example.com", api_key="same_key"
+    )
+    db_session.add(user1)
+    db_session.commit()
+
+    db_session.add(user2)
+    with pytest.raises(Exception):  # IntegrityError from unique constraint
+        db_session.commit()
+
+
+def test_human_user_factory_method(db_session):
+    """Test that HumanUser factory method sets all required fields"""
+    user = HumanUser.create_with_password(
+        email="factory@example.com", name="Factory User", password="test123"
+    )
+
+    # Factory method should set all required fields
+    assert user.email == "factory@example.com"
+    assert user.name == "Factory User"
+    assert user.password_hash is not None
+    assert user.user_type == "human"
+    assert user.api_key is None
+
+
+def test_bot_user_factory_method(db_session):
+    """Test that BotUser factory method sets all required fields"""
+    user = BotUser.create_with_api_key(
+        name="Factory Bot", email="factorybot@example.com", api_key="test_key"
+    )
+
+    # Factory method should set all required fields
+    assert user.email == "factorybot@example.com"
+    assert user.name == "Factory Bot"
+    assert user.api_key == "test_key"
+    assert user.user_type == "bot"
+    assert user.password_hash is None

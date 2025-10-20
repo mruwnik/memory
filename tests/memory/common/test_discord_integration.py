@@ -34,7 +34,7 @@ def test_send_dm_success(mock_post, mock_api_url):
     assert result is True
     mock_post.assert_called_once_with(
         "http://localhost:8000/send_dm",
-        json={"user_identifier": "user123", "message": "Hello!"},
+        json={"user": "user123", "message": "Hello!"},
         timeout=10,
     )
 

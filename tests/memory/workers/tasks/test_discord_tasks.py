@@ -59,6 +59,7 @@ def sample_message_data(mock_discord_user, mock_discord_channel):
         "message_id": 999888777,
         "channel_id": mock_discord_channel.id,
         "author_id": mock_discord_user.id,
+        "recipient_id": mock_discord_user.id,
         "content": "This is a test Discord message with enough content to be processed.",
         "sent_at": "2024-01-01T12:00:00Z",
         "server_id": None,
@@ -74,7 +75,8 @@ def test_get_prev_returns_previous_messages(
     msg1 = DiscordMessage(
         message_id=1,
         channel_id=mock_discord_channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="First message",
         sent_at=datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
         modality="text",
@@ -83,7 +85,8 @@ def test_get_prev_returns_previous_messages(
     msg2 = DiscordMessage(
         message_id=2,
         channel_id=mock_discord_channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Second message",
         sent_at=datetime(2024, 1, 1, 10, 5, 0, tzinfo=timezone.utc),
         modality="text",
@@ -92,7 +95,8 @@ def test_get_prev_returns_previous_messages(
     msg3 = DiscordMessage(
         message_id=3,
         channel_id=mock_discord_channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Third message",
         sent_at=datetime(2024, 1, 1, 10, 10, 0, tzinfo=timezone.utc),
         modality="text",
@@ -123,7 +127,8 @@ def test_get_prev_limits_context_window(
         msg = DiscordMessage(
             message_id=i,
             channel_id=mock_discord_channel.id,
-            discord_user_id=mock_discord_user.id,
+            from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
             content=f"Message {i}",
             sent_at=datetime(2024, 1, 1, 10, i, 0, tzinfo=timezone.utc),
             modality="text",
@@ -157,14 +162,26 @@ def test_get_prev_empty_channel(db_session, mock_discord_channel):
 
 @patch("memory.common.settings.DISCORD_PROCESS_MESSAGES", True)
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
+@patch("memory.workers.tasks.discord.create_provider")
 def test_should_process_normal_message(
-    db_session, mock_discord_user, mock_discord_server, mock_discord_channel
+    mock_create_provider,
+    db_session,
+    mock_discord_user,
+    mock_discord_server,
+    mock_discord_channel,
 ):
     """Test should_process returns True for normal messages."""
+    # Mock the LLM provider to return "yes"
+    mock_provider = Mock()
+    mock_provider.generate.return_value = "<response>yes</response>"
+    mock_provider.as_messages.return_value = []
+    mock_create_provider.return_value = mock_provider
+
     message = DiscordMessage(
         message_id=1,
         channel_id=mock_discord_channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         server_id=mock_discord_server.id,
         content="Test",
         sent_at=datetime.now(timezone.utc),
@@ -210,7 +227,8 @@ def test_should_process_server_ignored(
     message = DiscordMessage(
         message_id=1,
         channel_id=mock_discord_channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         server_id=server.id,
         content="Test",
         sent_at=datetime.now(timezone.utc),
@@ -243,7 +261,8 @@ def test_should_process_channel_ignored(
     message = DiscordMessage(
         message_id=1,
         channel_id=channel.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         server_id=mock_discord_server.id,
         content="Test",
         sent_at=datetime.now(timezone.utc),
@@ -274,7 +293,8 @@ def test_should_process_user_ignored(
     message = DiscordMessage(
         message_id=1,
         channel_id=mock_discord_channel.id,
-        discord_user_id=user.id,
+        from_id=user.id,
+        recipient_id=user.id,
         server_id=mock_discord_server.id,
         content="Test",
         sent_at=datetime.now(timezone.utc),
@@ -350,7 +370,8 @@ def test_add_discord_message_with_context(
     prev_msg = DiscordMessage(
         message_id=111111,
         channel_id=sample_message_data["channel_id"],
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Previous message",
         sent_at=datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
         modality="text",
@@ -370,11 +391,13 @@ def test_add_discord_message_with_context(
     assert result["status"] == "processed"
 
 
+@patch("memory.workers.tasks.discord.should_process")
 @patch("memory.workers.tasks.discord.process_discord_message")
 @patch("memory.common.settings.DISCORD_PROCESS_MESSAGES", True)
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
 def test_add_discord_message_triggers_processing(
     mock_process,
+    mock_should_process,
     db_session,
     sample_message_data,
     mock_discord_server,
@@ -382,6 +405,7 @@ def test_add_discord_message_triggers_processing(
     qdrant,
 ):
     """Test that add_discord_message triggers process_discord_message when conditions are met."""
+    mock_should_process.return_value = True
     mock_process.delay = Mock()
     sample_message_data["server_id"] = mock_discord_server.id
 
@@ -454,7 +478,8 @@ def test_edit_discord_message_updates_context(
     prev_msg = DiscordMessage(
         message_id=111111,
         channel_id=sample_message_data["channel_id"],
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Previous message",
         sent_at=datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
         modality="text",
@@ -576,7 +601,8 @@ def test_get_prev_only_returns_messages_from_same_channel(
     msg1 = DiscordMessage(
         message_id=1,
         channel_id=channel1.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Message in channel 1",
         sent_at=datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
         modality="text",
@@ -585,7 +611,8 @@ def test_get_prev_only_returns_messages_from_same_channel(
     msg2 = DiscordMessage(
         message_id=2,
         channel_id=channel2.id,
-        discord_user_id=mock_discord_user.id,
+        from_id=mock_discord_user.id,
+        recipient_id=mock_discord_user.id,
         content="Message in channel 2",
         sent_at=datetime(2024, 1, 1, 10, 5, 0, tzinfo=timezone.utc),
         modality="text",
