@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class AnthropicProvider(BaseLLMProvider):
     """Anthropic LLM provider with streaming, tool support, and extended thinking."""
 
+    provider = "anthropic"
+
     # Models that support extended thinking
     THINKING_MODELS = {
         "claude-opus-4",
@@ -262,7 +264,7 @@ class AnthropicProvider(BaseLLMProvider):
                     Usage(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
-                        total_tokens=usage.total_tokens,
+                        total_tokens=usage.input_tokens + usage.output_tokens,
                     )
                 )
 

@@ -41,8 +41,13 @@ class CommandContext:
 CommandHandler = Callable[..., CommandResponse]
 
 
-def register_slash_commands(bot: discord.Client) -> None:
-    """Register the collector slash commands on the provided bot."""
+def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
+    """Register the collector slash commands on the provided bot.
+
+    Args:
+        bot: Discord bot client
+        name: Prefix for command names (e.g., "memory" creates "memory_prompt")
+    """
 
     if getattr(bot, "_memory_commands_registered", False):
         return
@@ -54,12 +59,14 @@ def register_slash_commands(bot: discord.Client) -> None:
 
     tree = bot.tree
 
-    @tree.command(name="memory_prompt", description="Show the current system prompt")
+    @tree.command(
+        name=f"{name}_show_prompt", description="Show the current system prompt"
+    )
     @discord.app_commands.describe(
         scope="Which configuration to inspect",
         user="Target user when the scope is 'user'",
     )
-    async def prompt_command(
+    async def show_prompt_command(
         interaction: discord.Interaction,
         scope: ScopeLiteral,
         user: discord.User | None = None,
@@ -72,12 +79,35 @@ def register_slash_commands(bot: discord.Client) -> None:
         )
 
     @tree.command(
-        name="memory_chattiness",
-        description="Show or update the chattiness threshold for the target",
+        name=f"{name}_set_prompt",
+        description="Set the system prompt for the target",
+    )
+    @discord.app_commands.describe(
+        scope="Which configuration to modify",
+        prompt="The system prompt to set",
+        user="Target user when the scope is 'user'",
+    )
+    async def set_prompt_command(
+        interaction: discord.Interaction,
+        scope: ScopeLiteral,
+        prompt: str,
+        user: discord.User | None = None,
+    ) -> None:
+        await _run_interaction_command(
+            interaction,
+            scope=scope,
+            handler=handle_set_prompt,
+            target_user=user,
+            prompt=prompt,
+        )
+
+    @tree.command(
+        name=f"{name}_chattiness",
+        description="Show or update the chattiness for the target",
     )
     @discord.app_commands.describe(
         scope="Which configuration to inspect",
-        value="Optional new threshold value between 0 and 100",
+        value="Optional new chattiness value between 0 and 100",
         user="Target user when the scope is 'user'",
     )
     async def chattiness_command(
@@ -95,7 +125,7 @@ def register_slash_commands(bot: discord.Client) -> None:
         )
 
     @tree.command(
-        name="memory_ignore",
+        name=f"{name}_ignore",
         description="Toggle whether the bot should ignore messages for the target",
     )
     @discord.app_commands.describe(
@@ -117,7 +147,10 @@ def register_slash_commands(bot: discord.Client) -> None:
             ignore_enabled=enabled,
         )
 
-    @tree.command(name="memory_summary", description="Show the stored summary for the target")
+    @tree.command(
+        name=f"{name}_show_summary",
+        description="Show the stored summary for the target",
+    )
     @discord.app_commands.describe(
         scope="Which configuration to inspect",
         user="Target user when the scope is 'user'",
@@ -337,6 +370,18 @@ def handle_prompt(context: CommandContext) -> CommandResponse:
     )
 
 
+def handle_set_prompt(
+    context: CommandContext,
+    *,
+    prompt: str,
+) -> CommandResponse:
+    setattr(context.target, "system_prompt", prompt)
+
+    return CommandResponse(
+        content=f"Updated system prompt for {context.display_name}.",
+    )
+
+
 def handle_chattiness(
     context: CommandContext,
     *,
@@ -347,20 +392,22 @@ def handle_chattiness(
     if value is None:
         return CommandResponse(
             content=(
-                f"Chattiness threshold for {context.display_name}: "
+                f"Chattiness for {context.display_name}: "
                 f"{getattr(model, 'chattiness_threshold', 'not set')}"
             )
         )
 
     if not 0 <= value <= 100:
-        raise CommandError("Chattiness threshold must be between 0 and 100.")
+        raise CommandError("Chattiness must be between 0 and 100.")
 
     setattr(model, "chattiness_threshold", value)
 
     return CommandResponse(
         content=(
-            f"Updated chattiness threshold for {context.display_name} "
-            f"to {value}."
+            f"Updated chattiness for {context.display_name} to {value}."
+            "\n"
+            "This can be treated as how much you want the bot to pipe up by itself, as a percentage, "
+            "where 0 is never and 100 is always."
         )
     )
 

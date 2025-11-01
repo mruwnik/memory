@@ -35,8 +35,7 @@ class MessageProcessor:
     )
     chattiness_threshold = Column(
         Integer,
-        nullable=False,
-        default=50,
+        nullable=True,
         doc="The threshold for the bot to continue the conversation, between 0 and 100.",
     )
 

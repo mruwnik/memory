@@ -57,9 +57,17 @@ RUN_SCHEDULED_CALLS = f"{SCHEDULED_CALLS_ROOT}.run_scheduled_calls"
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
     user = safequote(settings.CELERY_BROKER_USER)
-    password = safequote(settings.CELERY_BROKER_PASSWORD)
+    password = safequote(settings.CELERY_BROKER_PASSWORD or "")
     host = settings.CELERY_BROKER_HOST
-    return f"{protocol}://{user}:{password}@{host}"
+
+    if password:
+        url = f"{protocol}://{user}:{password}@{host}"
+    else:
+        url = f"{protocol}://{host}"
+
+    if protocol == "redis":
+        url += f"/{settings.REDIS_DB}"
+    return url
 
 
 app = Celery(

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
 
+from memory.common import settings
+
 
 @dataclass(frozen=True)
 class RateLimitConfig:
@@ -111,12 +113,14 @@ class UsageBreakdown:
 
 def split_model_key(model: str) -> tuple[str, str]:
     if "/" not in model:
-        raise ValueError("model must be formatted as '<provider>/<model_name>'")
+        raise ValueError(
+            f"model must be formatted as '<provider>/<model_name>': got '{model}'"
+        )
 
     provider, model_name = model.split("/", maxsplit=1)
     if not provider or not model_name:
         raise ValueError(
-            "model must include both provider and model name separated by '/'"
+            f"model must include both provider and model name separated by '/': got '{model}'"
         )
     return provider, model_name
 
@@ -126,11 +130,15 @@ class UsageTracker:
 
     def __init__(
         self,
-        configs: dict[str, RateLimitConfig],
+        configs: dict[str, RateLimitConfig] | None = None,
         default_config: RateLimitConfig | None = None,
     ) -> None:
-        self._configs = configs
-        self._default_config = default_config
+        self._configs = configs or {}
+        self._default_config = default_config or RateLimitConfig(
+            window=timedelta(minutes=settings.DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES),
+            max_input_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS,
+            max_output_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS,
+        )
         self._lock = Lock()
 
     # ------------------------------------------------------------------
@@ -213,15 +221,14 @@ class UsageTracker:
         """
 
         split_model_key(model)
-        key = model
         with self._lock:
-            config = self._get_config(key)
+            config = self._get_config(model)
             if config is None:
                 return None
 
-            state = self.get_state(key)
+            state = self.get_state(model)
             self._prune_expired_events(state, config, now=timestamp)
-            self.save_state(key, state)
+            self.save_state(model, state)
 
             if config.max_total_tokens is None:
                 total_remaining = None
@@ -253,8 +260,8 @@ class UsageTracker:
 
         with self._lock:
             providers: dict[str, dict[str, UsageBreakdown]] = defaultdict(dict)
-            for key, state in self.iter_state_items():
-                prov, model_name = split_model_key(key)
+            for model, state in self.iter_state_items():
+                prov, model_name = split_model_key(model)
                 if provider and provider != prov:
                     continue
                 if model and model != model_name:
@@ -296,8 +303,8 @@ class UsageTracker:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _get_config(self, key: str) -> RateLimitConfig | None:
-        return self._configs.get(key) or self._default_config
+    def _get_config(self, model: str) -> RateLimitConfig | None:
+        return self._configs.get(model) or self._default_config
 
     def _prune_expired_events(
         self,

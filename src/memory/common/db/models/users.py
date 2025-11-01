@@ -138,6 +138,8 @@ class DiscordBotUser(BotUser):
         email: str,
         api_key: str | None = None,
     ) -> "DiscordBotUser":
+        if not discord_users:
+            raise ValueError("discord_users must be provided")
         bot = super().create_with_api_key(name, email, api_key)
         bot.discord_users = discord_users
         return bot

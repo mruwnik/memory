@@ -128,12 +128,19 @@ def should_process(message: DiscordMessage) -> bool:
                 "update_server_summary",
             ],
         )
+        print("response", response)
         if not response:
             return False
         if not (res := re.search(r"<number>(.*)</number>", response)):
             return False
         try:
-            return int(res.group(1)) > message.chattiness_threshold
+            print(
+                "parsed",
+                int(res.group(1)),
+                message.chattiness_threshold,
+                100 - message.chattiness_threshold,
+            )
+            return int(res.group(1)) > 100 - message.chattiness_threshold
         except ValueError:
             return False
 

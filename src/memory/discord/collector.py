@@ -203,7 +203,7 @@ class MessageCollector(commands.Bot):
     async def setup_hook(self):
         """Register slash commands when the bot is ready."""
 
-        register_slash_commands(self)
+        register_slash_commands(self, name=self.user.name)
 
     async def on_ready(self):
         """Called when bot connects to Discord"""

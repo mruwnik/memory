@@ -31,33 +31,24 @@ def make_db_url(
 
 DB_URL = os.getenv("DATABASE_URL", make_db_url())
 
+# Redis settings
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_DB = os.getenv("REDIS_DB", "0")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+if REDIS_PASSWORD:
+    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+else:
+    REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
 # Broker settings
 CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", "memory")
 CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "redis").lower()
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_DB = os.getenv("REDIS_DB", "0")
-LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
-CELERY_BROKER_USER = os.getenv(
-    "CELERY_BROKER_USER", "kb" if CELERY_BROKER_TYPE == "amqp" else ""
-)
-CELERY_BROKER_PASSWORD = os.getenv(
-    "CELERY_BROKER_PASSWORD", "" if CELERY_BROKER_TYPE == "redis" else "kb"
-)
+CELERY_BROKER_USER = os.getenv("CELERY_BROKER_USER", "")
+CELERY_BROKER_PASSWORD = os.getenv("CELERY_BROKER_PASSWORD", REDIS_PASSWORD)
 
-
-CELERY_BROKER_HOST = os.getenv("CELERY_BROKER_HOST", "")
-if not CELERY_BROKER_HOST:
-    if CELERY_BROKER_TYPE == "amqp":
-        RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-        RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
-        CELERY_BROKER_HOST = f"{RABBITMQ_HOST}:{RABBITMQ_PORT}//"
-    elif CELERY_BROKER_TYPE == "redis":
-        CELERY_BROKER_HOST = f"{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
-
+CELERY_BROKER_HOST = os.getenv("CELERY_BROKER_HOST", "") or f"{REDIS_HOST}:{REDIS_PORT}"
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
-
 
 # File storage settings
 FILE_STORAGE_DIR = pathlib.Path(os.getenv("FILE_STORAGE_DIR", "/tmp/memory_files"))
@@ -148,6 +139,18 @@ else:
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-4-5")
 RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", 200000))
+
+DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
+    os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)
+)
+DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS = int(
+    os.getenv("DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS", 1_000_000)
+)
+DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS = int(
+    os.getenv("DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS", 1_000_000)
+)
+LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
+
 
 # Search settings
 ENABLE_EMBEDDING_SEARCH = boolean_env("ENABLE_EMBEDDING_SEARCH", True)

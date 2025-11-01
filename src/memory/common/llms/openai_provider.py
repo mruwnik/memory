@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI LLM provider with streaming and tool support."""
 
+    provider = "openai"
+
     # Models that use max_completion_tokens instead of max_tokens
     # These are reasoning models with different parameter requirements
     NON_REASONING_MODELS = {"gpt-4o"}

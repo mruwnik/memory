@@ -205,6 +205,8 @@ class LLMSettings:
 class BaseLLMProvider(ABC):
     """Base class for LLM providers."""
 
+    provider: str = ""
+
     def __init__(
         self, api_key: str, model: str, usage_tracker: UsageTracker | None = None
     ):
@@ -234,8 +236,14 @@ class BaseLLMProvider(ABC):
 
     def log_usage(self, usage: Usage):
         """Log usage data."""
-        logger.debug(f"Token usage: {usage.to_dict()}")
-        print(f"Token usage: {usage.to_dict()}")
+        logger.debug(
+            f"Token usage: {usage.input_tokens} input, {usage.output_tokens} output, {usage.total_tokens} total"
+        )
+        self.usage_tracker.record_usage(
+            model=f"{self.provider}/{self.model}",
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        )
 
     def execute_tool(
         self,

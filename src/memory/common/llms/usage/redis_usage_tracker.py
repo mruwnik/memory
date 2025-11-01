@@ -33,7 +33,7 @@ class RedisUsageTracker(UsageTracker):
 
     def __init__(
         self,
-        configs: dict[str, RateLimitConfig],
+        configs: dict[str, RateLimitConfig] | None = None,
         default_config: RateLimitConfig | None = None,
         *,
         redis_client: RedisClientProtocol | None = None,
@@ -41,12 +41,7 @@ class RedisUsageTracker(UsageTracker):
     ) -> None:
         super().__init__(configs=configs, default_config=default_config)
         if redis_client is None:
-            redis_client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=int(settings.REDIS_PORT),
-                db=int(settings.REDIS_DB),
-                decode_responses=False,
-            )
+            redis_client = redis.Redis.from_url(settings.REDIS_URL)
         self._redis = redis_client
         prefix = key_prefix or settings.LLM_USAGE_REDIS_PREFIX
         self._key_prefix = prefix.rstrip(":")
