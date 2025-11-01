@@ -34,15 +34,26 @@ DB_URL = os.getenv("DATABASE_URL", make_db_url())
 
 # Broker settings
 CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", "memory")
-CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "amqp").lower()  # amqp or sqs
-CELERY_BROKER_USER = os.getenv("CELERY_BROKER_USER", "kb")
-CELERY_BROKER_PASSWORD = os.getenv("CELERY_BROKER_PASSWORD", "kb")
+CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "redis").lower()
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_DB = os.getenv("REDIS_DB", "0")
+CELERY_BROKER_USER = os.getenv(
+    "CELERY_BROKER_USER", "kb" if CELERY_BROKER_TYPE == "amqp" else ""
+)
+CELERY_BROKER_PASSWORD = os.getenv(
+    "CELERY_BROKER_PASSWORD", "" if CELERY_BROKER_TYPE == "redis" else "kb"
+)
+
 
 CELERY_BROKER_HOST = os.getenv("CELERY_BROKER_HOST", "")
-if not CELERY_BROKER_HOST and CELERY_BROKER_TYPE == "amqp":
-    RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-    RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
-    CELERY_BROKER_HOST = f"{RABBITMQ_HOST}:{RABBITMQ_PORT}//"
+if not CELERY_BROKER_HOST:
+    if CELERY_BROKER_TYPE == "amqp":
+        RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+        RABBITMQ_PORT = os.getenv("RABBITMQ_PORT", "5672")
+        CELERY_BROKER_HOST = f"{RABBITMQ_HOST}:{RABBITMQ_PORT}//"
+    elif CELERY_BROKER_TYPE == "redis":
+        CELERY_BROKER_HOST = f"{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", f"db+{DB_URL}")
 
@@ -161,7 +172,7 @@ STATIC_DIR = pathlib.Path(
 )
 
 # Discord notification settings
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+DISCORD_BOT_ID = int(os.getenv("DISCORD_BOT_ID", "0"))
 DISCORD_ERROR_CHANNEL = os.getenv("DISCORD_ERROR_CHANNEL", "memory-errors")
 DISCORD_ACTIVITY_CHANNEL = os.getenv("DISCORD_ACTIVITY_CHANNEL", "memory-activity")
 DISCORD_DISCOVERY_CHANNEL = os.getenv("DISCORD_DISCOVERY_CHANNEL", "memory-discoveries")
@@ -169,9 +180,7 @@ DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", "memory-chat")
 
 
 # Enable Discord notifications if bot token is set
-DISCORD_NOTIFICATIONS_ENABLED = bool(
-    boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True) and DISCORD_BOT_TOKEN
-)
+DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True)
 DISCORD_PROCESS_MESSAGES = boolean_env("DISCORD_PROCESS_MESSAGES", True)
 DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-sonnet-4-5")
 DISCORD_MAX_TOOL_CALLS = int(os.getenv("DISCORD_MAX_TOOL_CALLS", 10))

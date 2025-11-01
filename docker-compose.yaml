@@ -19,17 +19,17 @@ secrets:
 volumes:
   db_data: {} # Postgres
   qdrant_data: {} # Qdrant
-  rabbitmq_data: {} # RabbitMQ
+  redis_data: {} # Redis
 
 # ------------------------------ X-templates ----------------------------
 x-common-env: &env
-  RABBITMQ_USER: kb
-  RABBITMQ_HOST: rabbitmq
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_DB: 0
   CELERY_BROKER_PASSWORD: ${CELERY_BROKER_PASSWORD}
   QDRANT_HOST: qdrant
   DB_HOST: postgres
   DB_PORT: 5432
-  RABBITMQ_PORT: 5672
   FILE_STORAGE_DIR: /app/memory_files
   TZ: "Etc/UTC"
 
@@ -40,7 +40,7 @@ x-worker-base: &worker-base
   restart: unless-stopped
   networks: [ kbnet ]
   security_opt: [ "no-new-privileges=true" ]
-  depends_on: [ postgres, rabbitmq, qdrant ]
+  depends_on: [ postgres, redis, qdrant ]
   env_file: [ .env ]
   environment: &worker-env
     <<: *env
@@ -103,22 +103,21 @@ services:
     volumes:
       - ./db:/app/db:ro
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
+  redis:
+    image: redis:7.2-alpine
     restart: unless-stopped
     networks: [ kbnet ]
-    environment:
-      <<: *env
-      RABBITMQ_DEFAULT_USER: "kb"
-      RABBITMQ_DEFAULT_PASS: "${CELERY_BROKER_PASSWORD}"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${CELERY_BROKER_PASSWORD}"]
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq:rw
+      - redis_data:/data:rw
     healthcheck:
-      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      test: [ "CMD", "redis-cli", "--pass", "${CELERY_BROKER_PASSWORD}", "ping" ]
       interval: 15s
       timeout: 5s
       retries: 5
     security_opt: [ "no-new-privileges=true" ]
+    cap_drop: [ ALL ]
+    user: redis
 
   qdrant:
     image: qdrant/qdrant:v1.14.0
@@ -148,7 +147,7 @@ services:
         SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
     restart: unless-stopped
     networks: [kbnet]
-    depends_on: [postgres, rabbitmq, qdrant]
+    depends_on: [postgres, redis, qdrant]
     environment:
       <<: *env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -186,7 +185,7 @@ services:
     environment:
       <<: *worker-env
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
-      DISCORD_NOTIFICATIONS_ENABLED: true
+      DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
     volumes:
       - ./memory_files:/app/memory_files:rw
