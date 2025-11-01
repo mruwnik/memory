@@ -1,12 +1,47 @@
 from datetime import datetime, timedelta, timezone
+from typing import Iterable
 
 import pytest
 
+try:
+    import redis  # noqa: F401  # pragma: no cover - optional test dependency
+except ModuleNotFoundError:  # pragma: no cover - import guard for test envs
+    import sys
+    from types import SimpleNamespace
+
+    class _RedisStub(SimpleNamespace):
+        class Redis:  # type: ignore[no-redef]
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                raise ModuleNotFoundError(
+                    "The 'redis' package is required to use RedisUsageTracker"
+                )
+
+    sys.modules.setdefault("redis", _RedisStub())
+
+from memory.common.llms.redis_usage_tracker import RedisUsageTracker
 from memory.common.llms.usage_tracker import (
     InMemoryUsageTracker,
     RateLimitConfig,
     UsageTracker,
 )
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._store[key] = value
+
+    def scan_iter(self, match: str) -> Iterable[str]:
+        from fnmatch import fnmatch
+
+        for key in list(self._store.keys()):
+            if fnmatch(key, match):
+                yield key
 
 
 @pytest.fixture
@@ -22,6 +57,23 @@ def tracker() -> InMemoryUsageTracker:
             "anthropic/claude-3": config,
             "anthropic/haiku": config,
         }
+    )
+
+
+@pytest.fixture
+def redis_tracker() -> RedisUsageTracker:
+    config = RateLimitConfig(
+        window=timedelta(minutes=1),
+        max_input_tokens=1_000,
+        max_output_tokens=2_000,
+        max_total_tokens=2_500,
+    )
+    return RedisUsageTracker(
+        {
+            "anthropic/claude-3": config,
+            "anthropic/haiku": config,
+        },
+        redis_client=FakeRedis(),
     )
 
 
@@ -137,6 +189,22 @@ def test_is_rate_limited_when_only_output_exceeds_limit() -> None:
 
     tracker.record_usage("openai/gpt-4o", 0, 50)
     assert tracker.is_rate_limited("openai/gpt-4o")
+
+
+def test_redis_usage_tracker_persists_state(redis_tracker: RedisUsageTracker) -> None:
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    redis_tracker.record_usage("anthropic/claude-3", 100, 200, timestamp=now)
+    redis_tracker.record_usage("anthropic/haiku", 50, 75, timestamp=now)
+
+    allowance = redis_tracker.get_available_tokens("anthropic/claude-3", timestamp=now)
+    assert allowance is not None
+    assert allowance.input_tokens == 900
+
+    breakdown = redis_tracker.get_usage_breakdown()
+    assert breakdown["anthropic"]["claude-3"].window_output_tokens == 200
+
+    items = dict(redis_tracker.iter_state_items())
+    assert set(items.keys()) == {"anthropic/claude-3", "anthropic/haiku"}
 
 
 def test_usage_tracker_base_not_instantiable() -> None:

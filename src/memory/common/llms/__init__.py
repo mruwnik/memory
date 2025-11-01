@@ -24,13 +24,6 @@ from memory.common.llms.base import (
 )
 from memory.common.llms.anthropic_provider import AnthropicProvider
 from memory.common.llms.openai_provider import OpenAIProvider
-from memory.common.llms.usage_tracker import (
-    InMemoryUsageTracker,
-    RateLimitConfig,
-    TokenAllowance,
-    UsageBreakdown,
-    UsageTracker,
-)
 from memory.common import tokens
 
 __all__ = [
@@ -49,11 +42,6 @@ __all__ = [
     "StreamEvent",
     "LLMSettings",
     "create_provider",
-    "InMemoryUsageTracker",
-    "RateLimitConfig",
-    "TokenAllowance",
-    "UsageBreakdown",
-    "UsageTracker",
 ]
 
 logger = logging.getLogger(__name__)
@@ -93,28 +81,3 @@ def truncate(content: str, target_tokens: int) -> str:
     if len(content) > target_chars:
         return content[:target_chars].rsplit(" ", 1)[0] + "..."
     return content
-
-
-# bla = 1
-# from memory.common.llms import *
-# from memory.common.llms.tools.discord import make_discord_tools
-# from memory.common.db.connection import make_session
-# from memory.common.db.models import *
-
-# model = "anthropic/claude-sonnet-4-5"
-# provider = create_provider(model=model)
-# with make_session() as session:
-#     bot = session.query(DiscordBotUser).first()
-#     server = session.query(DiscordServer).first()
-#     channel = server.channels[0]
-#     tools = make_discord_tools(bot, None, channel, model)
-
-# def demo(msg: str):
-#     messages = [
-#         Message(
-#             role=MessageRole.USER,
-#             content=msg,
-#         )
-#     ]
-#     for m in provider.stream_with_tools(messages, tools):
-#         print(m)

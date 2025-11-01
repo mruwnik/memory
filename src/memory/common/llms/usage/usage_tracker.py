@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,40 @@ class UsageState:
     lifetime_input_tokens: int = 0
     lifetime_output_tokens: int = 0
 
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "input_tokens": event.input_tokens,
+                    "output_tokens": event.output_tokens,
+                }
+                for event in self.events
+            ],
+            "window_input_tokens": self.window_input_tokens,
+            "window_output_tokens": self.window_output_tokens,
+            "lifetime_input_tokens": self.lifetime_input_tokens,
+            "lifetime_output_tokens": self.lifetime_output_tokens,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "UsageState":
+        events = deque(
+            UsageEvent(
+                timestamp=datetime.fromisoformat(event["timestamp"]),
+                input_tokens=event["input_tokens"],
+                output_tokens=event["output_tokens"],
+            )
+            for event in payload.get("events", [])
+        )
+        return cls(
+            events=events,
+            window_input_tokens=payload.get("window_input_tokens", 0),
+            window_output_tokens=payload.get("window_output_tokens", 0),
+            lifetime_input_tokens=payload.get("lifetime_input_tokens", 0),
+            lifetime_output_tokens=payload.get("lifetime_output_tokens", 0),
+        )
+
 
 @dataclass
 class TokenAllowance:
@@ -76,9 +111,7 @@ class UsageBreakdown:
 
 def split_model_key(model: str) -> tuple[str, str]:
     if "/" not in model:
-        raise ValueError(
-            "model must be formatted as '<provider>/<model_name>'"
-        )
+        raise ValueError("model must be formatted as '<provider>/<model_name>'")
 
     provider, model_name = model.split("/", maxsplit=1)
     if not provider or not model_name:
@@ -205,9 +238,7 @@ class UsageTracker:
             if config.max_output_tokens is None:
                 output_remaining = None
             else:
-                output_remaining = (
-                    config.max_output_tokens - state.window_output_tokens
-                )
+                output_remaining = config.max_output_tokens - state.window_output_tokens
 
             return TokenAllowance(
                 input_tokens=clamp_non_negative(input_remaining),
@@ -313,4 +344,3 @@ def clamp_non_negative(value: int | None) -> int | None:
     if value is None:
         return None
     return 0 if value < 0 else value
-

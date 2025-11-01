@@ -58,6 +58,13 @@ def call_llm(
     msgs: list[str] = [],
     allowed_tools: list[str] = [],
 ) -> str | None:
+    provider = create_provider(model=model)
+    if provider.usage_tracker.is_rate_limited(model):
+        logger.error(
+            f"Rate limited for model {model}: {provider.usage_tracker.get_usage_breakdown(model=model)}"
+        )
+        return None
+
     tools = make_discord_tools(
         message.recipient_user.system_user,
         message.from_user,
@@ -73,7 +80,6 @@ def call_llm(
     system_prompt += comm_channel_prompt(
         session, message.recipient_user, message.channel
     )
-    provider = create_provider(model=model)
     messages = previous_messages(
         session,
         message.recipient_user and message.recipient_user.id,

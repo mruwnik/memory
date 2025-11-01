@@ -12,6 +12,7 @@ from PIL import Image
 
 from memory.common import settings
 from memory.common.llms.tools import ToolCall, ToolDefinition, ToolResult
+from memory.common.llms.usage import UsageTracker, RedisUsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,9 @@ class LLMSettings:
 class BaseLLMProvider(ABC):
     """Base class for LLM providers."""
 
-    def __init__(self, api_key: str, model: str):
+    def __init__(
+        self, api_key: str, model: str, usage_tracker: UsageTracker | None = None
+    ):
         """
         Initialize the LLM provider.
 
@@ -215,6 +218,7 @@ class BaseLLMProvider(ABC):
         self.api_key = api_key
         self.model = model
         self._client: Any = None
+        self.usage_tracker: UsageTracker = usage_tracker or RedisUsageTracker()
 
     @abstractmethod
     def _initialize_client(self) -> Any:

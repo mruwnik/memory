@@ -38,6 +38,7 @@ CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "redis").lower()
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_DB = os.getenv("REDIS_DB", "0")
+LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 CELERY_BROKER_USER = os.getenv(
     "CELERY_BROKER_USER", "kb" if CELERY_BROKER_TYPE == "amqp" else ""
 )
