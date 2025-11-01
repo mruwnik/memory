@@ -1,5 +1,3 @@
-version: "3.9"
-
 # --------------------------------------------------------------------- networks
 networks:
   kbnet:
@@ -26,7 +24,7 @@ x-common-env: &env
   REDIS_HOST: redis
   REDIS_PORT: 6379
   REDIS_DB: 0
-  CELERY_BROKER_PASSWORD: ${CELERY_BROKER_PASSWORD}
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
   QDRANT_HOST: qdrant
   DB_HOST: postgres
   DB_PORT: 5432
@@ -107,11 +105,11 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     networks: [ kbnet ]
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${CELERY_BROKER_PASSWORD}"]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${REDIS_PASSWORD}"]
     volumes:
       - redis_data:/data:rw
     healthcheck:
-      test: [ "CMD", "redis-cli", "--pass", "${CELERY_BROKER_PASSWORD}", "ping" ]
+      test: [ "CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping" ]
       interval: 15s
       timeout: 5s
       retries: 5
