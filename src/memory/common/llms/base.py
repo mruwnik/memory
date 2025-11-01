@@ -26,6 +26,15 @@ class MessageRole(str, Enum):
 
 
 @dataclass
+class Usage:
+    """Usage data for an LLM call."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
 class TextContent:
     """Text content in a message."""
 
@@ -218,6 +227,11 @@ class BaseLLMProvider(ABC):
         if self._client is None:
             self._client = self._initialize_client()
         return self._client
+
+    def log_usage(self, usage: Usage):
+        """Log usage data."""
+        logger.debug(f"Token usage: {usage.to_dict()}")
+        print(f"Token usage: {usage.to_dict()}")
 
     def execute_tool(
         self,

@@ -16,6 +16,7 @@ from memory.common.llms.base import (
     ToolDefinition,
     ToolResultContent,
     ToolUseContent,
+    Usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -283,6 +284,17 @@ class OpenAIProvider(BaseLLMProvider):
         """
         events: list[StreamEvent] = []
 
+        # Handle usage information (comes in final chunk with empty choices)
+        if hasattr(chunk, "usage") and chunk.usage:
+            usage = chunk.usage
+            self.log_usage(
+                Usage(
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                )
+            )
+
         if not chunk.choices:
             return events, current_tool_call
 
@@ -337,6 +349,14 @@ class OpenAIProvider(BaseLLMProvider):
 
         try:
             response = self.client.chat.completions.create(**kwargs)
+            usage = response.usage
+            self.log_usage(
+                Usage(
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                )
+            )
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
@@ -354,6 +374,9 @@ class OpenAIProvider(BaseLLMProvider):
         kwargs = self._build_request_kwargs(
             messages, system_prompt, tools, settings, stream=True
         )
+
+        if kwargs.get("stream"):
+            kwargs["stream_options"] = {"include_usage": True}
 
         try:
             stream = self.client.chat.completions.create(**kwargs)

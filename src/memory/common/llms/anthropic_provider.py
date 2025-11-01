@@ -14,6 +14,7 @@ from memory.common.llms.base import (
     MessageRole,
     StreamEvent,
     ToolDefinition,
+    Usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,6 +256,16 @@ class AnthropicProvider(BaseLLMProvider):
                 return StreamEvent(type="tool_use", data=tool_data), None
 
         elif event_type == "message_delta":
+            # Handle token usage information
+            if usage := getattr(event, "usage", None):
+                self.log_usage(
+                    Usage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                )
+
             delta = getattr(event, "delta", None)
             if delta:
                 stop_reason = getattr(delta, "stop_reason", None)
@@ -262,22 +273,6 @@ class AnthropicProvider(BaseLLMProvider):
                     return StreamEvent(
                         type="error", data="Max tokens reached"
                     ), current_tool_use
-
-            # Handle token usage information
-            usage = getattr(event, "usage", None)
-            if usage:
-                usage_data = {
-                    "input_tokens": getattr(usage, "input_tokens", 0),
-                    "output_tokens": getattr(usage, "output_tokens", 0),
-                    "cache_creation_input_tokens": getattr(
-                        usage, "cache_creation_input_tokens", None
-                    ),
-                    "cache_read_input_tokens": getattr(
-                        usage, "cache_read_input_tokens", None
-                    ),
-                }
-                # Could emit this as a separate event type if needed
-                logger.debug(f"Token usage: {usage_data}")
 
             return None, current_tool_use
 
