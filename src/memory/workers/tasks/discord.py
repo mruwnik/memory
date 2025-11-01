@@ -138,6 +138,18 @@ def should_process(message: DiscordMessage) -> bool:
             return False
 
 
+def _resolve_bot_id(discord_message: DiscordMessage) -> int | None:
+    recipient = discord_message.recipient_user
+    if not recipient:
+        return None
+
+    system_user = recipient.system_user
+    if not system_user:
+        return None
+
+    return getattr(system_user, "id", None)
+
+
 @app.task(name=PROCESS_DISCORD_MESSAGE)
 @safe_task_execution
 def process_discord_message(message_id: int) -> dict[str, Any]:
@@ -161,11 +173,26 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
         response = call_llm(session, discord_message, settings.DISCORD_MODEL)
 
         if not response:
-            pass
-        elif discord_message.channel.server:
-            discord.send_to_channel(discord_message.channel.name, response)
+            return {
+                "status": "processed",
+                "message_id": message_id,
+            }
+
+        bot_id = _resolve_bot_id(discord_message)
+        if not bot_id:
+            logger.warning(
+                "No associated Discord bot user for message %s; skipping send",
+                message_id,
+            )
+            return {
+                "status": "processed",
+                "message_id": message_id,
+            }
+
+        if discord_message.channel.server:
+            discord.send_to_channel(bot_id, discord_message.channel.name, response)
         else:
-            discord.send_dm(discord_message.from_user.username, response)
+            discord.send_dm(bot_id, discord_message.from_user.username, response)
 
     return {
         "status": "processed",

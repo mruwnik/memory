@@ -37,12 +37,22 @@ def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
     if len(message) > 1900:  # Leave some buffer
         message = message[:1900] + "\n\n... (response truncated)"
 
+    bot_id_value = scheduled_call.user_id
+    if bot_id_value is None:
+        logger.warning(
+            "Scheduled call %s has no associated bot user; skipping Discord send",
+            scheduled_call.id,
+        )
+        return
+
+    bot_id = cast(int, bot_id_value)
+
     if discord_user := scheduled_call.discord_user:
         logger.info(f"Sending DM to {discord_user.username}: {message}")
-        discord.send_dm(discord_user.username, message)
+        discord.send_dm(bot_id, discord_user.username, message)
     elif discord_channel := scheduled_call.discord_channel:
         logger.info(f"Broadcasting message to {discord_channel.name}: {message}")
-        discord.broadcast_message(discord_channel.name, message)
+        discord.broadcast_message(bot_id, discord_channel.name, message)
     else:
         logger.warning(
             f"No Discord user or channel found for scheduled call {scheduled_call.id}"

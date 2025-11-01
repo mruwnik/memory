@@ -7,17 +7,18 @@ providing HTTP endpoints for sending Discord messages.
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 import traceback
+from contextlib import asynccontextmanager
+from typing import cast
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import uvicorn
 
 from memory.common import settings
-from memory.discord.collector import MessageCollector
-from memory.common.db.models.users import BotUser
 from memory.common.db.connection import make_session
+from memory.common.db.models.users import DiscordBotUser
+from memory.discord.collector import MessageCollector
 
 logger = logging.getLogger(__name__)
 
@@ -41,37 +42,25 @@ class Collector:
     bot_token: str
     bot_name: str
 
-    def __init__(self, collector: MessageCollector, bot: BotUser):
+    def __init__(self, collector: MessageCollector, bot: DiscordBotUser):
         self.collector = collector
-        self.collector_task = asyncio.create_task(collector.start(bot.api_key))
-        self.bot_id = bot.id
-        self.bot_token = bot.api_key
-        self.bot_name = bot.name
-
-
-# Application state
-class AppState:
-    def __init__(self):
-        self.collector: MessageCollector | None = None
-        self.collector_task: asyncio.Task | None = None
-
-
-app_state = AppState()
+        self.collector_task = asyncio.create_task(collector.start(str(bot.api_key)))
+        self.bot_id = cast(int, bot.id)
+        self.bot_token = str(bot.api_key)
+        self.bot_name = str(bot.name)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage Discord collector lifecycle"""
-    if not settings.DISCORD_BOT_TOKEN:
-        logger.error("DISCORD_BOT_TOKEN not configured")
-        return
 
-    def make_collector(bot: BotUser):
+    def make_collector(bot: DiscordBotUser):
         collector = MessageCollector()
         return Collector(collector=collector, bot=bot)
 
     with make_session() as session:
-        app.bots = {bot.id: make_collector(bot) for bot in session.query(BotUser).all()}
+        bots = session.query(DiscordBotUser).all()
+        app.bots = {bot.id: make_collector(bot) for bot in bots}
 
     logger.info(f"Discord collectors started for {len(app.bots)} bots")
 
@@ -155,9 +144,8 @@ async def health_check():
     if not app.bots:
         raise HTTPException(status_code=503, detail="Discord collector not running")
 
-    collector = app_state.collector
     return {
-        collector.bot_name: {
+        bot.bot_name: {
             "status": "healthy",
             "connected": not bot.collector.is_closed(),
             "user": str(bot.collector.user) if bot.collector.user else None,

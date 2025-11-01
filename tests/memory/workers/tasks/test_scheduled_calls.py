@@ -3,17 +3,23 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 import uuid
 
-from memory.common.db.models import ScheduledLLMCall, HumanUser, DiscordUser, DiscordChannel, DiscordServer
+from memory.common.db.models import (
+    ScheduledLLMCall,
+    DiscordBotUser,
+    DiscordUser,
+    DiscordChannel,
+    DiscordServer,
+)
 from memory.workers.tasks import scheduled_calls
 
 
 @pytest.fixture
 def sample_user(db_session):
     """Create a sample user for testing."""
-    user = HumanUser.create_with_password(
-        name="testuser",
-        email="test@example.com",
-        password="password",
+    user = DiscordBotUser.create_with_api_key(
+        discord_users=[],
+        name="testbot",
+        email="bot@example.com",
     )
     db_session.add(user)
     db_session.commit()
@@ -124,6 +130,7 @@ def test_send_to_discord_user(mock_send_dm, pending_scheduled_call):
     scheduled_calls._send_to_discord(pending_scheduled_call, response)
 
     mock_send_dm.assert_called_once_with(
+        pending_scheduled_call.user_id,
         "testuser",  # username, not ID
         "**Topic:** Test Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a test response.",
     )
@@ -137,6 +144,7 @@ def test_send_to_discord_channel(mock_broadcast, completed_scheduled_call):
     scheduled_calls._send_to_discord(completed_scheduled_call, response)
 
     mock_broadcast.assert_called_once_with(
+        completed_scheduled_call.user_id,
         "test-channel",  # channel name, not ID
         "**Topic:** Completed Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a channel response.",
     )
@@ -151,7 +159,8 @@ def test_send_to_discord_long_message_truncation(mock_send_dm, pending_scheduled
 
     # Verify the message was truncated
     args, kwargs = mock_send_dm.call_args
-    message = args[1]
+    assert args[0] == pending_scheduled_call.user_id
+    message = args[2]
     assert len(message) <= 1950  # Should be truncated
     assert message.endswith("... (response truncated)")
 
@@ -164,7 +173,8 @@ def test_send_to_discord_normal_length_message(mock_send_dm, pending_scheduled_c
     scheduled_calls._send_to_discord(pending_scheduled_call, normal_response)
 
     args, kwargs = mock_send_dm.call_args
-    message = args[1]
+    assert args[0] == pending_scheduled_call.user_id
+    message = args[2]
     assert not message.endswith("... (response truncated)")
     assert "This is a normal length response." in message
 
@@ -574,6 +584,7 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
     mock_discord_user.username = "testuser"
 
     mock_call = Mock()
+    mock_call.user_id = 987
     mock_call.topic = topic
     mock_call.model = model
     mock_call.discord_user = mock_discord_user
@@ -583,7 +594,8 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
 
     # Get the actual message that was sent
     args, kwargs = mock_send_dm.call_args
-    actual_message = args[1]
+    assert args[0] == mock_call.user_id
+    actual_message = args[2]
 
     # Verify all expected parts are in the message
     for expected_part in expected_in_message:

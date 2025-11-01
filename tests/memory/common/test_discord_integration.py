@@ -4,6 +4,8 @@ import requests
 
 from memory.common import discord
 
+BOT_ID = 42
+
 
 @pytest.fixture
 def mock_api_url():
@@ -29,12 +31,12 @@ def test_send_dm_success(mock_post, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
 
-    result = discord.send_dm("user123", "Hello!")
+    result = discord.send_dm(BOT_ID, "user123", "Hello!")
 
     assert result is True
     mock_post.assert_called_once_with(
         "http://localhost:8000/send_dm",
-        json={"user": "user123", "message": "Hello!"},
+        json={"bot_id": BOT_ID, "user": "user123", "message": "Hello!"},
         timeout=10,
     )
 
@@ -47,7 +49,7 @@ def test_send_dm_api_failure(mock_post, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
 
-    result = discord.send_dm("user123", "Hello!")
+    result = discord.send_dm(BOT_ID, "user123", "Hello!")
 
     assert result is False
 
@@ -57,7 +59,7 @@ def test_send_dm_request_exception(mock_post, mock_api_url):
     """Test DM sending when request raises exception"""
     mock_post.side_effect = requests.RequestException("Network error")
 
-    result = discord.send_dm("user123", "Hello!")
+    result = discord.send_dm(BOT_ID, "user123", "Hello!")
 
     assert result is False
 
@@ -69,7 +71,7 @@ def test_send_dm_http_error(mock_post, mock_api_url):
     mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found")
     mock_post.return_value = mock_response
 
-    result = discord.send_dm("user123", "Hello!")
+    result = discord.send_dm(BOT_ID, "user123", "Hello!")
 
     assert result is False
 
@@ -82,12 +84,16 @@ def test_broadcast_message_success(mock_post, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
 
-    result = discord.broadcast_message("general", "Announcement!")
+    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
 
     assert result is True
     mock_post.assert_called_once_with(
         "http://localhost:8000/send_channel",
-        json={"channel_name": "general", "message": "Announcement!"},
+        json={
+            "bot_id": BOT_ID,
+            "channel_name": "general",
+            "message": "Announcement!",
+        },
         timeout=10,
     )
 
@@ -100,7 +106,7 @@ def test_broadcast_message_failure(mock_post, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
 
-    result = discord.broadcast_message("general", "Announcement!")
+    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
 
     assert result is False
 
@@ -110,7 +116,7 @@ def test_broadcast_message_exception(mock_post, mock_api_url):
     """Test channel message broadcast with exception"""
     mock_post.side_effect = requests.Timeout("Request timeout")
 
-    result = discord.broadcast_message("general", "Announcement!")
+    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
 
     assert result is False
 
@@ -119,11 +125,11 @@ def test_broadcast_message_exception(mock_post, mock_api_url):
 def test_is_collector_healthy_true(mock_get, mock_api_url):
     """Test health check when collector is healthy"""
     mock_response = Mock()
-    mock_response.json.return_value = {"status": "healthy"}
+    mock_response.json.return_value = {str(BOT_ID): {"connected": True}}
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
-    result = discord.is_collector_healthy()
+    result = discord.is_collector_healthy(BOT_ID)
 
     assert result is True
     mock_get.assert_called_once_with("http://localhost:8000/health", timeout=5)
@@ -133,11 +139,11 @@ def test_is_collector_healthy_true(mock_get, mock_api_url):
 def test_is_collector_healthy_false_status(mock_get, mock_api_url):
     """Test health check when collector returns unhealthy status"""
     mock_response = Mock()
-    mock_response.json.return_value = {"status": "unhealthy"}
+    mock_response.json.return_value = {str(BOT_ID): {"connected": False}}
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
-    result = discord.is_collector_healthy()
+    result = discord.is_collector_healthy(BOT_ID)
 
     assert result is False
 
@@ -147,7 +153,7 @@ def test_is_collector_healthy_exception(mock_get, mock_api_url):
     """Test health check when request fails"""
     mock_get.side_effect = requests.ConnectionError("Connection refused")
 
-    result = discord.is_collector_healthy()
+    result = discord.is_collector_healthy(BOT_ID)
 
     assert result is False
 
@@ -200,10 +206,10 @@ def test_send_error_message(mock_broadcast):
     """Test sending error message to error channel"""
     mock_broadcast.return_value = True
 
-    result = discord.send_error_message("Something broke")
+    result = discord.send_error_message(BOT_ID, "Something broke")
 
     assert result is True
-    mock_broadcast.assert_called_once_with("errors", "Something broke")
+    mock_broadcast.assert_called_once_with(BOT_ID, "errors", "Something broke")
 
 
 @patch("memory.common.discord.broadcast_message")
@@ -212,10 +218,12 @@ def test_send_activity_message(mock_broadcast):
     """Test sending activity message to activity channel"""
     mock_broadcast.return_value = True
 
-    result = discord.send_activity_message("User logged in")
+    result = discord.send_activity_message(BOT_ID, "User logged in")
 
     assert result is True
-    mock_broadcast.assert_called_once_with("activity", "User logged in")
+    mock_broadcast.assert_called_once_with(
+        BOT_ID, "activity", "User logged in"
+    )
 
 
 @patch("memory.common.discord.broadcast_message")
@@ -224,10 +232,12 @@ def test_send_discovery_message(mock_broadcast):
     """Test sending discovery message to discovery channel"""
     mock_broadcast.return_value = True
 
-    result = discord.send_discovery_message("Found interesting pattern")
+    result = discord.send_discovery_message(BOT_ID, "Found interesting pattern")
 
     assert result is True
-    mock_broadcast.assert_called_once_with("discoveries", "Found interesting pattern")
+    mock_broadcast.assert_called_once_with(
+        BOT_ID, "discoveries", "Found interesting pattern"
+    )
 
 
 @patch("memory.common.discord.broadcast_message")
@@ -236,20 +246,23 @@ def test_send_chat_message(mock_broadcast):
     """Test sending chat message to chat channel"""
     mock_broadcast.return_value = True
 
-    result = discord.send_chat_message("Hello from bot")
+    result = discord.send_chat_message(BOT_ID, "Hello from bot")
 
     assert result is True
-    mock_broadcast.assert_called_once_with("chat", "Hello from bot")
+    mock_broadcast.assert_called_once_with(BOT_ID, "chat", "Hello from bot")
 
 
 @patch("memory.common.discord.send_error_message")
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
 def test_notify_task_failure_basic(mock_send_error):
     """Test basic task failure notification"""
-    discord.notify_task_failure("test_task", "Something went wrong")
+    discord.notify_task_failure(
+        "test_task", "Something went wrong", bot_id=BOT_ID
+    )
 
     mock_send_error.assert_called_once()
-    message = mock_send_error.call_args[0][0]
+    assert mock_send_error.call_args[0][0] == BOT_ID
+    message = mock_send_error.call_args[0][1]
 
     assert "🚨 **Task Failed: test_task**" in message
     assert "**Error:** Something went wrong" in message
@@ -264,9 +277,10 @@ def test_notify_task_failure_with_args(mock_send_error):
         "Error occurred",
         task_args=("arg1", 42),
         task_kwargs={"key": "value", "number": 123},
+        bot_id=BOT_ID,
     )
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     assert "**Args:** `('arg1', 42)" in message
     assert "**Kwargs:** `{'key': 'value', 'number': 123}" in message
@@ -278,9 +292,11 @@ def test_notify_task_failure_with_traceback(mock_send_error):
     """Test task failure notification with traceback"""
     traceback = "Traceback (most recent call last):\n  File test.py, line 10\n    raise Exception('test')\nException: test"
 
-    discord.notify_task_failure("test_task", "Error occurred", traceback_str=traceback)
+    discord.notify_task_failure(
+        "test_task", "Error occurred", traceback_str=traceback, bot_id=BOT_ID
+    )
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     assert "**Traceback:**" in message
     assert "Exception: test" in message
@@ -292,9 +308,9 @@ def test_notify_task_failure_truncates_long_error(mock_send_error):
     """Test that long error messages are truncated"""
     long_error = "x" * 600
 
-    discord.notify_task_failure("test_task", long_error)
+    discord.notify_task_failure("test_task", long_error, bot_id=BOT_ID)
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     # Error should be truncated to 500 chars - check that the full 600 char string is not there
     assert "**Error:** " + long_error[:500] in message
@@ -309,9 +325,11 @@ def test_notify_task_failure_truncates_long_traceback(mock_send_error):
     """Test that long tracebacks are truncated"""
     long_traceback = "x" * 1000
 
-    discord.notify_task_failure("test_task", "Error", traceback_str=long_traceback)
+    discord.notify_task_failure(
+        "test_task", "Error", traceback_str=long_traceback, bot_id=BOT_ID
+    )
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     # Traceback should show last 800 chars
     assert long_traceback[-800:] in message
@@ -326,9 +344,11 @@ def test_notify_task_failure_truncates_long_args(mock_send_error):
     """Test that long task arguments are truncated"""
     long_args = ("x" * 300,)
 
-    discord.notify_task_failure("test_task", "Error", task_args=long_args)
+    discord.notify_task_failure(
+        "test_task", "Error", task_args=long_args, bot_id=BOT_ID
+    )
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     # Args should be truncated to 200 chars
     assert (
@@ -342,9 +362,11 @@ def test_notify_task_failure_truncates_long_kwargs(mock_send_error):
     """Test that long task kwargs are truncated"""
     long_kwargs = {"key": "x" * 300}
 
-    discord.notify_task_failure("test_task", "Error", task_kwargs=long_kwargs)
+    discord.notify_task_failure(
+        "test_task", "Error", task_kwargs=long_kwargs, bot_id=BOT_ID
+    )
 
-    message = mock_send_error.call_args[0][0]
+    message = mock_send_error.call_args[0][1]
 
     # Kwargs should be truncated to 200 chars
     assert len(message.split("**Kwargs:**")[1].split("\n")[0]) <= 210
@@ -354,7 +376,7 @@ def test_notify_task_failure_truncates_long_kwargs(mock_send_error):
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", False)
 def test_notify_task_failure_disabled(mock_send_error):
     """Test that notifications are not sent when disabled"""
-    discord.notify_task_failure("test_task", "Error occurred")
+    discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
 
     mock_send_error.assert_not_called()
 
@@ -366,7 +388,7 @@ def test_notify_task_failure_send_error_exception(mock_send_error):
     mock_send_error.side_effect = Exception("Failed to send")
 
     # Should not raise
-    discord.notify_task_failure("test_task", "Error occurred")
+    discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
 
     mock_send_error.assert_called_once()
 
@@ -386,8 +408,8 @@ def test_convenience_functions_use_correct_channels(
 ):
     """Test that convenience functions use the correct channel settings"""
     with patch(f"memory.common.settings.{channel_setting}", "test-channel"):
-        function(message)
-        mock_broadcast.assert_called_once_with("test-channel", message)
+        function(BOT_ID, message)
+        mock_broadcast.assert_called_once_with(BOT_ID, "test-channel", message)
 
 
 @patch("requests.post")
@@ -399,11 +421,13 @@ def test_send_dm_with_special_characters(mock_post, mock_api_url):
     mock_post.return_value = mock_response
 
     message_with_special_chars = "Hello! 🎉 <@123> #general"
-    result = discord.send_dm("user123", message_with_special_chars)
+    result = discord.send_dm(BOT_ID, "user123", message_with_special_chars)
 
     assert result is True
     call_args = mock_post.call_args
-    assert call_args[1]["json"]["message"] == message_with_special_chars
+    json_payload = call_args[1]["json"]
+    assert json_payload["message"] == message_with_special_chars
+    assert json_payload["bot_id"] == BOT_ID
 
 
 @patch("requests.post")
@@ -415,11 +439,13 @@ def test_broadcast_message_with_long_message(mock_post, mock_api_url):
     mock_post.return_value = mock_response
 
     long_message = "A" * 2000
-    result = discord.broadcast_message("general", long_message)
+    result = discord.broadcast_message(BOT_ID, "general", long_message)
 
     assert result is True
     call_args = mock_post.call_args
-    assert call_args[1]["json"]["message"] == long_message
+    json_payload = call_args[1]["json"]
+    assert json_payload["message"] == long_message
+    assert json_payload["bot_id"] == BOT_ID
 
 
 @patch("requests.get")
@@ -430,6 +456,6 @@ def test_is_collector_healthy_missing_status_key(mock_get, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
-    result = discord.is_collector_healthy()
+    result = discord.is_collector_healthy(BOT_ID)
 
     assert result is False

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import (
+    DiscordBotUser,
     DiscordMessage,
     DiscordUser,
     DiscordServer,
@@ -12,12 +13,25 @@ from memory.workers.tasks import discord
 
 
 @pytest.fixture
-def mock_discord_user(db_session):
+def discord_bot_user(db_session):
+    bot = DiscordBotUser.create_with_api_key(
+        discord_users=[],
+        name="Test Bot",
+        email="bot@example.com",
+    )
+    db_session.add(bot)
+    db_session.commit()
+    return bot
+
+
+@pytest.fixture
+def mock_discord_user(db_session, discord_bot_user):
     """Create a Discord user for testing."""
     user = DiscordUser(
         id=123456789,
         username="testuser",
         ignore_messages=False,
+        system_user_id=discord_bot_user.id,
     )
     db_session.add(user)
     db_session.commit()
