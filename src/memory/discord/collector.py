@@ -394,7 +394,8 @@ class MessageCollector(commands.Bot):
                 logger.error(f"DM channel not available for {user_identifier}")
                 return False
 
-            await channel.trigger_typing()
+            async with channel.typing():
+                pass
             return True
 
         except Exception as e:
@@ -431,30 +432,10 @@ class MessageCollector(commands.Bot):
                 logger.error(f"Channel {channel_name} not found")
                 return False
 
-            await channel.trigger_typing()
+            async with channel.typing():
+                pass
             return True
 
         except Exception as e:
             logger.error(f"Failed to trigger typing for channel {channel_name}: {e}")
             return False
-
-
-async def run_collector():
-    """Run the Discord message collector"""
-    if not settings.DISCORD_BOT_TOKEN:
-        logger.error("DISCORD_BOT_TOKEN not configured")
-        return
-
-    collector = MessageCollector()
-
-    try:
-        await collector.start(settings.DISCORD_BOT_TOKEN)
-    except Exception as e:
-        logger.error(f"Discord collector failed: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(run_collector())

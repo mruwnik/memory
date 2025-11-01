@@ -7,7 +7,7 @@ import logging
 import re
 import textwrap
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy.orm import Session, scoped_session
@@ -133,9 +133,19 @@ def should_process(message: DiscordMessage) -> bool:
         if not (res := re.search(r"<number>(.*)</number>", response)):
             return False
         try:
-            return int(res.group(1)) > 100 - message.chattiness_threshold
+            if int(res.group(1)) < 100 - message.chattiness_threshold:
+                return False
         except ValueError:
             return False
+
+        if not (bot_id := _resolve_bot_id(message)):
+            return False
+
+        if message.channel and message.channel.server:
+            discord.trigger_typing_channel(bot_id, message.channel.name)
+        else:
+            discord.trigger_typing_dm(bot_id, cast(int | str, message.from_id))
+        return True
 
 
 def _resolve_bot_id(discord_message: DiscordMessage) -> int | None:
@@ -180,15 +190,6 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "status": "processed",
                 "message_id": message_id,
             }
-
-        if discord_message.channel and discord_message.channel.server:
-            discord.trigger_typing_channel(
-                bot_id, discord_message.channel.name
-            )
-        else:
-            discord.trigger_typing_dm(bot_id, discord_message.from_id)
-
-        response: str | None = None
 
         try:
             response = call_llm(session, discord_message, settings.DISCORD_MODEL)
