@@ -22,7 +22,6 @@ from memory.common.db.models.base import Base
 
 
 class MessageProcessor:
-    track_messages = Column(Boolean, nullable=False, server_default="true")
     ignore_messages = Column(Boolean, nullable=True, default=False)
 
     allowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
@@ -89,7 +88,7 @@ class DiscordServer(Base, MessageProcessor):
     )
 
     __table_args__ = (
-        Index("discord_servers_active_idx", "track_messages", "last_sync_at"),
+        Index("discord_servers_active_idx", "ignore_messages", "last_sync_at"),
     )
 
 
