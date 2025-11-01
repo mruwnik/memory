@@ -5,8 +5,9 @@ Simple HTTP client that communicates with the Discord collector's API server.
 """
 
 import logging
-import requests
 from typing import Any
+
+import requests
 
 from memory.common import settings
 
@@ -37,6 +38,23 @@ def send_dm(bot_id: int, user_identifier: str, message: str) -> bool:
         return False
 
 
+def trigger_typing_dm(bot_id: int, user_identifier: int | str) -> bool:
+    """Trigger typing indicator for a DM via the Discord collector API"""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/typing/dm",
+            json={"bot_id": bot_id, "user": user_identifier},
+            timeout=10,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get("success", False)
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to trigger DM typing for {user_identifier}: {e}")
+        return False
+
+
 def send_to_channel(bot_id: int, channel_name: str, message: str) -> bool:
     """Send a DM via the Discord collector API"""
     try:
@@ -56,6 +74,23 @@ def send_to_channel(bot_id: int, channel_name: str, message: str) -> bool:
 
     except requests.RequestException as e:
         logger.error(f"Failed to send to channel {channel_name}: {e}")
+        return False
+
+
+def trigger_typing_channel(bot_id: int, channel_name: str) -> bool:
+    """Trigger typing indicator for a channel via the Discord collector API"""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/typing/channel",
+            json={"bot_id": bot_id, "channel_name": channel_name},
+            timeout=10,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get("success", False)
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to trigger typing for channel {channel_name}: {e}")
         return False
 
 

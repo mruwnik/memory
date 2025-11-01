@@ -170,20 +170,32 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
-        response = call_llm(session, discord_message, settings.DISCORD_MODEL)
-
-        if not response:
-            return {
-                "status": "processed",
-                "message_id": message_id,
-            }
-
         bot_id = _resolve_bot_id(discord_message)
         if not bot_id:
             logger.warning(
                 "No associated Discord bot user for message %s; skipping send",
                 message_id,
             )
+            return {
+                "status": "processed",
+                "message_id": message_id,
+            }
+
+        if discord_message.channel and discord_message.channel.server:
+            discord.trigger_typing_channel(
+                bot_id, discord_message.channel.name
+            )
+        else:
+            discord.trigger_typing_dm(bot_id, discord_message.from_id)
+
+        response: str | None = None
+
+        try:
+            response = call_llm(session, discord_message, settings.DISCORD_MODEL)
+        except Exception:
+            logger.exception("Failed to generate Discord response")
+
+        if not response:
             return {
                 "status": "processed",
                 "message_id": message_id,

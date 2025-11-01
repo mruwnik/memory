@@ -381,6 +381,26 @@ class MessageCollector(commands.Bot):
             logger.error(f"Failed to send DM to {user_identifier}: {e}")
             return False
 
+    async def trigger_typing_dm(self, user_identifier: int | str) -> bool:
+        """Trigger typing indicator in a DM"""
+        try:
+            user = await self.get_user(user_identifier)
+            if not user:
+                logger.error(f"User {user_identifier} not found")
+                return False
+
+            channel = user.dm_channel or await user.create_dm()
+            if not channel:
+                logger.error(f"DM channel not available for {user_identifier}")
+                return False
+
+            await channel.trigger_typing()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to trigger DM typing for {user_identifier}: {e}")
+            return False
+
     async def send_to_channel(self, channel_name: str, message: str) -> bool:
         """Send a message to a channel by name across all guilds"""
         if not settings.DISCORD_NOTIFICATIONS_ENABLED:
@@ -398,6 +418,24 @@ class MessageCollector(commands.Bot):
 
         except Exception as e:
             logger.error(f"Failed to send message to channel {channel_name}: {e}")
+            return False
+
+    async def trigger_typing_channel(self, channel_name: str) -> bool:
+        """Trigger typing indicator in a channel"""
+        if not settings.DISCORD_NOTIFICATIONS_ENABLED:
+            return False
+
+        try:
+            channel = await self.get_channel_by_name(channel_name)
+            if not channel:
+                logger.error(f"Channel {channel_name} not found")
+                return False
+
+            await channel.trigger_typing()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to trigger typing for channel {channel_name}: {e}")
             return False
 
 

@@ -35,6 +35,16 @@ class SendChannelRequest(BaseModel):
     message: str
 
 
+class TypingDMRequest(BaseModel):
+    bot_id: int
+    user: int | str
+
+
+class TypingChannelRequest(BaseModel):
+    bot_id: int
+    channel_name: str
+
+
 class Collector:
     collector: MessageCollector
     collector_task: asyncio.Task
@@ -109,6 +119,32 @@ async def send_dm_endpoint(request: SendDMRequest):
     }
 
 
+@app.post("/typing/dm")
+async def trigger_dm_typing(request: TypingDMRequest):
+    """Trigger a typing indicator for a DM via the collector"""
+    collector = app.bots.get(request.bot_id)
+    if not collector:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    try:
+        success = await collector.collector.trigger_typing_dm(request.user)
+    except Exception as e:
+        logger.error(f"Failed to trigger DM typing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to trigger typing for {request.user}",
+        )
+
+    return {
+        "success": True,
+        "user": request.user,
+        "message": f"Typing triggered for {request.user}",
+    }
+
+
 @app.post("/send_channel")
 async def send_channel_endpoint(request: SendChannelRequest):
     """Send a message to a channel via the collector's Discord client"""
@@ -120,22 +156,47 @@ async def send_channel_endpoint(request: SendChannelRequest):
         success = await collector.collector.send_to_channel(
             request.channel_name, request.message
         )
-
-        if success:
-            return {
-                "success": True,
-                "message": f"Message sent to channel {request.channel_name}",
-                "channel": request.channel_name,
-            }
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to send message to channel {request.channel_name}",
-            )
-
     except Exception as e:
         logger.error(f"Failed to send channel message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Message sent to channel {request.channel_name}",
+            "channel": request.channel_name,
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Failed to send message to channel {request.channel_name}",
+    )
+
+
+@app.post("/typing/channel")
+async def trigger_channel_typing(request: TypingChannelRequest):
+    """Trigger a typing indicator for a channel via the collector"""
+    collector = app.bots.get(request.bot_id)
+    if not collector:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    try:
+        success = await collector.collector.trigger_typing_channel(request.channel_name)
+    except Exception as e:
+        logger.error(f"Failed to trigger channel typing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to trigger typing for channel {request.channel_name}",
+        )
+
+    return {
+        "success": True,
+        "channel": request.channel_name,
+        "message": f"Typing triggered for channel {request.channel_name}",
+    }
 
 
 @app.get("/health")
