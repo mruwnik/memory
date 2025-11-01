@@ -18,6 +18,7 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordUser,
 )
+from memory.discord.commands import register_slash_commands
 from memory.workers.tasks.discord import add_discord_message, edit_discord_message
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,11 @@ class MessageCollector(commands.Bot):
             help_command=None,  # Disable default help
         )
 
+    async def setup_hook(self):
+        """Register slash commands when the bot is ready."""
+
+        register_slash_commands(self)
+
     async def on_ready(self):
         """Called when bot connects to Discord"""
         logger.info(f"Discord collector connected as {self.user}")
@@ -206,6 +212,11 @@ class MessageCollector(commands.Bot):
 
         # Sync server and channel metadata
         await self.sync_servers_and_channels()
+
+        try:
+            await self.tree.sync()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to sync slash commands: %s", exc)
 
         logger.info("Discord message collector ready")
 

@@ -493,10 +493,12 @@ async def test_on_ready():
     collector.user.name = "TestBot"
     collector.guilds = [Mock(), Mock()]
     collector.sync_servers_and_channels = AsyncMock()
+    collector.tree.sync = AsyncMock()
 
     await collector.on_ready()
 
     collector.sync_servers_and_channels.assert_called_once()
+    collector.tree.sync.assert_awaited()
 
 
 @pytest.mark.asyncio
