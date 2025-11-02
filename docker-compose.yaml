@@ -173,7 +173,7 @@ services:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "email,ebooks,discord,comic,blogs,forums,maintenance,notes,scheduler"
+      QUEUES: "backup,email,ebooks,discord,comic,blogs,forums,maintenance,notes,scheduler"
 
   ingest-hub:
     <<: *worker-base

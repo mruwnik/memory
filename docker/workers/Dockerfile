@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements ./requirements/
 COPY setup.py ./
 RUN mkdir src
-RUN pip install -e ".[common]"
+RUN pip install -e ".[workers]"
 
 # Install Python dependencies
 COPY src/ ./src/
@@ -44,7 +44,7 @@ RUN git config --global user.email "${GIT_USER_EMAIL}" && \
     git config --global user.name "${GIT_USER_NAME}"
 
 # Default queues to process
-ENV QUEUES="ebooks,email,discord,comic,blogs,forums,photo_embed,maintenance"
+ENV QUEUES="backup,ebooks,email,discord,comic,blogs,forums,photo_embed,maintenance"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["./entry.sh"] 

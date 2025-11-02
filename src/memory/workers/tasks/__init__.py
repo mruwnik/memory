@@ -3,11 +3,12 @@ Import sub-modules so Celery can register their @app.task decorators.
 """
 
 from memory.workers.tasks import (
-    email,
-    comic,
+    backup,
     blogs,
+    comic,
     discord,
     ebook,
+    email,
     forums,
     maintenance,
     notes,
@@ -15,8 +16,8 @@ from memory.workers.tasks import (
     scheduled_calls,
 )  # noqa
 
-
 __all__ = [
+    "backup",
     "email",
     "comic",
     "blogs",

@@ -13,6 +13,7 @@ NOTES_ROOT = "memory.workers.tasks.notes"
 OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
 SCHEDULED_CALLS_ROOT = "memory.workers.tasks.scheduled_calls"
 DISCORD_ROOT = "memory.workers.tasks.discord"
+BACKUP_ROOT = "memory.workers.tasks.backup"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -52,6 +53,10 @@ SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 # Scheduled calls tasks
 EXECUTE_SCHEDULED_CALL = f"{SCHEDULED_CALLS_ROOT}.execute_scheduled_call"
 RUN_SCHEDULED_CALLS = f"{SCHEDULED_CALLS_ROOT}.run_scheduled_calls"
+
+# Backup tasks
+BACKUP_TO_S3_DIRECTORY = f"{BACKUP_ROOT}.backup_to_s3_directory"
+BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 
 
 def get_broker_url() -> str:
@@ -99,6 +104,7 @@ app.conf.update(
         f"{SCHEDULED_CALLS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"
         },
+        f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
     },
 )
 

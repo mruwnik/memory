@@ -10,6 +10,7 @@ from memory.common.celery_app import (
     TRACK_GIT_CHANGES,
     SYNC_LESSWRONG,
     RUN_SCHEDULED_CALLS,
+    BACKUP_TO_S3,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,5 +48,9 @@ app.conf.beat_schedule = {
     "run-scheduled-calls": {
         "task": RUN_SCHEDULED_CALLS,
         "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,
+    },
+    "backup-to-s3": {
+        "task": BACKUP_TO_S3,
+        "schedule": settings.S3_BACKUP_INTERVAL,
     },
 }

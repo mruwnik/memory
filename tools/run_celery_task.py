@@ -51,6 +51,8 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
+    BACKUP_TO_S3_DIRECTORY,
+    BACKUP_ALL,
     app,
 )
 
@@ -96,6 +98,10 @@ TASK_MAPPINGS = {
     "notes": {
         "setup_git_notes": SETUP_GIT_NOTES,
         "track_git_changes": TRACK_GIT_CHANGES,
+    },
+    "backup": {
+        "backup_to_s3_directory": BACKUP_TO_S3_DIRECTORY,
+        "backup_all": BACKUP_ALL,
     },
 }
 QUEUE_MAPPINGS = {
@@ -175,6 +181,28 @@ def execute_task(ctx, category: str, task_name: str, **kwargs):
     except Exception as e:
         click.echo(f"Error running task: {e}")
         sys.exit(1)
+
+
+@cli.group()
+@click.pass_context
+def backup(ctx):
+    """Backup-related tasks."""
+    pass
+
+
+@backup.command("all")
+@click.pass_context
+def backup_all(ctx):
+    """Backup all directories."""
+    execute_task(ctx, "backup", "backup_all")
+
+
+@backup.command("path")
+@click.option("--path", required=True, help="Path to backup")
+@click.pass_context
+def backup_to_s3_directory(ctx, path):
+    """Backup a specific path."""
+    execute_task(ctx, "backup", "backup_to_s3_directory", path=path)
 
 
 @cli.group()

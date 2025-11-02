@@ -18,6 +18,7 @@ parsers_requires = read_requirements("requirements-parsers.txt")
 api_requires = read_requirements("requirements-api.txt")
 dev_requires = read_requirements("requirements-dev.txt")
 ingesters_requires = read_requirements("requirements-ingesters.txt")
+workers_requires = read_requirements("requirements-workers.txt")
 
 setup(
     name="memory",
@@ -30,10 +31,12 @@ setup(
         "common": common_requires + parsers_requires,
         "dev": dev_requires,
         "ingesters": common_requires + parsers_requires + ingesters_requires,
+        "workers": common_requires + parsers_requires + workers_requires,
         "all": api_requires
         + common_requires
         + dev_requires
         + parsers_requires
-        + ingesters_requires,
+        + ingesters_requires
+        + workers_requires,
     },
 )
