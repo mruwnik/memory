@@ -260,11 +260,13 @@ def call_llm(
     if allowed_tools is not None:
         tools = {name: tool for name, tool in tools.items() if name in allowed_tools}
 
+    if bot_user.system_prompt:
+        system_prompt = bot_user.system_prompt + "\n\n" + (system_prompt or "")
     message_content = [m.as_content() for m in prev_messages] + messages
     return provider.run_with_tools(
         messages=provider.as_messages(message_content),
         tools=tools,
-        system_prompt=bot_user.system_prompt + "\n\n" + system_prompt,
+        system_prompt=system_prompt,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
     ).response
 
