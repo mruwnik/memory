@@ -194,6 +194,22 @@ services:
       - /var/run/supervisor
     deploy: { resources: { limits: { cpus: "0.5", memory: 512m } } }
 
+  # ------------------------------------------------------------ database backups
+  backup:
+    image: postgres:15  # Has pg_dump, wget, curl
+    networks: [kbnet]
+    depends_on: [postgres, qdrant]
+    env_file: [ .env ]
+    environment:
+      <<: *worker-env
+    secrets: [postgres_password]
+    volumes:
+      - ./tools/backup_databases.sh:/backup.sh:ro
+    entrypoint: ["/bin/bash"]
+    command: ["/backup.sh"]
+    profiles: [backup]  # Only start when explicitly called
+    security_opt: ["no-new-privileges=true"]
+
   # ------------------------------------------------------------ watchtower (auto-update)
   # watchtower:
   #   image: containrrr/watchtower
