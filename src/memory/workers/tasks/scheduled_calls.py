@@ -27,9 +27,12 @@ def _call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | 
     message = cast(str, scheduled_call.message)
     allowed_tools_list = cast(list[str] | None, scheduled_call.allowed_tools)
 
+    bot_user = (
+        scheduled_call.user.discord_users and scheduled_call.user.discord_users[0]
+    )
     return call_llm(
         session=session,
-        bot_user=scheduled_call.user,
+        bot_user=bot_user,
         from_user=scheduled_call.discord_user,
         channel=scheduled_call.discord_channel,
         messages=[message],

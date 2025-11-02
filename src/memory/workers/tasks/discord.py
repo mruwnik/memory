@@ -118,7 +118,7 @@ def should_process(message: DiscordMessage) -> bool:
 
         response = call_llm(
             session,
-            bot_user=message.recipient_user.system_user,
+            bot_user=message.recipient_user,
             from_user=message.from_user,
             channel=message.channel,
             model=settings.SUMMARIZER_MODEL,
@@ -192,7 +192,7 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
         try:
             response = call_llm(
                 session,
-                bot_user=discord_message.recipient_user.system_user,
+                bot_user=discord_message.recipient_user,
                 from_user=discord_message.from_user,
                 channel=discord_message.channel,
                 model=settings.DISCORD_MODEL,

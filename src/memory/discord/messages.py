@@ -207,7 +207,7 @@ def comm_channel_prompt(
 
 def call_llm(
     session: Session | scoped_session,
-    bot_user: BotUser,
+    bot_user: DiscordUser,
     from_user: DiscordUser | None,
     channel: DiscordChannel | None,
     model: str,
@@ -253,7 +253,7 @@ def call_llm(
     from memory.common.llms.tools.discord import make_discord_tools
     from memory.common.llms.tools.base import WebSearchTool
 
-    tools = make_discord_tools(bot_user, from_user, channel, model=model)
+    tools = make_discord_tools(bot_user.system_user, from_user, channel, model=model)
     tools |= {"web_search": WebSearchTool()}
 
     # Filter to allowed tools if specified
@@ -264,7 +264,7 @@ def call_llm(
     return provider.run_with_tools(
         messages=provider.as_messages(message_content),
         tools=tools,
-        system_prompt=system_prompt,
+        system_prompt=bot_user.system_prompt + "\n\n" + system_prompt,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
     ).response
 
