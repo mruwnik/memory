@@ -99,7 +99,7 @@ async def get_endpoints(url: str) -> OAuthEndpoints:
         authorization_endpoint=authorization_endpoint,
         registration_endpoint=registration_endpoint,
         token_endpoint=token_endpoint,
-        redirect_uri=f"http://{settings.DISCORD_COLLECTOR_SERVER_URL}:{settings.DISCORD_COLLECTOR_PORT}/oauth/callback/discord",
+        redirect_uri=f"{settings.SERVER_URL}/oauth/callback/discord",
     )
 
 

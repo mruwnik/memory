@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Iterator, Literal, Union, cast
 from PIL import Image
 
 from memory.common import settings
-from memory.common.llms.tools import ToolCall, ToolDefinition, ToolResult
+from memory.common.llms.tools import MCPServer, ToolCall, ToolDefinition, ToolResult
 from memory.common.llms.usage import UsageTracker, RedisUsageTracker
 
 logger = logging.getLogger(__name__)
@@ -434,6 +434,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """
@@ -456,6 +457,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> Iterator[StreamEvent]:
         """
@@ -478,6 +480,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """
@@ -500,6 +503,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """
@@ -520,6 +524,7 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[Message],
         tools: dict[str, ToolDefinition],
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
         system_prompt: str | None = None,
         max_iterations: int = 10,
@@ -551,6 +556,7 @@ class BaseLLMProvider(ABC):
             messages=messages,
             system_prompt=system_prompt,
             tools=list(tools.values()),
+            mcp_servers=mcp_servers,
             settings=settings,
         ):
             if event.type == "text":
@@ -583,7 +589,12 @@ class BaseLLMProvider(ABC):
 
                 # Recursively continue the conversation with reduced iterations
                 yield from self.stream_with_tools(
-                    messages, tools, settings, system_prompt, max_iterations - 1
+                    messages,
+                    tools,
+                    mcp_servers,
+                    settings,
+                    system_prompt,
+                    max_iterations - 1,
                 )
                 return  # Exit after recursive call completes
 
@@ -598,6 +609,7 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[Message],
         tools: dict[str, ToolDefinition],
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
         system_prompt: str | None = None,
         max_iterations: int = 10,
@@ -606,6 +618,7 @@ class BaseLLMProvider(ABC):
         for event in self.stream_with_tools(
             messages=messages,
             tools=tools,
+            mcp_servers=mcp_servers,
             settings=settings,
             system_prompt=system_prompt,
             max_iterations=max_iterations,

@@ -9,6 +9,7 @@ import anthropic
 from memory.common.llms.base import (
     BaseLLMProvider,
     ImageContent,
+    MCPServer,
     LLMSettings,
     Message,
     MessageRole,
@@ -103,6 +104,7 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None,
         tools: list[ToolDefinition] | None,
+        mcp_servers: list[MCPServer] | None,
         settings: LLMSettings,
     ) -> dict[str, Any]:
         """Build common request kwargs for API calls."""
@@ -113,7 +115,9 @@ class AnthropicProvider(BaseLLMProvider):
             "messages": anthropic_messages,
             "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
-            "extra_headers": {"anthropic-beta": "web-fetch-2025-09-10"},
+            "extra_headers": {
+                "anthropic-beta": "web-fetch-2025-09-10,mcp-client-2025-04-04"
+            },
         }
 
         # Only include top_p if explicitly set
@@ -129,6 +133,25 @@ class AnthropicProvider(BaseLLMProvider):
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
 
+        if mcp_servers:
+
+            def format_server(server: MCPServer) -> dict[str, Any]:
+                conf: dict[str, Any] = {
+                    "type": "url",
+                    "url": server.url,
+                    "name": server.name,
+                    "authorization_token": server.token,
+                }
+                if server.allowed_tools:
+                    conf["tool_configuration"] = {
+                        "allowed_tools": server.allowed_tools,
+                    }
+                return conf
+
+            kwargs["extra_body"] = {
+                "mcp_servers": [format_server(server) for server in mcp_servers]
+            }
+
         # Enable extended thinking if requested and model supports it
         if self.enable_thinking and self._supports_thinking():
             thinking_budget = min(10000, settings.max_tokens - 1024)
@@ -140,6 +163,9 @@ class AnthropicProvider(BaseLLMProvider):
                 # When thinking is enabled: temperature must be 1, can't use top_p
                 kwargs["temperature"] = 1.0
                 kwargs.pop("top_p", None)
+
+        for k, v in kwargs.items():
+            print(f"{k}: {v}")
 
         return kwargs
 
@@ -312,11 +338,14 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response."""
         settings = settings or LLMSettings()
-        kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
+        kwargs = self._build_request_kwargs(
+            messages, system_prompt, tools, mcp_servers, settings
+        )
 
         try:
             response = self.client.messages.create(**kwargs)
@@ -332,11 +361,14 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> Iterator[StreamEvent]:
         """Generate a streaming response."""
         settings = settings or LLMSettings()
-        kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
+        kwargs = self._build_request_kwargs(
+            messages, system_prompt, tools, mcp_servers, settings
+        )
 
         try:
             with self.client.messages.stream(**kwargs) as stream:
@@ -358,11 +390,14 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response asynchronously."""
         settings = settings or LLMSettings()
-        kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
+        kwargs = self._build_request_kwargs(
+            messages, system_prompt, tools, mcp_servers, settings
+        )
 
         try:
             response = await self.async_client.messages.create(**kwargs)
@@ -378,11 +413,14 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
+        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Generate a streaming response asynchronously."""
         settings = settings or LLMSettings()
-        kwargs = self._build_request_kwargs(messages, system_prompt, tools, settings)
+        kwargs = self._build_request_kwargs(
+            messages, system_prompt, tools, mcp_servers, settings
+        )
 
         try:
             async with self.async_client.messages.stream(**kwargs) as stream:

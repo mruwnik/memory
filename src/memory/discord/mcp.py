@@ -100,11 +100,15 @@ async def handle_mcp_list(interaction: discord.Interaction) -> str:
 
 
 async def handle_mcp_add(
-    interaction: discord.Interaction, url: str, name: str = "memory"
+    interaction: discord.Interaction,
+    bot_user: discord.User | None,
+    url: str,
 ) -> str:
     """Add a new MCP server via OAuth."""
+    if not bot_user:
+        raise ValueError("Bot user is required")
     with make_session() as session:
-        if find_mcp_server(session, interaction.user.id, url):
+        if find_mcp_server(session, bot_user.id, url):
             return (
                 f"**MCP Server Already Exists**\n\n"
                 f"You already have an MCP server configured at `{url}`.\n"
@@ -115,10 +119,10 @@ async def handle_mcp_add(
         client_id = await register_oauth_client(
             endpoints,
             url,
-            f"Discord Bot - {name} ({interaction.user.name})",
+            f"Discord Bot - {bot_user.name} ({interaction.user.name})",
         )
         mcp_server = DiscordMCPServer(
-            discord_bot_user_id=interaction.user.id,
+            discord_bot_user_id=bot_user.id,
             mcp_server_url=url,
             client_id=client_id,
         )
@@ -142,10 +146,10 @@ async def handle_mcp_add(
     )
 
 
-async def handle_mcp_delete(interaction: discord.Interaction, url: str) -> str:
+async def handle_mcp_delete(bot_user: discord.User, url: str) -> str:
     """Delete an MCP server."""
     with make_session() as session:
-        mcp_server = find_mcp_server(session, interaction.user.id, url)
+        mcp_server = find_mcp_server(session, bot_user.id, url)
         if not mcp_server:
             return (
                 f"**MCP Server Not Found**\n\n"
@@ -157,10 +161,10 @@ async def handle_mcp_delete(interaction: discord.Interaction, url: str) -> str:
     return f"🗑️ **Delete MCP Server**\n\nServer `{url}` has been removed."
 
 
-async def handle_mcp_connect(interaction: discord.Interaction, url: str) -> str:
+async def handle_mcp_connect(bot_user: discord.User, url: str) -> str:
     """Reconnect to an existing MCP server (redo OAuth)."""
     with make_session() as session:
-        mcp_server = find_mcp_server(session, interaction.user.id, url)
+        mcp_server = find_mcp_server(session, bot_user.id, url)
         if not mcp_server:
             raise ValueError(
                 f"**MCP Server Not Found**\n\n"
@@ -180,9 +184,7 @@ async def handle_mcp_connect(interaction: discord.Interaction, url: str) -> str:
 
         session.commit()
 
-        logger.info(
-            f"Regenerated OAuth challenge for user={interaction.user.id}, url={url}"
-        )
+        logger.info(f"Regenerated OAuth challenge for user={bot_user.id}, url={url}")
 
     return (
         f"🔄 **Reconnect to MCP Server**\n\n"
@@ -193,10 +195,10 @@ async def handle_mcp_connect(interaction: discord.Interaction, url: str) -> str:
     )
 
 
-async def handle_mcp_tools(interaction: discord.Interaction, url: str) -> str:
+async def handle_mcp_tools(bot_user: discord.User, url: str) -> str:
     """List tools available on an MCP server."""
     with make_session() as session:
-        mcp_server = find_mcp_server(session, interaction.user.id, url)
+        mcp_server = find_mcp_server(session, bot_user.id, url)
 
         if not mcp_server:
             raise ValueError(
@@ -264,9 +266,9 @@ async def handle_mcp_tools(interaction: discord.Interaction, url: str) -> str:
 
 async def run_mcp_server_command(
     interaction: discord.Interaction,
+    bot_user: discord.User | None,
     action: Literal["list", "add", "delete", "connect", "tools"],
     url: str | None,
-    name: str = "memory",
 ) -> None:
     """Handle MCP server management commands."""
     if action not in ["list", "add", "delete", "connect", "tools"]:
@@ -277,18 +279,23 @@ async def run_mcp_server_command(
             "❌ URL is required for this action", ephemeral=True
         )
         return
+    if not bot_user:
+        await interaction.response.send_message(
+            "❌ Bot user is required", ephemeral=True
+        )
+        return
 
     try:
         if action == "list" or not url:
             result = await handle_mcp_list(interaction)
         elif action == "add":
-            result = await handle_mcp_add(interaction, url, name)
+            result = await handle_mcp_add(interaction, bot_user, url)
         elif action == "delete":
-            result = await handle_mcp_delete(interaction, url)
+            result = await handle_mcp_delete(bot_user, url)
         elif action == "connect":
-            result = await handle_mcp_connect(interaction, url)
+            result = await handle_mcp_connect(bot_user, url)
         elif action == "tools":
-            result = await handle_mcp_tools(interaction, url)
+            result = await handle_mcp_tools(bot_user, url)
     except Exception as exc:
         result = f"❌ Error: {exc}"
     await interaction.response.send_message(result, ephemeral=True)

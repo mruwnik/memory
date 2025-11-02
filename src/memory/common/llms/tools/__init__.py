@@ -24,6 +24,16 @@ class ToolResult(TypedDict):
 
 
 @dataclass
+class MCPServer:
+    """An MCP server."""
+
+    name: str
+    url: str
+    token: str
+    allowed_tools: list[str] | None = None
+
+
+@dataclass
 class ToolDefinition:
     """Definition of a tool that can be called by the LLM."""
 

@@ -44,7 +44,7 @@ class CommandContext:
 CommandHandler = Callable[..., CommandResponse]
 
 
-def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
+def register_slash_commands(bot: discord.Client) -> None:
     """Register the collector slash commands on the provided bot.
 
     Args:
@@ -53,7 +53,6 @@ def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
     """
 
     if getattr(bot, "_memory_commands_registered", False):
-        logger.error(f"Slash commands already registered for {name}")
         return
 
     setattr(bot, "_memory_commands_registered", True)
@@ -62,6 +61,7 @@ def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
         raise RuntimeError("Bot instance does not support app commands")
 
     tree = bot.tree
+    name = bot.user and bot.user.name.replace("-", "_").lower()
 
     @tree.command(
         name=f"{name}_show_prompt", description="Show the current system prompt"
@@ -184,7 +184,7 @@ def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
         action: Literal["list", "add", "delete", "connect", "tools"] = "list",
         url: str | None = None,
     ) -> None:
-        await run_mcp_server_command(interaction, action, url and url.strip(), name)
+        await run_mcp_server_command(interaction, bot.user, action, url and url.strip())
 
 
 async def _run_interaction_command(

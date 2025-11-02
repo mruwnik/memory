@@ -234,13 +234,12 @@ class MessageCollector(commands.Bot):
     async def setup_hook(self):
         """Register slash commands when the bot is ready."""
 
-        if not (name := self.user.name):
+        if not self.user:
             logger.error(f"Failed to get user name for {self.user}")
             return
 
-        name = name.replace("-", "_").lower()
         try:
-            register_slash_commands(self, name=name)
+            register_slash_commands(self)
         except Exception as e:
             logger.error(f"Failed to register slash commands for {self.user.name}: {e}")
         logger.error(f"Registered slash commands for {self.user.name}")
