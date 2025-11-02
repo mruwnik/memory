@@ -56,7 +56,7 @@ def call_llm(
     message: DiscordMessage,
     model: str,
     msgs: list[str] = [],
-    allowed_tools: list[str] = [],
+    allowed_tools: list[str] | None = None,
 ) -> str | None:
     provider = create_provider(model=model)
     if provider.usage_tracker.is_rate_limited(model):
@@ -74,7 +74,8 @@ def call_llm(
     tools = {
         name: tool
         for name, tool in tools.items()
-        if message.tool_allowed(name) and name in allowed_tools
+        if message.tool_allowed(name)
+        and (allowed_tools is None or name in allowed_tools)
     }
     system_prompt = message.system_prompt or ""
     system_prompt += comm_channel_prompt(
@@ -196,6 +197,7 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to generate Discord response")
 
+        print("response:", response)
         if not response:
             return {
                 "status": "processed",

@@ -55,7 +55,7 @@ EXECUTE_SCHEDULED_CALL = f"{SCHEDULED_CALLS_ROOT}.execute_scheduled_call"
 RUN_SCHEDULED_CALLS = f"{SCHEDULED_CALLS_ROOT}.run_scheduled_calls"
 
 # Backup tasks
-BACKUP_TO_S3_DIRECTORY = f"{BACKUP_ROOT}.backup_to_s3_directory"
+BACKUP_PATH = f"{BACKUP_ROOT}.backup_path"
 BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 
 

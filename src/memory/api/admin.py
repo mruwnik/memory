@@ -290,6 +290,7 @@ class ScheduledLLMCallAdmin(ModelView, model=ScheduledLLMCall):
         "created_at",
         "updated_at",
     ]
+    column_sortable_list = ["executed_at", "scheduled_time", "created_at", "updated_at"]
 
 
 def setup_admin(admin: Admin):

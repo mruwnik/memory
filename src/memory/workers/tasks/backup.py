@@ -12,7 +12,7 @@ import boto3
 from cryptography.fernet import Fernet
 
 from memory.common import settings
-from memory.common.celery_app import app, BACKUP_TO_S3_DIRECTORY, BACKUP_ALL
+from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def backup_encrypted_directory(path: Path) -> dict:
         return {"uploaded": False, "directory": path, "error": str(e)}
 
 
-@app.task(name=BACKUP_TO_S3_DIRECTORY)
+@app.task(name=BACKUP_PATH)
 def backup_to_s3(path: Path | str):
     """Backup a specific directory to S3."""
     path = Path(path)
