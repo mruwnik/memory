@@ -266,7 +266,7 @@ def call_llm(
     return provider.run_with_tools(
         messages=provider.as_messages(message_content),
         tools=tools,
-        system_prompt=system_prompt,
+        system_prompt=bot_user.system_prompt + "\n\n" + system_prompt,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
     ).response
 
