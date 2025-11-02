@@ -71,15 +71,23 @@ class AnthropicProvider(BaseLLMProvider):
         }
 
     def _convert_message(self, message: Message) -> dict[str, Any]:
-        converted = message.to_dict()
-        if converted["role"] == MessageRole.ASSISTANT and isinstance(
-            converted["content"], list
-        ):
-            content = sorted(
-                converted["content"], key=lambda x: x["type"] != "thinking"
-            )
-            return converted | {"content": content}
-        return converted
+        # Handle string content directly
+        if isinstance(message.content, str):
+            return {"role": message.role.value, "content": message.content}
+
+        # Convert content items, handling ImageContent specially
+        content_list = []
+        for item in message.content:
+            if isinstance(item, ImageContent):
+                content_list.append(self._convert_image_content(item))
+            else:
+                content_list.append(item.to_dict())
+
+        # Sort assistant messages to put thinking last
+        if message.role == MessageRole.ASSISTANT:
+            content_list = sorted(content_list, key=lambda x: x["type"] != "thinking")
+
+        return {"role": message.role.value, "content": content_list}
 
     def _should_include_message(self, message: Message) -> bool:
         """Filter out system messages (handled separately in Anthropic)."""
