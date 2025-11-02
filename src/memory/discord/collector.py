@@ -207,6 +207,10 @@ def sync_guild_metadata(guild: discord.Guild) -> None:
             if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
                 create_or_update_channel(session, channel)
 
+        # Sync threads
+        for thread in guild.threads:
+            create_or_update_channel(session, thread)
+
         session.commit()
 
 
@@ -266,6 +270,11 @@ class MessageCollector(commands.Bot):
                     if att.content_type and att.content_type.startswith("image/")
                 ]
 
+                # Determine message metadata (type, reply, thread)
+                message_type, reply_to_id, thread_id = determine_message_metadata(
+                    message
+                )
+
                 # Queue the message for processing
                 add_discord_message.delay(
                     message_id=message.id,
@@ -275,9 +284,9 @@ class MessageCollector(commands.Bot):
                     server_id=message.guild.id if message.guild else None,
                     content=message.content or "",
                     sent_at=message.created_at.isoformat(),
-                    message_reference_id=message.reference.message_id
-                    if message.reference
-                    else None,
+                    message_reference_id=reply_to_id,
+                    message_type=message_type,
+                    thread_id=thread_id,
                     image_urls=image_urls,
                 )
         except Exception as e:
@@ -321,6 +330,11 @@ class MessageCollector(commands.Bot):
                     if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
                         create_or_update_channel(session, channel)
                         channels_updated += 1
+
+                # Refresh all threads in this server
+                for thread in guild.threads:
+                    create_or_update_channel(session, thread)
+                    channels_updated += 1
 
                 # Refresh all members in this server (if members intent is enabled)
                 if self.intents.members:
@@ -440,15 +454,22 @@ class MessageCollector(commands.Bot):
             logger.error(f"Failed to trigger DM typing for {user_identifier}: {e}")
             return False
 
-    async def send_to_channel(self, channel_name: str, message: str) -> bool:
-        """Send a message to a channel by name across all guilds"""
+    async def send_to_channel(
+        self, channel_identifier: int | str, message: str
+    ) -> bool:
+        """Send a message to a channel by name or ID (supports threads)"""
         if not settings.DISCORD_NOTIFICATIONS_ENABLED:
             return False
 
         try:
-            channel = await self.get_channel_by_name(channel_name)
+            # Get channel by ID or name
+            if isinstance(channel_identifier, int):
+                channel = self.get_channel(channel_identifier)
+            else:
+                channel = await self.get_channel_by_name(channel_identifier)
+
             if not channel:
-                logger.error(f"Channel {channel_name} not found")
+                logger.error(f"Channel {channel_identifier} not found")
                 return False
 
             # Post-process mentions to convert usernames to IDs
@@ -456,22 +477,27 @@ class MessageCollector(commands.Bot):
                 processed_message = process_mentions(session, message)
 
             await channel.send(processed_message)
-            logger.info(f"Sent message to channel {channel_name}")
+            logger.info(f"Sent message to channel {channel_identifier}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to send message to channel {channel_name}: {e}")
+            logger.error(f"Failed to send message to channel {channel_identifier}: {e}")
             return False
 
-    async def trigger_typing_channel(self, channel_name: str) -> bool:
-        """Trigger typing indicator in a channel"""
+    async def trigger_typing_channel(self, channel_identifier: int | str) -> bool:
+        """Trigger typing indicator in a channel by name or ID (supports threads)"""
         if not settings.DISCORD_NOTIFICATIONS_ENABLED:
             return False
 
         try:
-            channel = await self.get_channel_by_name(channel_name)
+            # Get channel by ID or name
+            if isinstance(channel_identifier, int):
+                channel = self.get_channel(channel_identifier)
+            else:
+                channel = await self.get_channel_by_name(channel_identifier)
+
             if not channel:
-                logger.error(f"Channel {channel_name} not found")
+                logger.error(f"Channel {channel_identifier} not found")
                 return False
 
             async with channel.typing():
@@ -479,5 +505,7 @@ class MessageCollector(commands.Bot):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to trigger typing for channel {channel_name}: {e}")
+            logger.error(
+                f"Failed to trigger typing for channel {channel_identifier}: {e}"
+            )
             return False

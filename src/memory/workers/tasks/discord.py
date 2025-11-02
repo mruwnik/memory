@@ -180,7 +180,7 @@ def should_process(message: DiscordMessage) -> bool:
             return False
 
         if message.channel and message.channel.server:
-            discord.trigger_typing_channel(bot_id, message.channel.name)
+            discord.trigger_typing_channel(bot_id, cast(int, message.channel_id))
         else:
             discord.trigger_typing_dm(bot_id, cast(int | str, message.from_id))
         return True
@@ -242,7 +242,9 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
             }
 
         if discord_message.channel.server:
-            discord.send_to_channel(bot_id, discord_message.channel.name, response)
+            discord.send_to_channel(
+                bot_id, cast(int, discord_message.channel_id), response
+            )
         else:
             discord.send_dm(bot_id, discord_message.from_user.username, response)
 
@@ -263,6 +265,8 @@ def add_discord_message(
     server_id: int | None = None,
     recipient_id: int | None = None,
     message_reference_id: int | None = None,
+    message_type: str = "default",
+    thread_id: int | None = None,
     image_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -291,8 +295,9 @@ def add_discord_message(
             from_id=author_id,
             recipient_id=recipient_id,
             message_id=message_id,
-            message_type="reply" if message_reference_id else "default",
+            message_type=message_type,
             reply_to_message_id=message_reference_id,
+            thread_id=thread_id,
             images=saved_image_paths or None,
         )
         existing_msg = check_content_exists(

@@ -31,7 +31,7 @@ class SendDMRequest(BaseModel):
 
 class SendChannelRequest(BaseModel):
     bot_id: int
-    channel_name: str  # Channel name (e.g., "memory-errors")
+    channel: int | str  # Channel name or ID (ID supports threads)
     message: str
 
 
@@ -42,7 +42,7 @@ class TypingDMRequest(BaseModel):
 
 class TypingChannelRequest(BaseModel):
     bot_id: int
-    channel_name: str
+    channel: int | str  # Channel name or ID (ID supports threads)
 
 
 class Collector:
@@ -154,7 +154,7 @@ async def send_channel_endpoint(request: SendChannelRequest):
 
     try:
         success = await collector.collector.send_to_channel(
-            request.channel_name, request.message
+            request.channel, request.message
         )
     except Exception as e:
         logger.error(f"Failed to send channel message: {e}")
@@ -163,13 +163,13 @@ async def send_channel_endpoint(request: SendChannelRequest):
     if success:
         return {
             "success": True,
-            "message": f"Message sent to channel {request.channel_name}",
-            "channel": request.channel_name,
+            "message": f"Message sent to channel {request.channel}",
+            "channel": request.channel,
         }
 
     raise HTTPException(
         status_code=400,
-        detail=f"Failed to send message to channel {request.channel_name}",
+        detail=f"Failed to send message to channel {request.channel}",
     )
 
 
@@ -181,7 +181,7 @@ async def trigger_channel_typing(request: TypingChannelRequest):
         raise HTTPException(status_code=404, detail="Bot not found")
 
     try:
-        success = await collector.collector.trigger_typing_channel(request.channel_name)
+        success = await collector.collector.trigger_typing_channel(request.channel)
     except Exception as e:
         logger.error(f"Failed to trigger channel typing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -189,13 +189,13 @@ async def trigger_channel_typing(request: TypingChannelRequest):
     if not success:
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to trigger typing for channel {request.channel_name}",
+            detail=f"Failed to trigger typing for channel {request.channel}",
         )
 
     return {
         "success": True,
-        "channel": request.channel_name,
-        "message": f"Typing triggered for channel {request.channel_name}",
+        "channel": request.channel,
+        "message": f"Typing triggered for channel {request.channel}",
     }
 
 

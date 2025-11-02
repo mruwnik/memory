@@ -55,14 +55,14 @@ def trigger_typing_dm(bot_id: int, user_identifier: int | str) -> bool:
         return False
 
 
-def send_to_channel(bot_id: int, channel_name: str, message: str) -> bool:
-    """Send a DM via the Discord collector API"""
+def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
+    """Send message to a channel by name or ID (ID supports threads)"""
     try:
         response = requests.post(
             f"{get_api_url()}/send_channel",
             json={
                 "bot_id": bot_id,
-                "channel_name": channel_name,
+                "channel": channel,
                 "message": message,
             },
             timeout=10,
@@ -73,16 +73,16 @@ def send_to_channel(bot_id: int, channel_name: str, message: str) -> bool:
         return result.get("success", False)
 
     except requests.RequestException as e:
-        logger.error(f"Failed to send to channel {channel_name}: {e}")
+        logger.error(f"Failed to send to channel {channel}: {e}")
         return False
 
 
-def trigger_typing_channel(bot_id: int, channel_name: str) -> bool:
-    """Trigger typing indicator for a channel via the Discord collector API"""
+def trigger_typing_channel(bot_id: int, channel: int | str) -> bool:
+    """Trigger typing indicator for a channel by name or ID (ID supports threads)"""
     try:
         response = requests.post(
             f"{get_api_url()}/typing/channel",
-            json={"bot_id": bot_id, "channel_name": channel_name},
+            json={"bot_id": bot_id, "channel": channel},
             timeout=10,
         )
         response.raise_for_status()
@@ -90,18 +90,18 @@ def trigger_typing_channel(bot_id: int, channel_name: str) -> bool:
         return result.get("success", False)
 
     except requests.RequestException as e:
-        logger.error(f"Failed to trigger typing for channel {channel_name}: {e}")
+        logger.error(f"Failed to trigger typing for channel {channel}: {e}")
         return False
 
 
-def broadcast_message(bot_id: int, channel_name: str, message: str) -> bool:
-    """Send a message to a channel via the Discord collector API"""
+def broadcast_message(bot_id: int, channel: int | str, message: str) -> bool:
+    """Send a message to a channel by name or ID (ID supports threads)"""
     try:
         response = requests.post(
             f"{get_api_url()}/send_channel",
             json={
                 "bot_id": bot_id,
-                "channel_name": channel_name,
+                "channel": channel,
                 "message": message,
             },
             timeout=10,
@@ -111,7 +111,7 @@ def broadcast_message(bot_id: int, channel_name: str, message: str) -> bool:
         return result.get("success", False)
 
     except requests.RequestException as e:
-        logger.error(f"Failed to send message to channel {channel_name}: {e}")
+        logger.error(f"Failed to send message to channel {channel}: {e}")
         return False
 
 
