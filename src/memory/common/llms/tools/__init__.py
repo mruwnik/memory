@@ -34,3 +34,6 @@ class ToolDefinition:
 
     def __call__(self, input: ToolInput) -> str:
         return self.function(input)
+
+    def provider_format(self, provider: str) -> dict[str, Any] | None:
+        return None

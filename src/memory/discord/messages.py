@@ -242,7 +242,7 @@ def call_llm(
 
     user_id = None
     if from_user and not channel:
-        user_id = from_user.id
+        user_id = cast(int, from_user.id)
     prev_messages = previous_messages(
         session,
         user_id,
@@ -251,8 +251,10 @@ def call_llm(
     )
 
     from memory.common.llms.tools.discord import make_discord_tools
+    from memory.common.llms.tools.base import WebSearchTool
 
     tools = make_discord_tools(bot_user, from_user, channel, model=model)
+    tools |= {"web_search": WebSearchTool()}
 
     # Filter to allowed tools if specified
     if allowed_tools is not None:

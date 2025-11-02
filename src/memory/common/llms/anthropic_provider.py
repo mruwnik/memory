@@ -113,6 +113,7 @@ class AnthropicProvider(BaseLLMProvider):
             "messages": anthropic_messages,
             "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
+            "extra_headers": {"anthropic-beta": "web-fetch-2025-09-10"},
         }
 
         # Only include top_p if explicitly set
@@ -152,7 +153,6 @@ class AnthropicProvider(BaseLLMProvider):
             Tuple of (StreamEvent or None, updated current_tool_use or None)
         """
         event_type = getattr(event, "type", None)
-
         # Handle error events
         if event_type == "error":
             error = getattr(event, "error", None)

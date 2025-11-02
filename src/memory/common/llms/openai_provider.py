@@ -151,32 +151,24 @@ class OpenAIProvider(BaseLLMProvider):
 
         return openai_messages
 
-    def _convert_tools(
-        self, tools: list[ToolDefinition] | None
-    ) -> list[dict[str, Any]] | None:
+    def _convert_tool(self, tool: ToolDefinition) -> dict[str, Any]:
         """
         Convert our tool definitions to OpenAI format.
 
         Args:
-            tools: List of tool definitions
+            tool: Tool definition
 
         Returns:
-            List of tools in OpenAI format
+            Tool in OpenAI format
         """
-        if not tools:
-            return None
-
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema,
-                },
-            }
-            for tool in tools
-        ]
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_schema,
+            },
+        }
 
     def _build_request_kwargs(
         self,

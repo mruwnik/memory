@@ -422,7 +422,11 @@ class BaseLLMProvider(ABC):
         """Convert tool definitions to provider format."""
         if not tools:
             return None
-        return [self._convert_tool(tool) for tool in tools]
+        converted = [
+            tool.provider_format(self.provider) or self._convert_tool(tool)
+            for tool in tools
+        ]
+        return [c for c in converted if c is not None]
 
     @abstractmethod
     def generate(
