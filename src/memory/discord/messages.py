@@ -141,8 +141,10 @@ def previous_messages(
 ) -> list[DiscordMessage]:
     messages = session.query(DiscordMessage)
     if user_id:
+        print(f"user_id: {user_id}")
         messages = messages.filter(DiscordMessage.recipient_id == user_id)
     if channel_id:
+        print(f"channel_id: {channel_id}")
         messages = messages.filter(DiscordMessage.channel_id == channel_id)
     return list(
         reversed(

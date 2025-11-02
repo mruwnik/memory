@@ -229,11 +229,21 @@ class MessageCollector(commands.Bot):
             intents=intents,
             help_command=None,  # Disable default help
         )
+        logger.info(f"Initialized collector for {self.user}")
 
     async def setup_hook(self):
         """Register slash commands when the bot is ready."""
 
-        register_slash_commands(self, name=self.user.name)
+        if not (name := self.user.name):
+            logger.error(f"Failed to get user name for {self.user}")
+            return
+
+        name = name.replace("-", "_").lower()
+        try:
+            register_slash_commands(self, name=name)
+        except Exception as e:
+            logger.error(f"Failed to register slash commands for {self.user.name}: {e}")
+        logger.error(f"Registered slash commands for {self.user.name}")
 
     async def on_ready(self):
         """Called when bot connects to Discord"""
@@ -313,8 +323,6 @@ class MessageCollector(commands.Bot):
 
     async def refresh_metadata(self) -> dict[str, int]:
         """Refresh server and channel metadata from Discord and update database"""
-        print("🔄 Refreshing Discord metadata...")
-
         servers_updated = 0
         channels_updated = 0
         users_updated = 0
@@ -454,25 +462,33 @@ class MessageCollector(commands.Bot):
             logger.error(f"Failed to trigger DM typing for {user_identifier}: {e}")
             return False
 
+    async def _get_channel(
+        self, channel_identifier: int | str, check_notifications: bool = True
+    ):
+        """Get channel by ID or name with standard checks"""
+        if check_notifications and not settings.DISCORD_NOTIFICATIONS_ENABLED:
+            logger.debug("Discord notifications disabled")
+            return None
+
+        if isinstance(channel_identifier, int):
+            channel = self.get_channel(channel_identifier)
+        else:
+            channel = await self.get_channel_by_name(channel_identifier)
+
+        if not channel:
+            logger.error(f"Channel {channel_identifier} not found")
+
+        return channel
+
     async def send_to_channel(
         self, channel_identifier: int | str, message: str
     ) -> bool:
         """Send a message to a channel by name or ID (supports threads)"""
-        if not settings.DISCORD_NOTIFICATIONS_ENABLED:
-            return False
-
         try:
-            # Get channel by ID or name
-            if isinstance(channel_identifier, int):
-                channel = self.get_channel(channel_identifier)
-            else:
-                channel = await self.get_channel_by_name(channel_identifier)
-
+            channel = await self._get_channel(channel_identifier)
             if not channel:
-                logger.error(f"Channel {channel_identifier} not found")
                 return False
 
-            # Post-process mentions to convert usernames to IDs
             with make_session() as session:
                 processed_message = process_mentions(session, message)
 
@@ -486,18 +502,9 @@ class MessageCollector(commands.Bot):
 
     async def trigger_typing_channel(self, channel_identifier: int | str) -> bool:
         """Trigger typing indicator in a channel by name or ID (supports threads)"""
-        if not settings.DISCORD_NOTIFICATIONS_ENABLED:
-            return False
-
         try:
-            # Get channel by ID or name
-            if isinstance(channel_identifier, int):
-                channel = self.get_channel(channel_identifier)
-            else:
-                channel = await self.get_channel_by_name(channel_identifier)
-
+            channel = await self._get_channel(channel_identifier)
             if not channel:
-                logger.error(f"Channel {channel_identifier} not found")
                 return False
 
             async with channel.typing():
@@ -508,4 +515,22 @@ class MessageCollector(commands.Bot):
             logger.error(
                 f"Failed to trigger typing for channel {channel_identifier}: {e}"
             )
+            return False
+
+    async def add_reaction(
+        self, channel_identifier: int | str, message_id: int, emoji: str
+    ) -> bool:
+        """Add a reaction to a message in a channel"""
+        try:
+            channel = await self._get_channel(channel_identifier)
+            if not channel:
+                return False
+
+            message = await channel.fetch_message(message_id)
+            await message.add_reaction(emoji)
+            logger.info(f"Added reaction {emoji} to message {message_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add reaction: {e}")
             return False

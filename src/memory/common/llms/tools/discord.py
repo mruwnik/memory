@@ -17,6 +17,7 @@ from memory.common.db.models import (
     BotUser,
 )
 from memory.common.llms.tools import ToolDefinition, ToolInput, ToolHandler
+from memory.common.discord import add_reaction
 
 
 UpdateSummaryType = Literal["server", "channel", "user"]
@@ -209,6 +210,50 @@ def make_prev_messages_tool(user: int | None, channel: int | None) -> ToolDefini
     )
 
 
+def make_add_reaction_tool(bot: BotUser, channel: DiscordChannel) -> ToolDefinition:
+    bot_id = cast(int, bot.id)
+    channel_id = channel and channel.id
+
+    def handler(input: ToolInput) -> str:
+        if not isinstance(input, dict):
+            raise ValueError("Input must be a dictionary")
+        try:
+            emoji = input.get("emoji")
+        except ValueError:
+            raise ValueError("Emoji is required")
+        if not emoji:
+            raise ValueError("Emoji is required")
+
+        try:
+            message_id = int(input.get("message_id") or "no id")
+        except ValueError:
+            raise ValueError("Message ID is required")
+
+        success = add_reaction(bot_id, channel_id, message_id, emoji)
+        if not success:
+            return "Failed to add reaction"
+        return "Reaction added"
+
+    return ToolDefinition(
+        name="add_reaction",
+        description="Add a reaction to a message in a channel",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "number",
+                    "description": "The ID of the message to add the reaction to",
+                },
+                "emoji": {
+                    "type": "string",
+                    "description": "The emoji to add to the message",
+                },
+            },
+        },
+        function=handler,
+    )
+
+
 def make_discord_tools(
     bot: BotUser,
     author: DiscordUser | None,
@@ -227,5 +272,6 @@ def make_discord_tools(
     if channel and channel.server:
         tools += [
             make_summary_tool("server", cast(BigInteger, channel.server_id)),
+            make_add_reaction_tool(bot, channel),
         ]
     return {tool.name: tool for tool in tools}

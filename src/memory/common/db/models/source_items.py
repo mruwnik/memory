@@ -363,7 +363,19 @@ class DiscordMessage(SourceItem):
 
     @property
     def title(self) -> str:
-        return f"{self.from_user.username} ({self.sent_at.isoformat()[:19]}): {self.content}"
+        return textwrap.dedent("""
+            <message>
+                <id>{message_id}</id>
+                <from>{from_user}</from>
+                <sent_at>{sent_at}</sent_at>
+                <content>{content}</content>
+            </message>
+        """).format(
+            message_id=self.message_id,
+            from_user=self.from_user.username,
+            sent_at=self.sent_at.isoformat()[:19],
+            content=self.content,
+        )
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""

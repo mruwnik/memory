@@ -12,13 +12,15 @@ from contextlib import asynccontextmanager
 from typing import cast
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import DiscordBotUser
 from memory.discord.collector import MessageCollector
+from memory.discord.oauth import complete_oauth_flow
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,13 @@ class TypingChannelRequest(BaseModel):
     channel: int | str  # Channel name or ID (ID supports threads)
 
 
+class AddReactionRequest(BaseModel):
+    bot_id: int
+    channel: int | str  # Channel name or ID (ID supports threads)
+    message_id: int
+    emoji: str
+
+
 class Collector:
     collector: MessageCollector
     collector_task: asyncio.Task
@@ -53,6 +62,7 @@ class Collector:
     bot_name: str
 
     def __init__(self, collector: MessageCollector, bot: DiscordBotUser):
+        logger.error(f"Initialized collector for {bot.name} woth {bot.api_key}")
         self.collector = collector
         self.collector_task = asyncio.create_task(collector.start(str(bot.api_key)))
         self.bot_id = cast(int, bot.id)
@@ -72,7 +82,9 @@ async def lifespan(app: FastAPI):
         bots = session.query(DiscordBotUser).all()
         app.bots = {bot.id: make_collector(bot) for bot in bots}
 
-    logger.info(f"Discord collectors started for {len(app.bots)} bots")
+    logger.error(
+        f"Discord collectors started for {len(app.bots)} bots: {app.bots.keys()}"
+    )
 
     yield
 
@@ -216,6 +228,36 @@ async def health_check():
     }
 
 
+@app.post("/add_reaction")
+async def add_reaction_endpoint(request: AddReactionRequest):
+    """Add a reaction to a message via the collector's Discord client"""
+    collector = app.bots.get(request.bot_id)
+    if not collector:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    try:
+        success = await collector.collector.add_reaction(
+            request.channel, request.message_id, request.emoji
+        )
+    except Exception as e:
+        logger.error(f"Failed to add reaction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to add reaction to message {request.message_id}",
+        )
+
+    return {
+        "success": True,
+        "channel": request.channel,
+        "message_id": request.message_id,
+        "emoji": request.emoji,
+        "message": f"Added reaction {request.emoji} to message {request.message_id}",
+    }
+
+
 @app.post("/refresh_metadata")
 async def refresh_metadata():
     """Refresh Discord server/channel/user metadata from Discord API"""
@@ -235,6 +277,51 @@ async def refresh_metadata():
     except Exception as e:
         logger.error(f"Failed to refresh metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/oauth/callback/discord", response_class=HTMLResponse)
+async def oauth_callback(request: Request):
+    """Handle OAuth callback from MCP server after user authorization."""
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+
+    logger.info(
+        f"Received OAuth callback: code={code and code[:20]}..., state={state and state[:20]}..."
+    )
+
+    message, title, close, status_code = "", "", "", 200
+    if error:
+        logger.error(f"OAuth error: {error}")
+        message = f"Error: {error}"
+        title = "❌ Authorization Failed"
+        status_code = 400
+    elif not code or not state:
+        message = "Missing authorization code or state parameter."
+        title = "❌ Invalid Request"
+        status_code = 400
+    else:
+        # Complete the OAuth flow (exchange code for token)
+        with make_session() as session:
+            status_code, message = await complete_oauth_flow(session, code, state)
+        if 200 <= status_code < 300:
+            title = "✅ Authorization Successful!"
+            close = "You can close this window and return to the MCP server."
+        else:
+            title = "❌ Authorization Failed"
+
+    return HTMLResponse(
+        content=f"""
+        <html>
+            <body>
+                <h1>{title}</h1>
+                <p>{message}</p>
+                <p>{close}</p>
+            </body>
+        </html>
+        """,
+        status_code=status_code,
+    )
 
 
 def run_discord_api_server(host: str = "127.0.0.1", port: int = 8001):

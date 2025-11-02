@@ -127,5 +127,44 @@ class DiscordUser(Base, MessageProcessor):
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
     system_user = relationship("User", back_populates="discord_users")
+    mcp_servers = relationship(
+        "DiscordMCPServer", back_populates="discord_user", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (Index("discord_users_system_user_idx", "system_user_id"),)
+
+
+class DiscordMCPServer(Base):
+    """MCP server configuration and OAuth state for Discord users."""
+
+    __tablename__ = "discord_mcp_servers"
+
+    id = Column(Integer, primary_key=True)
+    discord_bot_user_id = Column(
+        BigInteger, ForeignKey("discord_users.id"), nullable=False
+    )
+
+    # MCP server info
+    mcp_server_url = Column(Text, nullable=False)
+    client_id = Column(Text, nullable=False)
+
+    # OAuth flow state (temporary, cleared after token exchange)
+    state = Column(Text, nullable=True, unique=True)
+    code_verifier = Column(Text, nullable=True)
+
+    # OAuth tokens (set after successful authorization)
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    discord_user = relationship("DiscordUser", back_populates="mcp_servers")
+
+    __table_args__ = (
+        Index("discord_mcp_state_idx", "state"),
+        Index("discord_mcp_user_url_idx", "discord_bot_user_id", "mcp_server_url"),
+    )

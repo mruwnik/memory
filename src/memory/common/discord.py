@@ -94,6 +94,30 @@ def trigger_typing_channel(bot_id: int, channel: int | str) -> bool:
         return False
 
 
+def add_reaction(bot_id: int, channel: int | str, message_id: int, emoji: str) -> bool:
+    """Add a reaction to a message in a channel"""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/add_reaction",
+            json={
+                "bot_id": bot_id,
+                "channel": channel,
+                "message_id": message_id,
+                "emoji": emoji,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get("success", False)
+
+    except requests.RequestException as e:
+        logger.error(
+            f"Failed to add reaction {emoji} to message {message_id} in channel {channel}: {e}"
+        )
+        return False
+
+
 def broadcast_message(bot_id: int, channel: int | str, message: str) -> bool:
     """Send a message to a channel by name or ID (ID supports threads)"""
     try:

@@ -1,7 +1,7 @@
 """Lightweight slash-command helpers for the Discord collector."""
 
-from __future__ import annotations
-
+from calendar import c
+import logging
 from dataclasses import dataclass
 from typing import Callable, Literal
 
@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordChannel, DiscordServer, DiscordUser
+from memory.discord.mcp import run_mcp_server_command
+
+logger = logging.getLogger(__name__)
 
 ScopeLiteral = Literal["server", "channel", "user"]
 
@@ -50,6 +53,7 @@ def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
     """
 
     if getattr(bot, "_memory_commands_registered", False):
+        logger.error(f"Slash commands already registered for {name}")
         return
 
     setattr(bot, "_memory_commands_registered", True)
@@ -167,6 +171,21 @@ def register_slash_commands(bot: discord.Client, name: str = "memory") -> None:
             target_user=user,
         )
 
+    @tree.command(
+        name=f"{name}_mcp_servers",
+        description="Manage MCP servers for your account",
+    )
+    @discord.app_commands.describe(
+        action="Action to perform",
+        url="MCP server URL (required for add, delete, connect, tools)",
+    )
+    async def mcp_servers_command(
+        interaction: discord.Interaction,
+        action: Literal["list", "add", "delete", "connect", "tools"] = "list",
+        url: str | None = None,
+    ) -> None:
+        await run_mcp_server_command(interaction, action, url and url.strip(), name)
+
 
 async def _run_interaction_command(
     interaction: discord.Interaction,
@@ -177,17 +196,10 @@ async def _run_interaction_command(
     **handler_kwargs,
 ) -> None:
     """Shared coroutine used by the registered slash commands."""
-
     try:
         with make_session() as session:
-            response = run_command(
-                session,
-                interaction,
-                scope,
-                handler=handler,
-                target_user=target_user,
-                **handler_kwargs,
-            )
+            context = _build_context(session, interaction, scope, target_user)
+            response = handler(context, **handler_kwargs)
             session.commit()
     except CommandError as exc:  # pragma: no cover - passthrough
         await interaction.response.send_message(str(exc), ephemeral=True)
@@ -197,21 +209,6 @@ async def _run_interaction_command(
         response.content,
         ephemeral=response.ephemeral,
     )
-
-
-def run_command(
-    session: Session,
-    interaction: discord.Interaction,
-    scope: ScopeLiteral,
-    *,
-    handler: CommandHandler,
-    target_user: discord.User | None = None,
-    **handler_kwargs,
-) -> CommandResponse:
-    """Create a :class:`CommandContext` and execute the handler."""
-
-    context = _build_context(session, interaction, scope, target_user)
-    return handler(context, **handler_kwargs)
 
 
 def _build_context(
