@@ -5,15 +5,16 @@ SQLAdmin views for the knowledge base database models.
 import logging
 
 from sqladmin import Admin, ModelView
+
 from memory.common.db.models import (
     AgentObservation,
     ArticleFeed,
     BlogPost,
     Book,
     BookSection,
-    ScheduledLLMCall,
     Chunk,
     Comic,
+    DiscordMessage,
     EmailAccount,
     EmailAttachment,
     ForumPost,
@@ -21,6 +22,7 @@ from memory.common.db.models import (
     MiscDoc,
     Note,
     Photo,
+    ScheduledLLMCall,
     SourceItem,
     User,
 )
@@ -151,6 +153,17 @@ class BookAdmin(ModelView, model=Book):
         "published",
     ]
     column_searchable_list = ["title", "author", "id"]
+
+
+class DiscordMessageAdmin(ModelView, model=DiscordMessage):
+    column_list = [
+        "id",
+        "content",
+        "images",
+        "sent_at",
+    ]
+    column_searchable_list = ["content", "id", "images"]
+    column_sortable_list = ["sent_at"]
 
 
 class ArticleFeedAdmin(ModelView, model=ArticleFeed):
@@ -310,6 +323,7 @@ def setup_admin(admin: Admin):
     admin.add_view(ForumPostAdmin)
     admin.add_view(ComicAdmin)
     admin.add_view(PhotoAdmin)
+    admin.add_view(DiscordMessageAdmin)
     admin.add_view(UserAdmin)
     admin.add_view(DiscordUserAdmin)
     admin.add_view(DiscordServerAdmin)

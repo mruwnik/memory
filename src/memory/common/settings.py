@@ -73,6 +73,9 @@ WEBPAGE_STORAGE_DIR = pathlib.Path(
 NOTES_STORAGE_DIR = pathlib.Path(
     os.getenv("NOTES_STORAGE_DIR", FILE_STORAGE_DIR / "notes")
 )
+DISCORD_STORAGE_DIR = pathlib.Path(
+    os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
+)
 PRIVATE_DIRS = [
     EMAIL_STORAGE_DIR,
     NOTES_STORAGE_DIR,
@@ -88,6 +91,7 @@ storage_dirs = [
     PHOTO_STORAGE_DIR,
     WEBPAGE_STORAGE_DIR,
     NOTES_STORAGE_DIR,
+    DISCORD_STORAGE_DIR,
 ]
 for dir in storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)

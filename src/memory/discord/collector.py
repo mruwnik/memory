@@ -24,6 +24,32 @@ from memory.workers.tasks.discord import add_discord_message, edit_discord_messa
 logger = logging.getLogger(__name__)
 
 
+def process_mentions(session: Session | scoped_session, message: str) -> str:
+    """Convert username mentions (<@username>) to ID mentions (<@123456>)"""
+    import re
+
+    def replace_mention(match):
+        mention_content = match.group(1)
+        # If it's already numeric, leave it alone
+        if mention_content.isdigit():
+            return match.group(0)
+
+        # Look up username in database
+        user = (
+            session.query(DiscordUser)
+            .filter(DiscordUser.username == mention_content)
+            .first()
+        )
+
+        if user:
+            return f"<@{user.id}>"
+
+        # If user not found, return original
+        return match.group(0)
+
+    return re.sub(r"<@([^>]+)>", replace_mention, message)
+
+
 # Pure functions for Discord entity creation/updates
 def create_or_update_server(
     session: Session | scoped_session, guild: discord.Guild | None
@@ -233,6 +259,13 @@ class MessageCollector(commands.Bot):
 
                     session.commit()
 
+                # Extract image URLs from attachments
+                image_urls = [
+                    att.url
+                    for att in message.attachments
+                    if att.content_type and att.content_type.startswith("image/")
+                ]
+
                 # Queue the message for processing
                 add_discord_message.delay(
                     message_id=message.id,
@@ -245,6 +278,7 @@ class MessageCollector(commands.Bot):
                     message_reference_id=message.reference.message_id
                     if message.reference
                     else None,
+                    image_urls=image_urls,
                 )
         except Exception as e:
             logger.error(f"Error queuing message {message.id}: {e}")
@@ -373,7 +407,11 @@ class MessageCollector(commands.Bot):
                 logger.error(f"User {user_identifier} not found")
                 return False
 
-            await user.send(message)
+            # Post-process mentions to convert usernames to IDs
+            with make_session() as session:
+                processed_message = process_mentions(session, message)
+
+            await user.send(processed_message)
             logger.info(f"Sent DM to {user_identifier}")
             return True
 
@@ -413,7 +451,11 @@ class MessageCollector(commands.Bot):
                 logger.error(f"Channel {channel_name} not found")
                 return False
 
-            await channel.send(message)
+            # Post-process mentions to convert usernames to IDs
+            with make_session() as session:
+                processed_message = process_mentions(session, message)
+
+            await channel.send(processed_message)
             logger.info(f"Sent message to channel {channel_name}")
             return True
 

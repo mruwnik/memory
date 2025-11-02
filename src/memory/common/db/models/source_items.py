@@ -301,6 +301,7 @@ class DiscordMessage(SourceItem):
         BigInteger, nullable=True
     )  # Discord thread snowflake ID if in thread
     edited_at = Column(DateTime(timezone=True), nullable=True)
+    images = Column(ARRAY(Text), nullable=True)  # List of image URLs
 
     channel = relationship("DiscordChannel", foreign_keys=[channel_id])
     server = relationship("DiscordServer", foreign_keys=[server_id])
@@ -357,6 +358,20 @@ class DiscordMessage(SourceItem):
     @property
     def title(self) -> str:
         return f"{self.from_user.username} ({self.sent_at.isoformat()[:19]}): {self.content}"
+
+    def as_content(self):
+        """Return message content ready for LLM (text + images from disk)."""
+        content = {"text": self.title, "images": []}
+        for path in cast(list[str] | None, self.images) or []:
+            try:
+                full_path = settings.FILE_STORAGE_DIR / path
+                if full_path.exists():
+                    image = Image.open(full_path)
+                    content["images"].append(image)
+            except Exception:
+                pass  # Skip failed image loads
+
+        return content
 
     __mapper_args__ = {
         "polymorphic_identity": "discord_message",

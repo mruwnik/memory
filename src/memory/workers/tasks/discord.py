@@ -4,11 +4,13 @@ Celery tasks for Discord message processing.
 
 import hashlib
 import logging
+import pathlib
 import re
 import textwrap
 from datetime import datetime
 from typing import Any, cast
 
+import requests
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy.orm import Session, scoped_session
 
@@ -32,6 +34,37 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
+    """Download images from URLs and save to disk. Returns relative file paths."""
+    image_dir = settings.DISCORD_STORAGE_DIR / str(message_id)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for url in image_urls:
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            # Generate filename
+            url_hash = hashlib.md5(url.encode()).hexdigest()
+            ext = pathlib.Path(url).suffix or ".jpg"
+            ext = ext.split("?")[0]
+            filename = f"{url_hash}{ext}"
+            local_path = image_dir / filename
+
+            # Save image
+            local_path.write_bytes(response.content)
+
+            # Store relative path from FILE_STORAGE_DIR
+            relative_path = local_path.relative_to(settings.FILE_STORAGE_DIR)
+            saved_paths.append(str(relative_path))
+
+        except Exception as e:
+            logger.error(f"Failed to download/save image from {url}: {e}")
+
+    return saved_paths
 
 
 def get_prev(
@@ -87,8 +120,12 @@ def call_llm(
         message.channel and message.channel.id,
         max_messages=10,
     )
+
+    # Build message list: previous messages + current message + any extra text msgs
+    message_content = [m.as_content() for m in messages + [message]] + msgs
+
     return provider.run_with_tools(
-        messages=provider.as_messages([m.title for m in messages] + msgs),
+        messages=provider.as_messages(message_content),
         tools=tools,
         system_prompt=system_prompt,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
@@ -226,6 +263,7 @@ def add_discord_message(
     server_id: int | None = None,
     recipient_id: int | None = None,
     message_reference_id: int | None = None,
+    image_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Add a Discord message to the database.
@@ -236,6 +274,11 @@ def add_discord_message(
     # Include message_id in hash to ensure uniqueness across duplicate content
     content_hash = hashlib.sha256(f"{message_id}:{content}".encode()).digest()
     sent_at_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+
+    # Download and save images to disk
+    saved_image_paths = []
+    if image_urls:
+        saved_image_paths = download_and_save_images(image_urls, message_id)
 
     with make_session() as session:
         discord_message = DiscordMessage(
@@ -250,6 +293,7 @@ def add_discord_message(
             message_id=message_id,
             message_type="reply" if message_reference_id else "default",
             reply_to_message_id=message_reference_id,
+            images=saved_image_paths or None,
         )
         existing_msg = check_content_exists(
             session, DiscordMessage, message_id=message_id, sha256=content_hash

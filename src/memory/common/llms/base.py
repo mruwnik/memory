@@ -171,13 +171,17 @@ class Message:
 
     @staticmethod
     def user(
-        text: str | None = None, tool_result: ToolResultContent | None = None
+        text: str | None = None,
+        images: list[Image.Image] | None = None,
+        tool_result: ToolResultContent | None = None,
     ) -> "Message":
         parts = []
         if text:
             parts.append(TextContent(text=text))
         if tool_result:
             parts.append(tool_result)
+        for image in images or []:
+            parts.append(ImageContent(image=image))
         return Message(role=MessageRole.USER, content=parts)
 
 
@@ -625,8 +629,16 @@ class BaseLLMProvider(ABC):
             tool_calls=tool_calls or None,
         )
 
-    def as_messages(self, messages) -> list[Message]:
-        return [Message.user(text=msg) for msg in messages]
+    def as_messages(self, messages: list[dict[str, Any] | str]) -> list[Message]:
+        def make_message(msg: dict[str, Any] | str) -> Message:
+            if isinstance(msg, str):
+                return Message.user(text=msg)
+            elif isinstance(msg, dict):
+                return Message.user(text=msg["text"], images=msg.get("images"))
+            else:
+                raise ValueError(f"Unknown message type: {type(msg)}")
+
+        return [make_message(msg) for msg in messages]
 
 
 def create_provider(
