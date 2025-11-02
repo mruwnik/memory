@@ -2,41 +2,45 @@ import logging
 from datetime import datetime, timezone
 from typing import cast
 
-from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall
+from memory.common import settings
 from memory.common.celery_app import (
-    app,
     EXECUTE_SCHEDULED_CALL,
     RUN_SCHEDULED_CALLS,
+    app,
 )
-from memory.common import llms, discord
+from memory.common.db.connection import make_session
+from memory.common.db.models import ScheduledLLMCall
+from memory.discord.messages import call_llm, send_discord_response
 from memory.workers.tasks.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
 
 
+def _call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | None:
+    """Call LLM with tools support for scheduled calls."""
+    if not scheduled_call.discord_user:
+        logger.warning("No discord_user for scheduled call - cannot execute")
+        return None
+
+    model = cast(str, scheduled_call.model or settings.DISCORD_MODEL)
+    system_prompt = cast(str, scheduled_call.system_prompt or "")
+    message = cast(str, scheduled_call.message)
+    allowed_tools_list = cast(list[str] | None, scheduled_call.allowed_tools)
+
+    return call_llm(
+        session=session,
+        bot_user=scheduled_call.user,
+        from_user=scheduled_call.discord_user,
+        channel=scheduled_call.discord_channel,
+        messages=[message],
+        model=model,
+        system_prompt=system_prompt,
+        allowed_tools=allowed_tools_list,
+    )
+
+
 def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
-    """
-    Send the LLM response to the specified Discord user.
-
-    Args:
-        scheduled_call: The scheduled call object
-        response: The LLM response to send
-    """
-    # Format the message with topic, model, and response
-    message_parts = []
-    if cast(str, scheduled_call.topic):
-        message_parts.append(f"**Topic:** {scheduled_call.topic}")
-    if cast(str, scheduled_call.model):
-        message_parts.append(f"**Model:** {scheduled_call.model}")
-    message_parts.append(f"**Response:** {response}")
-
-    message = "\n".join(message_parts)
-
-    # Discord has a 2000 character limit, so we may need to split the message
-    if len(message) > 1900:  # Leave some buffer
-        message = message[:1900] + "\n\n... (response truncated)"
-
+    """Send the LLM response to Discord user or channel."""
     bot_id_value = scheduled_call.user_id
     if bot_id_value is None:
         logger.warning(
@@ -47,16 +51,16 @@ def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
 
     bot_id = cast(int, bot_id_value)
 
-    if discord_user := scheduled_call.discord_user:
-        logger.info(f"Sending DM to {discord_user.username}: {message}")
-        discord.send_dm(bot_id, discord_user.username, message)
-    elif discord_channel := scheduled_call.discord_channel:
-        logger.info(f"Broadcasting message to {discord_channel.name}: {message}")
-        discord.broadcast_message(bot_id, discord_channel.name, message)
-    else:
-        logger.warning(
-            f"No Discord user or channel found for scheduled call {scheduled_call.id}"
-        )
+    send_discord_response(
+        bot_id=bot_id,
+        response=response,
+        channel_id=cast(int, scheduled_call.discord_channel.id)
+        if scheduled_call.discord_channel
+        else None,
+        user_identifier=scheduled_call.discord_user.username
+        if scheduled_call.discord_user
+        else None,
+    )
 
 
 @app.task(bind=True, name=EXECUTE_SCHEDULED_CALL)
@@ -92,15 +96,29 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
         logger.info(f"Calling LLM with model {scheduled_call.model}")
 
-        # Make the LLM call
-        if scheduled_call.model:
-            response = llms.summarize(
-                prompt=cast(str, scheduled_call.message),
-                model=cast(str, scheduled_call.model),
-                system_prompt=cast(str, scheduled_call.system_prompt),
-            )
-        else:
-            response = cast(str, scheduled_call.message)
+        # Make the LLM call with tools support
+        try:
+            response = _call_llm_for_scheduled(session, scheduled_call)
+        except Exception:
+            logger.exception("Failed to generate LLM response")
+            scheduled_call.status = "failed"
+            scheduled_call.error_message = "LLM call failed"
+            session.commit()
+            return {
+                "success": False,
+                "error": "LLM call failed",
+                "scheduled_call_id": scheduled_call_id,
+            }
+
+        if not response:
+            scheduled_call.status = "failed"
+            scheduled_call.error_message = "No response from LLM"
+            session.commit()
+            return {
+                "success": False,
+                "error": "No response from LLM",
+                "scheduled_call_id": scheduled_call_id,
+            }
 
         # Store the response
         scheduled_call.response = response

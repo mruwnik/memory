@@ -1,16 +1,20 @@
 import logging
 import textwrap
+from collections.abc import Collection
 from datetime import datetime, timezone
 from typing import Any, cast
 
 from sqlalchemy.orm import Session, scoped_session
 
+from memory.common import discord, settings
 from memory.common.db.models import (
     DiscordChannel,
+    DiscordMessage,
     DiscordUser,
     ScheduledLLMCall,
-    DiscordMessage,
 )
+from memory.common.db.models.users import BotUser
+from memory.common.llms.base import create_provider
 
 logger = logging.getLogger(__name__)
 
@@ -199,3 +203,94 @@ def comm_channel_prompt(
         You will be given the last {max_messages} messages in the conversation.
         Please react to them appropriately. You can return an empty response if you don't have anything to say.
     """).format(server_context=server_context, max_messages=max_messages)
+
+
+def call_llm(
+    session: Session | scoped_session,
+    bot_user: BotUser,
+    from_user: DiscordUser | None,
+    channel: DiscordChannel | None,
+    model: str,
+    system_prompt: str = "",
+    messages: list[str | dict[str, Any]] = [],
+    allowed_tools: Collection[str] | None = None,
+    num_previous_messages: int = 10,
+) -> str | None:
+    """
+    Call LLM with Discord tools support.
+
+    Args:
+        session: Database session
+        bot_user: Bot user making the call
+        from_user: Discord user who initiated the interaction
+        channel: Discord channel (if any)
+        messages: List of message strings or dicts with text/images
+        model: LLM model to use
+        system_prompt: System prompt
+        allowed_tools: List of allowed tool names (None = all tools allowed)
+
+    Returns:
+        LLM response or None if failed
+    """
+    provider = create_provider(model=model)
+
+    if provider.usage_tracker.is_rate_limited(model):
+        logger.error(
+            f"Rate limited for model {model}: {provider.usage_tracker.get_usage_breakdown(model=model)}"
+        )
+        return None
+
+    user_id = None
+    if from_user and not channel:
+        user_id = from_user.id
+    prev_messages = previous_messages(
+        session,
+        user_id,
+        channel and channel.id,
+        max_messages=num_previous_messages,
+    )
+
+    from memory.common.llms.tools.discord import make_discord_tools
+
+    tools = make_discord_tools(bot_user, from_user, channel, model=model)
+
+    # Filter to allowed tools if specified
+    if allowed_tools is not None:
+        tools = {name: tool for name, tool in tools.items() if name in allowed_tools}
+
+    message_content = [m.as_content() for m in prev_messages] + messages
+    return provider.run_with_tools(
+        messages=provider.as_messages(message_content),
+        tools=tools,
+        system_prompt=system_prompt,
+        max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
+    ).response
+
+
+def send_discord_response(
+    bot_id: int,
+    response: str,
+    channel_id: int | None = None,
+    user_identifier: str | None = None,
+) -> bool:
+    """
+    Send a response to Discord channel or user.
+
+    Args:
+        bot_id: Bot user ID
+        response: Message to send
+        channel_id: Channel ID (for channel messages)
+        user_identifier: Username (for DMs)
+
+    Returns:
+        True if sent successfully
+    """
+    if channel_id is not None:
+        logger.info(f"Sending message to channel {channel_id}")
+        return discord.send_to_channel(bot_id, channel_id, response)
+    elif user_identifier is not None:
+        logger.info(f"Sending DM to {user_identifier}")
+        return discord.send_dm(bot_id, user_identifier, response)
+    else:
+        logger.error("Neither channel_id nor user_identifier provided")
+        return False

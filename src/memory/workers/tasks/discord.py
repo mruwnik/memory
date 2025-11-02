@@ -23,9 +23,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, DiscordUser
-from memory.common.llms.base import create_provider
-from memory.common.llms.tools.discord import make_discord_tools
-from memory.discord.messages import comm_channel_prompt, previous_messages
+from memory.discord.messages import call_llm, comm_channel_prompt, send_discord_response
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_task_result,
@@ -84,54 +82,6 @@ def get_prev(
     return [f"{msg.username}: {msg.content}" for msg in prev[::-1]]
 
 
-def call_llm(
-    session,
-    message: DiscordMessage,
-    model: str,
-    msgs: list[str] = [],
-    allowed_tools: list[str] | None = None,
-) -> str | None:
-    provider = create_provider(model=model)
-    if provider.usage_tracker.is_rate_limited(model):
-        logger.error(
-            f"Rate limited for model {model}: {provider.usage_tracker.get_usage_breakdown(model=model)}"
-        )
-        return None
-
-    tools = make_discord_tools(
-        message.recipient_user.system_user,
-        message.from_user,
-        message.channel,
-        model=model,
-    )
-    tools = {
-        name: tool
-        for name, tool in tools.items()
-        if message.tool_allowed(name)
-        and (allowed_tools is None or name in allowed_tools)
-    }
-    system_prompt = message.system_prompt or ""
-    system_prompt += comm_channel_prompt(
-        session, message.recipient_user, message.channel
-    )
-    messages = previous_messages(
-        session,
-        message.recipient_user and message.recipient_user.id,
-        message.channel and message.channel.id,
-        max_messages=10,
-    )
-
-    # Build message list: previous messages + current message + any extra text msgs
-    message_content = [m.as_content() for m in messages + [message]] + msgs
-
-    return provider.run_with_tools(
-        messages=provider.as_messages(message_content),
-        tools=tools,
-        system_prompt=system_prompt,
-        max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
-    ).response
-
-
 def should_process(message: DiscordMessage) -> bool:
     if not (
         settings.DISCORD_PROCESS_MESSAGES
@@ -155,16 +105,26 @@ def should_process(message: DiscordMessage) -> bool:
                 <reason>I want to continue the conversation because I think it's important.</reason>
             </response>
         """)
+
+        system_prompt = message.system_prompt or ""
+        system_prompt += comm_channel_prompt(
+            session, message.recipient_user, message.channel
+        )
+        allowed_tools = [
+            "update_channel_summary",
+            "update_user_summary",
+            "update_server_summary",
+        ]
+
         response = call_llm(
             session,
-            message,
-            settings.SUMMARIZER_MODEL,
-            [msg],
-            allowed_tools=[
-                "update_channel_summary",
-                "update_user_summary",
-                "update_server_summary",
-            ],
+            bot_user=message.recipient_user.system_user,
+            from_user=message.from_user,
+            channel=message.channel,
+            model=settings.SUMMARIZER_MODEL,
+            system_prompt=system_prompt,
+            messages=[msg],
+            allowed_tools=message.filter_tools(allowed_tools),
         )
         if not response:
             return False
@@ -230,23 +190,40 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
             }
 
         try:
-            response = call_llm(session, discord_message, settings.DISCORD_MODEL)
+            response = call_llm(
+                session,
+                bot_user=discord_message.recipient_user.system_user,
+                from_user=discord_message.from_user,
+                channel=discord_message.channel,
+                model=settings.DISCORD_MODEL,
+                system_prompt=discord_message.system_prompt,
+            )
         except Exception:
             logger.exception("Failed to generate Discord response")
-
-        print("response:", response)
+            return {
+                "status": "error",
+                "error": "Failed to generate Discord response",
+                "message_id": message_id,
+            }
         if not response:
             return {
-                "status": "processed",
+                "status": "no-response",
                 "message_id": message_id,
             }
 
-        if discord_message.channel.server:
-            discord.send_to_channel(
-                bot_id, cast(int, discord_message.channel_id), response
-            )
-        else:
-            discord.send_dm(bot_id, discord_message.from_user.username, response)
+        res = send_discord_response(
+            bot_id=bot_id,
+            response=response,
+            channel_id=discord_message.channel_id,
+            user_identifier=discord_message.from_user
+            and discord_message.from_user.username,
+        )
+        if not res:
+            return {
+                "status": "error",
+                "error": "Failed to send Discord response",
+                "message_id": message_id,
+            }
 
     return {
         "status": "processed",

@@ -5,6 +5,7 @@ Database models for the knowledge base system.
 import pathlib
 import textwrap
 from datetime import datetime
+from collections.abc import Collection
 from typing import Any, Annotated, Sequence, cast
 
 from PIL import Image
@@ -309,16 +310,16 @@ class DiscordMessage(SourceItem):
     recipient_user = relationship("DiscordUser", foreign_keys=[recipient_id])
 
     @property
-    def allowed_tools(self) -> list[str]:
-        return (
+    def allowed_tools(self) -> set[str]:
+        return set(
             (self.channel.allowed_tools if self.channel else [])
             + (self.from_user.allowed_tools if self.from_user else [])
             + (self.server.allowed_tools if self.server else [])
         )
 
     @property
-    def disallowed_tools(self) -> list[str]:
-        return (
+    def disallowed_tools(self) -> set[str]:
+        return set(
             (self.channel.disallowed_tools if self.channel else [])
             + (self.from_user.disallowed_tools if self.from_user else [])
             + (self.server.disallowed_tools if self.server else [])
@@ -328,6 +329,11 @@ class DiscordMessage(SourceItem):
         return not (self.disallowed_tools and tool in self.disallowed_tools) and (
             not self.allowed_tools or tool in self.allowed_tools
         )
+
+    def filter_tools(self, tools: Collection[str] | None = None) -> set[str]:
+        if tools is None:
+            return self.allowed_tools - self.disallowed_tools
+        return set(tools) - self.disallowed_tools & self.allowed_tools
 
     @property
     def ignore_messages(self) -> bool:
@@ -359,7 +365,7 @@ class DiscordMessage(SourceItem):
     def title(self) -> str:
         return f"{self.from_user.username} ({self.sent_at.isoformat()[:19]}): {self.content}"
 
-    def as_content(self):
+    def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""
         content = {"text": self.title, "images": []}
         for path in cast(list[str] | None, self.images) or []:
