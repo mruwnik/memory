@@ -51,21 +51,40 @@ class MessageProcessor:
         ),
     )
 
-    def as_xml(self) -> str:
-        return (
-            textwrap.dedent("""
-            <{type}>
-                <name>{name}</name>
-                <summary>{summary}</summary>
-            </{type}>
-        """)
-            .format(
-                type=self.__class__.__tablename__[8:],  # type: ignore
-                name=getattr(self, "name", None) or getattr(self, "username", None),
-                summary=self.summary,
-            )
-            .strip()
-        )
+    @property
+    def entity_type(self) -> str:
+        return self.__class__.__tablename__[8:-1]  # type: ignore
+
+    def to_xml(self, fields: list[str]) -> str:
+        def indent(key: str, text: str) -> str:
+            res = textwrap.dedent("""
+                <{key}>
+                {text}
+                </{key}>
+            """).format(key=key, text=textwrap.indent(text, "    "))
+            return res.strip()
+
+        vals = []
+        if "name" in fields:
+            vals.append(indent("name", self.name))
+        if "system_prompt" in fields:
+            vals.append(indent("system_prompt", self.system_prompt or ""))
+        if "summary" in fields:
+            vals.append(indent("summary", self.summary or ""))
+        if "mcp_servers" in fields:
+            servers = [s.as_xml() for s in self.mcp_servers]
+            vals.append(indent("mcp_servers", "\n".join(servers)))
+
+        return indent(self.entity_type, "\n".join(vals))  # type: ignore
+
+    def xml_prompt(self) -> str:
+        return self.to_xml(["name", "system_prompt"]) if self.system_prompt else ""
+
+    def xml_summary(self) -> str:
+        return self.to_xml(["name", "summary"])
+
+    def xml_mcp_servers(self) -> str:
+        return self.to_xml(["mcp_servers"])
 
 
 class DiscordServer(Base, MessageProcessor):
@@ -130,6 +149,10 @@ class DiscordUser(Base, MessageProcessor):
 
     __table_args__ = (Index("discord_users_system_user_idx", "system_user_id"),)
 
+    @property
+    def name(self) -> str:
+        return self.username
+
 
 class MCPServer(Base):
     """MCP server configuration and OAuth state."""
@@ -163,6 +186,30 @@ class MCPServer(Base):
     )
 
     __table_args__ = (Index("mcp_state_idx", "state"),)
+
+    def as_xml(self) -> str:
+        tools = "\n".join(f"• {tool}" for tool in self.available_tools).strip()
+        return textwrap.dedent("""
+            <mcp_server>
+                <name>
+                    {name}
+                </name>
+                <mcp_server_url>
+                    {mcp_server_url}
+                </mcp_server_url>
+                <client_id>
+                    {client_id}
+                </client_id>
+                <available_tools>
+                    {available_tools}
+                </available_tools>
+            </mcp_server>
+        """).format(
+            name=self.name,
+            mcp_server_url=self.mcp_server_url,
+            client_id=self.client_id,
+            available_tools=tools,
+        )
 
 
 class MCPServerAssignment(Base):

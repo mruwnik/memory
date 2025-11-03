@@ -345,11 +345,12 @@ class DiscordMessage(SourceItem):
 
     @property
     def system_prompt(self) -> str:
-        return (
-            (self.from_user and self.from_user.system_prompt)
-            or (self.channel and self.channel.system_prompt)
-            or (self.server and self.server.system_prompt)
-        )
+        prompts = [
+            (self.from_user and self.from_user.system_prompt),
+            (self.channel and self.channel.system_prompt),
+            (self.server and self.server.system_prompt),
+        ]
+        return "\n\n".join(p for p in prompts if p)
 
     @property
     def chattiness_threshold(self) -> int:

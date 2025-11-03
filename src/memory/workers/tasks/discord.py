@@ -210,6 +210,11 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 for server in discord_message.recipient_user.mcp_servers
             ]
 
+        system_prompt = discord_message.system_prompt or ""
+        system_prompt += comm_channel_prompt(
+            session, discord_message.recipient_user, discord_message.channel
+        )
+
         try:
             response = call_llm(
                 session,
