@@ -246,8 +246,8 @@ class MessageCollector(commands.Bot):
 
     async def on_ready(self):
         """Called when bot connects to Discord"""
-        logger.info(f"Discord collector connected as {self.user}")
-        logger.info(f"Connected to {len(self.guilds)} servers")
+        logger.error(f"Discord collector connected as {self.user}")
+        logger.error(f"Connected to {len(self.guilds)} servers")
 
         # Sync server and channel metadata
         await self.sync_servers_and_channels()
@@ -257,7 +257,7 @@ class MessageCollector(commands.Bot):
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Failed to sync slash commands: %s", exc)
 
-        logger.info("Discord message collector ready")
+        logger.error("Discord message collector ready")
 
     async def on_message(self, message: discord.Message):
         """Queue incoming message for database storage"""
