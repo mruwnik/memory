@@ -363,16 +363,6 @@ def create_list_group(
             mcp_servers = [mcp_server.as_xml() for mcp_server in mcp_servers]
             res = "\n\n".join(mcp_servers)
             await respond(interaction, res)
-        # def handler(objects: DiscordObjects) -> str:
-        #     servers = [s.as_xml() for obj in objects.items for s in obj.mcp_servers]
-        #     return "\n\n".join(servers) if servers else "No MCP servers configured."
-
-        # try:
-        #     res = with_object_context(bot, interaction, handler, user)
-        # except Exception as exc:
-        #     logger.error(f"Error listing MCP servers: {exc}", exc_info=True)
-        #     return CommandResponse(content="Error listing MCP servers.")
-        # await respond(interaction, res)
 
     return group
 

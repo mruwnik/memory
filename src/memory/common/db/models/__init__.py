@@ -34,6 +34,8 @@ from memory.common.db.models.discord import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
+)
+from memory.common.db.models.mcp import (
     MCPServer,
     MCPServerAssignment,
 )

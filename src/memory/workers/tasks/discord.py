@@ -196,20 +196,7 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
-        mcp_servers = None
-        if (
-            discord_message.recipient_user
-            and discord_message.recipient_user.mcp_servers
-        ):
-            mcp_servers = [
-                MCPServer(
-                    name=server.mcp_server_url,
-                    url=server.mcp_server_url,
-                    token=server.access_token,
-                )
-                for server in discord_message.recipient_user.mcp_servers
-            ]
-
+        mcp_servers = discord_message.get_mcp_servers(session)
         system_prompt = discord_message.system_prompt or ""
         system_prompt += comm_channel_prompt(
             session, discord_message.recipient_user, discord_message.channel

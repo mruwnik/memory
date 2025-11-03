@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urljoin
 
 import aiohttp
 from memory.common import settings
-from memory.common.db.models.discord import MCPServer
+from memory.common.db.models import MCPServer
 
 logger = logging.getLogger(__name__)
 

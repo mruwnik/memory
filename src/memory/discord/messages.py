@@ -12,9 +12,9 @@ from memory.common.db.models import (
     DiscordMessage,
     DiscordUser,
     ScheduledLLMCall,
+    MCPServer as MCPServerModel,
 )
 from memory.common.llms.base import create_provider
-from memory.common.llms.tools import MCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ def comm_channel_prompt(
             {users}
             </user_notes>
         """).format(
-            users="\n".join({msg.from_user.as_xml() for msg in messages}),
+            users="\n".join({msg.from_user.xml_summary() for msg in messages}),
         )
 
     return textwrap.dedent("""
@@ -212,7 +212,7 @@ def call_llm(
     system_prompt: str = "",
     messages: list[str | dict[str, Any]] = [],
     allowed_tools: Collection[str] | None = None,
-    mcp_servers: list[MCPServer] | None = None,
+    mcp_servers: list[MCPServerModel] | None = None,
     num_previous_messages: int = 10,
 ) -> str | None:
     """
@@ -251,6 +251,7 @@ def call_llm(
 
     from memory.common.llms.tools.discord import make_discord_tools
     from memory.common.llms.tools.base import WebSearchTool
+    from memory.common.llms.tools import MCPServer
 
     tools = make_discord_tools(bot_user.system_user, from_user, channel, model=model)
     tools |= {"web_search": WebSearchTool()}
@@ -266,7 +267,16 @@ def call_llm(
         messages=provider.as_messages(message_content),
         tools=tools,
         system_prompt=(bot_user.system_prompt or "") + "\n\n" + (system_prompt or ""),
-        mcp_servers=mcp_servers,
+        mcp_servers=[
+            MCPServer(
+                name=str(server.name),
+                url=str(server.mcp_server_url),
+                token=str(server.access_token),
+            )
+            for server in mcp_servers
+        ]
+        if mcp_servers
+        else None,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
     ).response
 

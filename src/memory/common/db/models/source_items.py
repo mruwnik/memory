@@ -36,6 +36,10 @@ from memory.common.db.models.source_item import (
     clean_filename,
     chunk_mixed,
 )
+from memory.common.db.models.mcp import (
+    MCPServer,
+    MCPServerAssignment,
+)
 
 
 class MailMessagePayload(SourceItemPayload):
@@ -391,6 +395,29 @@ class DiscordMessage(SourceItem):
                 pass  # Skip failed image loads
 
         return content
+
+    def get_mcp_servers(self, session) -> list[MCPServer]:
+        entity_ids = list(
+            filter(
+                None,
+                [
+                    self.recipient_user.id,
+                    self.from_user.id,
+                    self.channel.id,
+                    self.server.id,
+                ],
+            )
+        )
+        if not entity_ids:
+            return None
+
+        return (
+            session.query(MCPServer)
+            .filter(
+                MCPServerAssignment.entity_id.in_(entity_ids),
+            )
+            .all()
+        )
 
     __mapper_args__ = {
         "polymorphic_identity": "discord_message",
