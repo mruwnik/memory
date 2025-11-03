@@ -14,6 +14,7 @@ from memory.common.db.models import (
     BookSection,
     Chunk,
     Comic,
+    DiscordMCPServer,
     DiscordMessage,
     EmailAccount,
     EmailAttachment,
@@ -164,6 +165,37 @@ class DiscordMessageAdmin(ModelView, model=DiscordMessage):
     ]
     column_searchable_list = ["content", "id", "images"]
     column_sortable_list = ["sent_at"]
+
+
+class DiscordMCPServerAdmin(ModelView, model=DiscordMCPServer):
+    column_list = [
+        "id",
+        "mcp_server_url",
+        "client_id",
+        "discord_bot_user_id",
+        "state",
+        "code_verifier",
+        "access_token",
+        "refresh_token",
+        "token_expires_at",
+        "created_at",
+        "updated_at",
+    ]
+    column_searchable_list = [
+        "mcp_server_url",
+        "client_id",
+        "state",
+        "id",
+        "discord_bot_user_id",
+    ]
+    column_sortable_list = [
+        "created_at",
+        "updated_at",
+        "mcp_server_url",
+        "client_id",
+        "state",
+        "id",
+    ]
 
 
 class ArticleFeedAdmin(ModelView, model=ArticleFeed):
@@ -328,4 +360,5 @@ def setup_admin(admin: Admin):
     admin.add_view(DiscordUserAdmin)
     admin.add_view(DiscordServerAdmin)
     admin.add_view(DiscordChannelAdmin)
+    admin.add_view(DiscordMCPServerAdmin)
     admin.add_view(ScheduledLLMCallAdmin)

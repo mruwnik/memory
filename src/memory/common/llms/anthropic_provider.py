@@ -164,9 +164,6 @@ class AnthropicProvider(BaseLLMProvider):
                 kwargs["temperature"] = 1.0
                 kwargs.pop("top_p", None)
 
-        for k, v in kwargs.items():
-            print(f"{k}: {v}")
-
         return kwargs
 
     def _handle_stream_event(

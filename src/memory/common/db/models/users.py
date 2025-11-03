@@ -1,22 +1,23 @@
 import hashlib
 import secrets
-from typing import cast
 import uuid
-from sqlalchemy.orm import Session
-from memory.common.db.models.base import Base
+from typing import cast
+
 from sqlalchemy import (
+    ARRAY,
+    Boolean,
+    CheckConstraint,
     Column,
-    Integer,
-    String,
     DateTime,
     ForeignKey,
-    Boolean,
-    ARRAY,
+    Integer,
     Numeric,
-    CheckConstraint,
+    String,
 )
+from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+
+from memory.common.db.models.base import Base
 
 
 def hash_password(password: str) -> str:

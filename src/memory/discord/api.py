@@ -18,9 +18,9 @@ from pydantic import BaseModel
 
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models.users import DiscordBotUser
+from memory.common.db.models import DiscordMCPServer, DiscordBotUser
+from memory.common.oauth import complete_oauth_flow
 from memory.discord.collector import MessageCollector
-from memory.discord.oauth import complete_oauth_flow
 
 logger = logging.getLogger(__name__)
 
@@ -277,51 +277,6 @@ async def refresh_metadata():
     except Exception as e:
         logger.error(f"Failed to refresh metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/oauth/callback/discord", response_class=HTMLResponse)
-async def oauth_callback(request: Request):
-    """Handle OAuth callback from MCP server after user authorization."""
-    code = request.query_params.get("code")
-    state = request.query_params.get("state")
-    error = request.query_params.get("error")
-
-    logger.info(
-        f"Received OAuth callback: code={code and code[:20]}..., state={state and state[:20]}..."
-    )
-
-    message, title, close, status_code = "", "", "", 200
-    if error:
-        logger.error(f"OAuth error: {error}")
-        message = f"Error: {error}"
-        title = "❌ Authorization Failed"
-        status_code = 400
-    elif not code or not state:
-        message = "Missing authorization code or state parameter."
-        title = "❌ Invalid Request"
-        status_code = 400
-    else:
-        # Complete the OAuth flow (exchange code for token)
-        with make_session() as session:
-            status_code, message = await complete_oauth_flow(session, code, state)
-        if 200 <= status_code < 300:
-            title = "✅ Authorization Successful!"
-            close = "You can close this window and return to the MCP server."
-        else:
-            title = "❌ Authorization Failed"
-
-    return HTMLResponse(
-        content=f"""
-        <html>
-            <body>
-                <h1>{title}</h1>
-                <p>{message}</p>
-                <p>{close}</p>
-            </body>
-        </html>
-        """,
-        status_code=status_code,
-    )
 
 
 def run_discord_api_server(host: str = "127.0.0.1", port: int = 8001):

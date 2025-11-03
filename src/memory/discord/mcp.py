@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, scoped_session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models.discord import DiscordMCPServer
-from memory.discord.oauth import get_endpoints, issue_challenge, register_oauth_client
+from memory.common.oauth import get_endpoints, issue_challenge, register_oauth_client
 
 logger = logging.getLogger(__name__)
 

@@ -1,13 +1,21 @@
-from datetime import datetime, timedelta, timezone
 import logging
+from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, Depends, Request, Response, APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy.orm import Session as DBSession
+from sqlalchemy.orm import scoped_session
 from starlette.middleware.base import BaseHTTPMiddleware
-from memory.common import settings
-from sqlalchemy.orm import Session as DBSession, scoped_session
 
+from memory.common import settings
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models.users import User, HumanUser, BotUser, UserSession
+from memory.common.db.models import (
+    BotUser,
+    DiscordMCPServer,
+    HumanUser,
+    User,
+    UserSession,
+)
+from memory.common.oauth import complete_oauth_flow
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +142,58 @@ def logout(request: Request, db: DBSession = Depends(get_session)):
 def get_me(user: User = Depends(get_current_user)):
     """Get current user info"""
     return user.serialize()
+
+
+@router.get("/callback/discord")
+async def oauth_callback_discord(request: Request):
+    """Get current user info"""
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+
+    logger.info(
+        f"Received OAuth callback: code={code and code[:20]}..., state={state and state[:20]}..."
+    )
+
+    message, title, close, status_code = "", "", "", 200
+    if error:
+        logger.error(f"OAuth error: {error}")
+        message = f"Error: {error}"
+        title = "❌ Authorization Failed"
+        status_code = 400
+    elif not code or not state:
+        message = "Missing authorization code or state parameter."
+        title = "❌ Invalid Request"
+        status_code = 400
+    else:
+        # Complete the OAuth flow (exchange code for token)
+        with make_session() as session:
+            mcp_server = (
+                session.query(DiscordMCPServer)
+                .filter(DiscordMCPServer.state == state)
+                .first()
+            )
+            status_code, message = await complete_oauth_flow(mcp_server, code, state)
+            session.commit()
+
+        if 200 <= status_code < 300:
+            title = "✅ Authorization Successful!"
+            close = "You can close this window and return to the MCP server."
+        else:
+            title = "❌ Authorization Failed"
+
+    return Response(
+        content=f"""
+        <html>
+            <body>
+                <h1>{title}</h1>
+                <p>{message}</p>
+                <p>{close}</p>
+            </body>
+        </html>
+        """,
+        status_code=status_code,
+    )
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):

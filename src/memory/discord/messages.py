@@ -13,8 +13,8 @@ from memory.common.db.models import (
     DiscordUser,
     ScheduledLLMCall,
 )
-from memory.common.db.models.users import BotUser
 from memory.common.llms.base import create_provider
+from memory.common.llms.tools import MCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +216,7 @@ def call_llm(
     system_prompt: str = "",
     messages: list[str | dict[str, Any]] = [],
     allowed_tools: Collection[str] | None = None,
+    mcp_servers: list[MCPServer] | None = None,
     num_previous_messages: int = 10,
 ) -> str | None:
     """
@@ -269,6 +270,7 @@ def call_llm(
         messages=provider.as_messages(message_content),
         tools=tools,
         system_prompt=bot_user.system_prompt + "\n\n" + system_prompt,
+        mcp_servers=mcp_servers,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,
     ).response
 

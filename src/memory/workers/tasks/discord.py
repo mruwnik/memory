@@ -10,6 +10,7 @@ import textwrap
 from datetime import datetime
 from typing import Any, cast
 
+from memory.common.llms.tools import MCPServer
 import requests
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy.orm import Session, scoped_session
@@ -189,6 +190,20 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
+        mcp_servers = None
+        if (
+            discord_message.recipient_user
+            and discord_message.recipient_user.mcp_servers
+        ):
+            mcp_servers = [
+                MCPServer(
+                    name=server.mcp_server_url,
+                    url=server.mcp_server_url,
+                    token=server.access_token,
+                )
+                for server in discord_message.recipient_user.mcp_servers
+            ]
+
         try:
             response = call_llm(
                 session,
@@ -196,6 +211,7 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 from_user=discord_message.from_user,
                 channel=discord_message.channel,
                 model=settings.DISCORD_MODEL,
+                mcp_servers=mcp_servers,
                 system_prompt=discord_message.system_prompt,
             )
         except Exception:

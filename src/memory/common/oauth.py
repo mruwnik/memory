@@ -7,9 +7,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
-from sqlalchemy.orm import Session, scoped_session
 from memory.common import settings
-from memory.common.db.connection import make_session
 from memory.common.db.models.discord import DiscordMCPServer
 
 logger = logging.getLogger(__name__)
@@ -99,7 +97,7 @@ async def get_endpoints(url: str) -> OAuthEndpoints:
         authorization_endpoint=authorization_endpoint,
         registration_endpoint=registration_endpoint,
         token_endpoint=token_endpoint,
-        redirect_uri=f"{settings.SERVER_URL}/oauth/callback/discord",
+        redirect_uri=f"{settings.SERVER_URL}/auth/callback/discord",
     )
 
 
@@ -181,7 +179,7 @@ async def issue_challenge(
 
 
 async def complete_oauth_flow(
-    session: Session | scoped_session, code: str, state: str
+    mcp_server: DiscordMCPServer, code: str, state: str
 ) -> tuple[int, str]:
     """Complete OAuth flow by exchanging code for token.
 
@@ -193,12 +191,6 @@ async def complete_oauth_flow(
         Tuple of (status_code, html_message) for the callback response
     """
     try:
-        mcp_server = (
-            session.query(DiscordMCPServer)
-            .filter(DiscordMCPServer.state == state)
-            .first()
-        )
-
         if not mcp_server:
             logger.error(f"Invalid or expired state: {state[:20]}...")
             return 400, "Invalid or expired OAuth state"
@@ -253,8 +245,6 @@ async def complete_oauth_flow(
         # Clear temporary OAuth flow data
         mcp_server.state = None  # type: ignore
         mcp_server.code_verifier = None  # type: ignore
-
-        session.commit()
 
         logger.info(
             f"Stored tokens for user {mcp_server.discord_bot_user_id}, "
