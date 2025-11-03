@@ -179,17 +179,14 @@ def should_track_message(
     channel: DiscordChannel,
     user: DiscordUser,
 ) -> bool:
-    """Pure function to determine if we should track this message"""
-    if server and not server.track_messages:  # type: ignore
+    if server and server.ignore_messages:
         return False
 
-    if not channel.track_messages:
+    if channel.ignore_messages:
         return False
 
     if channel.channel_type in ("dm", "group_dm"):
-        return bool(user.track_messages)
-
-    # Default: track the message
+        return not user.ignore_messages
     return True
 
 

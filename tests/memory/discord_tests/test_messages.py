@@ -1,5 +1,8 @@
 """Tests for Discord message helper functions."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from memory.discord.messages import (
@@ -9,6 +12,7 @@ from memory.discord.messages import (
     upsert_scheduled_message,
     previous_messages,
     comm_channel_prompt,
+    call_llm,
 )
 from memory.common.db.models import (
     DiscordUser,
@@ -18,6 +22,7 @@ from memory.common.db.models import (
     HumanUser,
     ScheduledLLMCall,
 )
+from memory.common.llms.tools import MCPServer as MCPServerDefinition
 
 
 @pytest.fixture
@@ -411,3 +416,107 @@ def test_comm_channel_prompt_includes_user_notes(
 
     assert "user_notes" in result.lower()
     assert "testuser" in result  # username should appear
+
+
+@patch("memory.discord.messages.create_provider")
+@patch("memory.discord.messages.previous_messages")
+@patch("memory.common.llms.tools.discord.make_discord_tools")
+@patch("memory.common.llms.tools.base.WebSearchTool")
+def test_call_llm_includes_web_search_and_mcp_servers(
+    mock_web_search,
+    mock_make_tools,
+    mock_prev_messages,
+    mock_create_provider,
+):
+    provider = MagicMock()
+    provider.usage_tracker.is_rate_limited.return_value = False
+    provider.as_messages.return_value = ["converted"]
+    provider.run_with_tools.return_value = SimpleNamespace(response="llm-output")
+    mock_create_provider.return_value = provider
+
+    mock_prev_messages.return_value = [SimpleNamespace(as_content=lambda: "prev")]
+
+    existing_tool = MagicMock(name="existing_tool")
+    mock_make_tools.return_value = {"existing": existing_tool}
+
+    web_tool_instance = MagicMock(name="web_tool")
+    mock_web_search.return_value = web_tool_instance
+
+    bot_user = SimpleNamespace(system_user="system-user", system_prompt="bot prompt")
+    from_user = SimpleNamespace(id=123)
+    mcp_model = SimpleNamespace(
+        name="Server",
+        mcp_server_url="https://mcp.example.com",
+        access_token="token123",
+    )
+
+    result = call_llm(
+        session=MagicMock(),
+        bot_user=bot_user,
+        from_user=from_user,
+        channel=None,
+        model="gpt-test",
+        messages=["hi"],
+        mcp_servers=[mcp_model],
+    )
+
+    assert result == "llm-output"
+
+    kwargs = provider.run_with_tools.call_args.kwargs
+    tools = kwargs["tools"]
+    assert tools["existing"] is existing_tool
+    assert tools["web_search"] is web_tool_instance
+
+    mcp_servers = kwargs["mcp_servers"]
+    assert mcp_servers == [
+        MCPServerDefinition(
+            name="Server", url="https://mcp.example.com", token="token123"
+        )
+    ]
+
+
+@patch("memory.discord.messages.create_provider")
+@patch("memory.discord.messages.previous_messages")
+@patch("memory.common.llms.tools.discord.make_discord_tools")
+@patch("memory.common.llms.tools.base.WebSearchTool")
+def test_call_llm_filters_disallowed_tools(
+    mock_web_search,
+    mock_make_tools,
+    mock_prev_messages,
+    mock_create_provider,
+):
+    provider = MagicMock()
+    provider.usage_tracker.is_rate_limited.return_value = False
+    provider.as_messages.return_value = ["converted"]
+    provider.run_with_tools.return_value = SimpleNamespace(response="filtered-output")
+    mock_create_provider.return_value = provider
+
+    mock_prev_messages.return_value = []
+
+    allowed_tool = MagicMock(name="allowed")
+    blocked_tool = MagicMock(name="blocked")
+    mock_make_tools.return_value = {
+        "allowed": allowed_tool,
+        "blocked": blocked_tool,
+    }
+
+    mock_web_search.return_value = MagicMock(name="web_tool")
+
+    bot_user = SimpleNamespace(system_user="system-user", system_prompt=None)
+    from_user = SimpleNamespace(id=1)
+
+    call_llm(
+        session=MagicMock(),
+        bot_user=bot_user,
+        from_user=from_user,
+        channel=None,
+        model="gpt-test",
+        messages=[],
+        allowed_tools={"allowed"},
+        mcp_servers=None,
+    )
+
+    tools = provider.run_with_tools.call_args.kwargs["tools"]
+    assert "allowed" in tools
+    assert "blocked" not in tools
+    assert "web_search" not in tools

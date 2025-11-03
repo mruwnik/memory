@@ -1,5 +1,7 @@
 """Tests for Discord database models."""
 
+from types import SimpleNamespace
+
 import pytest
 from memory.common.db.models import DiscordServer, DiscordChannel, DiscordUser
 
@@ -19,12 +21,11 @@ def test_create_discord_server(db_session):
     assert server.name == "Test Server"
     assert server.description == "A test Discord server"
     assert server.member_count == 100
-    assert server.track_messages is True  # default value
-    assert server.ignore_messages is False
+    assert server.ignore_messages is False  # default value
 
 
 def test_discord_server_as_xml(db_session):
-    """Test DiscordServer.as_xml() method."""
+    """Test DiscordServer.to_xml() method."""
     server = DiscordServer(
         id=123456789,
         name="Test Server",
@@ -33,11 +34,11 @@ def test_discord_server_as_xml(db_session):
     db_session.add(server)
     db_session.commit()
 
-    xml = server.as_xml()
-    assert "<servers>" in xml  # tablename is discord_servers, strips to "servers"
-    assert "<name>Test Server</name>" in xml
-    assert "<summary>This is a test server for gaming</summary>" in xml
-    assert "</servers>" in xml
+    xml = server.to_xml("name", "summary")
+    assert "<server>" in xml  # tablename is discord_servers, strips to "server"
+    assert "<name>" in xml and "Test Server" in xml
+    assert "<summary>" in xml and "This is a test server for gaming" in xml
+    assert "</server>" in xml
 
 
 def test_discord_server_message_tracking(db_session):
@@ -45,13 +46,11 @@ def test_discord_server_message_tracking(db_session):
     server = DiscordServer(
         id=123456789,
         name="Test Server",
-        track_messages=False,
         ignore_messages=True,
     )
     db_session.add(server)
     db_session.commit()
 
-    assert server.track_messages is False
     assert server.ignore_messages is True
 
 
@@ -111,7 +110,7 @@ def test_discord_channel_without_server(db_session):
 
 
 def test_discord_channel_as_xml(db_session):
-    """Test DiscordChannel.as_xml() method."""
+    """Test DiscordChannel.to_xml() method."""
     channel = DiscordChannel(
         id=111222333,
         name="general",
@@ -121,30 +120,28 @@ def test_discord_channel_as_xml(db_session):
     db_session.add(channel)
     db_session.commit()
 
-    xml = channel.as_xml()
-    assert "<channels>" in xml  # tablename is discord_channels, strips to "channels"
-    assert "<name>general</name>" in xml
-    assert "<summary>Main discussion channel</summary>" in xml
-    assert "</channels>" in xml
+    xml = channel.to_xml("name", "summary")
+    assert "<channel>" in xml  # tablename is discord_channels, strips to "channel"
+    assert "<name>" in xml and "general" in xml
+    assert "<summary>" in xml and "Main discussion channel" in xml
+    assert "</channel>" in xml
 
 
 def test_discord_channel_inherits_server_settings(db_session):
     """Test that channels can have their own or inherit server settings."""
-    server = DiscordServer(
-        id=987654321, name="Server", track_messages=True, ignore_messages=False
-    )
+    server = DiscordServer(id=987654321, name="Server", ignore_messages=False)
     channel = DiscordChannel(
         id=111222333,
         server_id=server.id,
         name="announcements",
         channel_type="text",
-        track_messages=False,  # Override server setting
+        ignore_messages=True,  # Override server setting
     )
     db_session.add_all([server, channel])
     db_session.commit()
 
-    assert server.track_messages is True
-    assert channel.track_messages is False
+    assert server.ignore_messages is False
+    assert channel.ignore_messages is True
 
 
 def test_create_discord_user(db_session):
@@ -186,7 +183,7 @@ def test_discord_user_with_system_user(db_session):
 
 
 def test_discord_user_as_xml(db_session):
-    """Test DiscordUser.as_xml() method."""
+    """Test DiscordUser.to_xml() method."""
     user = DiscordUser(
         id=555666777,
         username="testuser",
@@ -195,11 +192,10 @@ def test_discord_user_as_xml(db_session):
     db_session.add(user)
     db_session.commit()
 
-    xml = user.as_xml()
-    assert "<users>" in xml  # tablename is discord_users, strips to "users"
-    assert "<name>testuser</name>" in xml
-    assert "<summary>Friendly and helpful community member</summary>" in xml
-    assert "</users>" in xml
+    xml = user.to_xml("summary")
+    assert "<user>" in xml  # tablename is discord_users, strips to "user"
+    assert "<summary>" in xml and "Friendly and helpful community member" in xml
+    assert "</user>" in xml
 
 
 def test_discord_user_message_preferences(db_session):
@@ -207,13 +203,11 @@ def test_discord_user_message_preferences(db_session):
     user = DiscordUser(
         id=555666777,
         username="testuser",
-        track_messages=True,
         ignore_messages=False,
     )
     db_session.add(user)
     db_session.commit()
 
-    assert user.track_messages is True
     assert user.ignore_messages is False
 
 
@@ -232,6 +226,21 @@ def test_discord_server_channel_relationship(db_session):
     assert len(server.channels) == 2
     assert channel1 in server.channels
     assert channel2 in server.channels
+
+
+def test_discord_processor_xml_mcp_servers():
+    """Test xml_mcp_servers includes assigned MCP server XML."""
+    server = DiscordServer(id=111, name="Server")
+    mcp_stub = SimpleNamespace(
+        as_xml=lambda: "<mcp_server><name>Example</name></mcp_server>"
+    )
+
+    # Relationship is optional for test purposes; assign directly
+    server.mcp_servers = [mcp_stub]
+
+    xml_output = server.xml_mcp_servers()
+    assert "<mcp_server>" in xml_output
+    assert "Example" in xml_output
 
 
 def test_discord_server_cascade_delete(db_session):

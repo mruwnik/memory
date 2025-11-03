@@ -131,7 +131,7 @@ def test_build_request_kwargs_basic(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(temperature=0.5, max_tokens=1000)
 
-    kwargs = provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
 
     assert kwargs["model"] == "claude-3-opus-20240229"
     assert kwargs["temperature"] == 0.5
@@ -143,7 +143,9 @@ def test_build_request_kwargs_with_system_prompt(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, "system prompt", None, settings)
+    kwargs = provider._build_request_kwargs(
+        messages, "system prompt", None, None, settings
+    )
 
     assert kwargs["system"] == "system prompt"
 
@@ -160,7 +162,7 @@ def test_build_request_kwargs_with_tools(provider):
     ]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, None, tools, settings)
+    kwargs = provider._build_request_kwargs(messages, None, tools, None, settings)
 
     assert "tools" in kwargs
     assert len(kwargs["tools"]) == 1
@@ -170,7 +172,9 @@ def test_build_request_kwargs_with_thinking(thinking_provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(max_tokens=5000)
 
-    kwargs = thinking_provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = thinking_provider._build_request_kwargs(
+        messages, None, None, None, settings
+    )
 
     assert "thinking" in kwargs
     assert kwargs["thinking"]["type"] == "enabled"
@@ -183,7 +187,9 @@ def test_build_request_kwargs_thinking_insufficient_tokens(thinking_provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(max_tokens=1000)
 
-    kwargs = thinking_provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = thinking_provider._build_request_kwargs(
+        messages, None, None, None, settings
+    )
 
     # Shouldn't enable thinking if not enough tokens
     assert "thinking" not in kwargs
@@ -326,7 +332,7 @@ async def test_agenerate_basic(provider, mock_anthropic_client):
 
     result = await provider.agenerate(messages)
 
-    assert result == "test summary"
+    assert "<summary>test summary</summary>" in result
     provider.async_client.messages.create.assert_called_once()
 
 

@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 from PIL import Image
 
 from memory.common.llms.openai_provider import OpenAIProvider
@@ -192,7 +192,7 @@ def test_build_request_kwargs_basic(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(temperature=0.5, max_tokens=1000)
 
-    kwargs = provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
 
     assert kwargs["model"] == "gpt-4o"
     assert kwargs["temperature"] == 0.5
@@ -204,7 +204,9 @@ def test_build_request_kwargs_with_system_prompt_standard_model(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, "system prompt", None, settings)
+    kwargs = provider._build_request_kwargs(
+        messages, "system prompt", None, None, settings
+    )
 
     # For gpt-4o, system prompt becomes system message
     assert kwargs["messages"][0]["role"] == "system"
@@ -218,7 +220,7 @@ def test_build_request_kwargs_with_system_prompt_reasoning_model(
     settings = LLMSettings()
 
     kwargs = reasoning_provider._build_request_kwargs(
-        messages, "system prompt", None, settings
+        messages, "system prompt", None, None, settings
     )
 
     # For o1 models, system prompt becomes developer message
@@ -232,7 +234,9 @@ def test_build_request_kwargs_reasoning_model_uses_max_completion_tokens(
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(max_tokens=2000)
 
-    kwargs = reasoning_provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = reasoning_provider._build_request_kwargs(
+        messages, None, None, None, settings
+    )
 
     # Reasoning models use max_completion_tokens
     assert "max_completion_tokens" in kwargs
@@ -244,7 +248,9 @@ def test_build_request_kwargs_reasoning_model_no_temperature(reasoning_provider)
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(temperature=0.7)
 
-    kwargs = reasoning_provider._build_request_kwargs(messages, None, None, settings)
+    kwargs = reasoning_provider._build_request_kwargs(
+        messages, None, None, None, settings
+    )
 
     # Reasoning models don't support temperature
     assert "temperature" not in kwargs
@@ -263,7 +269,7 @@ def test_build_request_kwargs_with_tools(provider):
     ]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, None, tools, settings)
+    kwargs = provider._build_request_kwargs(messages, None, tools, None, settings)
 
     assert "tools" in kwargs
     assert len(kwargs["tools"]) == 1
@@ -274,7 +280,9 @@ def test_build_request_kwargs_with_stream(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, None, None, settings, stream=True)
+    kwargs = provider._build_request_kwargs(
+        messages, None, None, None, settings, stream=True
+    )
 
     assert kwargs["stream"] is True
 
@@ -314,7 +322,8 @@ def test_handle_stream_chunk_text_content(provider):
                 delta=Mock(content="hello", tool_calls=None),
                 finish_reason=None,
             )
-        ]
+        ],
+        usage=Mock(prompt_tokens=10, completion_tokens=5),
     )
 
     events, tool_call = provider._handle_stream_chunk(chunk, None)
@@ -342,8 +351,9 @@ def test_handle_stream_chunk_tool_call_start(provider):
     choice.delta = delta
     choice.finish_reason = None
 
-    chunk = Mock(spec=["choices"])
+    chunk = Mock(spec=["choices", "usage"])
     chunk.choices = [choice]
+    chunk.usage = Mock(prompt_tokens=10, completion_tokens=5)
 
     events, tool_call = provider._handle_stream_chunk(chunk, None)
 
@@ -369,7 +379,8 @@ def test_handle_stream_chunk_tool_call_arguments(provider):
                 ),
                 finish_reason=None,
             )
-        ]
+        ],
+        usage=Mock(prompt_tokens=10, completion_tokens=5),
     )
 
     events, tool_call = provider._handle_stream_chunk(chunk, current_tool)
@@ -386,7 +397,8 @@ def test_handle_stream_chunk_finish_with_tool_call(provider):
                 delta=Mock(content=None, tool_calls=None),
                 finish_reason="tool_calls",
             )
-        ]
+        ],
+        usage=Mock(prompt_tokens=10, completion_tokens=5),
     )
 
     events, tool_call = provider._handle_stream_chunk(chunk, current_tool)
@@ -399,7 +411,7 @@ def test_handle_stream_chunk_finish_with_tool_call(provider):
 
 
 def test_handle_stream_chunk_empty_choices(provider):
-    chunk = Mock(choices=[])
+    chunk = Mock(choices=[], usage=Mock(prompt_tokens=10, completion_tokens=5))
 
     events, tool_call = provider._handle_stream_chunk(chunk, None)
 
@@ -435,8 +447,13 @@ async def test_agenerate_basic(provider, mock_openai_client):
     messages = [Message(role=MessageRole.USER, content="test")]
 
     # Mock the async client
-    mock_response = Mock(choices=[Mock(message=Mock(content="async response"))])
-    provider.async_client.chat.completions.create = Mock(return_value=mock_response)
+    mock_response = Mock(
+        choices=[Mock(message=Mock(content="async response"))],
+        usage=Mock(prompt_tokens=10, completion_tokens=20),
+    )
+    provider.async_client.chat.completions.create = AsyncMock(
+        return_value=mock_response
+    )
 
     result = await provider.agenerate(messages)
 
@@ -452,15 +469,19 @@ async def test_astream_basic(provider, mock_openai_client):
         yield Mock(
             choices=[
                 Mock(delta=Mock(content="async", tool_calls=None), finish_reason=None)
-            ]
+            ],
+            usage=Mock(prompt_tokens=10, completion_tokens=5),
         )
         yield Mock(
             choices=[
                 Mock(delta=Mock(content=" test", tool_calls=None), finish_reason="stop")
-            ]
+            ],
+            usage=Mock(prompt_tokens=10, completion_tokens=10),
         )
 
-    provider.async_client.chat.completions.create = Mock(return_value=async_stream())
+    provider.async_client.chat.completions.create = AsyncMock(
+        return_value=async_stream()
+    )
 
     events = []
     async for event in provider.astream(messages):

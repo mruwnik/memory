@@ -1,17 +1,23 @@
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock
 
 import discord
 
 from memory.common.db.models import DiscordChannel, DiscordServer, DiscordUser
 from memory.discord.commands import (
+    CommandContext,
     CommandError,
     CommandResponse,
-    run_command,
     handle_prompt,
     handle_chattiness,
     handle_ignore,
     handle_summary,
+    respond,
+    with_object_context,
+    handle_mcp_servers,
 )
 
 
@@ -66,29 +72,54 @@ def interaction(guild, text_channel, discord_user) -> DummyInteraction:
     return DummyInteraction(guild=guild, channel=text_channel, user=discord_user)
 
 
-def test_handle_command_prompt_server(db_session, guild, interaction):
+@pytest.mark.asyncio
+async def test_handle_command_prompt_server(db_session, guild, interaction):
     server = DiscordServer(id=guild.id, name="Test Guild", system_prompt="Be helpful")
     db_session.add(server)
     db_session.commit()
 
-    response = run_command(
-        db_session,
-        interaction,
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
         scope="server",
-        handler=handle_prompt,
+        target=server,
+        display_name="server **Test Guild**",
     )
+
+    response = await handle_prompt(context)
 
     assert isinstance(response, CommandResponse)
     assert "Be helpful" in response.content
 
 
-def test_handle_command_prompt_channel_creates_channel(db_session, interaction, text_channel):
-    response = run_command(
-        db_session,
-        interaction,
-        scope="channel",
-        handler=handle_prompt,
+@pytest.mark.asyncio
+async def test_handle_command_prompt_channel_creates_channel(
+    db_session, interaction, text_channel, guild
+):
+    # Create the server first to satisfy FK constraint
+    server = DiscordServer(id=guild.id, name="Test Guild")
+    db_session.add(server)
+
+    channel_model = DiscordChannel(
+        id=text_channel.id,
+        name=text_channel.name,
+        channel_type="text",
+        server_id=guild.id,
     )
+    db_session.add(channel_model)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="channel",
+        target=channel_model,
+        display_name=f"channel **#{text_channel.name}**",
+    )
+
+    response = await handle_prompt(context)
 
     assert "No prompt" in response.content
     channel = db_session.get(DiscordChannel, text_channel.id)
@@ -96,33 +127,44 @@ def test_handle_command_prompt_channel_creates_channel(db_session, interaction, 
     assert channel.name == text_channel.name
 
 
-def test_handle_command_chattiness_show(db_session, interaction, guild):
+@pytest.mark.asyncio
+async def test_handle_command_chattiness_show(db_session, interaction, guild):
     server = DiscordServer(id=guild.id, name="Guild", chattiness_threshold=73)
     db_session.add(server)
     db_session.commit()
 
-    response = run_command(
-        db_session,
-        interaction,
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
         scope="server",
-        handler=handle_chattiness,
+        target=server,
+        display_name="server **Guild**",
     )
+
+    response = await handle_chattiness(context, value=None)
 
     assert str(server.chattiness_threshold) in response.content
 
 
-def test_handle_command_chattiness_update(db_session, interaction):
-    user_model = DiscordUser(id=interaction.user.id, username="command-user", chattiness_threshold=15)
+@pytest.mark.asyncio
+async def test_handle_command_chattiness_update(db_session, interaction):
+    user_model = DiscordUser(
+        id=interaction.user.id, username="command-user", chattiness_threshold=15
+    )
     db_session.add(user_model)
     db_session.commit()
 
-    response = run_command(
-        db_session,
-        interaction,
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=user_model,
         scope="user",
-        handler=handle_chattiness,
-        value=80,
+        target=user_model,
+        display_name="user **command-user**",
     )
+
+    response = await handle_chattiness(context, value=80)
 
     db_session.flush()
 
@@ -130,29 +172,50 @@ def test_handle_command_chattiness_update(db_session, interaction):
     assert user_model.chattiness_threshold == 80
 
 
-def test_handle_command_chattiness_invalid_value(db_session, interaction):
+@pytest.mark.asyncio
+async def test_handle_command_chattiness_invalid_value(db_session, interaction):
+    user_model = DiscordUser(id=interaction.user.id, username="command-user")
+    db_session.add(user_model)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=user_model,
+        scope="user",
+        target=user_model,
+        display_name="user **command-user**",
+    )
+
     with pytest.raises(CommandError):
-        run_command(
-            db_session,
-            interaction,
-            scope="user",
-            handler=handle_chattiness,
-            value=150,
-        )
+        await handle_chattiness(context, value=150)
 
 
-def test_handle_command_ignore_toggle(db_session, interaction, guild):
-    channel = DiscordChannel(id=interaction.channel.id, name="general", channel_type="text", server_id=guild.id)
+@pytest.mark.asyncio
+async def test_handle_command_ignore_toggle(db_session, interaction, guild):
+    # Create the server first to satisfy FK constraint
+    server = DiscordServer(id=guild.id, name="Test Guild")
+    db_session.add(server)
+
+    channel = DiscordChannel(
+        id=interaction.channel.id,
+        name="general",
+        channel_type="text",
+        server_id=guild.id,
+    )
     db_session.add(channel)
     db_session.commit()
 
-    response = run_command(
-        db_session,
-        interaction,
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
         scope="channel",
-        handler=handle_ignore,
-        ignore_enabled=True,
+        target=channel,
+        display_name="channel **#general**",
     )
+
+    response = await handle_ignore(context, ignore_enabled=True)
 
     db_session.flush()
 
@@ -160,13 +223,157 @@ def test_handle_command_ignore_toggle(db_session, interaction, guild):
     assert channel.ignore_messages is True
 
 
-def test_handle_command_summary_missing(db_session, interaction):
-    response = run_command(
-        db_session,
-        interaction,
+@pytest.mark.asyncio
+async def test_handle_command_summary_missing(db_session, interaction):
+    user_model = DiscordUser(id=interaction.user.id, username="command-user")
+    db_session.add(user_model)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=user_model,
         scope="user",
-        handler=handle_summary,
+        target=user_model,
+        display_name="user **command-user**",
     )
+
+    response = await handle_summary(context)
 
     assert "No summary" in response.content
 
+
+@pytest.mark.asyncio
+async def test_respond_sends_message_without_file():
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.response.send_message = AsyncMock()
+
+    await respond(interaction, "hello world", ephemeral=False)
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "hello world", ephemeral=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_respond_sends_file_when_content_too_large():
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.response.send_message = AsyncMock()
+
+    oversized = "x" * 2000
+    with patch("memory.discord.commands.discord.File") as mock_file:
+        file_instance = MagicMock()
+        mock_file.return_value = file_instance
+
+        await respond(interaction, oversized)
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "Response too large, sending as file:",
+        file=file_instance,
+        ephemeral=True,
+    )
+
+
+@patch("memory.discord.commands._ensure_channel")
+@patch("memory.discord.commands.ensure_server")
+@patch("memory.discord.commands.ensure_user")
+@patch("memory.discord.commands.make_session")
+def test_with_object_context_uses_ensured_objects(
+    mock_make_session,
+    mock_ensure_user,
+    mock_ensure_server,
+    mock_ensure_channel,
+    interaction,
+    guild,
+    text_channel,
+    discord_user,
+):
+    mock_session = MagicMock()
+
+    @contextmanager
+    def session_cm():
+        yield mock_session
+
+    mock_make_session.return_value = session_cm()
+
+    bot_model = MagicMock(name="bot_model")
+    user_model = MagicMock(name="user_model")
+    server_model = MagicMock(name="server_model")
+    channel_model = MagicMock(name="channel_model")
+
+    mock_ensure_user.side_effect = [bot_model, user_model]
+    mock_ensure_server.return_value = server_model
+    mock_ensure_channel.return_value = channel_model
+
+    handler_objects = {}
+
+    def handler(objects):
+        handler_objects["objects"] = objects
+        return "done"
+
+    bot_client = SimpleNamespace(user=MagicMock())
+    override_user = MagicMock(spec=discord.User)
+
+    result = with_object_context(bot_client, interaction, handler, override_user)
+
+    assert result == "done"
+    objects = handler_objects["objects"]
+    assert objects.bot is bot_model
+    assert objects.server is server_model
+    assert objects.channel is channel_model
+    assert objects.user is user_model
+
+    mock_ensure_user.assert_any_call(mock_session, bot_client.user)
+    mock_ensure_user.assert_any_call(mock_session, override_user)
+    mock_ensure_server.assert_called_once_with(mock_session, guild)
+    mock_ensure_channel.assert_called_once_with(
+        mock_session, text_channel, guild.id
+    )
+
+
+@pytest.mark.asyncio
+@patch("memory.discord.commands.run_mcp_server_command", new_callable=AsyncMock)
+async def test_handle_mcp_servers_returns_response(mock_run_mcp, interaction):
+    mock_run_mcp.return_value = "Listed servers"
+    server_model = DiscordServer(id=interaction.guild.id, name="Guild")
+
+    context = CommandContext(
+        session=MagicMock(),
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server_model,
+        display_name="server **Guild**",
+    )
+    interaction.client = SimpleNamespace(user=MagicMock(spec=discord.User))
+
+    response = await handle_mcp_servers(
+        context, action="list", url=None
+    )
+
+    assert response.content == "Listed servers"
+    mock_run_mcp.assert_awaited_once_with(
+        interaction.client.user, "list", None, "DiscordServer", server_model.id
+    )
+
+
+@pytest.mark.asyncio
+@patch("memory.discord.commands.run_mcp_server_command", new_callable=AsyncMock)
+async def test_handle_mcp_servers_wraps_errors(mock_run_mcp, interaction):
+    mock_run_mcp.side_effect = RuntimeError("boom")
+    server_model = DiscordServer(id=interaction.guild.id, name="Guild")
+
+    context = CommandContext(
+        session=MagicMock(),
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server_model,
+        display_name="server **Guild**",
+    )
+    interaction.client = SimpleNamespace(user=MagicMock(spec=discord.User))
+
+    with pytest.raises(CommandError) as exc:
+        await handle_mcp_servers(context, action="list", url=None)
+
+    assert "Error: boom" in str(exc.value)

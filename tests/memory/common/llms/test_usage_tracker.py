@@ -18,10 +18,10 @@ except ModuleNotFoundError:  # pragma: no cover - import guard for test envs
 
     sys.modules.setdefault("redis", _RedisStub())
 
-from memory.common.llms.redis_usage_tracker import RedisUsageTracker
-from memory.common.llms.usage_tracker import (
+from memory.common.llms.usage import (
     InMemoryUsageTracker,
     RateLimitConfig,
+    RedisUsageTracker,
     UsageTracker,
 )
 
@@ -84,7 +84,9 @@ def redis_tracker() -> RedisUsageTracker:
         (timedelta(seconds=0), {"max_total_tokens": 1}),
     ],
 )
-def test_rate_limit_config_validation(window: timedelta, kwargs: dict[str, int]) -> None:
+def test_rate_limit_config_validation(
+    window: timedelta, kwargs: dict[str, int]
+) -> None:
     with pytest.raises(ValueError):
         RateLimitConfig(window=window, **kwargs)
 
@@ -93,9 +95,7 @@ def test_allows_usage_within_limits(tracker: InMemoryUsageTracker) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     tracker.record_usage("anthropic/claude-3", 100, 200, timestamp=now)
 
-    allowance = tracker.get_available_tokens(
-        "anthropic/claude-3", timestamp=now
-    )
+    allowance = tracker.get_available_tokens("anthropic/claude-3", timestamp=now)
     assert allowance is not None
     assert allowance.input_tokens == 900
     assert allowance.output_tokens == 1_800
@@ -114,9 +114,7 @@ def test_recovers_after_window(tracker: InMemoryUsageTracker) -> None:
     tracker.record_usage("anthropic/claude-3", 800, 1_700, timestamp=now)
 
     later = now + timedelta(minutes=2)
-    allowance = tracker.get_available_tokens(
-        "anthropic/claude-3", timestamp=later
-    )
+    allowance = tracker.get_available_tokens("anthropic/claude-3", timestamp=later)
     assert allowance is not None
     assert allowance.input_tokens == 1_000
     assert allowance.output_tokens == 2_000
@@ -126,6 +124,7 @@ def test_recovers_after_window(tracker: InMemoryUsageTracker) -> None:
 
 def test_usage_breakdown_and_provider_totals(tracker: InMemoryUsageTracker) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    # Use the configured models from the fixture
     tracker.record_usage("anthropic/claude-3", 100, 200, timestamp=now)
     tracker.record_usage("anthropic/haiku", 50, 75, timestamp=now)
 
@@ -144,6 +143,7 @@ def test_usage_breakdown_and_provider_totals(tracker: InMemoryUsageTracker) -> N
 
 def test_get_usage_breakdown_filters(tracker: InMemoryUsageTracker) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    # Use configured models from the fixture
     tracker.record_usage("anthropic/claude-3", 10, 20, timestamp=now)
     tracker.record_usage("openai/gpt-4o", 5, 5, timestamp=now)
 
@@ -156,15 +156,19 @@ def test_get_usage_breakdown_filters(tracker: InMemoryUsageTracker) -> None:
     assert set(filtered_model["openai"].keys()) == {"gpt-4o"}
 
 
-def test_missing_configuration_records_lifetime_only() -> None:
+def test_missing_configuration_uses_default() -> None:
+    # With no specific config, falls back to default config (from settings)
     tracker = InMemoryUsageTracker(configs={})
     tracker.record_usage("openai/gpt-4o", 10, 20)
 
-    assert tracker.get_available_tokens("openai/gpt-4o") is None
+    # Uses default config, so get_available_tokens returns allowance
+    allowance = tracker.get_available_tokens("openai/gpt-4o")
+    assert allowance is not None
 
+    # Lifetime stats are tracked
     breakdown = tracker.get_usage_breakdown()
     usage = breakdown["openai"]["gpt-4o"]
-    assert usage.window_input_tokens == 0
+    assert usage.window_input_tokens == 10
     assert usage.lifetime_input_tokens == 10
 
 
@@ -193,6 +197,7 @@ def test_is_rate_limited_when_only_output_exceeds_limit() -> None:
 
 def test_redis_usage_tracker_persists_state(redis_tracker: RedisUsageTracker) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    # Use configured models from the fixture
     redis_tracker.record_usage("anthropic/claude-3", 100, 200, timestamp=now)
     redis_tracker.record_usage("anthropic/haiku", 50, 75, timestamp=now)
 
@@ -201,6 +206,8 @@ def test_redis_usage_tracker_persists_state(redis_tracker: RedisUsageTracker) ->
     assert allowance.input_tokens == 900
 
     breakdown = redis_tracker.get_usage_breakdown()
+    assert "anthropic" in breakdown
+    assert "claude-3" in breakdown["anthropic"]
     assert breakdown["anthropic"]["claude-3"].window_output_tokens == 200
 
     items = dict(redis_tracker.iter_state_items())

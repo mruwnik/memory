@@ -497,13 +497,14 @@ def test_make_discord_tools_with_user_and_channel(
     )
 
     # Should have: schedule_message, previous_messages, update_channel_summary,
-    # update_user_summary, update_server_summary
-    assert len(tools) == 5
+    # update_user_summary, update_server_summary, add_reaction
+    assert len(tools) == 6
     assert "schedule_message" in tools
     assert "previous_messages" in tools
     assert "update_channel_summary" in tools
     assert "update_user_summary" in tools
     assert "update_server_summary" in tools
+    assert "add_reaction" in tools
 
 
 def test_make_discord_tools_with_user_only(sample_bot_user, sample_discord_user):
@@ -533,12 +534,13 @@ def test_make_discord_tools_with_channel_only(sample_bot_user, sample_discord_ch
     )
 
     # Should have: schedule_message, previous_messages, update_channel_summary,
-    # update_server_summary (no user summary without author)
-    assert len(tools) == 4
+    # update_server_summary, add_reaction (no user summary without author)
+    assert len(tools) == 5
     assert "schedule_message" in tools
     assert "previous_messages" in tools
     assert "update_channel_summary" in tools
     assert "update_server_summary" in tools
+    assert "add_reaction" in tools
     assert "update_user_summary" not in tools
 
 

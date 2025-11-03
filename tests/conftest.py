@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,31 @@ from testcontainers.qdrant import QdrantContainer
 from memory.common import settings
 from memory.common.qdrant import initialize_collections
 from tests.providers.email_provider import MockEmailProvider
+
+
+class MockRedis:
+    """In-memory mock of Redis for testing."""
+
+    def __init__(self):
+        self._data = {}
+
+    def get(self, key: str):
+        return self._data.get(key)
+
+    def set(self, key: str, value):
+        self._data[key] = value
+
+    def scan_iter(self, match: str):
+        import fnmatch
+
+        pattern = match.replace("*", "**")
+        for key in self._data.keys():
+            if fnmatch.fnmatch(key, pattern):
+                yield key
+
+    @classmethod
+    def from_url(cls, url: str):
+        return cls()
 
 
 def get_test_db_name() -> str:
@@ -83,7 +109,7 @@ def run_alembic_migrations(db_name: str) -> None:
     alembic_ini = project_root / "db" / "migrations" / "alembic.ini"
 
     subprocess.run(
-        ["alembic", "-c", str(alembic_ini), "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", str(alembic_ini), "upgrade", "head"],
         env={**os.environ, "DATABASE_URL": settings.make_db_url(db=db_name)},
         check=True,
         capture_output=True,
@@ -265,7 +291,8 @@ def mock_openai_client():
                         ),
                         finish_reason=None,
                     )
-                ]
+                ],
+                usage=Mock(prompt_tokens=10, completion_tokens=20),
             )
         )
 
@@ -281,7 +308,8 @@ def mock_openai_client():
                                     delta=Mock(content="test", tool_calls=None),
                                     finish_reason=None,
                                 )
-                            ]
+                            ],
+                            usage=Mock(prompt_tokens=10, completion_tokens=5),
                         ),
                         Mock(
                             choices=[
@@ -289,7 +317,8 @@ def mock_openai_client():
                                     delta=Mock(content=" response", tool_calls=None),
                                     finish_reason="stop",
                                 )
-                            ]
+                            ],
+                            usage=Mock(prompt_tokens=10, completion_tokens=15),
                         ),
                     ]
                 )
@@ -303,7 +332,8 @@ def mock_openai_client():
                             ),
                             finish_reason=None,
                         )
-                    ]
+                    ],
+                    usage=Mock(prompt_tokens=10, completion_tokens=20),
                 )
 
         client.chat.completions.create.side_effect = streaming_response
@@ -312,6 +342,8 @@ def mock_openai_client():
 
 @pytest.fixture(autouse=True)
 def mock_anthropic_client():
+    from unittest.mock import AsyncMock
+
     with patch.object(anthropic, "Anthropic", autospec=True) as mock_client:
         client = mock_client()
         client.messages = Mock()
@@ -345,7 +377,57 @@ def mock_anthropic_client():
                 ]
             )
         )
-        yield client
+
+        # Mock async client
+        async_client = Mock()
+        async_client.messages = Mock()
+        async_client.messages.create = AsyncMock(
+            return_value=Mock(
+                content=[
+                    Mock(
+                        type="text",
+                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                    )
+                ]
+            )
+        )
+
+        # Mock async streaming
+        def async_stream_ctx(*args, **kwargs):
+            async def async_iter():
+                yield Mock(
+                    type="content_block_delta",
+                    delta=Mock(
+                        type="text_delta",
+                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                    ),
+                )
+
+            class AsyncStreamMock:
+                async def __aenter__(self):
+                    return async_iter()
+
+                async def __aexit__(self, *args):
+                    pass
+
+            return AsyncStreamMock()
+
+        async_client.messages.stream = Mock(side_effect=async_stream_ctx)
+
+        # Add async_client property to mock
+        mock_client.return_value._async_client = None
+
+        with patch.object(anthropic, "AsyncAnthropic", return_value=async_client):
+            yield client
+
+
+@pytest.fixture(autouse=True)
+def mock_redis():
+    """Mock Redis client for all tests."""
+    import redis
+
+    with patch.object(redis, "Redis", MockRedis):
+        yield
 
 
 @pytest.fixture(autouse=True)

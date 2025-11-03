@@ -134,11 +134,15 @@ class UsageTracker:
         default_config: RateLimitConfig | None = None,
     ) -> None:
         self._configs = configs or {}
-        self._default_config = default_config or RateLimitConfig(
-            window=timedelta(minutes=settings.DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES),
-            max_input_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS,
-            max_output_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS,
-        )
+        if default_config is None:
+            default_config = RateLimitConfig(
+                window=timedelta(
+                    minutes=settings.DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES
+                ),
+                max_input_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS,
+                max_output_tokens=settings.DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS,
+            )
+        self._default_config = default_config
         self._lock = Lock()
 
     # ------------------------------------------------------------------
@@ -260,8 +264,8 @@ class UsageTracker:
 
         with self._lock:
             providers: dict[str, dict[str, UsageBreakdown]] = defaultdict(dict)
-            for model, state in self.iter_state_items():
-                prov, model_name = split_model_key(model)
+            for model_key, state in self.iter_state_items():
+                prov, model_name = split_model_key(model_key)
                 if provider and provider != prov:
                     continue
                 if model and model != model_name:
@@ -304,7 +308,10 @@ class UsageTracker:
     # Internal helpers
     # ------------------------------------------------------------------
     def _get_config(self, model: str) -> RateLimitConfig | None:
-        return self._configs.get(model) or self._default_config
+        config = self._configs.get(model)
+        if config is not None:
+            return config
+        return self._default_config
 
     def _prune_expired_events(
         self,
