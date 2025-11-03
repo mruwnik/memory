@@ -1,6 +1,5 @@
 """Lightweight slash-command helpers for the Discord collector."""
 
-from calendar import c
 import logging
 from dataclasses import dataclass
 from typing import Callable, Literal
@@ -14,7 +13,7 @@ from memory.discord.mcp import run_mcp_server_command
 
 logger = logging.getLogger(__name__)
 
-ScopeLiteral = Literal["server", "channel", "user"]
+ScopeLiteral = Literal["bot", "server", "channel", "user"]
 
 
 class CommandError(Exception):
@@ -173,18 +172,29 @@ def register_slash_commands(bot: discord.Client) -> None:
 
     @tree.command(
         name=f"{name}_mcp_servers",
-        description="Manage MCP servers for your account",
+        description="Manage MCP servers for a scope",
     )
     @discord.app_commands.describe(
+        scope="Which configuration to modify (server, channel, or user)",
         action="Action to perform",
         url="MCP server URL (required for add, delete, connect, tools)",
+        user="Target user when the scope is 'user'",
     )
     async def mcp_servers_command(
         interaction: discord.Interaction,
+        scope: ScopeLiteral,
         action: Literal["list", "add", "delete", "connect", "tools"] = "list",
         url: str | None = None,
+        user: discord.User | None = None,
     ) -> None:
-        await run_mcp_server_command(interaction, bot.user, action, url and url.strip())
+        await _run_interaction_command(
+            interaction,
+            scope=scope,
+            handler=handle_mcp_servers,
+            target_user=user,
+            action=action,
+            url=url and url.strip(),
+        )
 
 
 async def _run_interaction_command(
@@ -199,7 +209,7 @@ async def _run_interaction_command(
     try:
         with make_session() as session:
             context = _build_context(session, interaction, scope, target_user)
-            response = handler(context, **handler_kwargs)
+            response = await handler(context, **handler_kwargs)
             session.commit()
     except CommandError as exc:  # pragma: no cover - passthrough
         await interaction.response.send_message(str(exc), ephemeral=True)
@@ -435,3 +445,29 @@ def handle_summary(context: CommandContext) -> CommandResponse:
     return CommandResponse(
         content=f"No summary stored for {context.display_name}.",
     )
+
+
+async def handle_mcp_servers(
+    context: CommandContext,
+    *,
+    action: Literal["list", "add", "delete", "connect", "tools"],
+    url: str | None,
+) -> CommandResponse:
+    """Handle MCP server commands for a specific scope."""
+    entity_type_map = {
+        "server": "DiscordServer",
+        "channel": "DiscordChannel",
+        "user": "DiscordUser",
+    }
+    entity_type = entity_type_map[context.scope]
+    entity_id = context.target.id
+    try:
+        res = await run_mcp_server_command(
+            context.interaction.user, action, url, entity_type, entity_id
+        )
+        return CommandResponse(content=res)
+    except Exception as exc:
+        import traceback
+
+        logger.error(f"Error running MCP server command: {traceback.format_exc()}")
+        raise CommandError(f"Error: {exc}") from exc

@@ -55,7 +55,6 @@ CUSTOM_EXTENSIONS = {
 def get_mime_type(path: pathlib.Path) -> str:
     mime_type, _ = mimetypes.guess_type(str(path))
     if mime_type:
-        print(f"mime_type: {mime_type}")
         return mime_type
     ext = path.suffix.lower()
     return CUSTOM_EXTENSIONS.get(ext, "application/octet-stream")

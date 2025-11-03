@@ -12,14 +12,12 @@ from contextlib import asynccontextmanager
 from typing import cast
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordMCPServer, DiscordBotUser
-from memory.common.oauth import complete_oauth_flow
+from memory.common.db.models import DiscordBotUser
 from memory.discord.collector import MessageCollector
 
 logger = logging.getLogger(__name__)

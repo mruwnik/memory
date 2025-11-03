@@ -69,7 +69,6 @@ def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
         )
         response.raise_for_status()
         result = response.json()
-        print("Result", result)
         return result.get("success", False)
 
     except requests.RequestException as e:

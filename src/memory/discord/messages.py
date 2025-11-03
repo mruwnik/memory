@@ -113,8 +113,6 @@ def upsert_scheduled_message(
         .first()
     )
     naive_scheduled_time = scheduled_time.replace(tzinfo=None)
-    print(f"naive_scheduled_time: {naive_scheduled_time}")
-    print(f"prev_call.scheduled_time: {prev_call and prev_call.scheduled_time}")
     if prev_call and cast(datetime, prev_call.scheduled_time) > naive_scheduled_time:
         prev_call.status = "cancelled"  # type: ignore
 
@@ -141,10 +139,8 @@ def previous_messages(
 ) -> list[DiscordMessage]:
     messages = session.query(DiscordMessage)
     if user_id:
-        print(f"user_id: {user_id}")
         messages = messages.filter(DiscordMessage.recipient_id == user_id)
     if channel_id:
-        print(f"channel_id: {channel_id}")
         messages = messages.filter(DiscordMessage.channel_id == channel_id)
     return list(
         reversed(
@@ -294,10 +290,8 @@ def send_discord_response(
         True if sent successfully
     """
     if channel_id is not None:
-        logger.info(f"Sending message to channel {channel_id}")
         return discord.send_to_channel(bot_id, channel_id, response)
     elif user_identifier is not None:
-        logger.info(f"Sending DM to {user_identifier}")
         return discord.send_dm(bot_id, user_identifier, response)
     else:
         logger.error("Neither channel_id nor user_identifier provided")

@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urljoin
 
 import aiohttp
 from memory.common import settings
-from memory.common.db.models.discord import DiscordMCPServer
+from memory.common.db.models.discord import MCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ async def register_oauth_client(
 
 
 async def issue_challenge(
-    mcp_server: DiscordMCPServer,
+    mcp_server: MCPServer,
     endpoints: OAuthEndpoints,
 ) -> str:
     """Generate OAuth challenge and store state in mcp_server object."""
@@ -160,7 +160,7 @@ async def issue_challenge(
     mcp_server.code_verifier = code_verifier  # type: ignore
 
     logger.info(
-        f"Generated OAuth state for user {mcp_server.discord_bot_user_id}: "
+        f"Generated OAuth state for MCP server {mcp_server.mcp_server_url}: "
         f"state={state[:20]}..., verifier={code_verifier[:20]}..."
     )
 
@@ -179,7 +179,7 @@ async def issue_challenge(
 
 
 async def complete_oauth_flow(
-    mcp_server: DiscordMCPServer, code: str, state: str
+    mcp_server: MCPServer, code: str, state: str
 ) -> tuple[int, str]:
     """Complete OAuth flow by exchanging code for token.
 
@@ -196,7 +196,7 @@ async def complete_oauth_flow(
             return 400, "Invalid or expired OAuth state"
 
         logger.info(
-            f"Found MCP server config: user={mcp_server.discord_bot_user_id}, "
+            f"Found MCP server config: id={mcp_server.id}, "
             f"url={mcp_server.mcp_server_url}"
         )
 
@@ -247,8 +247,8 @@ async def complete_oauth_flow(
         mcp_server.code_verifier = None  # type: ignore
 
         logger.info(
-            f"Stored tokens for user {mcp_server.discord_bot_user_id}, "
-            f"server {mcp_server.mcp_server_url}"
+            f"Stored tokens for MCP server id={mcp_server.id}, "
+            f"url={mcp_server.mcp_server_url}"
         )
 
         return 200, "✅ Authorization successful! You can now use this MCP server."

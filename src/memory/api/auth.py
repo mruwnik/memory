@@ -10,7 +10,7 @@ from memory.common import settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import (
     BotUser,
-    DiscordMCPServer,
+    MCPServer,
     HumanUser,
     User,
     UserSession,
@@ -169,9 +169,7 @@ async def oauth_callback_discord(request: Request):
         # Complete the OAuth flow (exchange code for token)
         with make_session() as session:
             mcp_server = (
-                session.query(DiscordMCPServer)
-                .filter(DiscordMCPServer.state == state)
-                .first()
+                session.query(MCPServer).filter(MCPServer.state == state).first()
             )
             status_code, message = await complete_oauth_flow(mcp_server, code, state)
             session.commit()

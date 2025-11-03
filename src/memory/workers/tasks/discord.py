@@ -91,6 +91,10 @@ def should_process(message: DiscordMessage) -> bool:
     ):
         return False
 
+    if f"<@{message.recipient_user.id}>" in message.content:
+        logger.info("Direct mention of the bot, processing message")
+        return True
+
     if message.from_user == message.recipient_user:
         logger.info("Skipping message because from_user == recipient_user")
         return False
@@ -132,6 +136,8 @@ def should_process(message: DiscordMessage) -> bool:
         if not (res := re.search(r"<number>(.*)</number>", response)):
             return False
         try:
+            logger.info(f"chattiness_threshold: {message.chattiness_threshold}")
+            logger.info(f"haiku desire: {res.group(1)}")
             if int(res.group(1)) < 100 - message.chattiness_threshold:
                 return False
         except ValueError:

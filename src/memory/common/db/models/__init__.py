@@ -34,7 +34,8 @@ from memory.common.db.models.discord import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
-    DiscordMCPServer,
+    MCPServer,
+    MCPServerAssignment,
 )
 from memory.common.db.models.observations import (
     ObservationContradiction,
@@ -107,7 +108,8 @@ __all__ = [
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",
-    "DiscordMCPServer",
+    "MCPServer",
+    "MCPServerAssignment",
     # Users
     "User",
     "HumanUser",
