@@ -128,7 +128,7 @@ services:
       - /var/tmp
       - /qdrant/snapshots:rw
     healthcheck:
-      test: [ "CMD", "wget", "-q", "-T", "2", "-O", "-", "localhost:6333/ready" ]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && timeout 2 cat <&3 | grep -q ready"]
       interval: 15s
       timeout: 5s
       retries: 5

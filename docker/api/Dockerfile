@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     python3-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python requirements
