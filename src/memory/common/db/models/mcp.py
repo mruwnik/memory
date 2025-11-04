@@ -28,6 +28,7 @@ class MCPServer(Base):
     mcp_server_url = Column(Text, nullable=False)
     client_id = Column(Text, nullable=False)
     available_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+    disabled_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
 
     # OAuth flow state (temporary, cleared after token exchange)
     state = Column(Text, nullable=True, unique=True)

@@ -1,9 +1,7 @@
 """Lightweight slash-command helpers for the Discord collector."""
 
-import json
 import logging
-import time
-from typing import Any, AsyncGenerator, Literal, cast
+from typing import Literal, cast
 
 import aiohttp
 import discord
@@ -12,6 +10,7 @@ from sqlalchemy.orm import Session, scoped_session
 from memory.common.db.connection import make_session
 from memory.common.db.models import MCPServer, MCPServerAssignment
 from memory.common.oauth import get_endpoints, issue_challenge, register_oauth_client
+from memory.common.mcp import mcp_tools_list
 
 logger = logging.getLogger(__name__)
 
@@ -31,49 +30,6 @@ def find_mcp_server(
         .first()
     )
     return assignment and assignment.mcp_server
-
-
-async def call_mcp_server(
-    url: str, access_token: str, method: str, params: dict = {}
-) -> AsyncGenerator[Any, None]:
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "Authorization": f"Bearer {access_token}",
-    }
-
-    payload = {
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1000),
-        "method": method,
-        "params": params,
-    }
-
-    async with aiohttp.ClientSession() as http_session:
-        async with http_session.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                logger.error(f"Tools list failed: {resp.status} - {error_text}")
-                raise ValueError(
-                    f"Failed to call MCP server: {resp.status} - {error_text}"
-                )
-
-            # Parse SSE stream
-            async for line in resp.content:
-                line_str = line.decode("utf-8").strip()
-
-                # SSE format: "data: {json}"
-                if line_str.startswith("data: "):
-                    json_str = line_str[6:]  # Remove "data: " prefix
-                    try:
-                        yield json.loads(json_str)
-                    except json.JSONDecodeError:
-                        continue  # Skip invalid JSON lines
 
 
 async def handle_mcp_list(entity_type: str, entity_id: int) -> str:
@@ -258,10 +214,7 @@ async def handle_mcp_tools(entity_type: str, entity_id: int, url: str) -> str:
     # Make JSON-RPC request to MCP server
     tools = None
     try:
-        async for data in call_mcp_server(url, access_token, "tools/list"):
-            if "result" in data and "tools" in data["result"]:
-                tools = data["result"]["tools"]
-                break
+        tools = await mcp_tools_list(url, access_token)
     except aiohttp.ClientError as exc:
         logger.exception(f"Failed to connect to MCP server: {exc}")
         raise ValueError(

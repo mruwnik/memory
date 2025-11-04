@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session as DBSession
@@ -15,6 +16,7 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
+from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
 
 logger = logging.getLogger(__name__)
@@ -171,8 +173,23 @@ async def oauth_callback_discord(request: Request):
             mcp_server = (
                 session.query(MCPServer).filter(MCPServer.state == state).first()
             )
+            if not mcp_server:
+                return Response(
+                    content="MCP server not found",
+                    status_code=404,
+                )
+
             status_code, message = await complete_oauth_flow(mcp_server, code, state)
             session.commit()
+
+            tools = await mcp_tools_list(
+                cast(str, mcp_server.mcp_server_url), cast(str, mcp_server.access_token)
+            )
+            mcp_server.available_tools = [
+                name for tool in tools if (name := tool.get("name"))
+            ]
+            session.commit()
+            logger.info(f"MCP server tools: {tools}")
 
         if 200 <= status_code < 300:
             title = "✅ Authorization Successful!"

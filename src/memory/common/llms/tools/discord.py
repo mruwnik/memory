@@ -14,7 +14,7 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
-    BotUser,
+    DiscordBotUser,
 )
 from memory.common.llms.tools import ToolDefinition, ToolInput, ToolHandler
 from memory.common.discord import add_reaction
@@ -83,9 +83,9 @@ def make_summary_tool(type: UpdateSummaryType, item_id: BigInteger) -> ToolDefin
 
 
 def schedule_message(
-    user_id: int,
-    user: int | None,
-    channel: int | None,
+    bot_id: int,
+    recipient_id: int | None,
+    channel_id: int | None,
     model: str,
     message: str,
     date_time: datetime,
@@ -95,43 +95,62 @@ def schedule_message(
             session,
             scheduled_time=date_time,
             message=message,
-            user_id=user_id,
+            user_id=bot_id,
             model=model,
-            discord_user=user,
-            discord_channel=channel,
-            system_prompt=comm_channel_prompt(session, user, channel),
+            discord_user=recipient_id,
+            discord_channel=channel_id,
         )
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.error(f"Scheduled message: {call}")
+        logger.error(f"Scheduled message: {call.id}")
+        logger.error(f"Scheduled message time: {call.scheduled_time}")
+        logger.error(f"Scheduled message message: {call.message}")
+        logger.error(f"Scheduled message model: {call.model}")
+        logger.error(f"Scheduled message user id: {call.user_id}")
+        logger.error(f"Scheduled message discord user id: {call.discord_user_id}")
+        logger.error(f"Scheduled message discord channel id: {call.discord_channel_id}")
 
         session.commit()
         return cast(str, call.id)
 
 
 def make_message_scheduler(
-    bot: BotUser, user: int | None, channel: int | None, model: str
+    bot: DiscordBotUser, user_id: int | None, channel_id: int | None, model: str
 ) -> ToolDefinition:
     bot_id = cast(int, bot.id)
-    if user:
+    if user_id:
         channel_type = "from your chat with this user"
-    elif channel:
+    elif channel_id:
         channel_type = "in this channel"
     else:
         raise ValueError("Either user or channel must be provided")
 
     def handler(input: ToolInput) -> str:
-        if not isinstance(input, dict):
-            raise ValueError("Input must be a dictionary")
-
         try:
-            time = datetime.fromisoformat(input["date_time"])
-        except ValueError:
-            raise ValueError("Invalid date time format")
-        except KeyError:
-            raise ValueError("Date time is required")
+            if not isinstance(input, dict):
+                raise ValueError("Input must be a dictionary")
 
-        return schedule_message(bot_id, user, channel, model, input["message"], time)
+            try:
+                time = datetime.fromisoformat(input["date_time"])
+            except ValueError:
+                raise ValueError("Invalid date time format")
+            except KeyError:
+                raise ValueError("Date time is required")
+
+            return schedule_message(
+                bot_id, user_id, channel_id, model, input["message"], time
+            )
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error scheduling message: {e}")
+            raise e
 
     return ToolDefinition(
-        name="schedule_message",
+        name="schedule_discord_message",
         description=textwrap.dedent("""
             Use this to schedule a message to be sent to yourself.
 
@@ -162,10 +181,13 @@ def make_message_scheduler(
     )
 
 
-def make_prev_messages_tool(user: int | None, channel: int | None) -> ToolDefinition:
-    if user:
+def make_prev_messages_tool(
+    bot: DiscordBotUser, user_id: int | None, channel_id: int | None
+) -> ToolDefinition:
+    bot_id = bot.discord_id
+    if user_id:
         channel_type = "from your chat with this user"
-    elif channel:
+    elif channel_id:
         channel_type = "in this channel"
     else:
         raise ValueError("Either user or channel must be provided")
@@ -185,7 +207,9 @@ def make_prev_messages_tool(user: int | None, channel: int | None) -> ToolDefini
             raise ValueError("Offset must be greater than or equal to 0")
 
         with make_session() as session:
-            messages = previous_messages(session, user, channel, max_messages, offset)
+            messages = previous_messages(
+                session, bot_id, user_id, channel_id, max_messages, offset
+            )
             return "\n\n".join([msg.title for msg in messages])
 
     return ToolDefinition(
@@ -210,7 +234,9 @@ def make_prev_messages_tool(user: int | None, channel: int | None) -> ToolDefini
     )
 
 
-def make_add_reaction_tool(bot: BotUser, channel: DiscordChannel) -> ToolDefinition:
+def make_add_reaction_tool(
+    bot: DiscordBotUser, channel: DiscordChannel
+) -> ToolDefinition:
     bot_id = cast(int, bot.id)
     channel_id = channel and channel.id
 
@@ -255,7 +281,7 @@ def make_add_reaction_tool(bot: BotUser, channel: DiscordChannel) -> ToolDefinit
 
 
 def make_discord_tools(
-    bot: BotUser,
+    bot: DiscordBotUser,
     author: DiscordUser | None,
     channel: DiscordChannel | None,
     model: str,
@@ -264,7 +290,7 @@ def make_discord_tools(
     channel_id = channel and channel.id
     tools = [
         make_message_scheduler(bot, author_id, channel_id, model),
-        make_prev_messages_tool(author_id, channel_id),
+        make_prev_messages_tool(bot, author_id, channel_id),
         make_summary_tool("channel", channel_id),
     ]
     if author:

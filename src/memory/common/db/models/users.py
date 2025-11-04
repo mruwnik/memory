@@ -145,6 +145,12 @@ class DiscordBotUser(BotUser):
         bot.discord_users = discord_users
         return bot
 
+    @property
+    def discord_id(self) -> int | None:
+        if not self.discord_users:
+            return None
+        return self.discord_users[0].id
+
 
 class UserSession(Base):
     __tablename__ = "user_sessions"

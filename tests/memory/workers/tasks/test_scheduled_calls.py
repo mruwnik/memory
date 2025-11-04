@@ -127,7 +127,7 @@ def test_send_to_discord_user(mock_send_dm, pending_scheduled_call):
     """Test sending to Discord user."""
     response = "This is a test response."
 
-    scheduled_calls._send_to_discord(pending_scheduled_call, response)
+    scheduled_calls.send_to_discord(pending_scheduled_call, response)
 
     mock_send_dm.assert_called_once_with(
         pending_scheduled_call.user_id,
@@ -141,7 +141,7 @@ def test_send_to_discord_channel(mock_broadcast, completed_scheduled_call):
     """Test sending to Discord channel."""
     response = "This is a channel response."
 
-    scheduled_calls._send_to_discord(completed_scheduled_call, response)
+    scheduled_calls.send_to_discord(completed_scheduled_call, response)
 
     mock_broadcast.assert_called_once_with(
         completed_scheduled_call.user_id,
@@ -155,7 +155,7 @@ def test_send_to_discord_long_message_truncation(mock_send_dm, pending_scheduled
     """Test message truncation for long responses."""
     long_response = "A" * 2500  # Very long response
 
-    scheduled_calls._send_to_discord(pending_scheduled_call, long_response)
+    scheduled_calls.send_to_discord(pending_scheduled_call, long_response)
 
     # Verify the message was truncated
     args, kwargs = mock_send_dm.call_args
@@ -170,7 +170,7 @@ def test_send_to_discord_normal_length_message(mock_send_dm, pending_scheduled_c
     """Test that normal length messages are not truncated."""
     normal_response = "This is a normal length response."
 
-    scheduled_calls._send_to_discord(pending_scheduled_call, normal_response)
+    scheduled_calls.send_to_discord(pending_scheduled_call, normal_response)
 
     args, kwargs = mock_send_dm.call_args
     assert args[0] == pending_scheduled_call.user_id
@@ -535,7 +535,7 @@ def test_discord_destination_priority(
     db_session.commit()
 
     response = "Test response"
-    scheduled_calls._send_to_discord(call, response)
+    scheduled_calls.send_to_discord(call, response)
 
     if expected_method == "send_dm":
         mock_send_dm.assert_called_once()
@@ -590,7 +590,7 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
     mock_call.discord_user = mock_discord_user
     mock_call.discord_channel = None
 
-    scheduled_calls._send_to_discord(mock_call, response)
+    scheduled_calls.send_to_discord(mock_call, response)
 
     # Get the actual message that was sent
     args, kwargs = mock_send_dm.call_args

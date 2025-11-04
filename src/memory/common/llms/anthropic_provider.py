@@ -2,6 +2,7 @@
 
 import json
 import logging
+from urllib.parse import urlparse
 from typing import Any, AsyncIterator, Iterator
 
 import anthropic
@@ -283,9 +284,10 @@ class AnthropicProvider(BaseLLMProvider):
                 # Include server info if present
                 if current_tool_use.get("server_name"):
                     tool_data["server_name"] = current_tool_use["server_name"]
-                if current_tool_use.get("is_server_call"):
-                    tool_data["is_server_call"] = current_tool_use["is_server_call"]
 
+                # Emit different event type for MCP server tools
+                if current_tool_use.get("is_server_call"):
+                    return StreamEvent(type="server_tool_use", data=tool_data), None
                 return StreamEvent(type="tool_use", data=tool_data), None
 
         elif event_type == "message_delta":

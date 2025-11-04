@@ -108,6 +108,7 @@ async def send_dm_endpoint(request: SendDMRequest):
     """Send a DM via the collector's Discord client"""
     collector = app.bots.get(request.bot_id)
     if not collector:
+        logger.error(f"Bot not found: {request.bot_id}")
         raise HTTPException(status_code=404, detail="Bot not found")
 
     try:

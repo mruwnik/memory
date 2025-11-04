@@ -4,11 +4,11 @@ MCP tools for the epistemic sparring partner system.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from memory.api.MCP.base import get_current_user, mcp
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall
+from memory.common.db.models import ScheduledLLMCall, DiscordBotUser
 from memory.discord.messages import schedule_discord_message
 
 logger = logging.getLogger(__name__)
@@ -71,11 +71,15 @@ async def schedule_message(
         raise ValueError("Invalid datetime format")
 
     with make_session() as session:
+        bot = session.query(DiscordBotUser).first()
+        if not bot:
+            return {"error": "No bot found"}
+
         scheduled_call = schedule_discord_message(
             session=session,
             scheduled_time=scheduled_dt,
             message=message,
-            user_id=current_user.get("user", {}).get("user_id"),
+            user_id=cast(int, bot.id),
             model=model,
             topic=topic,
             discord_channel=discord_channel,

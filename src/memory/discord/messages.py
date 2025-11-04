@@ -132,14 +132,17 @@ def upsert_scheduled_message(
 
 def previous_messages(
     session: Session | scoped_session,
+    bot_id: int,
     user_id: int | None,
     channel_id: int | None,
     max_messages: int = 10,
     offset: int = 0,
 ) -> list[DiscordMessage]:
-    messages = session.query(DiscordMessage)
+    messages = session.query(DiscordMessage).filter(
+        DiscordMessage.recipient_id == bot_id
+    )
     if user_id:
-        messages = messages.filter(DiscordMessage.recipient_id == user_id)
+        messages = messages.filter(DiscordMessage.from_id == user_id)
     if channel_id:
         messages = messages.filter(DiscordMessage.channel_id == channel_id)
     return list(
@@ -154,15 +157,23 @@ def previous_messages(
 
 def comm_channel_prompt(
     session: Session | scoped_session,
+    bot: DiscordEntity,
     user: DiscordEntity,
     channel: DiscordEntity,
     max_messages: int = 10,
 ) -> str:
     user = resolve_discord_user(session, user)
     channel = resolve_discord_channel(session, channel)
+    bot = resolve_discord_user(session, bot)
+    if not bot:
+        raise ValueError("Bot not found")
 
     messages = previous_messages(
-        session, user and user.id, channel and channel.id, max_messages
+        session,
+        cast(int, bot.id),
+        user and user.id,
+        channel and channel.id,
+        max_messages,
     )
 
     server_context = ""
@@ -244,6 +255,7 @@ def call_llm(
         user_id = cast(int, from_user.id)
     prev_messages = previous_messages(
         session,
+        bot_user.system_user.discord_id,
         user_id,
         channel and channel.id,
         max_messages=num_previous_messages,
@@ -263,18 +275,12 @@ def call_llm(
     if bot_user.system_prompt:
         system_prompt = bot_user.system_prompt + "\n\n" + (system_prompt or "")
     message_content = [m.as_content() for m in prev_messages] + messages
+
     return provider.run_with_tools(
         messages=provider.as_messages(message_content),
         tools=tools,
         system_prompt=(bot_user.system_prompt or "") + "\n\n" + (system_prompt or ""),
-        mcp_servers=[
-            MCPServer(
-                name=str(server.name),
-                url=str(server.mcp_server_url),
-                token=str(server.access_token),
-            )
-            for server in mcp_servers
-        ]
+        mcp_servers=[MCPServer.from_model(server) for server in mcp_servers]
         if mcp_servers
         else None,
         max_iterations=settings.DISCORD_MAX_TOOL_CALLS,

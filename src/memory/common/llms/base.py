@@ -189,7 +189,15 @@ class Message:
 class StreamEvent:
     """An event from the streaming response."""
 
-    type: Literal["text", "tool_use", "tool_result", "thinking", "error", "done"]
+    type: Literal[
+        "text",
+        "tool_use",
+        "server_tool_use",
+        "tool_result",
+        "thinking",
+        "error",
+        "done",
+    ]
     data: Any = None
     signature: str | None = None
 
@@ -565,9 +573,31 @@ class BaseLLMProvider(ABC):
             elif event.type == "thinking":
                 thinking.thinking += event.data
                 yield event
-            elif event.type == "tool_use":
+            elif event.type == "server_tool_use":
+                # MCP server tools are executed by Anthropic's backend
+                # Results will come as separate tool_result events
                 yield event
-                # Execute the tool and yield the result
+
+                # Track the MCP tool call but don't execute locally
+                messages.append(
+                    Message.assistant(
+                        response,
+                        thinking,
+                        ToolUseContent(
+                            id=event.data["id"],
+                            name=event.data["name"],
+                            input=event.data["input"],
+                        ),
+                    )
+                )
+                # Reset response for next turn
+                response = TextContent(text="")
+                thinking = ThinkingContent(thinking="")
+                # Continue streaming to get the tool result from Anthropic
+
+            elif event.type == "tool_use":
+                # Execute local tools
+                yield event
                 tool_result = self.execute_tool(event.data, tools)
                 yield StreamEvent(type="tool_result", data=tool_result.to_dict())
 
@@ -588,6 +618,27 @@ class BaseLLMProvider(ABC):
                 messages.append(Message.user(tool_result=tool_result))
 
                 # Recursively continue the conversation with reduced iterations
+                yield from self.stream_with_tools(
+                    messages,
+                    tools,
+                    mcp_servers,
+                    settings,
+                    system_prompt,
+                    max_iterations - 1,
+                )
+                return  # Exit after recursive call completes
+
+            elif event.type == "tool_result":
+                yield event
+                # Add user message with the result
+                tool_result_content = ToolResultContent(
+                    tool_use_id=event.data["id"],
+                    content=str(event.data.get("result", "")),
+                    is_error=event.data.get("is_error", False),
+                )
+                messages.append(Message.user(tool_result=tool_result_content))
+
+                # Continue conversation with reduced iterations
                 yield from self.stream_with_tools(
                     messages,
                     tools,
@@ -625,7 +676,7 @@ class BaseLLMProvider(ABC):
         ):
             if event.type == "thinking":
                 thinking += event.data
-            elif event.type == "tool_use":
+            elif event.type == "tool_use" or event.type == "server_tool_use":
                 tool_calls[event.data["id"]] = {
                     "name": event.data["name"],
                     "input": event.data["input"],
@@ -634,11 +685,15 @@ class BaseLLMProvider(ABC):
             elif event.type == "text":
                 response += event.data
             elif event.type == "tool_result":
-                current = tool_calls.get(event.data["tool_use_id"]) or {}
-                tool_calls[event.data["tool_use_id"]] = {
+                tool_id = event.data.get("id") or event.data.get("tool_use_id")
+                if not tool_id:
+                    logger.warning(f"tool_result event missing id: {event.data}")
+                    continue
+                current = tool_calls.get(tool_id) or {}
+                tool_calls[tool_id] = {
                     "name": event.data.get("name") or current.get("name"),
                     "input": event.data.get("input") or current.get("input"),
-                    "output": event.data.get("content"),
+                    "output": event.data.get("content") or event.data.get("result"),
                 }
         return Turn(
             thinking=thinking or None,

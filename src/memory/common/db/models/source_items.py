@@ -401,10 +401,10 @@ class DiscordMessage(SourceItem):
             filter(
                 None,
                 [
-                    self.recipient_user.id,
-                    self.from_user.id,
-                    self.channel.id,
-                    self.server.id,
+                    self.recipient_id,
+                    self.from_id,
+                    self.channel_id,
+                    self.server_id,
                 ],
             )
         )

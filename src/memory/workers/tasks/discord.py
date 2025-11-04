@@ -113,7 +113,7 @@ def should_process(message: DiscordMessage) -> bool:
 
         system_prompt = message.system_prompt or ""
         system_prompt += comm_channel_prompt(
-            session, message.recipient_user, message.channel
+            session, message.recipient_user, message.from_user, message.channel
         )
         allowed_tools = [
             "update_channel_summary",
@@ -199,7 +199,10 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
         mcp_servers = discord_message.get_mcp_servers(session)
         system_prompt = discord_message.system_prompt or ""
         system_prompt += comm_channel_prompt(
-            session, discord_message.recipient_user, discord_message.channel
+            session,
+            discord_message.recipient_user,
+            discord_message.from_user,
+            discord_message.channel,
         )
 
         try:

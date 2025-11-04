@@ -9,14 +9,14 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall
+from memory.common.db.models import ScheduledLLMCall, DiscordBotUser
 from memory.discord.messages import call_llm, send_discord_response
 from memory.workers.tasks.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
 
 
-def _call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | None:
+def call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | None:
     """Call LLM with tools support for scheduled calls."""
     if not scheduled_call.discord_user:
         logger.warning("No discord_user for scheduled call - cannot execute")
@@ -30,6 +30,7 @@ def _call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | 
     bot_user = (
         scheduled_call.user.discord_users and scheduled_call.user.discord_users[0]
     )
+
     return call_llm(
         session=session,
         bot_user=bot_user,
@@ -42,18 +43,8 @@ def _call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | 
     )
 
 
-def _send_to_discord(scheduled_call: ScheduledLLMCall, response: str):
+def send_to_discord(bot_id: int, scheduled_call: ScheduledLLMCall, response: str):
     """Send the LLM response to Discord user or channel."""
-    bot_id_value = scheduled_call.user_id
-    if bot_id_value is None:
-        logger.warning(
-            "Scheduled call %s has no associated bot user; skipping Discord send",
-            scheduled_call.id,
-        )
-        return
-
-    bot_id = cast(int, bot_id_value)
-
     send_discord_response(
         bot_id=bot_id,
         response=response,
@@ -101,7 +92,7 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
         # Make the LLM call with tools support
         try:
-            response = _call_llm_for_scheduled(session, scheduled_call)
+            response = call_llm_for_scheduled(session, scheduled_call)
         except Exception:
             logger.exception("Failed to generate LLM response")
             scheduled_call.status = "failed"
@@ -132,7 +123,7 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
         # Send to Discord
         try:
-            _send_to_discord(scheduled_call, response)
+            send_to_discord(cast(int, scheduled_call.user_id), scheduled_call, response)
             logger.info(f"Response sent to Discord for {scheduled_call_id}")
         except Exception as discord_error:
             logger.error(f"Failed to send to Discord: {discord_error}")
