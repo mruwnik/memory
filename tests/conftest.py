@@ -21,6 +21,39 @@ from memory.common.qdrant import initialize_collections
 from tests.providers.email_provider import MockEmailProvider
 
 
+def pytest_addoption(parser):
+    """Add custom command-line options for pytest."""
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Run slow tests (database, containers, etc.)",
+    )
+
+
+def pytest_configure(config):
+    """Configure pytest with custom markers."""
+    config.addinivalue_line("markers", "slow: marks tests as slow")
+    config.addinivalue_line("markers", "integration: marks integration tests")
+    config.addinivalue_line("markers", "db: marks tests that require database")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark tests that use slow fixtures and skip them unless --run-slow is provided."""
+    if config.getoption("--run-slow"):
+        # --run-slow given: don't skip slow tests
+        return
+
+    skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
+    slow_fixtures = {"test_db", "db_engine", "db_session", "qdrant"}
+
+    for item in items:
+        # Check if test uses any slow fixtures
+        if slow_fixtures.intersection(set(getattr(item, "fixturenames", []))):
+            item.add_marker(pytest.mark.slow)
+            item.add_marker(skip_slow)
+
+
 class MockRedis:
     """In-memory mock of Redis for testing."""
 
