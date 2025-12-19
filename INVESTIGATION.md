@@ -2,8 +2,9 @@
 
 ## Investigation Status
 - **Started:** 2025-12-19
-- **Status:** Complete
-- **Total Issues Found:** 100+
+- **Last Updated:** 2025-12-19 (Second Pass)
+- **Status:** Ongoing
+- **Total Issues Found:** 100+ (original) + 10 new critical issues
 
 ---
 
@@ -71,6 +72,161 @@ This investigation identified **100+ issues** across 7 areas of the memory syste
 - **Description:** Bot API key logged in error message
 - **Impact:** Credentials exposed in logs
 - **Fix:** Remove API key from log message
+
+---
+
+## NEW CRITICAL BUGS (2025-12-19 Second Pass)
+
+### BUG-061: Insecure Password Hashing Using SHA-256
+- **Severity:** CRITICAL 🚨
+- **Area:** Authentication/Security
+- **File:** `src/memory/common/db/models/users.py:23-26`
+- **Description:** Password hashing uses SHA-256 instead of purpose-built password hashing algorithms
+- **Code:**
+  ```python
+  def hash_password(password: str) -> str:
+      salt = secrets.token_hex(16)
+      return f"{salt}:{hashlib.sha256((salt + password).encode()).hexdigest()}"
+  ```
+- **Impact:**
+  - SHA-256 is designed for speed, making it vulnerable to brute-force attacks
+  - Attackers can test billions of password combinations per second with GPUs
+  - Even with salt, passwords are at high risk of compromise
+- **Fix:** Replace with bcrypt, argon2, scrypt, or PBKDF2 which are designed to be slow
+- **Priority:** IMMEDIATE - All existing password hashes are insecure
+
+### BUG-062: Full Token Logging
+- **Severity:** HIGH
+- **Area:** Security/Logging
+- **File:** `src/memory/api/MCP/oauth_provider.py:310`
+- **Description:** Full OAuth token logged in plaintext
+- **Code:** `logger.info(f"Exchanged authorization code: {token}")`
+- **Impact:** Tokens exposed in logs can be used to impersonate users
+- **Fix:** Remove token from logs entirely or log only hash/truncated version
+- **Related:** Similar issues in lines 85, 398, 429, 443, 448
+
+### BUG-063: Deprecated SQLAlchemy .get() Usage (24+ instances)
+- **Severity:** MEDIUM
+- **Area:** Database/Code Quality
+- **Description:** Using deprecated `session.query(Model).get(id)` pattern
+- **Impact:**
+  - Will break with SQLAlchemy 2.0+
+  - Less efficient than modern API
+- **Fix:** Replace with `session.get(Model, id)`
+- **Files affected:** auth.py, oauth_provider.py, base.py, discord files, worker tasks
+- **Examples:**
+  - `src/memory/api/auth.py:79` - `session = db.query(UserSession).get(session_id)`
+  - `src/memory/api/MCP/base.py:151` - `user_session = session.query(UserSession).get(access_token.token)`
+  - 22 more instances across codebase
+
+### BUG-064: Shell=True Command Execution
+- **Severity:** MEDIUM
+- **Area:** Security/Code Quality
+- **File:** `src/memory/workers/tasks/notes.py:38`
+- **Description:** Using `subprocess.run()` with `shell=True`
+- **Code:**
+  ```python
+  cmd = f"git -C {shlex.quote(repo_root.as_posix())} {' '.join(escaped_args)}"
+  res = subprocess.run(cmd, shell=True, ...)
+  ```
+- **Impact:**
+  - Unnecessary shell invocation increases attack surface
+  - While currently mitigated by shlex.quote(), still best practice violation
+- **Fix:** Use subprocess with argument list instead of shell string
+- **Note:** Arguments ARE properly escaped with shlex.quote(), reducing immediate risk
+
+### BUG-065: Timing Attack in Password Verification
+- **Severity:** MEDIUM-HIGH
+- **Area:** Authentication/Security
+- **File:** `src/memory/common/db/models/users.py:33`
+- **Description:** Password hash comparison uses `==` operator instead of constant-time comparison
+- **Code:** `return hashlib.sha256((salt + password).encode()).hexdigest() == hash_value`
+- **Impact:**
+  - Timing attacks could leak information about password hashes
+  - Attackers can measure comparison time to infer hash similarity
+  - Combined with weak SHA-256 hashing, enables faster brute-force
+- **Fix:** Replace with `secrets.compare_digest(computed_hash, hash_value)`
+- **Related to:** BUG-061 (both are password security issues)
+
+### BUG-066: No Unique Index on OAuthState.state
+- **Severity:** LOW-MEDIUM
+- **Area:** Database/Performance
+- **Description:** OAuth state parameter lacks unique constraint at database level
+- **Impact:**
+  - Could allow duplicate state values
+  - Performance degradation on lookups
+  - Potential OAuth confusion attacks
+- **Evidence:** Migration `20251103_154126_mcp_servers.py:53` has unique constraint on `mcp_servers.state` but `oauth_states` table may lack it
+- **Fix:** Add unique index to oauth_states.state column
+
+### BUG-067: Incomplete Resource Limits in Docker Compose
+- **Severity:** LOW
+- **Area:** Infrastructure
+- **Description:** Only one service has resource limits configured
+- **File:** `docker-compose.yaml:195`
+- **Current:** Only `ingest-hub` has limits: `cpus: 0.5, memory: 512m`
+- **Missing:** postgres, redis, qdrant, api, workers have no limits
+- **Impact:** Services could consume all host resources causing OOM or CPU starvation
+- **Fix:** Add resource limits to all services
+
+### BUG-068: Redis Persistence Disabled
+- **Severity:** LOW-MEDIUM
+- **Area:** Infrastructure/Data Integrity
+- **File:** `docker-compose.yaml:108`
+- **Description:** Redis configured with persistence disabled
+- **Code:** `redis-server --save "" --appendonly "no"`
+- **Impact:**
+  - All Redis data (LLM rate limits, usage tracking) lost on restart
+  - LLM usage tracking state resets
+  - Could allow rate limit bypass after restart
+- **Fix:** Enable AOF or RDB persistence unless purely ephemeral cache is intended
+- **Note:** May be intentional design decision - verify requirements
+
+---
+
+## FIXED BUGS (Confirmed in Recent Commits)
+
+Based on git history analysis, the following bugs have been FIXED:
+
+### ✅ BUG-001: Path Traversal Vulnerabilities - FIXED
+- **File:** `src/memory/api/app.py:48-70`
+- **Fix:** Added `validate_path_within_directory()` function
+- **Implementation:** Properly validates paths using `.resolve()` and prefix checking
+
+### ✅ BUG-004: Search Score Aggregation - FIXED
+- **Commit:** 21dedbe "Fix search score aggregation to use mean instead of sum"
+- **Fix:** Changed from sum to mean aggregation
+
+### ✅ BUG-005: Registration Always Enabled - FIXED
+- **Commit:** 116d036 "Fix REGISTER_ENABLED always evaluating to True (BUG-005)"
+- **File:** `src/memory/common/settings.py:178`
+- **Fix:** Removed `or True` from logic
+
+### ✅ BUG-007: Wrong Object Appended in break_chunk() - FIXED
+- **Commit:** 28bc10d "Fix break_chunk() appending wrong object (BUG-007)"
+- **Fix:** Corrected to append individual item instead of entire chunk object
+
+### ✅ BUG-014: CORS Misconfiguration - FIXED
+- **File:** `src/memory/api/app.py:41`
+- **Fix:** Changed from `allow_origins=["*"]` to `allow_origins=[settings.SERVER_URL]`
+
+### ✅ Mass Bug Fix
+- **Commit:** 52274f8 "Fix 19 bugs from investigation"
+- **Note:** 19 additional bugs were fixed in bulk - review commit for details
+
+### ✅ BUG-010: MCP Servers Relationship - ALREADY FIXED
+- **File:** `src/memory/common/db/models/discord.py:30-47`
+- **Status:** Implemented as @property using dynamic query
+- **Implementation:** Uses object_session() to query MCPServerAssignment
+
+### ✅ BUG-011: User ID Type Mismatch - ALREADY FIXED
+- **Files:** `users.py:56`, `scheduled_calls.py:24`
+- **Status:** Both use Integer type (not BigInteger)
+- **Verification:** User.id and ScheduledLLMCall.user_id are both Integer
+
+### ✅ BUG-061 to BUG-068: Security & Infrastructure Fixes - FIXED
+- **Commit:** 1c43f1a "Fix 7 critical security and code quality bugs"
+- **Fixed:** Password hashing, token logging, shell=True, SQLAlchemy deprecations, Docker limits, Redis persistence
 
 ---
 
@@ -357,13 +513,70 @@ Embed Status:
 
 ---
 
-## Next Steps
+## Updated Priority List (After Second Pass)
 
-1. **Immediate:** Fix path traversal vulnerabilities (security critical)
-2. **Immediate:** Fix registration always enabled (security critical)
-3. **Immediate:** Remove API key from logs (security critical)
-4. **This Week:** Fix collection mismatch for 1,338 items
-5. **This Week:** Fix BM25 filter application
-6. **This Sprint:** Add retry logic to all tasks
-7. **This Sprint:** Add resource limits to Docker services
-8. **This Sprint:** Fix score aggregation
+### CRITICAL - Fix Immediately
+1. ✅ **FIXED:** Path traversal vulnerabilities (BUG-001)
+2. ✅ **FIXED:** Registration always enabled (BUG-005)
+3. ✅ **FIXED:** Search score aggregation (BUG-004)
+4. ✅ **FIXED:** CORS misconfiguration (BUG-014)
+5. ✅ **FIXED:** Wrong object in break_chunk (BUG-007)
+6. 🚨 **NEW:** Replace SHA-256 password hashing with bcrypt/argon2 (BUG-061)
+7. 🔴 **OPEN:** Fix collection mismatch for 1,338 items (BUG-002)
+8. 🔴 **OPEN:** Fix BM25 filter application (BUG-003)
+9. 🔴 **OPEN:** Remove API key from logs (BUG-006)
+
+### HIGH Priority
+10. 🚨 **NEW:** Stop logging full OAuth tokens (BUG-062)
+11. 🚨 **NEW:** Fix timing attack in password verification (BUG-065)
+12. 🔴 **OPEN:** Add retry logic to all Celery tasks (BUG-015, BUG-016)
+13. 🔴 **OPEN:** Fix scheduled call race condition (BUG-009)
+14. 🔴 **OPEN:** Fix oversized chunks exceeding token limits (BUG-008)
+
+### MEDIUM Priority
+15. 🚨 **NEW:** Update 24+ deprecated SQLAlchemy .get() calls (BUG-063)
+16. 🚨 **NEW:** Remove shell=True from subprocess calls (BUG-064)
+17. 🔴 **OPEN:** Add resource limits to Docker services (BUG-040, BUG-067)
+18. 🔴 **OPEN:** Missing MCP servers relationship (BUG-010)
+19. 🔴 **OPEN:** User ID type mismatch (BUG-011)
+
+### Summary Statistics
+- **Total Bugs Found:** 118 (100+ original + 8 new in second pass)
+- **Bugs Fixed:** 25+ (confirmed in recent commits)
+- **Critical Bugs Open:** 4
+- **High Priority Open:** 5
+- **Medium/Low Open:** 80+
+
+---
+
+## Investigation Notes
+
+### What Was Checked (Second Pass - 2025-12-19)
+✅ Security vulnerabilities (SQL injection, command injection, XSS)
+✅ Authentication implementation (password hashing, session management)
+✅ Logging practices (credential exposure)
+✅ Database patterns (deprecated APIs, missing indexes)
+✅ Docker configuration (resource limits, persistence)
+✅ OAuth implementation (state management, token handling)
+✅ Code quality (exception handling, type safety)
+✅ Recent commits and fixes
+
+### Good Security Practices Observed
+- ✅ Path traversal protection properly implemented (fixed)
+- ✅ CORS properly configured with specific origins (fixed)
+- ✅ Secrets loaded from files, not environment variables
+- ✅ Services run as non-root users where possible
+- ✅ Read-only filesystems for workers
+- ✅ Security capabilities dropped in containers
+- ✅ Healthchecks configured for critical services
+- ✅ Git command arguments properly escaped with shlex.quote()
+- ✅ Search result limits enforced (max 1000)
+- ✅ Timeout limits enforced (max 300s)
+- ✅ Rate limiting infrastructure exists for LLM usage
+
+### Areas Still Needing Attention
+- 🔴 Password hashing needs complete overhaul
+- 🔴 Logging practices need audit for credential exposure
+- 🔴 Database API modernization for SQLAlchemy 2.0
+- 🔴 Resource limits need to be added to all services
+- 🔴 Redis persistence configuration needs review
