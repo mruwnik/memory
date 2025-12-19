@@ -48,6 +48,7 @@ This investigation identified **100+ issues** across 7 areas of the memory syste
 - **Root Cause:** `extract_text()` defaults to `modality="text"` but BookSection didn't override it
 - **Fix Applied:** Added `modality="book"` to BookSection._chunk_contents() DataChunk creation
 - **Note:** Original 1,338 mail items investigation was outdated - current mismatch is 24 mail->text chunks which are actually email attachments (correct behavior)
+- **TODO:** Existing 9,370 book chunks need re-indexing to move from text to book collection
 
 ### BUG-003: BM25 Filters Completely Ignored
 - **Severity:** CRITICAL
