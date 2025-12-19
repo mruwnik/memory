@@ -2,21 +2,28 @@
 
 ## Investigation Status
 - **Started:** 2025-12-19
-- **Last Updated:** 2025-12-19 (Second Pass)
+- **Last Updated:** 2025-12-19 (Third Pass - Verification)
 - **Status:** Ongoing
 - **Total Issues Found:** 100+ (original) + 10 new critical issues
+- **Bugs Fixed:** 25+ confirmed fixed
 
 ---
 
 ## Executive Summary
 
-This investigation identified **100+ issues** across 7 areas of the memory system. The most critical findings are:
+This investigation identified **100+ issues** across 7 areas of the memory system. Many critical issues have been fixed:
 
-1. **Security vulnerabilities** (path traversal, CORS, API key logging)
-2. **Data integrity issues** (1,338 items unsearchable due to collection mismatch)
-3. **Search system bugs** (BM25 filters ignored, broken score aggregation)
-4. **Worker reliability** (no retries, silent failures, race conditions)
-5. **Code quality concerns** (bare exceptions, type safety gaps)
+### Fixed Issues ✅
+- **Security:** Path traversal (BUG-001), CORS (BUG-014), password hashing (BUG-061), token logging (BUG-062), shell injection (BUG-064)
+- **Worker reliability:** Retry config (BUG-015), silent failures (BUG-016), task time limits (BUG-035)
+- **Search:** BM25 filters (BUG-003), embed status (BUG-019), SearchConfig limits (BUG-031)
+- **Infrastructure:** Resource limits (BUG-040/067), Redis persistence (BUG-068), health checks (BUG-043)
+- **Code quality:** SQLAlchemy deprecations (BUG-063), print statements (BUG-033/060)
+
+### Remaining Issues
+1. **Data integrity issues** (1,338 items unsearchable due to collection mismatch - BUG-002 needs verification)
+2. **Search system bugs** (BM25 scores discarded - BUG-026)
+3. **Code quality concerns** (bare exceptions, type safety gaps)
 
 ---
 
@@ -277,20 +284,23 @@ Based on git history analysis, the following bugs have been FIXED:
 - **Description:** No try-except blocks around Voyage AI API calls
 - **Impact:** Entire content processing fails on API error
 
-### BUG-014: Unrestricted CORS Configuration
+### BUG-014: Unrestricted CORS Configuration ✅ FIXED
 - **File:** `src/memory/api/app.py:36-42`
-- **Description:** `allow_origins=["*"]` with `allow_credentials=True`
-- **Impact:** CSRF attacks enabled
+- **Description:** ~~`allow_origins=["*"]` with `allow_credentials=True`~~ Now uses `settings.SERVER_URL`
+- **Impact:** ~~CSRF attacks enabled~~ Fixed
+- **Status:** ✅ Already fixed - CORS now uses specific origin from settings
 
-### BUG-015: Missing Retry Configuration
+### BUG-015: Missing Retry Configuration ✅ FIXED
 - **Files:** All task files
-- **Description:** No `autoretry_for`, `max_retries` on any Celery tasks
-- **Impact:** Transient failures lost without retry
+- **Description:** ~~No `autoretry_for`, `max_retries` on any Celery tasks~~ Global config in celery_app.py
+- **Impact:** ~~Transient failures lost without retry~~ Fixed
+- **Status:** ✅ Already fixed - celery_app.py has global retry config (autoretry, max_retries=3, backoff, jitter)
 
-### BUG-016: Silent Task Failures
+### BUG-016: Silent Task Failures ✅ FIXED
 - **File:** `src/memory/workers/tasks/content_processing.py:258-296`
-- **Description:** `safe_task_execution` catches all exceptions, returns as dict
-- **Impact:** Failed tasks can't be retried by Celery
+- **Description:** ~~`safe_task_execution` catches all exceptions, returns as dict~~ Now re-raises exceptions
+- **Impact:** ~~Failed tasks can't be retried by Celery~~ Fixed
+- **Status:** ✅ Already fixed - exceptions are now re-raised after logging to allow Celery retries
 
 ---
 
@@ -299,7 +309,7 @@ Based on git history analysis, the following bugs have been FIXED:
 ### Data Layer
 - BUG-017: Missing `collection_name` index on Chunk table (`source_item.py:165-168`)
 - BUG-018: AgentObservation dead code for future embedding types (`source_items.py:1005-1028`)
-- BUG-019: Embed status never set to STORED after push (`content_processing.py:125`)
+- BUG-019: ✅ Embed status never set to STORED after push - FIXED (properly sets STORED at lines 169, 245)
 - BUG-020: Missing server_id index on DiscordMessage (`source_items.py:426-435`)
 
 ### Content Processing
@@ -317,23 +327,23 @@ Based on git history analysis, the following bugs have been FIXED:
 
 ### API Layer
 - BUG-030: Missing rate limiting (global)
-- BUG-031: No SearchConfig limits - can request millions of results (`types.py:73-78`)
+- BUG-031: ✅ No SearchConfig limits - FIXED (enforces 1-1000 limit, 1-300 timeout in model_post_init)
 - BUG-032: No CSRF protection (`auth.py:50-86`)
-- BUG-033: Debug print statements in production (`memory.py:363-370`)
+- BUG-033: ✅ Debug print statements in production - FIXED (no print statements found in src/memory)
 - BUG-034: Timezone handling issues (`oauth_provider.py:83-87`)
 
 ### Worker Tasks
-- BUG-035: No task time limits (global)
+- BUG-035: ✅ No task time limits - FIXED (celery_app.py has task_time_limit=3600, task_soft_time_limit=3000)
 - BUG-036: Database integrity errors not properly handled (`discord.py:310-321`)
-- BUG-037: Timezone bug in scheduled calls (`scheduled_calls.py:152-153`)
+- BUG-037: ✅ Timezone bug in scheduled calls - FIXED (properly converts to UTC and strips tzinfo for DB comparison)
 - BUG-038: Beat schedule not thread-safe for distributed deployment (`ingest.py:19-56`)
 - BUG-039: Email sync fails entire account on single folder error (`email.py:84-152`)
 
 ### Infrastructure
-- BUG-040: Missing resource limits for postgres, redis, qdrant, api (`docker-compose.yaml`)
+- BUG-040: ✅ Missing resource limits for postgres, redis, qdrant, api - FIXED in BUG-067
 - BUG-041: Backup encryption silently disabled if key missing (`settings.py:215-216`)
 - BUG-042: Restore scripts don't validate database integrity (`restore_databases.sh:79`)
-- BUG-043: Health check doesn't check dependencies (`app.py:87-92`)
+- BUG-043: ✅ Health check doesn't check dependencies - FIXED (now checks database and Qdrant connections)
 - BUG-044: Uvicorn trusts all proxy headers (`docker/api/Dockerfile:63`)
 
 ### Code Quality
@@ -351,13 +361,13 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-051: Duplicate chunks (16 identical "Claude plays Pokemon" chunks)
 - BUG-052: Garbage content in text collection
 - BUG-053: No vector freshness index (`source_item.py:157`)
-- BUG-054: OAuthToken missing Base inheritance (`users.py:215-228`)
+- BUG-054: N/A OAuthToken missing Base inheritance - intentional mixin design (used by OAuthState and OAuthRefreshToken)
 - BUG-055: collection_model returns "unknown" (`collections.py:140`)
 - BUG-056: Unused "appuser" in API Dockerfile (`docker/api/Dockerfile:48`)
 - BUG-057: Build dependencies not cleaned up (`docker/api/Dockerfile:7-12`)
 - BUG-058: Typos in log messages (`tests/conftest.py:63`)
 - BUG-059: MockRedis overly simplistic (`tests/conftest.py:24-46`)
-- BUG-060: Print statement in ebook.py:192
+- BUG-060: ✅ Print statement in ebook.py:192 - FIXED (changed to logger.debug)
 
 ---
 
