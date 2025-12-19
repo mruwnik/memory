@@ -40,13 +40,14 @@ This investigation identified **100+ issues** across 7 areas of the memory syste
 - **Impact:** Arbitrary file read on server filesystem
 - **Fix:** Add path resolution validation with `.resolve()` and prefix check
 
-### BUG-002: Collection Mismatch (1,338 items)
-- **Severity:** CRITICAL
+### BUG-002: Collection Mismatch ✅ INVESTIGATED & FIXED
+- **Severity:** MEDIUM (not as critical as originally thought)
 - **Area:** Data/Embedding Pipeline
-- **Description:** Mail items have chunks with `collection_name='text'` but vectors stored in Qdrant's `mail` collection
-- **Impact:** Items completely unsearchable
-- **Evidence:** 1,338 orphaned vectors in mail, 1,338 missing in text
-- **Fix:** Re-sync vectors or update chunk collection_name
+- **Description:** BookSection._chunk_contents() called extract_text() without specifying modality, defaulting to "text"
+- **Impact:** 9,370 book chunks stored in text collection instead of book
+- **Root Cause:** `extract_text()` defaults to `modality="text"` but BookSection didn't override it
+- **Fix Applied:** Added `modality="book"` to BookSection._chunk_contents() DataChunk creation
+- **Note:** Original 1,338 mail items investigation was outdated - current mismatch is 24 mail->text chunks which are actually email attachments (correct behavior)
 
 ### BUG-003: BM25 Filters Completely Ignored
 - **Severity:** CRITICAL

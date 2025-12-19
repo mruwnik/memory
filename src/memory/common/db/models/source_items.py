@@ -606,7 +606,9 @@ class BookSection(SourceItem):
             return []
 
         if len([p for p in self.pages if p.strip()]) == 1:
-            chunks = extract.extract_text(content, metadata={"type": "page"})
+            chunks = extract.extract_text(
+                content, metadata={"type": "page"}, modality="book"
+            )
             if len(chunks) > 1:
                 chunks[-1].metadata["type"] = "summary"
             return chunks
@@ -614,10 +616,10 @@ class BookSection(SourceItem):
         summary, tags = summarizer.summarize(content)
         return [
             extract.DataChunk(
-                data=[content], metadata={"type": "section", "tags": tags}
+                data=[content], metadata={"type": "section", "tags": tags}, modality="book"
             ),
             extract.DataChunk(
-                data=[summary], metadata={"type": "summary", "tags": tags}
+                data=[summary], metadata={"type": "summary", "tags": tags}, modality="book"
             ),
         ]
 
