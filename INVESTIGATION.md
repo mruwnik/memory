@@ -368,7 +368,7 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-056: ✅ Unused "appuser" in Dockerfile - FIXED (removed unused user creation)
 - BUG-057: ✅ Build dependencies not cleaned up - FIXED (added apt-get purge after pip install in Dockerfile)
 - BUG-058: N/A Typos in log messages - no log messages found at referenced location
-- BUG-059: MockRedis overly simplistic (`tests/conftest.py:24-46`)
+- BUG-059: N/A MockRedis - actually sufficient (implements get/set/scan_iter which are the only Redis methods used)
 - BUG-060: ✅ Print statement in ebook.py:192 - FIXED (changed to logger.debug)
 
 ---
@@ -376,12 +376,12 @@ Based on git history analysis, the following bugs have been FIXED:
 ## Improvement Suggestions
 
 ### High Priority
-1. **Implement proper retry logic** for all Celery tasks with exponential backoff
-2. **Add comprehensive health checks** that validate all service dependencies
+1. ~~**Implement proper retry logic** for all Celery tasks~~ ✅ DONE (BUG-015)
+2. ~~**Add comprehensive health checks**~~ ✅ DONE (BUG-043)
 3. **Fix score aggregation** to use mean/max instead of sum
-4. **Add rate limiting** to prevent DoS attacks
-5. **Implement proper CSRF protection** for OAuth flows
-6. **Add resource limits** to all Docker services
+4. ~~**Add rate limiting**~~ ✅ DONE (BUG-030)
+5. ~~**Implement proper CSRF protection**~~ ✅ Already present (BUG-049)
+6. ~~**Add resource limits** to all Docker services~~ ✅ DONE (BUG-067)
 7. **Implement centralized logging** with ELK or Grafana Loki
 
 ### Medium Priority
