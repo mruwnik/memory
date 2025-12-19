@@ -49,12 +49,13 @@ def embed_chunks(
 def break_chunk(
     chunk: extract.DataChunk, chunk_size: int = DEFAULT_CHUNK_TOKENS
 ) -> list[extract.MulitmodalChunk]:
-    result = []
+    result: list[extract.MulitmodalChunk] = []
     for c in chunk.data:
         if isinstance(c, str):
             result += chunk_text(c, chunk_size, OVERLAP_TOKENS)
         else:
-            result.append(chunk)
+            # Non-string items (e.g., images) are passed through directly
+            result.append(c)
     return result
 
 
