@@ -76,12 +76,12 @@ def execute_scheduled_call(self, scheduled_call_id: str):
             logger.error(f"Scheduled call {scheduled_call_id} not found")
             return {"error": "Scheduled call not found"}
 
-        # Check if the call is still pending
-        if not scheduled_call.is_pending():
+        # Check if the call is ready to execute (pending or queued)
+        if scheduled_call.status not in ("pending", "queued"):
             logger.warning(
-                f"Scheduled call {scheduled_call_id} is not pending (status: {scheduled_call.status})"
+                f"Scheduled call {scheduled_call_id} is not ready (status: {scheduled_call.status})"
             )
-            return {"error": f"Call is not pending (status: {scheduled_call.status})"}
+            return {"error": f"Call is not ready (status: {scheduled_call.status})"}
 
         # Update status to executing
         scheduled_call.status = "executing"
@@ -143,21 +143,40 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 @app.task(name=RUN_SCHEDULED_CALLS)
 @safe_task_execution
 def run_scheduled_calls():
-    """Run scheduled calls that are due."""
+    """Run scheduled calls that are due.
+
+    Uses SELECT FOR UPDATE SKIP LOCKED to prevent race conditions when
+    multiple workers query for due calls simultaneously.
+    """
     with make_session() as session:
+        # Use FOR UPDATE SKIP LOCKED to atomically claim pending calls
+        # This prevents multiple workers from processing the same call
+        #
+        # Note: scheduled_time is stored as naive datetime (assumed UTC).
+        # We compare against current UTC time, also as naive datetime.
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         calls = (
             session.query(ScheduledLLMCall)
             .filter(
                 ScheduledLLMCall.status.in_(["pending"]),
-                ScheduledLLMCall.scheduled_time
-                < datetime.now(timezone.utc).replace(tzinfo=None),
+                ScheduledLLMCall.scheduled_time < now_utc,
             )
+            .with_for_update(skip_locked=True)
             .all()
         )
+
+        # Mark calls as queued before dispatching to prevent re-processing
+        call_ids = []
         for call in calls:
-            execute_scheduled_call.delay(call.id)
+            call.status = "queued"
+            call_ids.append(call.id)
+        session.commit()
+
+        # Now dispatch tasks for queued calls
+        for call_id in call_ids:
+            execute_scheduled_call.delay(call_id)
 
         return {
-            "calls": [call.id for call in calls],
-            "count": len(calls),
+            "calls": call_ids,
+            "count": len(call_ids),
         }

@@ -60,7 +60,7 @@ class Collector:
     bot_name: str
 
     def __init__(self, collector: MessageCollector, bot: DiscordBotUser):
-        logger.error(f"Initialized collector for {bot.name} woth {bot.api_key}")
+        logger.info(f"Initialized collector for {bot.name}")
         self.collector = collector
         self.collector_task = asyncio.create_task(collector.start(str(bot.api_key)))
         self.bot_id = cast(int, bot.id)
@@ -80,8 +80,8 @@ async def lifespan(app: FastAPI):
         bots = session.query(DiscordBotUser).all()
         app.bots = {bot.id: make_collector(bot) for bot in bots}
 
-    logger.error(
-        f"Discord collectors started for {len(app.bots)} bots: {app.bots.keys()}"
+    logger.info(
+        f"Discord collectors started for {len(app.bots)} bots: {list(app.bots.keys())}"
     )
 
     yield

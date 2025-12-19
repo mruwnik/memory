@@ -12,7 +12,7 @@ from memory.api.search.types import SearchFilters
 
 from memory.common import extract
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, ConfidenceScore
+from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +29,27 @@ async def search_bm25(
             Chunk.content.isnot(None),
         )
 
+        # Join with SourceItem if we need size filters
+        needs_source_join = any(filters.get(k) for k in ["min_size", "max_size"])
+        if needs_source_join:
+            items_query = items_query.join(
+                SourceItem, SourceItem.id == Chunk.source_id
+            )
+
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))
+
+        # Size filters
+        if min_size := filters.get("min_size"):
+            items_query = items_query.filter(SourceItem.size >= min_size)
+        if max_size := filters.get("max_size"):
+            items_query = items_query.filter(SourceItem.size <= max_size)
+
+        # Observation type filter - restricts to specific collection types
+        if observation_types := filters.get("observation_types"):
+            items_query = items_query.filter(
+                Chunk.collection_name.in_(observation_types)
+            )
 
         # Add confidence filtering if specified
         if min_confidences := filters.get("min_confidences"):

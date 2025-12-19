@@ -80,3 +80,15 @@ class SearchConfig(BaseModel):
     timeout: int = 20
     previews: bool = False
     useScores: bool = False
+
+    def model_post_init(self, __context) -> None:
+        # Enforce reasonable limits
+        if self.limit < 1:
+            object.__setattr__(self, "limit", 1)
+        elif self.limit > 1000:
+            object.__setattr__(self, "limit", 1000)
+
+        if self.timeout < 1:
+            object.__setattr__(self, "timeout", 1)
+        elif self.timeout > 300:
+            object.__setattr__(self, "timeout", 300)

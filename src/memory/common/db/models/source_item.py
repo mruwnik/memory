@@ -165,6 +165,7 @@ class Chunk(Base):
     __table_args__ = (
         CheckConstraint("(file_paths IS NOT NULL) OR (content IS NOT NULL)"),
         Index("chunk_source_idx", "source_id"),
+        Index("chunk_collection_idx", "collection_name"),
     )
 
     @property

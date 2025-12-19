@@ -88,6 +88,14 @@ app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
+    # Default retry configuration for transient failures
+    task_autoretry_for=(Exception,),
+    task_retry_kwargs={"max_retries": 3},
+    task_retry_backoff=True,
+    task_retry_backoff_max=600,  # Max 10 minutes between retries
+    task_retry_jitter=True,
+    task_time_limit=3600,  # 1 hour hard limit
+    task_soft_time_limit=3000,  # 50 minute soft limit
     task_routes={
         f"{EBOOK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-ebooks"},
         f"{BLOGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-blogs"},

@@ -189,7 +189,7 @@ def sync_book(
         # Create book and sections with relationships
         book, all_sections = create_book_and_sections(ebook, session, tags)
         for section in all_sections:
-            print(section.section_title, section.book)
+            logger.debug(f"Created section: {section.section_title}")
 
         if title:
             book.title = title  # type: ignore

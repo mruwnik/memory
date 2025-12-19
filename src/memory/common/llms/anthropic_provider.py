@@ -284,6 +284,8 @@ class AnthropicProvider(BaseLLMProvider):
                 # Include server info if present
                 if current_tool_use.get("server_name"):
                     tool_data["server_name"] = current_tool_use["server_name"]
+                if current_tool_use.get("is_server_call"):
+                    tool_data["is_server_call"] = current_tool_use["is_server_call"]
 
                 # Emit different event type for MCP server tools
                 if current_tool_use.get("is_server_call"):

@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, object_session
 
 from memory.common.db.models.base import Base
 
@@ -26,6 +26,25 @@ class MessageProcessor:
 
     allowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
     disallowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+
+    @property
+    def mcp_servers(self) -> list:
+        """Get MCP servers assigned to this entity via MCPServerAssignment."""
+        from memory.common.db.models.mcp import MCPServer, MCPServerAssignment
+
+        session = object_session(self)
+        if not session:
+            return []
+
+        return (
+            session.query(MCPServer)
+            .join(MCPServerAssignment)
+            .filter(
+                MCPServerAssignment.entity_type == self.entity_type,
+                MCPServerAssignment.entity_id == self.id,
+            )
+            .all()
+        )
 
     system_prompt = Column(
         Text,

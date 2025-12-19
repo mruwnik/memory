@@ -354,7 +354,6 @@ class MessageCollector(commands.Bot):
             "users_updated": users_updated,
         }
 
-        print(f"✅ Metadata refresh complete: {result}")
         logger.info(f"Metadata refresh complete: {result}")
 
         return result

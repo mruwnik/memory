@@ -132,9 +132,14 @@ def get_modality(mime_type: str) -> str:
 def collection_model(
     collection: str, text: str, images: list[Image.Image]
 ) -> str | None:
+    """Determine the appropriate embedding model for a collection.
+
+    Returns None if no suitable model can be determined, rather than
+    falling back to an invalid placeholder.
+    """
     config = ALL_COLLECTIONS.get(collection, {})
     if images and config.get("multimodal"):
         return settings.MIXED_EMBEDDING_MODEL
     if text and config.get("text"):
         return settings.TEXT_EMBEDDING_MODEL
-    return "unknown"
+    return None

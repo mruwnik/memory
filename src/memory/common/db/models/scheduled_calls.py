@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     BigInteger,
+    Integer,
     JSON,
     Text,
 )
@@ -20,7 +21,7 @@ class ScheduledLLMCall(Base):
     __tablename__ = "scheduled_llm_calls"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     topic = Column(Text, nullable=True)
 
     # Scheduling info

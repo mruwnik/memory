@@ -102,29 +102,35 @@ def chunk_text(
     current = ""
 
     for span in yield_spans(text, max_tokens):
-        current = f"{current} {span}".strip()
-        if tokens.approx_token_count(current) < max_tokens:
+        # Check if adding this span would exceed the limit
+        new_chunk = f"{current} {span}".strip() if current else span
+        if tokens.approx_token_count(new_chunk) <= max_tokens:
+            current = new_chunk
             continue
 
-        if overlap <= 0:
+        # Adding span would exceed limit - yield current first (if non-empty)
+        if current:
             yield current
-            current = ""
+
+        # Handle overlap for the next chunk
+        if overlap <= 0 or not current:
+            current = span
             continue
 
-        overlap_text = current[-overlap_chars:]
+        # Try to find a clean break point for overlap
+        overlap_text = current[-overlap_chars:] if len(current) > overlap_chars else current
         clean_break = max(
             overlap_text.rfind(". "), overlap_text.rfind("! "), overlap_text.rfind("? ")
         )
 
         if clean_break < 0:
-            yield current
-            current = ""
+            current = span
             continue
 
-        break_offset = -overlap_chars + clean_break + 1
-        chunk = current[break_offset:].strip()
-        yield current
-        current = chunk
+        # Start new chunk with overlap from clean break
+        break_offset = -len(overlap_text) + clean_break + 1
+        overlap_portion = current[break_offset:].strip()
+        current = f"{overlap_portion} {span}".strip() if overlap_portion else span
 
     if current:
         yield current.strip()

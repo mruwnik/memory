@@ -27,6 +27,32 @@ from memory.common.formatters import observation
 logger = logging.getLogger(__name__)
 
 
+def validate_path_within_directory(
+    base_dir: pathlib.Path, requested_path: str
+) -> pathlib.Path:
+    """Validate that a requested path resolves within the base directory.
+
+    Prevents path traversal attacks using ../ or similar techniques.
+
+    Args:
+        base_dir: The allowed base directory
+        requested_path: The user-provided path
+
+    Returns:
+        The resolved absolute path if valid
+
+    Raises:
+        ValueError: If the path would escape the base directory
+    """
+    resolved = (base_dir / requested_path.lstrip("/")).resolve()
+    base_resolved = base_dir.resolve()
+
+    if not str(resolved).startswith(str(base_resolved) + "/") and resolved != base_resolved:
+        raise ValueError(f"Path escapes allowed directory: {requested_path}")
+
+    return resolved
+
+
 def filter_observation_source_ids(
     tags: list[str] | None = None, observation_types: list[str] | None = None
 ):
@@ -344,7 +370,11 @@ async def note_files(path: str = "/"):
 
     Returns: List of file paths relative to notes directory
     """
-    root = settings.NOTES_STORAGE_DIR / path.lstrip("/")
+    try:
+        root = validate_path_within_directory(settings.NOTES_STORAGE_DIR, path)
+    except ValueError as e:
+        raise ValueError(f"Invalid path: {e}")
+
     return [
         f"/notes/{f.relative_to(settings.NOTES_STORAGE_DIR)}"
         for f in root.rglob("*.md")
@@ -359,15 +389,19 @@ def fetch_file(filename: str) -> dict:
     Returns dict with content, mime_type, is_text, file_size.
     Text content as string, binary as base64.
     """
-    path = settings.FILE_STORAGE_DIR / filename.strip().lstrip("/")
-    print("fetching file", path)
+    try:
+        path = validate_path_within_directory(
+            settings.FILE_STORAGE_DIR, filename.strip()
+        )
+    except ValueError as e:
+        raise ValueError(f"Invalid path: {e}")
+
+    logger.debug(f"Fetching file: {path}")
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
     mime_type = extract.get_mime_type(path)
     chunks = extract.extract_data_chunks(mime_type, path, skip_summary=True)
-    print("mime_type", mime_type)
-    print("chunks", chunks)
 
     def serialize_chunk(
         chunk: extract.DataChunk, data: extract.MulitmodalChunk

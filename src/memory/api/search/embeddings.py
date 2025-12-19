@@ -182,13 +182,16 @@ async def search_chunks_embeddings(
     filters: SearchFilters = SearchFilters(),
     timeout: int = 2,
 ) -> list[str]:
+    # Note: Multimodal embeddings typically produce higher similarity scores,
+    # so we use a higher threshold (0.4) to maintain selectivity.
+    # Text embeddings produce lower scores, so we use 0.25.
     all_ids = await asyncio.gather(
         asyncio.wait_for(
             search_chunks(
                 data,
                 modalities & TEXT_COLLECTIONS,
                 limit,
-                0.4,
+                0.25,
                 filters,
                 False,
             ),
@@ -199,7 +202,7 @@ async def search_chunks_embeddings(
                 data,
                 modalities & MULTIMODAL_COLLECTIONS,
                 limit,
-                0.25,
+                0.4,
                 filters,
                 True,
             ),

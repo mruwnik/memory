@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from bs4 import BeautifulSoup
 from PIL import Image
 
 from memory.common.db.models.source_item import Chunk
 from memory.common import llms, settings, tokens
+
+logger = logging.getLogger(__name__)
 
 
 SCORE_CHUNK_SYSTEM_PROMPT = """
@@ -32,7 +35,7 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
     try:
         data = chunk.data
     except Exception as e:
-        print(f"Error getting chunk data: {e}, {type(e)}")
+        logger.error(f"Error getting chunk data: {e}")
         return chunk
 
     chunk_text = "\n".join(text for text in data if isinstance(text, str))
@@ -47,7 +50,7 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
             system_prompt=SCORE_CHUNK_SYSTEM_PROMPT,
         )
     except Exception as e:
-        print(f"Error scoring chunk: {e}, {type(e)}")
+        logger.error(f"Error scoring chunk: {e}")
         return chunk
 
     soup = BeautifulSoup(response, "html.parser")

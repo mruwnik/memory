@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Literal, cast
 
 import voyageai
@@ -15,6 +16,12 @@ from memory.common.db.models import Chunk, SourceItem
 logger = logging.getLogger(__name__)
 
 
+class EmbeddingError(Exception):
+    """Raised when embedding generation fails after retries."""
+
+    pass
+
+
 def as_string(
     chunk: extract.MulitmodalChunk | list[extract.MulitmodalChunk],
 ) -> str:
@@ -29,21 +36,60 @@ def embed_chunks(
     chunks: list[list[extract.MulitmodalChunk]],
     model: str = settings.TEXT_EMBEDDING_MODEL,
     input_type: Literal["document", "query"] = "document",
+    max_retries: int = 3,
+    retry_delay: float = 1.0,
 ) -> list[Vector]:
-    logger.debug(f"Embedding chunks: {model} - {str(chunks)} {len(chunks)}")
-    vo = voyageai.Client()  # type: ignore
-    if model == settings.MIXED_EMBEDDING_MODEL:
-        return vo.multimodal_embed(
-            chunks,
-            model=model,
-            input_type=input_type,
-        ).embeddings
+    """Embed chunks with retry logic for transient failures.
 
-    texts = [as_string(c) for c in chunks]
-    logger.debug(f"Embedding texts: {texts}")
-    return cast(
-        list[Vector], vo.embed(texts, model=model, input_type=input_type).embeddings
-    )
+    Args:
+        chunks: List of chunk lists to embed
+        model: Embedding model to use
+        input_type: Whether embedding documents or queries
+        max_retries: Maximum number of retry attempts
+        retry_delay: Base delay between retries (exponential backoff)
+
+    Returns:
+        List of embedding vectors
+
+    Raises:
+        EmbeddingError: If embedding fails after all retries
+    """
+    if not chunks:
+        return []
+
+    logger.debug(f"Embedding {len(chunks)} chunks with model {model}")
+    vo = voyageai.Client()  # type: ignore
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            if model == settings.MIXED_EMBEDDING_MODEL:
+                return vo.multimodal_embed(
+                    chunks,
+                    model=model,
+                    input_type=input_type,
+                ).embeddings
+
+            texts = [as_string(c) for c in chunks]
+            return cast(
+                list[Vector],
+                vo.embed(texts, model=model, input_type=input_type).embeddings,
+            )
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = retry_delay * (2**attempt)
+                logger.warning(
+                    f"Embedding attempt {attempt + 1}/{max_retries} failed: {e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.error(f"Embedding failed after {max_retries} attempts: {e}")
+
+    raise EmbeddingError(
+        f"Failed to generate embeddings after {max_retries} attempts"
+    ) from last_error
 
 
 def break_chunk(

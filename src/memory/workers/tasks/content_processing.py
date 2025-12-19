@@ -259,22 +259,26 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
     """
     Decorator for safe task execution with comprehensive error handling.
 
-    Wraps task functions to catch and log exceptions, ensuring tasks
-    always return a result dictionary even when they fail.
+    Wraps task functions to log exceptions and notify on failures while
+    still allowing Celery to handle retries. Exceptions are re-raised after
+    logging to allow Celery's retry mechanism to work.
 
     Args:
         func: Task function to wrap
 
     Returns:
-        Wrapped function that handles exceptions gracefully
+        Wrapped function that logs exceptions and re-raises for retry
 
     Example:
+        @app.task(bind=True)
         @safe_task_execution
-        def my_task(arg1, arg2):
+        def my_task(self, arg1, arg2):
             # Task implementation
             return {"status": "success"}
     """
+    from functools import wraps
 
+    @wraps(func)
     def wrapper(*args, **kwargs) -> dict:
         try:
             return func(*args, **kwargs)
@@ -283,14 +287,25 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
             traceback_str = traceback.format_exc()
             logger.error(traceback_str)
 
-            notify_task_failure(
-                task_name=func.__name__,
-                error_message=str(e),
-                task_args=args,
-                task_kwargs=kwargs,
-                traceback_str=traceback_str,
+            # Check if this is a bound task and if retries are exhausted
+            task_self = args[0] if args and hasattr(args[0], "request") else None
+            is_final_retry = (
+                task_self
+                and hasattr(task_self, "request")
+                and task_self.request.retries >= task_self.max_retries
             )
 
-            return {"status": "error", "error": str(e), "traceback": traceback_str}
+            # Notify on final failure only
+            if is_final_retry or task_self is None:
+                notify_task_failure(
+                    task_name=func.__name__,
+                    error_message=str(e),
+                    task_args=args[1:] if task_self else args,
+                    task_kwargs=kwargs,
+                    traceback_str=traceback_str,
+                )
+
+            # Re-raise to allow Celery retries
+            raise
 
     return wrapper
