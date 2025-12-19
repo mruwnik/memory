@@ -41,7 +41,12 @@ class SearchResult(BaseModel):
         metadata.pop("content", None)
         chunk_size = settings.DEFAULT_CHUNK_TOKENS * 4
 
-        search_score = sum(chunk.relevance_score for chunk in chunks)
+        # Use mean of chunk scores to avoid bias towards documents with more chunks
+        search_score = (
+            sum(chunk.relevance_score for chunk in chunks) / len(chunks)
+            if chunks
+            else 0
+        )
 
         return cls(
             id=cast(int, source.id),
