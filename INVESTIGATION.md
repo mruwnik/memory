@@ -2,10 +2,10 @@
 
 ## Investigation Status
 - **Started:** 2025-12-19
-- **Last Updated:** 2025-12-19 (Fourth Pass - Complete Verification)
+- **Last Updated:** 2025-12-19 (Fifth Pass - Second Deep Dive)
 - **Status:** Complete
-- **Total Issues Found:** 100+ (original) + 10 new critical issues
-- **Bugs Fixed/Verified:** 45+ (fixed or confirmed as non-issues)
+- **Total Issues Found:** 100+ (original) + 10 new critical issues + 38 from second deep dive
+- **Bugs Fixed/Verified:** 53+ (fixed or confirmed as non-issues)
 
 ---
 
@@ -14,11 +14,11 @@
 This investigation identified **100+ issues** across 7 areas of the memory system. Many critical issues have been fixed:
 
 ### Fixed Issues ✅
-- **Security:** Path traversal (BUG-001), CORS (BUG-014), password hashing (BUG-061), token logging (BUG-062), shell injection (BUG-064), rate limiting (BUG-030), filter validation (BUG-028), test SQL injection (BUG-050)
+- **Security:** Path traversal (BUG-001, improved symlink handling), CORS (BUG-014), password hashing (BUG-061), token logging (BUG-062), shell injection (BUG-064), rate limiting (BUG-030), filter validation (BUG-028), test SQL injection (BUG-050), user enumeration timing attack, API key timing attack
 - **Worker reliability:** Retry config (BUG-015), silent failures (BUG-016), task time limits (BUG-035)
 - **Search:** BM25 filters (BUG-003), embed status (BUG-019), SearchConfig limits (BUG-031)
-- **Infrastructure:** Resource limits (BUG-040/067), Redis persistence (BUG-068), health checks (BUG-043)
-- **Code quality:** SQLAlchemy deprecations (BUG-063), print statements (BUG-033/060), timezone handling (BUG-034)
+- **Infrastructure:** Resource limits (BUG-040/067), Redis persistence (BUG-068), health checks (BUG-043), DB connection pooling
+- **Code quality:** SQLAlchemy deprecations (BUG-063), print statements (BUG-033/060), timezone handling (BUG-034), duplicate code removal, docstring fixes, operator precedence
 
 ### Remaining Issues
 1. **Data migration:** Existing 9,370 book chunks need re-indexing to move from text to book collection (BUG-002 code fix applied)
@@ -437,6 +437,34 @@ Based on git history analysis, the following bugs have been FIXED:
 3. **Backup scheduling UI** - configure backup frequency
 4. **Monitoring dashboard** - Grafana-style metrics visualization
 5. **Audit logging** - track all data access and modifications
+
+---
+
+## Second Deep Dive Findings (38 Issues)
+
+A comprehensive security and code quality audit identified 38 additional issues. Key findings:
+
+### Fixed in This Pass ✅
+1. **Path traversal symlink handling** - Improved to use pathlib.relative_to() instead of string comparison
+2. **User enumeration timing attack** - Added dummy password check when user doesn't exist
+3. **API key timing attack** - Using secrets.compare_digest() for constant-time comparison
+4. **Database connection pool bypass** - Cached engine/session factory for proper pooling
+5. **String literal without effect** - Fixed to proper comment
+6. **Duplicate db_session.add()** - Removed redundant call
+7. **Incorrect docstring parameter** - Fixed message_id → message
+8. **Unclear operator precedence** - Added parentheses to set operations
+
+### Remaining Issues (Require Further Investigation)
+- **Race conditions**: Discord message processing, email sync, content processing need distributed locking
+- **OAuth state cleanup**: Expired states accumulate in database
+- **Backup coordination**: Multiple backup tasks could conflict
+- **Error exposure**: Database errors in health check leak implementation details
+- **Sensitive logging**: OAuth codes and emails in logs
+- **Configuration concerns**: Backup key in environment, /tmp default storage
+
+### Not Applicable / Acceptable Design
+- Redirect URI replacement for Cursor protocol (intentional design)
+- Password hash exception handling (already logs appropriately)
 
 ---
 
