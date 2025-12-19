@@ -31,14 +31,14 @@ def process_attachment(
 
     Args:
         attachment: Attachment dictionary with metadata and content
-        message_id: Email message ID to use in file path generation
+        message: MailMessage instance to use for file path generation
 
     Returns:
         Processed attachment dictionary with appropriate metadata
     """
     content, file_path = None, None
     if not (real_content := attachment.get("content")):
-        "No content, so just save the metadata"
+        pass  # No content, so just save the metadata
     elif attachment["size"] <= settings.MAX_INLINE_ATTACHMENT_SIZE and attachment[
         "content_type"
     ].startswith("text/"):
@@ -130,7 +130,6 @@ def create_mail_message(
         db_session.add_all(attachments)
         mail_message.attachments = attachments
 
-    db_session.add(mail_message)
     return mail_message
 
 

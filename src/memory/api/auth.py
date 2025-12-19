@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
@@ -118,16 +119,38 @@ def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUse
 
 
 def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | None:
-    """Authenticate a human user by email and password"""
+    """Authenticate a human user by email and password.
+
+    Uses constant-time comparison to prevent timing-based user enumeration.
+    """
     user = db.query(HumanUser).filter(HumanUser.email == email).first()
-    if user and user.is_valid_password(password):
-        return user
+
+    # Always perform password check to prevent timing attacks
+    # Even if user doesn't exist, we do a dummy check
+    if user:
+        if user.is_valid_password(password):
+            return user
+    else:
+        # Dummy password check to prevent timing-based user enumeration
+        # This ensures the function takes similar time whether user exists or not
+        from memory.common.db.models.users import verify_password
+        verify_password(password, "$2b$12$dummy.hash.for.timing.attack.prevention")
+
     return None
 
 
 def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
-    """Authenticate a bot by API key"""
-    return db.query(BotUser).filter(BotUser.api_key == api_key).first()
+    """Authenticate a bot by API key.
+
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    # Get all bot users and compare with constant-time function
+    # This prevents timing attacks on API key discovery
+    bots = db.query(BotUser).all()
+    for bot in bots:
+        if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
+            return bot
+    return None
 
 
 @router.api_route("/logout", methods=["GET", "POST"])

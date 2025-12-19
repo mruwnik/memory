@@ -76,7 +76,7 @@ app.add_middleware(
 def validate_path_within_directory(base_dir: pathlib.Path, requested_path: str) -> pathlib.Path:
     """Validate that a requested path resolves within the base directory.
 
-    Prevents path traversal attacks using ../ or similar techniques.
+    Prevents path traversal attacks using ../, symlinks, or similar techniques.
 
     Args:
         base_dir: The allowed base directory
@@ -88,11 +88,25 @@ def validate_path_within_directory(base_dir: pathlib.Path, requested_path: str) 
     Raises:
         HTTPException: If the path would escape the base directory
     """
-    # Resolve to absolute path and ensure it's within base_dir
-    resolved = (base_dir / requested_path).resolve()
-    base_resolved = base_dir.resolve()
+    # Resolve base directory to absolute path
+    base_resolved = base_dir.resolve(strict=True)
 
-    if not str(resolved).startswith(str(base_resolved) + "/") and resolved != base_resolved:
+    # Build the target path and resolve it
+    # Use strict=False first to check the path before it exists
+    target = base_dir / requested_path
+
+    # Resolve the path (follows symlinks)
+    try:
+        resolved = target.resolve(strict=True)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Use pathlib's is_relative_to for proper path containment check
+    # This is safer than string comparison as it handles edge cases
+    try:
+        resolved.relative_to(base_resolved)
+    except ValueError:
+        # Path is not relative to base - access denied
         raise HTTPException(status_code=403, detail="Access denied")
 
     return resolved

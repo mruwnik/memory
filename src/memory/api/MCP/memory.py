@@ -139,7 +139,8 @@ async def search_knowledge_base(
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
-    modalities = set(modalities) & ALL_COLLECTIONS.keys() - OBSERVATION_COLLECTIONS
+    # Filter to valid collections, excluding observation collections
+    modalities = (set(modalities) & ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
 
     search_filters = SearchFilters(**filters)
     search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
