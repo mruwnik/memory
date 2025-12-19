@@ -313,7 +313,7 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-020: ✅ Missing server_id index on DiscordMessage - FIXED (Index exists at source_items.py:428-432)
 
 ### Content Processing
-- BUG-021: No chunk validation after break_chunk (`embedding.py:49-58`)
+- BUG-021: ✅ No chunk validation after break_chunk - FIXED (yield_spans guarantees max_tokens)
 - BUG-022: Ebook extraction creates single massive chunk (`extract.py:218-230`)
 - BUG-023: SHA256-only deduplication misses semantic duplicates (`source_item.py:51-91`)
 - BUG-024: Email hash inconsistency with markdown conversion (`email.py:171-185`)
@@ -321,7 +321,7 @@ Based on git history analysis, the following bugs have been FIXED:
 
 ### Search System
 - BUG-026: BM25 scores calculated then discarded (`bm25.py:66-70`)
-- BUG-027: LLM score fallback missing - defaults to 0.0 (`scorer.py:55-60`)
+- BUG-027: N/A LLM score fallback - actually reasonable (0.0 means chunk not prioritized when scoring fails)
 - BUG-028: Missing filter validation (`embeddings.py:130-131`)
 - BUG-029: Hardcoded min_score thresholds (`embeddings.py:186,202`)
 
@@ -362,7 +362,7 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-052: Garbage content in text collection
 - BUG-053: No vector freshness index (`source_item.py:157`)
 - BUG-054: N/A OAuthToken missing Base inheritance - intentional mixin design (used by OAuthState and OAuthRefreshToken)
-- BUG-055: collection_model returns "unknown" (`collections.py:140`)
+- BUG-055: ✅ collection_model returns "unknown" - FIXED (now returns None instead of placeholder)
 - BUG-056: Unused "appuser" in API Dockerfile (`docker/api/Dockerfile:48`)
 - BUG-057: Build dependencies not cleaned up (`docker/api/Dockerfile:7-12`)
 - BUG-058: Typos in log messages (`tests/conftest.py:63`)
