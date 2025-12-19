@@ -5,7 +5,7 @@
 - **Last Updated:** 2025-12-19 (Third Pass - Verification)
 - **Status:** Ongoing
 - **Total Issues Found:** 100+ (original) + 10 new critical issues
-- **Bugs Fixed:** 25+ confirmed fixed
+- **Bugs Fixed:** 30+ confirmed fixed
 
 ---
 
@@ -307,10 +307,10 @@ Based on git history analysis, the following bugs have been FIXED:
 ## Medium Severity Bugs
 
 ### Data Layer
-- BUG-017: Missing `collection_name` index on Chunk table (`source_item.py:165-168`)
+- BUG-017: ✅ Missing `collection_name` index - FIXED (Index exists at source_item.py:168)
 - BUG-018: AgentObservation dead code for future embedding types (`source_items.py:1005-1028`)
 - BUG-019: ✅ Embed status never set to STORED after push - FIXED (properly sets STORED at lines 169, 245)
-- BUG-020: Missing server_id index on DiscordMessage (`source_items.py:426-435`)
+- BUG-020: ✅ Missing server_id index on DiscordMessage - FIXED (Index exists at source_items.py:428-432)
 
 ### Content Processing
 - BUG-021: No chunk validation after break_chunk (`embedding.py:49-58`)
@@ -337,11 +337,11 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-036: Database integrity errors not properly handled (`discord.py:310-321`)
 - BUG-037: ✅ Timezone bug in scheduled calls - FIXED (properly converts to UTC and strips tzinfo for DB comparison)
 - BUG-038: Beat schedule not thread-safe for distributed deployment (`ingest.py:19-56`)
-- BUG-039: Email sync fails entire account on single folder error (`email.py:84-152`)
+- BUG-039: ✅ Email sync fails entire account on single folder error - FIXED (process_folder has own try-except, continues to next folder)
 
 ### Infrastructure
 - BUG-040: ✅ Missing resource limits for postgres, redis, qdrant, api - FIXED in BUG-067
-- BUG-041: Backup encryption silently disabled if key missing (`settings.py:215-216`)
+- BUG-041: N/A Backup encryption silently disabled - actually reasonable (S3_BACKUP_ENABLED=False when no key)
 - BUG-042: Restore scripts don't validate database integrity (`restore_databases.sh:79`)
 - BUG-043: ✅ Health check doesn't check dependencies - FIXED (now checks database and Qdrant connections)
 - BUG-044: Uvicorn trusts all proxy headers (`docker/api/Dockerfile:63`)
