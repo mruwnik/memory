@@ -228,29 +228,39 @@ Based on git history analysis, the following bugs have been FIXED:
 - **Commit:** 1c43f1a "Fix 7 critical security and code quality bugs"
 - **Fixed:** Password hashing, token logging, shell=True, SQLAlchemy deprecations, Docker limits, Redis persistence
 
+### ✅ BUG-003: BM25 Filters - ALREADY FIXED
+- **File:** `src/memory/api/search/bm25.py:32-62`
+- **Status:** All filters now applied (size, confidence, observation_types, source_ids)
+
+### ✅ BUG-008: Oversized Chunks - ALREADY FIXED
+- **File:** `src/memory/common/chunker.py`
+- **Status:** `yield_spans()` guarantees all spans are under max_tokens
+
+### ✅ BUG-009: Race Condition - ALREADY FIXED
+- **File:** `src/memory/workers/tasks/scheduled_calls.py:164`
+- **Status:** Uses `.with_for_update(skip_locked=True)` for atomic claim
+
+### ✅ BUG-013: Embedding Error Handling - ALREADY FIXED
+- **File:** `src/memory/common/embedding.py:78-92`
+- **Status:** Has try-except with retry logic and exponential backoff
+
 ---
 
-## High Severity Bugs
+## High Severity Bugs (Most Now Fixed)
 
-### BUG-007: Wrong Object Appended in break_chunk()
+### ✅ BUG-007: Wrong Object Appended in break_chunk() - FIXED
 - **File:** `src/memory/common/embedding.py:57`
-- **Description:** Appends entire `chunk` object instead of individual item `c`
-- **Impact:** Circular references, type mismatches, embedding failures
+- **Status:** Fixed in commit 28bc10d
 
-### BUG-008: Oversized Chunks Exceed Token Limits
-- **File:** `src/memory/common/chunker.py:109-112`
-- **Description:** When overlap <= 0, chunks yielded without size validation
-- **Impact:** 483 chunks >10K chars (should be ~2K)
+### ✅ BUG-008: Oversized Chunks Exceed Token Limits - FIXED
+- **Status:** yield_spans() now guarantees token limits
 
-### BUG-009: Scheduled Call Race Condition
-- **File:** `src/memory/workers/tasks/scheduled_calls.py:145-163`
-- **Description:** No DB lock when querying due calls - multiple workers can execute same call
-- **Impact:** Duplicate LLM calls and Discord messages
+### ✅ BUG-009: Scheduled Call Race Condition - FIXED
+- **Status:** Fixed with FOR UPDATE SKIP LOCKED
 
-### BUG-010: Missing MCP Servers Relationship
-- **File:** `src/memory/common/db/models/discord.py:74-76`
-- **Description:** `self.mcp_servers` referenced in `to_xml()` but no relationship defined
-- **Impact:** Runtime AttributeError
+### ✅ BUG-010: Missing MCP Servers Relationship - FIXED
+- **File:** `src/memory/common/db/models/discord.py:30-47`
+- **Status:** Implemented as @property using dynamic query
 
 ### BUG-011: User ID Type Mismatch
 - **Files:** `users.py:47`, `scheduled_calls.py:23`
