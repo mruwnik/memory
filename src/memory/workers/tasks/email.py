@@ -1,6 +1,9 @@
 import logging
 from datetime import datetime
 from typing import cast
+
+from sqlalchemy.exc import IntegrityError
+
 from memory.common.db.connection import make_session
 from memory.common.db.models import EmailAccount, MailMessage
 from memory.common.celery_app import app, PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS
@@ -44,41 +47,46 @@ def process_message(
         logger.warning(f"Empty email message received for account {account_id}")
         return {"status": "skipped", "reason": "empty_content"}
 
-    with make_session() as db:
-        account = db.get(EmailAccount, account_id)
-        if not account:
-            logger.error(f"Account {account_id} not found")
-            return {"status": "error", "error": "Account not found"}
+    try:
+        with make_session() as db:
+            account = db.get(EmailAccount, account_id)
+            if not account:
+                logger.error(f"Account {account_id} not found")
+                return {"status": "error", "error": "Account not found"}
 
-        parsed_email = parse_email_message(raw_email, message_id)
-        if check_content_exists(
-            db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
-        ):
-            return {"status": "already_exists", "message_id": message_id}
+            parsed_email = parse_email_message(raw_email, message_id)
+            if check_content_exists(
+                db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
+            ):
+                return {"status": "already_exists", "message_id": message_id}
 
-        mail_message = create_mail_message(db, account.tags, folder, parsed_email)
+            mail_message = create_mail_message(db, account.tags, folder, parsed_email)
 
-        db.flush()
-        vectorize_email(mail_message)
+            db.flush()
+            vectorize_email(mail_message)
 
-        db.commit()
+            db.commit()
 
-        logger.info(f"Stored embedding for message {mail_message.message_id}")
-        logger.info("Chunks:")
-        for chunk in mail_message.chunks:
-            logger.info(f" - {chunk.id}")
-        for attachment in mail_message.attachments:
-            logger.info(f" - Attachment {attachment.id}")
-            for chunk in attachment.chunks:
-                logger.info(f"   - {chunk.id}")
+            logger.info(f"Stored embedding for message {mail_message.message_id}")
+            logger.info("Chunks:")
+            for chunk in mail_message.chunks:
+                logger.info(f" - {chunk.id}")
+            for attachment in mail_message.attachments:
+                logger.info(f" - Attachment {attachment.id}")
+                for chunk in attachment.chunks:
+                    logger.info(f"   - {chunk.id}")
 
-        return {
-            "status": "processed",
-            "mail_message_id": cast(int, mail_message.id),
-            "message_id": message_id,
-            "chunks_count": len(mail_message.chunks),
-            "attachments_count": len(mail_message.attachments),
-        }
+            return {
+                "status": "processed",
+                "mail_message_id": cast(int, mail_message.id),
+                "message_id": message_id,
+                "chunks_count": len(mail_message.chunks),
+                "attachments_count": len(mail_message.attachments),
+            }
+    except IntegrityError:
+        # Another worker already processed this message (race condition)
+        logger.info(f"Message {message_id} already exists (concurrent insert)")
+        return {"status": "already_exists", "message_id": message_id}
 
 
 @app.task(name=SYNC_ACCOUNT)

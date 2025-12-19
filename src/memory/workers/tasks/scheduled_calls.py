@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import cast
 
 from memory.common import settings
@@ -14,6 +14,10 @@ from memory.discord.messages import call_llm, send_discord_response
 from memory.workers.tasks.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
+
+# Maximum time a task can be in "executing" state before being considered stale
+# Should be longer than task_time_limit (1 hour) to allow for legitimate long-running tasks
+STALE_EXECUTION_TIMEOUT_HOURS = 2
 
 
 def call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | None:
@@ -147,8 +151,36 @@ def run_scheduled_calls():
 
     Uses SELECT FOR UPDATE SKIP LOCKED to prevent race conditions when
     multiple workers query for due calls simultaneously.
+
+    Also recovers stale "executing" tasks that were abandoned due to worker crashes.
     """
     with make_session() as session:
+        # First, recover stale "executing" tasks that have been stuck too long
+        # This handles cases where workers crashed mid-execution
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_EXECUTION_TIMEOUT_HOURS)
+        stale_calls = (
+            session.query(ScheduledLLMCall)
+            .filter(
+                ScheduledLLMCall.status == "executing",
+                ScheduledLLMCall.executed_at < stale_cutoff,
+            )
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+
+        for stale_call in stale_calls:
+            logger.warning(
+                f"Recovering stale scheduled call {stale_call.id} "
+                f"(stuck in executing since {stale_call.executed_at})"
+            )
+            stale_call.status = "pending"
+            stale_call.executed_at = None
+            stale_call.error_message = "Recovered from stale execution state"
+
+        if stale_calls:
+            session.commit()
+            logger.info(f"Recovered {len(stale_calls)} stale scheduled calls")
+
         # Use FOR UPDATE SKIP LOCKED to atomically claim pending calls
         # This prevents multiple workers from processing the same call
         #

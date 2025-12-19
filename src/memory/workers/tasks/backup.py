@@ -6,15 +6,42 @@ import io
 import logging
 import subprocess
 import tarfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import boto3
+import redis
 from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
 
 logger = logging.getLogger(__name__)
+
+# Backup lock timeout (30 minutes max for backup to complete)
+BACKUP_LOCK_TIMEOUT = 30 * 60
+
+
+@contextmanager
+def backup_lock(lock_name: str = "backup_all"):
+    """Acquire a distributed lock for backup operations using Redis.
+
+    Prevents concurrent backup operations which could cause resource
+    contention and inconsistent state.
+    """
+    redis_client = redis.from_url(settings.REDIS_URL)
+    lock_key = f"memory:lock:{lock_name}"
+
+    # Try to acquire lock with NX (only if not exists) and expiry
+    acquired = redis_client.set(lock_key, "1", nx=True, ex=BACKUP_LOCK_TIMEOUT)
+    if not acquired:
+        raise RuntimeError(f"Could not acquire backup lock '{lock_name}' - backup already in progress")
+
+    try:
+        yield
+    finally:
+        # Release the lock
+        redis_client.delete(lock_key)
 
 
 def get_cipher() -> Fernet:
@@ -136,17 +163,25 @@ def backup_to_s3(path: Path | str):
 
 @app.task(name=BACKUP_ALL)
 def backup_all_to_s3():
-    """Main backup task that syncs unencrypted dirs and uploads encrypted dirs."""
+    """Main backup task that syncs unencrypted dirs and uploads encrypted dirs.
+
+    Uses a distributed lock to prevent concurrent backup operations.
+    """
     if not settings.S3_BACKUP_ENABLED:
         logger.info("S3 backup is disabled")
         return {"status": "disabled"}
 
-    logger.info("Starting S3 backup...")
+    try:
+        with backup_lock():
+            logger.info("Starting S3 backup...")
 
-    for dir_name in settings.storage_dirs:
-        backup_to_s3.delay((settings.FILE_STORAGE_DIR / dir_name).as_posix())
+            for dir_name in settings.storage_dirs:
+                backup_to_s3.delay((settings.FILE_STORAGE_DIR / dir_name).as_posix())
 
-    return {
-        "status": "success",
-        "message": f"Started backup for {len(settings.storage_dirs)} directories",
-    }
+            return {
+                "status": "success",
+                "message": f"Started backup for {len(settings.storage_dirs)} directories",
+            }
+    except RuntimeError as e:
+        logger.warning(str(e))
+        return {"status": "skipped", "reason": str(e)}

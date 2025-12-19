@@ -176,9 +176,8 @@ async def oauth_callback_discord(request: Request):
     state = request.query_params.get("state")
     error = request.query_params.get("error")
 
-    logger.info(
-        f"Received OAuth callback: code={code and code[:20]}..., state={state and state[:20]}..."
-    )
+    # Log OAuth callback without sensitive data (code/state could be intercepted)
+    logger.info("Received OAuth callback")
 
     message, title, close, status_code = "", "", "", 200
     if error:
@@ -269,6 +268,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-            logger.debug(f"Authenticated request from user {user.email} to {path}")
+            # Log user ID instead of email for privacy
+            logger.debug(f"Authenticated request from user_id={user.id} to {path}")
 
         return await call_next(request)

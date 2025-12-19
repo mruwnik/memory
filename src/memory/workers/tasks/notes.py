@@ -123,12 +123,23 @@ def sync_note(
             note.tags = tags  # type: ignore
 
         note.update_confidences(confidences)
-        if save_to_file:
-            with git_tracking(
-                settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
-            ):
-                note.save_to_file()
-        return process_content_item(note, session)
+
+        # Process the content item first (commits transaction)
+        result = process_content_item(note, session)
+
+    # Git operations MUST be outside the database transaction to avoid
+    # holding the connection during slow network I/O
+    if save_to_file:
+        with git_tracking(
+            settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
+        ):
+            # Re-fetch note for file operations (session is closed)
+            with make_session() as session:
+                note = session.get(Note, result.get(f"note_id"))
+                if note:
+                    note.save_to_file()
+
+    return result
 
 
 @app.task(name=SYNC_NOTES)

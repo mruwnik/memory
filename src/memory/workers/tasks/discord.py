@@ -196,6 +196,29 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
                 "message_id": message_id,
             }
 
+        # Validate required relationships exist before processing
+        if not discord_message.recipient_user:
+            logger.warning(
+                "No recipient_user for message %s; skipping processing",
+                message_id,
+            )
+            return {
+                "status": "error",
+                "error": "No recipient user",
+                "message_id": message_id,
+            }
+
+        if not discord_message.from_user:
+            logger.warning(
+                "No from_user for message %s; skipping processing",
+                message_id,
+            )
+            return {
+                "status": "error",
+                "error": "No sender user",
+                "message_id": message_id,
+            }
+
         mcp_servers = discord_message.get_mcp_servers(session)
         system_prompt = discord_message.system_prompt or ""
         system_prompt += comm_channel_prompt(

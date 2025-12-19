@@ -173,7 +173,9 @@ async def health_check(request: Request):
             conn.execute(text("SELECT 1"))
         checks["database"] = "healthy"
     except Exception as e:
-        checks["database"] = f"unhealthy: {str(e)[:100]}"
+        # Log error details but don't expose in response
+        logger.error(f"Database health check failed: {e}")
+        checks["database"] = "unhealthy"
         all_healthy = False
 
     # Check Qdrant connection
@@ -184,7 +186,9 @@ async def health_check(request: Request):
         client.get_collections()
         checks["qdrant"] = "healthy"
     except Exception as e:
-        checks["qdrant"] = f"unhealthy: {str(e)[:100]}"
+        # Log error details but don't expose in response
+        logger.error(f"Qdrant health check failed: {e}")
+        checks["qdrant"] = "unhealthy"
         all_healthy = False
 
     checks["status"] = "healthy" if all_healthy else "degraded"

@@ -15,6 +15,8 @@ from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
     CLEAN_COLLECTION,
+    CLEANUP_EXPIRED_OAUTH_STATES,
+    CLEANUP_EXPIRED_SESSIONS,
     REINGEST_MISSING_CHUNKS,
     REINGEST_CHUNK,
     REINGEST_ITEM,
@@ -338,3 +340,66 @@ def update_metadata_for_source_items(item_type: str):
             update_metadata_for_item.delay(item_id.id, item_type)  # type: ignore
 
         return {"status": "success", "items": len(item_ids)}
+
+
+@app.task(name=CLEANUP_EXPIRED_OAUTH_STATES)
+def cleanup_expired_oauth_states(max_age_hours: int = 1):
+    """Clean up OAuth states that are older than max_age_hours.
+
+    OAuth states should be short-lived - they're only needed during the
+    authorization flow which should complete within minutes.
+    """
+    from memory.common.db.models import MCPServer
+
+    logger.info(f"Cleaning up OAuth states older than {max_age_hours} hours")
+
+    cutoff = datetime.now() - timedelta(hours=max_age_hours)
+    cleaned = 0
+
+    with make_session() as session:
+        # Find MCP servers with stale OAuth state
+        stale_servers = (
+            session.query(MCPServer)
+            .filter(
+                MCPServer.state.isnot(None),
+                MCPServer.updated_at < cutoff,
+            )
+            .all()
+        )
+
+        for server in stale_servers:
+            # Clear the temporary OAuth state fields
+            server.state = None
+            server.code_verifier = None
+            cleaned += 1
+
+        session.commit()
+
+    logger.info(f"Cleaned up {cleaned} expired OAuth states")
+    return {"cleaned": cleaned}
+
+
+@app.task(name=CLEANUP_EXPIRED_SESSIONS)
+def cleanup_expired_sessions():
+    """Clean up expired user sessions from the database."""
+    from memory.common.db.models import UserSession
+    from datetime import timezone
+
+    logger.info("Cleaning up expired user sessions")
+
+    now = datetime.now(timezone.utc)
+    deleted = 0
+
+    with make_session() as session:
+        expired_sessions = (
+            session.query(UserSession).filter(UserSession.expires_at < now).all()
+        )
+
+        for user_session in expired_sessions:
+            session.delete(user_session)
+            deleted += 1
+
+        session.commit()
+
+    logger.info(f"Deleted {deleted} expired user sessions")
+    return {"deleted": deleted}

@@ -44,6 +44,8 @@ UPDATE_METADATA_FOR_SOURCE_ITEMS = (
     f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
 )
 UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
+CLEANUP_EXPIRED_OAUTH_STATES = f"{MAINTENANCE_ROOT}.cleanup_expired_oauth_states"
+CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
 SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"

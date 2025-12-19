@@ -1,8 +1,11 @@
+import logging
 import os
 import pathlib
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def boolean_env(key: str, default: bool = False) -> bool:
@@ -95,6 +98,14 @@ storage_dirs = [
 ]
 for dir in storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)
+
+# Warn if using default /tmp storage - data will be lost on reboot
+if str(FILE_STORAGE_DIR).startswith("/tmp"):
+    logger.warning(
+        f"FILE_STORAGE_DIR is set to '{FILE_STORAGE_DIR}' which is a temporary directory. "
+        "Data stored here may be lost on system reboot. "
+        "Set FILE_STORAGE_DIR environment variable to a persistent location for production use."
+    )
 
 # Maximum attachment size to store directly in the database (10MB)
 MAX_INLINE_ATTACHMENT_SIZE = int(

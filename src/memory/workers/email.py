@@ -262,6 +262,11 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None,
             conn.logout()
         except Exception as e:
             logger.error(f"Error logging out from {account.imap_server}: {str(e)}")
+            # If logout fails, explicitly close the socket to prevent resource leak
+            try:
+                conn.shutdown()
+            except Exception:
+                pass  # Socket may already be closed
 
 
 def vectorize_email(email: MailMessage):
