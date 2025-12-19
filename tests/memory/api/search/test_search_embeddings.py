@@ -160,11 +160,11 @@ def test_merge_filters_realistic_combination():
 
 
 def test_merge_filters_unknown_key():
-    """Test fallback behavior for unknown filter keys"""
+    """Test that unknown filter keys are logged and ignored for security"""
     filters = []
     result = merge_filters(filters, "unknown_field", "unknown_value")
-    expected = [{"key": "unknown_field", "match": "unknown_value"}]
-    assert result == expected
+    # Unknown keys should be ignored to prevent filter injection
+    assert result == []
 
 
 def test_merge_filters_empty_min_confidences():

@@ -80,8 +80,11 @@ def create_refresh_token_record(
 
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     """Validate a refresh token, raising ValueError if invalid."""
-    now = datetime.now()
-    if db_refresh_token.expires_at < now:  # type: ignore
+    now = datetime.now(timezone.utc)
+    expires_at = db_refresh_token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < now:
         logger.error(f"Refresh token expired: {db_refresh_token.token[:20]}...")
         db_refresh_token.revoked = True  # type: ignore
         raise ValueError("Refresh token expired")

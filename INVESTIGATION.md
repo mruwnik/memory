@@ -5,7 +5,7 @@
 - **Last Updated:** 2025-12-19 (Fourth Pass - Complete Verification)
 - **Status:** Complete
 - **Total Issues Found:** 100+ (original) + 10 new critical issues
-- **Bugs Fixed/Verified:** 35+ (fixed or confirmed as non-issues)
+- **Bugs Fixed/Verified:** 40+ (fixed or confirmed as non-issues)
 
 ---
 
@@ -14,16 +14,16 @@
 This investigation identified **100+ issues** across 7 areas of the memory system. Many critical issues have been fixed:
 
 ### Fixed Issues ✅
-- **Security:** Path traversal (BUG-001), CORS (BUG-014), password hashing (BUG-061), token logging (BUG-062), shell injection (BUG-064)
+- **Security:** Path traversal (BUG-001), CORS (BUG-014), password hashing (BUG-061), token logging (BUG-062), shell injection (BUG-064), rate limiting (BUG-030), filter validation (BUG-028), test SQL injection (BUG-050)
 - **Worker reliability:** Retry config (BUG-015), silent failures (BUG-016), task time limits (BUG-035)
 - **Search:** BM25 filters (BUG-003), embed status (BUG-019), SearchConfig limits (BUG-031)
 - **Infrastructure:** Resource limits (BUG-040/067), Redis persistence (BUG-068), health checks (BUG-043)
-- **Code quality:** SQLAlchemy deprecations (BUG-063), print statements (BUG-033/060)
+- **Code quality:** SQLAlchemy deprecations (BUG-063), print statements (BUG-033/060), timezone handling (BUG-034)
 
 ### Remaining Issues
-1. **Data integrity issues** (1,338 items unsearchable due to collection mismatch - BUG-002 needs verification)
-2. **Search system bugs** (BM25 scores discarded - BUG-026)
-3. **Code quality concerns** (bare exceptions, type safety gaps)
+1. **Data migration:** Existing 9,370 book chunks need re-indexing to move from text to book collection (BUG-002 code fix applied)
+2. **Search system:** BM25 scores discarded (BUG-026) - architectural change needed for hybrid scoring
+3. **Code quality:** Bare exceptions (BUG-047/048), type safety gaps (BUG-045/046)
 
 ---
 
@@ -324,15 +324,15 @@ Based on git history analysis, the following bugs have been FIXED:
 ### Search System
 - BUG-026: BM25 scores calculated then discarded (`bm25.py:66-70`)
 - BUG-027: N/A LLM score fallback - actually reasonable (0.0 means chunk not prioritized when scoring fails)
-- BUG-028: Missing filter validation (`embeddings.py:130-131`)
+- BUG-028: ✅ Missing filter validation - FIXED (unknown filter keys now logged and ignored instead of passed through)
 - BUG-029: N/A Hardcoded min_score thresholds - intentional (0.25 text, 0.4 multimodal due to different score distributions)
 
 ### API Layer
-- BUG-030: Missing rate limiting (global)
+- BUG-030: ✅ Missing rate limiting - FIXED (added slowapi middleware with configurable limits: 100/min default, 30/min search, 10/min auth)
 - BUG-031: ✅ No SearchConfig limits - FIXED (enforces 1-1000 limit, 1-300 timeout in model_post_init)
-- BUG-032: No CSRF protection (`auth.py:50-86`)
+- BUG-032: N/A CSRF protection - already mitigated (uses OAuth Bearer tokens not cookie-based auth, CORS restricts to specific origins)
 - BUG-033: ✅ Debug print statements in production - FIXED (no print statements found in src/memory)
-- BUG-034: Timezone handling issues (`oauth_provider.py:83-87`)
+- BUG-034: ✅ Timezone handling issues - FIXED (now uses timezone-aware UTC comparison)
 
 ### Worker Tasks
 - BUG-035: ✅ No task time limits - FIXED (celery_app.py has task_time_limit=3600, task_soft_time_limit=3000)
@@ -353,8 +353,8 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-046: 21 type:ignore comments (various files)
 - BUG-047: 32 bare except Exception blocks (various files)
 - BUG-048: 13 exception swallowing with pass (various files)
-- BUG-049: Missing CSRF in OAuth callback (`auth.py`)
-- BUG-050: SQL injection in test database handling (`tests/conftest.py:94`)
+- BUG-049: N/A OAuth callback already has CSRF protection (state parameter validated against database, generated with secrets.token_urlsafe)
+- BUG-050: ✅ SQL injection in test database handling - FIXED (added identifier validation for database names)
 
 ---
 

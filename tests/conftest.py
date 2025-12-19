@@ -83,6 +83,20 @@ def get_test_db_name() -> str:
     return f"test_db_{uuid.uuid4().hex[:8]}"
 
 
+def validate_db_identifier(name: str) -> str:
+    """Validate that a database name is a safe SQL identifier.
+
+    Prevents SQL injection by ensuring the name contains only
+    alphanumeric characters and underscores.
+    """
+    import re
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(f"Invalid database identifier: {name}")
+    if len(name) > 63:  # PostgreSQL identifier limit
+        raise ValueError(f"Database name too long: {name}")
+    return name
+
+
 def create_test_database(test_db_name: str) -> str:
     """
     Create a test database with a unique name.
@@ -93,13 +107,15 @@ def create_test_database(test_db_name: str) -> str:
     Returns:
         URL to the test database
     """
+    # Validate to prevent SQL injection
+    safe_name = validate_db_identifier(test_db_name)
     admin_engine = create_engine(settings.DB_URL)
 
     # Create a new database
     with admin_engine.connect() as conn:
         conn.execute(text("COMMIT"))  # Close any open transaction
-        conn.execute(text(f"DROP DATABASE IF EXISTS {test_db_name}"))
-        conn.execute(text(f"CREATE DATABASE {test_db_name}"))
+        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
+        conn.execute(text(f"CREATE DATABASE {safe_name}"))
 
     admin_engine.dispose()
 
@@ -113,6 +129,8 @@ def drop_test_database(test_db_name: str) -> None:
     Args:
         test_db_name: Name of the test database to drop
     """
+    # Validate to prevent SQL injection
+    safe_name = validate_db_identifier(test_db_name)
     admin_engine = create_engine(settings.DB_URL)
 
     with admin_engine.connect() as conn:
@@ -124,14 +142,14 @@ def drop_test_database(test_db_name: str) -> None:
                 f"""
                 SELECT pg_terminate_backend(pg_stat_activity.pid)
                 FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{test_db_name}'
+                WHERE pg_stat_activity.datname = '{safe_name}'
                 AND pid <> pg_backend_pid()
                 """
             )
         )
 
         # Drop the database
-        conn.execute(text(f"DROP DATABASE IF EXISTS {test_db_name}"))
+        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
 
     admin_engine.dispose()
 

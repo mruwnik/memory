@@ -9,8 +9,12 @@ import mimetypes
 import pathlib
 
 from fastapi import FastAPI, UploadFile, Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqladmin import Admin
 
 from memory.common import extract, settings
@@ -24,6 +28,13 @@ from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
 
+# Rate limiter setup
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[settings.API_RATE_LIMIT_DEFAULT] if settings.API_RATE_LIMIT_ENABLED else [],
+    enabled=settings.API_RATE_LIMIT_ENABLED,
+)
+
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +44,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
+app.state.limiter = limiter
+
+# Rate limit exception handler
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "detail": str(exc.detail),
+            "retry_after": exc.retry_after,
+        },
+        headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else {},
+    )
+
+# Add rate limiting middleware
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.

@@ -21,22 +21,15 @@ from memory.common.db.models.users import (
     ],
 )
 def test_hash_password_format(password):
-    """Test that hash_password returns correctly formatted hash"""
+    """Test that hash_password returns correctly formatted bcrypt hash"""
     result = hash_password(password)
 
-    # Should be in format "salt:hash"
-    assert ":" in result
-    parts = result.split(":", 1)
-    assert len(parts) == 2
+    # bcrypt format: $2b$cost$salthash (60 characters total)
+    assert result.startswith("$2b$")
+    assert len(result) == 60
 
-    salt, hash_value = parts
-    # Salt should be 32 hex characters (16 bytes * 2)
-    assert len(salt) == 32
-    assert all(c in "0123456789abcdef" for c in salt)
-
-    # Hash should be 64 hex characters (SHA-256 = 32 bytes * 2)
-    assert len(hash_value) == 64
-    assert all(c in "0123456789abcdef" for c in hash_value)
+    # Verify the hash can be used for verification
+    assert verify_password(password, result)
 
 
 def test_hash_password_uniqueness():

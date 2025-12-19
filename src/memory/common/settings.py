@@ -175,6 +175,15 @@ SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
+# API Rate limiting settings
+API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
+# Default rate limit: 100 requests per minute
+API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# Search endpoints have a lower limit to prevent abuse
+API_RATE_LIMIT_SEARCH = os.getenv("API_RATE_LIMIT_SEARCH", "30/minute")
+# Auth endpoints have stricter limits to prevent brute force
+API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+
 REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False)
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 STATIC_DIR = pathlib.Path(

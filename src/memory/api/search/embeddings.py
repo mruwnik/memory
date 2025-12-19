@@ -128,7 +128,8 @@ def merge_filters(
         filters.append({"key": "id", "match": {"any": val}})
 
     else:
-        filters.append({"key": key, "match": val})
+        # Log and ignore unknown filter keys to prevent injection
+        logger.warning(f"Unknown filter key ignored: {key}")
 
     return filters
 
