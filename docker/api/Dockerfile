@@ -41,6 +41,11 @@ FROM backend-base
 COPY src/ ./src/
 RUN pip install -e ".[api]"
 
+# Remove build dependencies to reduce image size
+RUN apt-get purge -y gcc g++ python3-dev && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy frontend build output from frontend stage
 COPY --from=frontend-builder /frontend/dist ./static/
 
@@ -57,6 +62,10 @@ USER kb
 
 # Set environment variables
 ENV PORT=8000
+# FORWARDED_ALLOW_IPS controls which IPs can set X-Forwarded-* headers
+# Set to specific proxy IPs in production (e.g., "10.0.0.1,10.0.0.2")
+# Default "*" is for development/containerized deployments behind trusted proxies
+ENV FORWARDED_ALLOW_IPS="*"
 EXPOSE 8000
 
-CMD ["uvicorn", "memory.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"] 
+CMD uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS" 

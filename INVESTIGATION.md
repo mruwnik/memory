@@ -5,7 +5,7 @@
 - **Last Updated:** 2025-12-19 (Fourth Pass - Complete Verification)
 - **Status:** Complete
 - **Total Issues Found:** 100+ (original) + 10 new critical issues
-- **Bugs Fixed/Verified:** 40+ (fixed or confirmed as non-issues)
+- **Bugs Fixed/Verified:** 45+ (fixed or confirmed as non-issues)
 
 ---
 
@@ -346,7 +346,7 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-041: N/A Backup encryption silently disabled - actually reasonable (S3_BACKUP_ENABLED=False when no key)
 - BUG-042: Restore scripts don't validate database integrity (`restore_databases.sh:79`)
 - BUG-043: ✅ Health check doesn't check dependencies - FIXED (now checks database and Qdrant connections)
-- BUG-044: Uvicorn trusts all proxy headers (`docker/api/Dockerfile:63`)
+- BUG-044: ✅ Uvicorn proxy headers - FIXED (FORWARDED_ALLOW_IPS now configurable via env var, with secure deployment guidance)
 
 ### Code Quality
 - BUG-045: 183 unsafe cast() operations (various files)
@@ -366,8 +366,8 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-054: N/A OAuthToken missing Base inheritance - intentional mixin design (used by OAuthState and OAuthRefreshToken)
 - BUG-055: ✅ collection_model returns "unknown" - FIXED (now returns None instead of placeholder)
 - BUG-056: ✅ Unused "appuser" in Dockerfile - FIXED (removed unused user creation)
-- BUG-057: Build dependencies not cleaned up (`docker/api/Dockerfile:7-12`)
-- BUG-058: Typos in log messages (`tests/conftest.py:63`)
+- BUG-057: ✅ Build dependencies not cleaned up - FIXED (added apt-get purge after pip install in Dockerfile)
+- BUG-058: N/A Typos in log messages - no log messages found at referenced location
 - BUG-059: MockRedis overly simplistic (`tests/conftest.py:24-46`)
 - BUG-060: ✅ Print statement in ebook.py:192 - FIXED (changed to logger.debug)
 
