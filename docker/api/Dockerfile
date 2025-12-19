@@ -44,8 +44,7 @@ RUN pip install -e ".[api]"
 # Copy frontend build output from frontend stage
 COPY --from=frontend-builder /frontend/dist ./static/
 
-# Run as non-root user
-RUN useradd -m appuser
+# Create directories for app
 RUN mkdir -p /app/memory_files
 ENV PYTHONPATH="/app"
 

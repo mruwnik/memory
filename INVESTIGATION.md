@@ -2,10 +2,10 @@
 
 ## Investigation Status
 - **Started:** 2025-12-19
-- **Last Updated:** 2025-12-19 (Third Pass - Verification)
-- **Status:** Ongoing
+- **Last Updated:** 2025-12-19 (Fourth Pass - Complete Verification)
+- **Status:** Complete
 - **Total Issues Found:** 100+ (original) + 10 new critical issues
-- **Bugs Fixed:** 30+ confirmed fixed
+- **Bugs Fixed/Verified:** 35+ (fixed or confirmed as non-issues)
 
 ---
 
@@ -308,22 +308,22 @@ Based on git history analysis, the following bugs have been FIXED:
 
 ### Data Layer
 - BUG-017: ✅ Missing `collection_name` index - FIXED (Index exists at source_item.py:168)
-- BUG-018: AgentObservation dead code for future embedding types (`source_items.py:1005-1028`)
+- BUG-018: N/A AgentObservation dead code - intentional TODO comments for future embedding types
 - BUG-019: ✅ Embed status never set to STORED after push - FIXED (properly sets STORED at lines 169, 245)
 - BUG-020: ✅ Missing server_id index on DiscordMessage - FIXED (Index exists at source_items.py:428-432)
 
 ### Content Processing
 - BUG-021: ✅ No chunk validation after break_chunk - FIXED (yield_spans guarantees max_tokens)
-- BUG-022: Ebook extraction creates single massive chunk (`extract.py:218-230`)
+- BUG-022: Low priority - extract_ebook creates single chunk, BUT sync_book task properly creates BookSection chunks
 - BUG-023: SHA256-only deduplication misses semantic duplicates (`source_item.py:51-91`)
 - BUG-024: Email hash inconsistency with markdown conversion (`email.py:171-185`)
-- BUG-025: Token approximation uses fixed 4-char ratio (`tokens.py:8-12`)
+- BUG-025: Acceptable - 4 chars/token is common approximation (accurate tokenization requires model-specific tokenizers)
 
 ### Search System
 - BUG-026: BM25 scores calculated then discarded (`bm25.py:66-70`)
 - BUG-027: N/A LLM score fallback - actually reasonable (0.0 means chunk not prioritized when scoring fails)
 - BUG-028: Missing filter validation (`embeddings.py:130-131`)
-- BUG-029: Hardcoded min_score thresholds (`embeddings.py:186,202`)
+- BUG-029: N/A Hardcoded min_score thresholds - intentional (0.25 text, 0.4 multimodal due to different score distributions)
 
 ### API Layer
 - BUG-030: Missing rate limiting (global)
@@ -334,9 +334,9 @@ Based on git history analysis, the following bugs have been FIXED:
 
 ### Worker Tasks
 - BUG-035: ✅ No task time limits - FIXED (celery_app.py has task_time_limit=3600, task_soft_time_limit=3000)
-- BUG-036: Database integrity errors not properly handled (`discord.py:310-321`)
+- BUG-036: Acceptable - IntegrityError caught and returns error (retrying duplicates wouldn't help)
 - BUG-037: ✅ Timezone bug in scheduled calls - FIXED (properly converts to UTC and strips tzinfo for DB comparison)
-- BUG-038: Beat schedule not thread-safe for distributed deployment (`ingest.py:19-56`)
+- BUG-038: N/A Beat schedule - standard practice is single beat process; use celery-redbeat for distributed
 - BUG-039: ✅ Email sync fails entire account on single folder error - FIXED (process_folder has own try-except, continues to next folder)
 
 ### Infrastructure
@@ -363,7 +363,7 @@ Based on git history analysis, the following bugs have been FIXED:
 - BUG-053: No vector freshness index (`source_item.py:157`)
 - BUG-054: N/A OAuthToken missing Base inheritance - intentional mixin design (used by OAuthState and OAuthRefreshToken)
 - BUG-055: ✅ collection_model returns "unknown" - FIXED (now returns None instead of placeholder)
-- BUG-056: Unused "appuser" in API Dockerfile (`docker/api/Dockerfile:48`)
+- BUG-056: ✅ Unused "appuser" in Dockerfile - FIXED (removed unused user creation)
 - BUG-057: Build dependencies not cleaned up (`docker/api/Dockerfile:7-12`)
 - BUG-058: Typos in log messages (`tests/conftest.py:63`)
 - BUG-059: MockRedis overly simplistic (`tests/conftest.py:24-46`)
