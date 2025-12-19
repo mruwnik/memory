@@ -175,7 +175,7 @@ SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
-REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False) or True
+REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False)
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 STATIC_DIR = pathlib.Path(
     os.getenv(
@@ -195,7 +195,7 @@ DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", "memory-chat")
 # Enable Discord notifications if bot token is set
 DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True)
 DISCORD_PROCESS_MESSAGES = boolean_env("DISCORD_PROCESS_MESSAGES", True)
-DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-sonnet-4-5")
+DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-haiku-4-5")
 DISCORD_MAX_TOOL_CALLS = int(os.getenv("DISCORD_MAX_TOOL_CALLS", 10))
 
 
