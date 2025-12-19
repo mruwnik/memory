@@ -85,6 +85,14 @@ services:
       timeout: 5s
       retries: 5
     security_opt: [ "no-new-privileges=true" ]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
 
   migrate:
     build:
@@ -105,7 +113,8 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     networks: [ kbnet ]
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${REDIS_PASSWORD}"]
+    # Enable AOF persistence for data durability
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD}"]
     volumes:
       - redis_data:/data:rw
     healthcheck:
@@ -116,6 +125,14 @@ services:
     security_opt: [ "no-new-privileges=true" ]
     cap_drop: [ ALL ]
     user: redis
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   qdrant:
     image: qdrant/qdrant:v1.14.0
@@ -134,6 +151,14 @@ services:
       retries: 5
     security_opt: [ "no-new-privileges=true" ]
     cap_drop: [ ALL ]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
 
   # ------------------------------------------------------------ API / gateway
   api:
@@ -167,6 +192,14 @@ services:
       retries: 5
     ports:
       - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
 
   # ------------------------------------------------------------ Celery workers
   worker:

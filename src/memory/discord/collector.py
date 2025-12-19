@@ -58,7 +58,7 @@ def create_or_update_server(
     if not guild:
         return None
 
-    server = session.query(DiscordServer).get(guild.id)
+    server = session.get(DiscordServer, guild.id)
 
     if not server:
         server = DiscordServer(
@@ -111,7 +111,7 @@ def create_or_update_channel(
     if not channel:
         return None
 
-    discord_channel = session.query(DiscordChannel).get(channel.id)
+    discord_channel = session.get(DiscordChannel, channel.id)
 
     if not discord_channel:
         channel_type, server_id, name = determine_channel_metadata(channel)
@@ -137,7 +137,7 @@ def create_or_update_user(
     if not user:
         return None
 
-    discord_user = session.query(DiscordUser).get(user.id)
+    discord_user = session.get(DiscordUser, user.id)
 
     if not discord_user:
         discord_user = DiscordUser(

@@ -29,13 +29,12 @@ def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
     if not (repo_root / ".git").exists() and not force:
         return
 
-    # Properly escape arguments for shell execution
-    escaped_args = [shlex.quote(arg) for arg in args]
-    cmd = f"git -C {shlex.quote(repo_root.as_posix())} {' '.join(escaped_args)}"
+    # Build command as list for subprocess (safer than shell=True)
+    cmd = ["git", "-C", repo_root.as_posix()] + list(args)
 
     res = subprocess.run(
         cmd,
-        shell=True,
+        shell=False,
         text=True,
         capture_output=True,  # Capture both stdout and stderr
     )

@@ -76,7 +76,7 @@ def get_user_session(
     if not session_id:
         return None
 
-    session = db.query(UserSession).get(session_id)
+    session = db.get(UserSession, session_id)
     if not session:
         return None
 

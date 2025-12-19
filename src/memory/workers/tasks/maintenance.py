@@ -66,7 +66,7 @@ def clean_all_collections():
 def reingest_chunk(chunk_id: str, collection: str):
     logger.info(f"Reingesting chunk {chunk_id}")
     with make_session() as session:
-        chunk = session.query(Chunk).get(chunk_id)
+        chunk = session.get(Chunk, chunk_id)
         if not chunk:
             logger.error(f"Chunk {chunk_id} not found")
             return
@@ -116,7 +116,7 @@ def reingest_item(item_id: str, item_type: str):
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
-        item = session.query(class_).get(item_id)
+        item = session.get(class_, item_id)
         if not item:
             return {"status": "error", "error": f"Item {item_id} not found"}
 
@@ -275,7 +275,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
     errors = 0
 
     with make_session() as session:
-        item = session.query(class_).get(item_id)
+        item = session.get(class_, item_id)
         if not item:
             return {"status": "error", "error": f"Item {item_id} not found"}
 

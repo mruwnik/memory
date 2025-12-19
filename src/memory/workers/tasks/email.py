@@ -45,7 +45,7 @@ def process_message(
         return {"status": "skipped", "reason": "empty_content"}
 
     with make_session() as db:
-        account = db.query(EmailAccount).get(account_id)
+        account = db.get(EmailAccount, account_id)
         if not account:
             logger.error(f"Account {account_id} not found")
             return {"status": "error", "error": "Account not found"}

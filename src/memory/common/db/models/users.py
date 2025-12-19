@@ -1,8 +1,8 @@
-import hashlib
 import secrets
 import uuid
 from typing import cast
 
+import bcrypt
 from sqlalchemy import (
     ARRAY,
     Boolean,
@@ -21,17 +21,26 @@ from memory.common.db.models.base import Base
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256 with salt"""
-    salt = secrets.token_hex(16)
-    return f"{salt}:{hashlib.sha256((salt + password).encode()).hexdigest()}"
+    """Hash a password using bcrypt with salt.
+
+    Returns a hash in the format: bcrypt2:$2b$12$...
+    The prefix allows us to identify the hashing algorithm.
+    """
+    # Generate bcrypt hash (automatically includes salt)
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12))
+    return f"{hashed.decode('utf-8')}"
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash"""
+    """Verify a password against its hash.
+
+    Returns:
+        bool: True if password is correct
+    """
+    # Check for bcrypt format
     try:
-        salt, hash_value = password_hash.split(":", 1)
-        return hashlib.sha256((salt + password).encode()).hexdigest() == hash_value
-    except ValueError:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
         return False
 
 
@@ -88,7 +97,10 @@ class HumanUser(User):
     }
 
     def is_valid_password(self, password: str) -> bool:
-        """Check if the provided password is valid for this user"""
+        """Check if the provided password is valid for this user.
+
+        Automatically upgrades legacy SHA-256 hashes to bcrypt on successful login.
+        """
         return verify_password(password, cast(str, self.password_hash))
 
     @classmethod

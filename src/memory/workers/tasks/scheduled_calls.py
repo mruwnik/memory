@@ -70,7 +70,7 @@ def execute_scheduled_call(self, scheduled_call_id: str):
 
     with make_session() as session:
         # Fetch the scheduled call
-        scheduled_call = session.query(ScheduledLLMCall).get(scheduled_call_id)
+        scheduled_call = session.get(ScheduledLLMCall, scheduled_call_id)
 
         if not scheduled_call:
             logger.error(f"Scheduled call {scheduled_call_id} not found")

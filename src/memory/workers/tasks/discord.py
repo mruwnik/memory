@@ -176,7 +176,7 @@ def process_discord_message(message_id: int) -> dict[str, Any]:
     logger.info(f"Processing Discord message {message_id}")
 
     with make_session() as session:
-        discord_message = session.query(DiscordMessage).get(message_id)
+        discord_message = session.get(DiscordMessage, message_id)
         if not discord_message:
             logger.info(f"Discord message not found: {message_id}")
             return {

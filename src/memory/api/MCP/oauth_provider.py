@@ -134,13 +134,13 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Get OAuth client information."""
         with make_session() as session:
-            client = session.query(OAuthClientInformation).get(client_id)
+            client = session.get(OAuthClientInformation, client_id)
             return client and OAuthClientInformationFull(**client.serialize())
 
     async def register_client(self, client_info: OAuthClientInformationFull):
         """Register a new OAuth client."""
         with make_session() as session:
-            client = session.query(OAuthClientInformation).get(client_info.client_id)
+            client = session.get(OAuthClientInformation, client_info.client_id)
             if not client:
                 client = OAuthClientInformation(client_id=client_info.client_id)
 
@@ -307,7 +307,7 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
                 raise ValueError("Invalid authorization code")
 
             token = make_token(session, auth_code, authorization_code.scopes)
-            logger.info(f"Exchanged authorization code: {token}")
+            logger.info(f"Exchanged authorization code for user {auth_code.user_id}")
             return token
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
@@ -422,7 +422,7 @@ class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
 
             # Try to revoke as access token (UserSession)
             if not token_type_hint or token_type_hint == "access_token":
-                user_session = session.query(UserSession).get(token)
+                user_session = session.get(UserSession, token)
                 if user_session:
                     session.delete(user_session)
                     revoked = True

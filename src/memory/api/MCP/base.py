@@ -148,7 +148,7 @@ def get_current_user() -> dict:
         return {"authenticated": False}
 
     with make_session() as session:
-        user_session = session.query(UserSession).get(access_token.token)
+        user_session = session.get(UserSession, access_token.token)
 
         if user_session and user_session.user:
             user_info = user_session.user.serialize()
