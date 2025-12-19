@@ -317,12 +317,12 @@ Based on git history analysis, the following bugs have been FIXED:
 ### Content Processing
 - BUG-021: ✅ No chunk validation after break_chunk - FIXED (yield_spans guarantees max_tokens)
 - BUG-022: Low priority - extract_ebook creates single chunk, BUT sync_book task properly creates BookSection chunks
-- BUG-023: SHA256-only deduplication misses semantic duplicates (`source_item.py:51-91`)
+- BUG-023: Acceptable design - SHA256 is for exact deduplication (semantic dedup would be a feature enhancement)
 - BUG-024: Email hash inconsistency with markdown conversion (`email.py:171-185`)
 - BUG-025: Acceptable - 4 chars/token is common approximation (accurate tokenization requires model-specific tokenizers)
 
 ### Search System
-- BUG-026: BM25 scores calculated then discarded (`bm25.py:66-70`)
+- BUG-026: Acceptable design - BM25/embedding scores used for candidate selection, LLM scorer provides final ranking (hybrid scoring would be an enhancement, not a bug fix)
 - BUG-027: N/A LLM score fallback - actually reasonable (0.0 means chunk not prioritized when scoring fails)
 - BUG-028: ✅ Missing filter validation - FIXED (unknown filter keys now logged and ignored instead of passed through)
 - BUG-029: N/A Hardcoded min_score thresholds - intentional (0.25 text, 0.4 multimodal due to different score distributions)
