@@ -17,6 +17,9 @@ from memory.api.search import scorer
 if settings.ENABLE_BM25_SEARCH:
     from memory.api.search.bm25 import search_bm25_chunks
 
+if settings.ENABLE_HYDE_EXPANSION:
+    from memory.api.search.hyde import expand_query_hyde
+
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -87,14 +90,35 @@ async def search_chunks(
 
     Combines results using weighted score fusion, giving bonus to documents
     that match both semantically and lexically.
+
+    If HyDE is enabled, also generates a hypothetical document from the query
+    and includes it in the embedding search for better semantic matching.
     """
     # Search for more candidates than requested, fuse scores, then return top N
     # This helps find results that rank well in one method but not the other
     internal_limit = limit * CANDIDATE_MULTIPLIER
 
+    # Extract query text for HyDE expansion
+    search_data = list(data)  # Copy to avoid modifying original
+    if settings.ENABLE_HYDE_EXPANSION:
+        query_text = " ".join(
+            c for chunk in data for c in chunk.data if isinstance(c, str)
+        )
+        # Only expand queries with 4+ words (short queries are usually specific enough)
+        if len(query_text.split()) >= 4:
+            try:
+                hyde_doc = await expand_query_hyde(
+                    query_text, timeout=settings.HYDE_TIMEOUT
+                )
+                if hyde_doc:
+                    logger.debug(f"HyDE expansion: '{query_text[:30]}...' -> '{hyde_doc[:50]}...'")
+                    search_data.append(extract.DataChunk(data=[hyde_doc]))
+            except Exception as e:
+                logger.warning(f"HyDE expansion failed, using original query: {e}")
+
     # Run embedding search
     embedding_scores = await search_chunks_embeddings(
-        data, modalities, internal_limit, filters, timeout
+        search_data, modalities, internal_limit, filters, timeout
     )
 
     # Run BM25 search if enabled
