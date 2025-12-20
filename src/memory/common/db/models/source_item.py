@@ -372,6 +372,16 @@ class SourceItem(Base):
         return [cls.__tablename__]
 
     @property
+    def popularity(self) -> float:
+        """
+        Return a popularity score for this item.
+
+        Default is 1.0. Subclasses can override to provide custom popularity
+        metrics (e.g., karma, view count, citations).
+        """
+        return 1.0
+
+    @property
     def display_contents(self) -> dict | None:
         payload = self.as_payload()
         payload.pop("source_id", None)  # type: ignore

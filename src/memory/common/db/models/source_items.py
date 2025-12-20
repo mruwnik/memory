@@ -751,6 +751,43 @@ class ForumPost(SourceItem):
         # Very sad that I didn't keep the names consistent... Qdrant doesn't allow renaming collections
         return ["forum"]
 
+    # Karma reference values for different forum sources.
+    # Maps URL substring to karma value representing "very popular" (~90th percentile).
+    # Posts at this karma get popularity=2.0; above caps at 2.5.
+    # Based on actual LW data: 90th %ile ≈ 100, 95th ≈ 144, 99th ≈ 275
+    KARMA_REFERENCES: dict[str, int] = {
+        "lesswrong.com": 100,  # 90th percentile from data
+        "greaterwrong.com": 100,  # LW mirror
+        "alignmentforum.org": 50,  # Smaller community
+        "forum.effectivealtruism.org": 75,
+    }
+    DEFAULT_KARMA_REFERENCE: int = 50
+
+    @property
+    def karma_reference(self) -> int:
+        """Get the karma reference for this post based on its URL."""
+        url = self.url or ""
+        for pattern, ref in self.KARMA_REFERENCES.items():
+            if pattern in url:
+                return ref
+        return self.DEFAULT_KARMA_REFERENCE
+
+    @property
+    def popularity(self) -> float:
+        """
+        Return popularity based on karma, normalized to karma_reference.
+
+        - karma <= 0: returns 0.5 to 1.0
+        - karma = karma_reference: returns 2.0
+        - karma > karma_reference: capped at 2.5
+        """
+        karma = self.karma or 0
+        if karma <= 0:
+            # Downvoted or zero karma: scale between 0.5 and 1.0
+            return max(0.5, 1.0 - abs(karma) / 100)
+        # Positive karma: linear scale up to reference, then cap
+        return min(2.5, 1.0 + karma / self.karma_reference)
+
 
 class MiscDoc(SourceItem):
     __tablename__ = "misc_doc"

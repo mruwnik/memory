@@ -11,10 +11,12 @@ from memory.api.search.search import (
     apply_query_term_boost,
     deduplicate_by_source,
     apply_title_boost,
+    apply_popularity_boost,
     fuse_scores_rrf,
     STOPWORDS,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
+    POPULARITY_BOOST,
     RRF_K,
 )
 
@@ -271,6 +273,76 @@ def test_apply_title_boost_none_title(mock_make_session):
     chunks = [_make_title_chunk(1, 0.5)]
     apply_title_boost(chunks, {"machine"})
     assert chunks[0].relevance_score == 0.5
+
+
+# ============================================================================
+# apply_popularity_boost tests
+# ============================================================================
+
+
+def _make_pop_chunk(source_id: int, score: float = 0.5):
+    """Create a mock chunk for popularity boost tests."""
+    chunk = MagicMock()
+    chunk.source_id = source_id
+    chunk.relevance_score = score
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "popularity,initial_score,expected_multiplier",
+    [
+        (1.0, 0.5, 1.0),  # Default popularity, no change
+        (2.0, 0.5, 1.0 + POPULARITY_BOOST),  # High popularity
+        (0.5, 0.5, 1.0 - POPULARITY_BOOST * 0.5),  # Low popularity
+        (1.5, 1.0, 1.0 + POPULARITY_BOOST * 0.5),  # Moderate popularity
+    ],
+)
+@patch("memory.api.search.search.make_session")
+def test_apply_popularity_boost(mock_make_session, popularity, initial_score, expected_multiplier):
+    """Should boost chunks based on source popularity."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.popularity = popularity
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_pop_chunk(1, initial_score)]
+    apply_popularity_boost(chunks)
+
+    expected = initial_score * expected_multiplier
+    assert chunks[0].relevance_score == pytest.approx(expected)
+
+
+def test_apply_popularity_boost_empty_chunks():
+    """Should handle empty chunks list."""
+    apply_popularity_boost([])  # Should not raise
+
+
+@patch("memory.api.search.search.make_session")
+def test_apply_popularity_boost_multiple_sources(mock_make_session):
+    """Should apply different boosts per source."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    source1 = MagicMock()
+    source1.id = 1
+    source1.popularity = 2.0  # High karma
+    source2 = MagicMock()
+    source2.id = 2
+    source2.popularity = 1.0  # Default
+    mock_session.query.return_value.filter.return_value.all.return_value = [source1, source2]
+
+    chunks = [_make_pop_chunk(1, 0.5), _make_pop_chunk(2, 0.5)]
+    apply_popularity_boost(chunks)
+
+    # Source 1 should be boosted
+    assert chunks[0].relevance_score == pytest.approx(0.5 * (1.0 + POPULARITY_BOOST))
+    # Source 2 should be unchanged (popularity = 1.0)
+    assert chunks[1].relevance_score == 0.5
 
 
 # ============================================================================
