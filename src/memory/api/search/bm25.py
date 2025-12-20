@@ -1,20 +1,67 @@
 """
-Search endpoints for the knowledge base API.
+Full-text search using PostgreSQL's built-in text search capabilities.
+
+This replaces the previous in-memory BM25 implementation which caused OOM
+with large collections (250K+ chunks).
 """
 
 import asyncio
-from hashlib import sha256
 import logging
+import re
 
-import bm25s
-import Stemmer
+from sqlalchemy import func, text
+
 from memory.api.search.types import SearchFilters
-
 from memory.common import extract
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 
 logger = logging.getLogger(__name__)
+
+# Pattern to remove special characters that confuse tsquery
+_TSQUERY_SPECIAL_CHARS = re.compile(r"[&|!():*<>'\"-]")
+
+# Common English stopwords to filter from queries
+# These are words that appear in most documents and don't help with search relevance
+_STOPWORDS = frozenset([
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+    "be", "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "must", "shall", "can", "need", "dare", "ought",
+    "used", "it", "its", "this", "that", "these", "those", "i", "you", "he",
+    "she", "we", "they", "what", "which", "who", "whom", "whose", "where",
+    "when", "why", "how", "all", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+    "same", "so", "than", "too", "very", "just", "about", "into", "through",
+    "during", "before", "after", "above", "below", "between", "under", "again",
+    "further", "then", "once", "here", "there", "any", "being", "doing",
+])
+
+
+def build_tsquery(query: str) -> str:
+    """
+    Convert a natural language query to a PostgreSQL tsquery.
+
+    Uses AND matching for multi-word queries to ensure all terms appear.
+    Also adds prefix matching with :* for partial word matches.
+    Filters out common stopwords that don't help with search relevance.
+    """
+    # Remove special characters that confuse tsquery
+    clean_query = _TSQUERY_SPECIAL_CHARS.sub(" ", query)
+
+    # Split query into words, filter stopwords and short words
+    words = [
+        w.strip().lower()
+        for w in clean_query.split()
+        if w.strip() and len(w.strip()) > 2 and w.strip().lower() not in _STOPWORDS
+    ]
+    if not words:
+        return ""
+
+    # Join words with & for AND matching (all terms must appear)
+    # Add :* for prefix matching to catch word variants
+    tsquery_parts = [f"{word}:*" for word in words]
+    return " & ".join(tsquery_parts)
 
 
 async def search_bm25(
@@ -22,11 +69,34 @@ async def search_bm25(
     modalities: set[str],
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
-) -> list[str]:
+) -> dict[str, float]:
+    """
+    Search chunks using PostgreSQL full-text search.
+
+    Uses ts_rank for relevance scoring, normalized to 0-1 range.
+
+    Returns:
+    - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
+    """
+    tsquery = build_tsquery(query)
+    if not tsquery:
+        return {}
+
     with make_session() as db:
-        items_query = db.query(Chunk.id, Chunk.content).filter(
+        # Build the base query with full-text search
+        # ts_rank returns a relevance score based on term frequency
+        rank_expr = func.ts_rank(
+            Chunk.search_vector,
+            func.to_tsquery("english", tsquery),
+        )
+
+        items_query = db.query(
+            Chunk.id,
+            rank_expr.label("rank"),
+        ).filter(
             Chunk.collection_name.in_(modalities),
-            Chunk.content.isnot(None),
+            Chunk.search_vector.isnot(None),
+            Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
         # Join with SourceItem if we need size filters
@@ -61,32 +131,33 @@ async def search_bm25(
                     & (ConfidenceScore.score >= min_score),
                 )
 
+        # Order by rank descending and limit results
+        items_query = items_query.order_by(text("rank DESC")).limit(limit)
+
         items = items_query.all()
         if not items:
-            return []
+            return {}
 
-        item_ids = {
-            sha256(item.content.lower().strip().encode("utf-8")).hexdigest(): item.id
-            for item in items
-            if item.content
-        }
-        corpus = [item.content.lower().strip() for item in items]
+        # Collect raw scores
+        raw_scores = {str(item.id): float(item.rank) for item in items if item.rank > 0}
 
-    stemmer = Stemmer.Stemmer("english")
-    corpus_tokens = bm25s.tokenize(corpus, stopwords="en", stemmer=stemmer)
-    retriever = bm25s.BM25()
-    retriever.index(corpus_tokens)
+        if not raw_scores:
+            return {}
 
-    query_tokens = bm25s.tokenize(query, stemmer=stemmer)
-    results, scores = retriever.retrieve(
-        query_tokens, k=min(limit, len(corpus)), corpus=corpus
-    )
+        # Normalize scores to 0-1 range using min-max normalization
+        # This makes them comparable to embedding cosine similarity scores
+        min_score = min(raw_scores.values())
+        max_score = max(raw_scores.values())
+        score_range = max_score - min_score
 
-    item_scores = {
-        item_ids[sha256(doc.encode("utf-8")).hexdigest()]: score
-        for doc, score in zip(results[0], scores[0])
-    }
-    return list(item_scores.keys())
+        if score_range > 0:
+            return {
+                chunk_id: (score - min_score) / score_range
+                for chunk_id, score in raw_scores.items()
+            }
+        else:
+            # All scores are equal, return 0.5 for all
+            return {chunk_id: 0.5 for chunk_id in raw_scores}
 
 
 async def search_bm25_chunks(
@@ -94,8 +165,14 @@ async def search_bm25_chunks(
     modalities: set[str] = set(),
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
-    timeout: int = 2,
-) -> list[str]:
+    timeout: int = 10,
+) -> dict[str, float]:
+    """
+    Search chunks using PostgreSQL full-text search.
+
+    Returns:
+    - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
+    """
     query = " ".join([c for chunk in data for c in chunk.data if isinstance(c, str)])
     return await asyncio.wait_for(
         search_bm25(query, modalities, limit, filters),

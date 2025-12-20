@@ -105,9 +105,11 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
 @mcp.tool()
 async def search_knowledge_base(
     query: str,
-    filters: SearchFilters,
-    config: SearchConfig = SearchConfig(),
+    filters: SearchFilters = {},
     modalities: set[str] = set(),
+    limit: int = 20,
+    previews: bool = False,
+    use_scores: bool = False,
 ) -> list[dict]:
     """
     Search user's stored content including emails, documents, articles, books.
@@ -120,22 +122,22 @@ async def search_knowledge_base(
     Args:
         query: Natural language search query - be descriptive about what you're looking for
         modalities: Filter by type: email, blog, book, forum, photo, comic, webpage (empty = all)
-        filters: a dictionary with the following keys:
+        limit: Maximum number of results to return (default 20, max 100). Use higher limits for vague queries.
+        previews: Whether to include the actual content in the results (up to MAX_PREVIEW_LENGTH characters)
+        use_scores: Whether to score the results with an LLM before returning - better results but slower
+        filters: Optional dictionary with:
             - tags: a list of tags to filter by
             - source_ids: a list of source ids to filter by
             - min_size: the minimum size of the content to filter by
             - max_size: the maximum size of the content to filter by
             - min_created_at: the minimum created_at date to filter by
             - max_created_at: the maximum created_at date to filter by
-        config: a dictionary with the following keys:
-            - limit: the maximum number of results to return
-            - previews: whether to include the actual content in the results (up to MAX_PREVIEW_LENGTH characters)
-            - useScores: whether to score the results with a LLM before returning - this results in better results but is slower
 
     Returns: List of search results with id, score, chunks, content, filename
     Higher scores (>0.7) indicate strong matches.
     """
     logger.info(f"MCP search for: {query}")
+    config = SearchConfig(limit=min(limit, 100), previews=previews, useScores=use_scores)
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
@@ -247,7 +249,7 @@ async def search_observations(
     tags: list[str] | None = None,
     observation_types: list[str] | None = None,
     min_confidences: dict[str, float] = {},
-    config: SearchConfig = SearchConfig(),
+    limit: int = 20,
 ) -> list[dict]:
     """
     Search recorded observations about the user.
@@ -260,12 +262,13 @@ async def search_observations(
         tags: Filter by tags (must have at least one matching tag)
         observation_types: Filter by: belief, preference, behavior, contradiction, general
         min_confidences: Minimum confidence thresholds, e.g. {"observation_accuracy": 0.8}
-        config: SearchConfig
+        limit: Maximum number of results to return (default 20, max 100)
 
     Returns: List with content, tags, created_at, metadata
     Results sorted by relevance to your query.
     """
     logger.info("MCP: Searching observations for %s", query)
+    config = SearchConfig(limit=min(limit, 100))
     semantic_text = observation.generate_semantic_text(
         subject=subject or "",
         observation_type="".join(observation_types or []),

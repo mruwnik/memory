@@ -24,6 +24,7 @@ from sqlalchemy import (
     func,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.orm import Session, relationship
 from sqlalchemy.types import Numeric
@@ -155,6 +156,7 @@ class Chunk(Base):
     collection_name = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     checked_at = Column(DateTime(timezone=True), server_default=func.now())
+    search_vector = Column(TSVECTOR)  # Full-text search index
 
     vector: list[float] = []
     item_metadata: dict[str, Any] = {}

@@ -41,9 +41,11 @@ class SearchResult(BaseModel):
         metadata.pop("content", None)
         chunk_size = settings.DEFAULT_CHUNK_TOKENS * 4
 
-        # Use mean of chunk scores to avoid bias towards documents with more chunks
+        # Use max chunk score - we want to find documents with at least one
+        # highly relevant section, not penalize long documents with some irrelevant parts.
+        # This is better for "half-remembered" searches where users recall one specific detail.
         search_score = (
-            sum(chunk.relevance_score for chunk in chunks) / len(chunks)
+            max((chunk.relevance_score for chunk in chunks), default=0)
             if chunks
             else 0
         )
@@ -76,7 +78,7 @@ class SearchFilters(TypedDict):
 
 
 class SearchConfig(BaseModel):
-    limit: int = 10
+    limit: int = 20
     timeout: int = 20
     previews: bool = False
     useScores: bool = False

@@ -141,18 +141,20 @@ async def search_chunks(
     min_score: float = 0.3,
     filters: SearchFilters = {},
     multimodal: bool = False,
-) -> list[str]:
+) -> dict[str, float]:
     """
     Search across knowledge base using text query and optional files.
 
     Parameters:
     - data: List of data to search in (e.g., text, images, files)
-    - previews: Whether to include previews in the search results
     - modalities: List of modalities to search in (e.g., "text", "photo", "doc")
     - limit: Maximum number of results
     - min_score: Minimum score to include in the search results
     - filters: Filters to apply to the search results
     - multimodal: Whether to search in multimodal collections
+
+    Returns:
+    - Dictionary mapping chunk IDs to their similarity scores
     """
     search_filters = []
     for key, val in filters.items():
@@ -170,10 +172,14 @@ async def search_chunks(
     )
     search_results = {k: results.get(k, []) for k in modalities}
 
-    found_chunks = {
-        str(r.id): r for results in search_results.values() for r in results
-    }
-    return list(found_chunks.keys())
+    # Return chunk IDs with their scores (take max score if chunk appears multiple times)
+    found_chunks: dict[str, float] = {}
+    for collection_results in search_results.values():
+        for r in collection_results:
+            chunk_id = str(r.id)
+            if chunk_id not in found_chunks or r.score > found_chunks[chunk_id]:
+                found_chunks[chunk_id] = r.score
+    return found_chunks
 
 
 async def search_chunks_embeddings(
@@ -182,11 +188,17 @@ async def search_chunks_embeddings(
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
     timeout: int = 2,
-) -> list[str]:
+) -> dict[str, float]:
+    """
+    Search chunks using embeddings across text and multimodal collections.
+
+    Returns:
+    - Dictionary mapping chunk IDs to their similarity scores
+    """
     # Note: Multimodal embeddings typically produce higher similarity scores,
     # so we use a higher threshold (0.4) to maintain selectivity.
     # Text embeddings produce lower scores, so we use 0.25.
-    all_ids = await asyncio.gather(
+    all_results = await asyncio.gather(
         asyncio.wait_for(
             search_chunks(
                 data,
@@ -210,4 +222,10 @@ async def search_chunks_embeddings(
             timeout,
         ),
     )
-    return list({id for ids in all_ids for id in ids})
+    # Merge scores, taking max if chunk appears in both
+    merged_scores: dict[str, float] = {}
+    for result_dict in all_results:
+        for chunk_id, score in result_dict.items():
+            if chunk_id not in merged_scores or score > merged_scores[chunk_id]:
+                merged_scores[chunk_id] = score
+    return merged_scores

@@ -21,6 +21,59 @@ from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
 logger = logging.getLogger(__name__)
 
+# Weight for embedding scores vs BM25 scores in hybrid fusion
+# Higher values favor semantic similarity over keyword matching
+EMBEDDING_WEIGHT = 0.7
+BM25_WEIGHT = 0.3
+
+# Bonus for results that appear in both embedding and BM25 search
+# This rewards documents that match both semantically and lexically
+HYBRID_BONUS = 0.15
+
+# Multiplier for internal search limit before fusion
+# We search for more candidates than requested, fuse scores, then return top N
+# This helps find results that rank well in one method but not the other
+CANDIDATE_MULTIPLIER = 5
+
+
+def fuse_scores(
+    embedding_scores: dict[str, float],
+    bm25_scores: dict[str, float],
+) -> dict[str, float]:
+    """
+    Fuse embedding and BM25 scores using weighted combination with hybrid bonus.
+
+    Documents appearing in both search results get a bonus, as matching both
+    semantic similarity AND keyword relevance is a strong signal.
+
+    Args:
+        embedding_scores: Dict mapping chunk IDs to embedding similarity scores (0-1)
+        bm25_scores: Dict mapping chunk IDs to normalized BM25 scores (0-1)
+
+    Returns:
+        Dict mapping chunk IDs to fused scores (0-1 range)
+    """
+    all_ids = set(embedding_scores.keys()) | set(bm25_scores.keys())
+    fused: dict[str, float] = {}
+
+    for chunk_id in all_ids:
+        emb_score = embedding_scores.get(chunk_id, 0.0)
+        bm25_score = bm25_scores.get(chunk_id, 0.0)
+
+        # Check if result appears in both methods
+        in_both = chunk_id in embedding_scores and chunk_id in bm25_scores
+
+        # Weighted combination
+        combined = (EMBEDDING_WEIGHT * emb_score) + (BM25_WEIGHT * bm25_score)
+
+        # Add bonus for appearing in both (strong relevance signal)
+        if in_both:
+            combined = min(1.0, combined + HYBRID_BONUS)
+
+        fused[chunk_id] = combined
+
+    return fused
+
 
 async def search_chunks(
     data: list[extract.DataChunk],
@@ -29,14 +82,40 @@ async def search_chunks(
     filters: SearchFilters = {},
     timeout: int = 2,
 ) -> list[Chunk]:
-    funcs = [search_chunks_embeddings]
-    if settings.ENABLE_BM25_SEARCH:
-        funcs.append(search_bm25_chunks)
+    """
+    Search chunks using embedding similarity and optionally BM25.
 
-    all_ids = await asyncio.gather(
-        *[func(data, modalities, limit, filters, timeout) for func in funcs]
+    Combines results using weighted score fusion, giving bonus to documents
+    that match both semantically and lexically.
+    """
+    # Search for more candidates than requested, fuse scores, then return top N
+    # This helps find results that rank well in one method but not the other
+    internal_limit = limit * CANDIDATE_MULTIPLIER
+
+    # Run embedding search
+    embedding_scores = await search_chunks_embeddings(
+        data, modalities, internal_limit, filters, timeout
     )
-    all_ids = {id for ids in all_ids for id in ids}
+
+    # Run BM25 search if enabled
+    bm25_scores: dict[str, float] = {}
+    if settings.ENABLE_BM25_SEARCH:
+        try:
+            bm25_scores = await search_bm25_chunks(
+                data, modalities, internal_limit, filters, timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning("BM25 search timed out, using embedding results only")
+
+    # Fuse scores from both methods
+    fused_scores = fuse_scores(embedding_scores, bm25_scores)
+
+    if not fused_scores:
+        return []
+
+    # Sort by score and take top results
+    sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
+    top_ids = sorted_ids[:limit]
 
     with make_session() as db:
         chunks = (
@@ -49,9 +128,14 @@ async def search_chunks(
                     Chunk.file_paths,  # type: ignore
                 )
             )
-            .filter(Chunk.id.in_(all_ids))
+            .filter(Chunk.id.in_(top_ids))
             .all()
         )
+
+        # Set relevance_score on each chunk from the fused scores
+        for chunk in chunks:
+            chunk.relevance_score = fused_scores.get(str(chunk.id), 0.0)
+
         db.expunge_all()
         return chunks
 
