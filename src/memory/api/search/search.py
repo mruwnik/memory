@@ -470,7 +470,9 @@ async def search_chunks(
         else settings.ENABLE_RERANKING
     )
     use_query_analysis = (
-        config.useQueryAnalysis if config.useQueryAnalysis is not None else False
+        config.useQueryAnalysis
+        if config.useQueryAnalysis is not None
+        else settings.ENABLE_QUERY_ANALYSIS
     )
 
     internal_limit = limit * CANDIDATE_MULTIPLIER

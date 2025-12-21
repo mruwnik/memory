@@ -57,11 +57,11 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState(10)
     // Search enhancement options - initialize to match server defaults
-    // Server defaults: BM25=true, HyDE=true, Reranking=true, QueryAnalysis=false
+    // All enabled by default (query analysis runs in parallel with HyDE, no extra latency)
     const [useBm25, setUseBm25] = useState<boolean | undefined>(true)
     const [useHyde, setUseHyde] = useState<boolean | undefined>(true)
     const [useReranking, setUseReranking] = useState<boolean | undefined>(true)
-    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(false)
+    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(true)
     const { getMetadataSchemas, getTags } = useMCP()
     
     useEffect(() => {
