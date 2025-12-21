@@ -56,11 +56,12 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     const [tags, setTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState(10)
-    // Search enhancement options (undefined = use server defaults)
-    const [useBm25, setUseBm25] = useState<boolean | undefined>(undefined)
-    const [useHyde, setUseHyde] = useState<boolean | undefined>(undefined)
-    const [useReranking, setUseReranking] = useState<boolean | undefined>(undefined)
-    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(undefined)
+    // Search enhancement options - initialize to match server defaults
+    // Server defaults: BM25=true, HyDE=true, Reranking=true, QueryAnalysis=false
+    const [useBm25, setUseBm25] = useState<boolean | undefined>(true)
+    const [useHyde, setUseHyde] = useState<boolean | undefined>(true)
+    const [useReranking, setUseReranking] = useState<boolean | undefined>(true)
+    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(false)
     const { getMetadataSchemas, getTags } = useMCP()
     
     useEffect(() => {
@@ -146,40 +147,40 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                             <label>
                                 <input
                                     type="checkbox"
-                                    checked={useBm25 ?? false}
+                                    checked={useBm25}
                                     onChange={(e) => setUseBm25(e.target.checked)}
                                 />
-                                Enable BM25 (keyword search)
+                                BM25 keyword search
                             </label>
                         </div>
                         <div className="search-option">
                             <label>
                                 <input
                                     type="checkbox"
-                                    checked={useHyde ?? false}
+                                    checked={useHyde}
                                     onChange={(e) => setUseHyde(e.target.checked)}
                                 />
-                                Enable HyDE (hypothetical document expansion)
+                                HyDE (hypothetical document expansion)
                             </label>
                         </div>
                         <div className="search-option">
                             <label>
                                 <input
                                     type="checkbox"
-                                    checked={useReranking ?? false}
+                                    checked={useReranking}
                                     onChange={(e) => setUseReranking(e.target.checked)}
                                 />
-                                Enable reranking (cross-encoder)
+                                Reranking (cross-encoder)
                             </label>
                         </div>
                         <div className="search-option">
                             <label>
                                 <input
                                     type="checkbox"
-                                    checked={useQueryAnalysis ?? false}
+                                    checked={useQueryAnalysis}
                                     onChange={(e) => setUseQueryAnalysis(e.target.checked)}
                                 />
-                                Enable query analysis (LLM-based)
+                                Query analysis (LLM-based)
                             </label>
                         </div>
                     </div>
