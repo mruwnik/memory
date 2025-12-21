@@ -19,6 +19,7 @@ from memory.api.search.constants import (
     RERANK_CANDIDATE_MULTIPLIER,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
+    RECALLED_TITLE_BOOST,
     POPULARITY_BOOST,
     RECENCY_BOOST_MAX,
     RECENCY_HALF_LIFE_DAYS,
@@ -93,16 +94,21 @@ def deduplicate_by_source(chunks: list[Chunk]) -> list[Chunk]:
 def apply_source_boosts(
     chunks: list[Chunk],
     query_terms: set[str],
+    recalled_titles: list[str] | None = None,
 ) -> None:
     """
     Apply title, popularity, and recency boosts to chunks in a single DB query.
 
     - Title boost: chunks get boosted when query terms appear in source title
+    - Recalled title boost: chunks get large boost if source title matches recalled content
     - Popularity boost: chunks get boosted based on source karma/popularity
     - Recency boost: newer content gets a small boost that decays over time
     """
     if not chunks:
         return
+
+    # Normalize recalled titles for matching
+    recalled_lower = [t.lower() for t in (recalled_titles or [])]
 
     source_ids = list({chunk.source_id for chunk in chunks})
     now = datetime.now(timezone.utc)
@@ -124,12 +130,18 @@ def apply_source_boosts(
         score = chunk.relevance_score or 0
 
         # Apply title boost if query terms match
-        if query_terms:
-            title = source_data.get("title", "")
-            if title:
-                matches = sum(1 for term in query_terms if term in title)
-                if matches > 0:
-                    score += TITLE_MATCH_BOOST * (matches / len(query_terms))
+        title = source_data.get("title", "")
+        if query_terms and title:
+            matches = sum(1 for term in query_terms if term in title)
+            if matches > 0:
+                score += TITLE_MATCH_BOOST * (matches / len(query_terms))
+
+        # Apply recalled title boost - large boost if title matches LLM-recalled content
+        if recalled_lower and title:
+            for recalled in recalled_lower:
+                if recalled in title or title in recalled:
+                    score += RECALLED_TITLE_BOOST
+                    break
 
         # Apply popularity boost
         popularity = source_data.get("popularity", 1.0)
@@ -254,22 +266,23 @@ def _apply_query_analysis(
     query_text: str,
     data: list[extract.DataChunk],
     modalities: set[str],
-) -> tuple[str, list[extract.DataChunk], set[str], list[str]]:
+) -> tuple[str, list[extract.DataChunk], set[str], list[str], list[str]]:
     """
     Apply query analysis results to modify query, data, and modalities.
 
     Returns:
-        (updated_query_text, updated_data, updated_modalities, query_variants)
+        (updated_query_text, updated_data, updated_modalities, query_variants, recalled_content)
     """
     query_variants: list[str] = []
+    recalled_content: list[str] = []
 
     if not (analysis_result and analysis_result.success):
-        return query_text, data, modalities, query_variants
+        return query_text, data, modalities, query_variants, recalled_content
 
-    # Use detected modalities if any
+    # Log detected modalities but don't restrict - content may exist in multiple modalities
+    # (e.g., "the sequences" is both forum posts AND a book compilation)
     if analysis_result.modalities:
-        modalities = analysis_result.modalities
-        logger.debug(f"Query analysis modalities: {modalities}")
+        logger.debug(f"Query analysis detected modalities: {analysis_result.modalities}")
 
     # Use cleaned query
     if analysis_result.cleaned_query and analysis_result.cleaned_query != query_text:
@@ -282,19 +295,25 @@ def _apply_query_analysis(
     # Collect query variants
     query_variants.extend(analysis_result.query_variants)
 
-    return query_text, data, modalities, query_variants
+    # Collect recalled content (titles/essays the LLM remembers)
+    recalled_content.extend(analysis_result.recalled_content)
+    if recalled_content:
+        logger.debug(f"Query analysis recalled: {recalled_content}")
+
+    return query_text, data, modalities, query_variants, recalled_content
 
 
 def _build_search_data(
     data: list[extract.DataChunk],
     hyde_doc: str | None,
     query_variants: list[str],
+    recalled_content: list[str],
     query_text: str,
 ) -> list[extract.DataChunk]:
     """
     Build the list of data chunks to search with.
 
-    Includes original query, HyDE expansion, and query variants.
+    Includes original query, HyDE expansion, query variants, and recalled content.
     """
     search_data = list(data)
 
@@ -307,7 +326,65 @@ def _build_search_data(
     for variant in query_variants[:3]:
         search_data.append(extract.DataChunk(data=[variant]))
 
+    # Add recalled content (titles/essays the LLM remembers that match the query)
+    for title in recalled_content[:3]:
+        search_data.append(extract.DataChunk(data=[title]))
+
     return search_data
+
+
+def _fetch_chunks_by_title(
+    titles: list[str],
+    modalities: set[str],
+    limit_per_title: int = 5,
+) -> dict[str, float]:
+    """
+    Fetch chunks from sources whose titles match the given titles.
+
+    This ensures recalled content from LLM makes it into the candidate pool
+    even if BM25/embedding search doesn't rank it highly.
+    """
+    if not titles or not modalities:
+        return {}
+
+    # Normalize titles for matching
+    titles_lower = [t.lower() for t in titles[:5]]
+
+    with make_session() as db:
+        # Query sources in requested modalities
+        # We need to fetch the polymorphic models to get their title attributes
+        sources = (
+            db.query(SourceItem)
+            .filter(SourceItem.modality.in_(modalities))
+            .limit(500)  # Reasonable limit for title scanning
+            .all()
+        )
+
+        # Filter sources whose titles match any of the recalled titles
+        matching_source_ids = []
+        for source in sources:
+            title = getattr(source, "title", None)
+            if title:
+                title_lower = title.lower()
+                for recalled in titles_lower:
+                    if recalled in title_lower or title_lower in recalled:
+                        matching_source_ids.append(source.id)
+                        break
+
+        if not matching_source_ids:
+            return {}
+
+        # Fetch chunks for matching sources
+        chunks = (
+            db.query(Chunk.id)
+            .filter(Chunk.source_id.in_(matching_source_ids[:limit_per_title * len(titles)]))
+            .limit(limit_per_title * len(matching_source_ids))
+            .all()
+        )
+
+        # Give these chunks a baseline score so they're included in fusion
+        # The actual boost will be applied later by apply_source_boosts
+        return {str(c.id): 0.5 for c in chunks}
 
 
 async def _run_searches(
@@ -318,6 +395,7 @@ async def _run_searches(
     filters: SearchFilters,
     timeout: int,
     use_bm25: bool,
+    recalled_titles: list[str] | None = None,
 ) -> dict[str, float]:
     """
     Run embedding and optionally BM25 searches in parallel, returning fused scores.
@@ -329,9 +407,10 @@ async def _run_searches(
 
     if use_bm25:
         # Run both searches in parallel
+        # Note: BM25 uses search_data to include query variants and recalled content
         results = await asyncio.gather(
             embedding_task,
-            search_bm25_chunks(data, modalities, internal_limit, filters, timeout),
+            search_bm25_chunks(search_data, modalities, internal_limit, filters, timeout),
             return_exceptions=True,
         )
 
@@ -347,7 +426,17 @@ async def _run_searches(
         bm25_scores = {}
 
     # Fuse scores from both methods using Reciprocal Rank Fusion
-    return fuse_scores_rrf(embedding_scores, bm25_scores)
+    fused = fuse_scores_rrf(embedding_scores, bm25_scores)
+
+    # Add chunks from recalled titles (direct title match)
+    # This ensures LLM-recalled content makes it into the candidate pool
+    if recalled_titles:
+        title_chunks = _fetch_chunks_by_title(recalled_titles, modalities)
+        for chunk_id, score in title_chunks.items():
+            if chunk_id not in fused:
+                fused[chunk_id] = score
+
+    return fused
 
 
 def _fetch_chunks(
@@ -391,6 +480,7 @@ def _fetch_chunks(
 def _apply_boosts(
     chunks: list[Chunk],
     data: list[extract.DataChunk],
+    recalled_content: list[str] | None = None,
 ) -> None:
     """
     Apply query term, title, popularity, and recency boosts to chunks.
@@ -407,10 +497,10 @@ def _apply_boosts(
         query_terms = extract_query_terms(query_text)
         apply_query_term_boost(chunks, query_terms)
         # Apply title + popularity boosts (single DB query)
-        apply_source_boosts(chunks, query_terms)
+        apply_source_boosts(chunks, query_terms, recalled_content)
     else:
-        # No query terms, just apply popularity boost
-        apply_source_boosts(chunks, set())
+        # No query terms, just apply popularity and recalled title boosts
+        apply_source_boosts(chunks, set(), recalled_content)
 
 
 async def _apply_reranking(
@@ -486,23 +576,24 @@ async def search_chunks(
     )
 
     # Apply query analysis results
-    query_text, data, modalities, query_variants = _apply_query_analysis(
+    query_text, data, modalities, query_variants, recalled_content = _apply_query_analysis(
         analysis_result, query_text, data, modalities
     )
 
-    # Build search data with HyDE and variants
-    search_data = _build_search_data(data, hyde_doc, query_variants, query_text)
+    # Build search data with HyDE, variants, and recalled content
+    search_data = _build_search_data(data, hyde_doc, query_variants, recalled_content, query_text)
 
     # Run searches and fuse scores
     fused_scores = await _run_searches(
-        search_data, data, modalities, internal_limit, filters, timeout, use_bm25
+        search_data, data, modalities, internal_limit, filters, timeout, use_bm25,
+        recalled_titles=recalled_content,
     )
 
     # Fetch chunks from database
     chunks = _fetch_chunks(fused_scores, limit, use_reranking)
 
-    # Apply various boosts
-    _apply_boosts(chunks, data)
+    # Apply various boosts including recalled content title matching
+    _apply_boosts(chunks, data, recalled_content)
 
     # Apply reranking if enabled
     chunks = await _apply_reranking(chunks, query_text, limit, use_reranking)

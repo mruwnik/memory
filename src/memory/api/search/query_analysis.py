@@ -6,6 +6,7 @@ Uses a fast LLM (Haiku) to analyze natural language queries and extract:
 - Source hints: author names, domains, or specific sources
 - Cleaned query: the actual search terms with meta-language removed
 - Query variants: alternative phrasings to search
+- Recalled content: specific titles/essays the LLM recalls that match the query
 
 This runs in parallel with HyDE for maximum efficiency.
 """
@@ -206,13 +207,16 @@ def _build_prompt() -> str:
           "modalities": [],  // From: {modality_names} (empty = search all)
           "sources": [],  // Specific sources/authors mentioned
           "cleaned_query": "",  // Query with meta-language removed
-          "query_variants": []  // 1-3 alternative phrasings
+          "query_variants": [],  // 1-3 alternative phrasings
+          "recalled_content": []  // Specific titles/essays/concepts you recall that match
         }}
 
         Guidelines:
-        - "on lesswrong" -> forum, "comic about" -> comic, etc.
-        - Remove "there was something about", "I remember reading", etc.
-        - Generate useful query variants
+        - Only restrict modalities when VERY confident about content type
+        - When unsure, return empty modalities to search all
+        - Remove meta-language like "there was something about", "I remember reading"
+        - For recalled_content: if you recognize the topic, suggest specific titles/essays
+          that might be relevant (e.g., "predetermined conclusions" -> "The Bottom Line")
 
         Return ONLY valid JSON.
     """)
@@ -232,6 +236,7 @@ class QueryAnalysis:
     sources: list[str] = field(default_factory=list)
     cleaned_query: str = ""
     query_variants: list[str] = field(default_factory=list)
+    recalled_content: list[str] = field(default_factory=list)  # Titles/essays LLM recalls
     success: bool = False
 
 
@@ -300,12 +305,14 @@ async def analyze_query(
                 result.sources = data.get("sources", [])
                 result.cleaned_query = data.get("cleaned_query", query)
                 result.query_variants = data.get("query_variants", [])
+                result.recalled_content = data.get("recalled_content", [])
                 result.success = True
 
                 logger.debug(
                     f"Query analysis: '{query[:40]}...' -> "
                     f"modalities={result.modalities}, "
-                    f"cleaned='{result.cleaned_query[:30]}...'"
+                    f"cleaned='{result.cleaned_query[:30]}...', "
+                    f"recalled={result.recalled_content}"
                 )
 
             except json.JSONDecodeError as e:

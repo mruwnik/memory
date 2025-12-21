@@ -170,11 +170,41 @@ async def search_bm25_chunks(
     """
     Search chunks using PostgreSQL full-text search.
 
+    Runs separate searches for each data chunk and merges results,
+    similar to how embedding search handles multiple query variants.
+
     Returns:
     - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
     """
-    query = " ".join([c for chunk in data for c in chunk.data if isinstance(c, str)])
-    return await asyncio.wait_for(
-        search_bm25(query, modalities, limit, filters),
-        timeout,
-    )
+    # Extract query strings from each data chunk
+    queries = [
+        " ".join(c for c in chunk.data if isinstance(c, str))
+        for chunk in data
+    ]
+    queries = [q.strip() for q in queries if q.strip()]
+
+    if not queries:
+        return {}
+
+    # Run separate searches for each query in parallel
+    async def run_search(query: str) -> dict[str, float]:
+        return await search_bm25(query, modalities, limit, filters)
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*[run_search(q) for q in queries], return_exceptions=True),
+            timeout,
+        )
+    except asyncio.TimeoutError:
+        return {}
+
+    # Merge results - take max score for each chunk across all queries
+    merged: dict[str, float] = {}
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        for chunk_id, score in result.items():
+            if chunk_id not in merged or score > merged[chunk_id]:
+                merged[chunk_id] = score
+
+    return merged

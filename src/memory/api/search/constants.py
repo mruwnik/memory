@@ -22,6 +22,11 @@ QUERY_TERM_BOOST = 0.005
 # Bonus when query terms match the source title (stronger signal)
 TITLE_MATCH_BOOST = 0.01
 
+# Bonus when source title matches LLM-recalled content exactly
+# This is larger than regular title boost because it's a strong signal
+# that the user is looking for specific known content
+RECALLED_TITLE_BOOST = 0.05
+
 # Bonus multiplier for popularity (applied as: score * (1 + POPULARITY_BOOST * (popularity - 1)))
 # This gives a small boost to popular items without dominating relevance
 POPULARITY_BOOST = 0.02
