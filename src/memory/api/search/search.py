@@ -4,7 +4,10 @@ Search endpoints for the knowledge base API.
 
 import asyncio
 import logging
+import math
+import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import load_only
 from memory.common import extract, settings
@@ -50,6 +53,76 @@ TITLE_MATCH_BOOST = 0.01
 # Bonus multiplier for popularity (applied as: score * (1 + POPULARITY_BOOST * (popularity - 1)))
 # This gives a small boost to popular items without dominating relevance
 POPULARITY_BOOST = 0.02
+
+# Recency boost settings
+# Maximum bonus for brand new content (additive)
+RECENCY_BOOST_MAX = 0.005
+# Half-life in days: content loses half its recency boost every N days
+RECENCY_HALF_LIFE_DAYS = 90
+
+# Query expansion: map abbreviations/acronyms to full forms
+# These help match when users search for "ML" but documents say "machine learning"
+QUERY_EXPANSIONS: dict[str, list[str]] = {
+    # AI/ML abbreviations
+    "ai": ["artificial intelligence"],
+    "ml": ["machine learning"],
+    "dl": ["deep learning"],
+    "nlp": ["natural language processing"],
+    "cv": ["computer vision"],
+    "rl": ["reinforcement learning"],
+    "llm": ["large language model", "language model"],
+    "gpt": ["generative pretrained transformer", "language model"],
+    "nn": ["neural network"],
+    "cnn": ["convolutional neural network"],
+    "rnn": ["recurrent neural network"],
+    "lstm": ["long short term memory"],
+    "gan": ["generative adversarial network"],
+    "rag": ["retrieval augmented generation"],
+    # Rationality/EA terms
+    "ea": ["effective altruism"],
+    "lw": ["lesswrong", "less wrong"],
+    "gwwc": ["giving what we can"],
+    "agi": ["artificial general intelligence"],
+    "asi": ["artificial superintelligence"],
+    "fai": ["friendly ai", "ai alignment"],
+    "x-risk": ["existential risk"],
+    "xrisk": ["existential risk"],
+    "p(doom)": ["probability of doom", "ai risk"],
+    # Reverse mappings (full forms -> abbreviations)
+    "artificial intelligence": ["ai"],
+    "machine learning": ["ml"],
+    "deep learning": ["dl"],
+    "natural language processing": ["nlp"],
+    "computer vision": ["cv"],
+    "reinforcement learning": ["rl"],
+    "neural network": ["nn"],
+    "effective altruism": ["ea"],
+    "existential risk": ["x-risk", "xrisk"],
+}
+
+
+def expand_query(query: str) -> str:
+    """
+    Expand query with synonyms and abbreviations.
+
+    This helps match documents that use different terminology for the same concept.
+    For example, "ML algorithms" -> "ML machine learning algorithms"
+    """
+    query_lower = query.lower()
+    expansions = []
+
+    for term, synonyms in QUERY_EXPANSIONS.items():
+        # Check if term appears as a whole word in the query
+        # Use word boundaries to avoid matching partial words
+        pattern = r'\b' + re.escape(term) + r'\b'
+        if re.search(pattern, query_lower):
+            expansions.extend(synonyms)
+
+    if expansions:
+        # Add expansions to the original query
+        return query + " " + " ".join(expansions)
+    return query
+
 
 # Common words to ignore when checking for query term presence
 STOPWORDS = {
@@ -116,66 +189,78 @@ def deduplicate_by_source(chunks: list[Chunk]) -> list[Chunk]:
     return list(best_by_source.values())
 
 
-def apply_title_boost(
+def apply_source_boosts(
     chunks: list[Chunk],
     query_terms: set[str],
 ) -> None:
     """
-    Boost chunks when query terms match the source title.
+    Apply title, popularity, and recency boosts to chunks in a single DB query.
 
-    Title matches are a strong signal since titles summarize content.
-    """
-    if not query_terms or not chunks:
-        return
-
-    # Get unique source IDs
-    source_ids = list({chunk.source_id for chunk in chunks})
-
-    # Fetch full source items (polymorphic) to access title attribute
-    with make_session() as db:
-        sources = db.query(SourceItem).filter(
-            SourceItem.id.in_(source_ids)
-        ).all()
-        titles = {s.id: (getattr(s, 'title', None) or "").lower() for s in sources}
-
-    # Apply boost to chunks whose source title matches query terms
-    for chunk in chunks:
-        title = titles.get(chunk.source_id, "")
-        if not title:
-            continue
-
-        matches = sum(1 for term in query_terms if term in title)
-        if matches > 0:
-            boost = TITLE_MATCH_BOOST * (matches / len(query_terms))
-            chunk.relevance_score = (chunk.relevance_score or 0) + boost
-
-
-def apply_popularity_boost(chunks: list[Chunk]) -> None:
-    """
-    Boost chunks based on source popularity.
-
-    Uses the popularity property from SourceItem subclasses.
-    ForumPost uses karma, others default to 1.0.
+    - Title boost: chunks get boosted when query terms appear in source title
+    - Popularity boost: chunks get boosted based on source karma/popularity
+    - Recency boost: newer content gets a small boost that decays over time
     """
     if not chunks:
         return
 
     source_ids = list({chunk.source_id for chunk in chunks})
+    now = datetime.now(timezone.utc)
 
+    # Single query to fetch all source metadata
     with make_session() as db:
         sources = db.query(SourceItem).filter(
             SourceItem.id.in_(source_ids)
         ).all()
-        popularity_map = {s.id: s.popularity for s in sources}
+        source_map = {
+            s.id: {
+                "title": (getattr(s, "title", None) or "").lower(),
+                "popularity": s.popularity,
+                "inserted_at": s.inserted_at,
+            }
+            for s in sources
+        }
 
     for chunk in chunks:
-        popularity = popularity_map.get(chunk.source_id, 1.0)
+        source_data = source_map.get(chunk.source_id, {})
+        score = chunk.relevance_score or 0
+
+        # Apply title boost if query terms match
+        if query_terms:
+            title = source_data.get("title", "")
+            if title:
+                matches = sum(1 for term in query_terms if term in title)
+                if matches > 0:
+                    score += TITLE_MATCH_BOOST * (matches / len(query_terms))
+
+        # Apply popularity boost
+        popularity = source_data.get("popularity", 1.0)
         if popularity != 1.0:
-            # Apply boost: score * (1 + POPULARITY_BOOST * (popularity - 1))
-            # For popularity=2.0: multiplier = 1.02
-            # For popularity=0.5: multiplier = 0.99
             multiplier = 1.0 + POPULARITY_BOOST * (popularity - 1.0)
-            chunk.relevance_score = (chunk.relevance_score or 0) * multiplier
+            score *= multiplier
+
+        # Apply recency boost (exponential decay with half-life)
+        inserted_at = source_data.get("inserted_at")
+        if inserted_at:
+            # Handle timezone-naive timestamps
+            if inserted_at.tzinfo is None:
+                inserted_at = inserted_at.replace(tzinfo=timezone.utc)
+            age_days = (now - inserted_at).total_seconds() / 86400
+            # Exponential decay: boost = max_boost * 0.5^(age/half_life)
+            decay = math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
+            score += RECENCY_BOOST_MAX * decay
+
+        chunk.relevance_score = score
+
+
+# Keep legacy functions for backwards compatibility and testing
+def apply_title_boost(chunks: list[Chunk], query_terms: set[str]) -> None:
+    """Legacy function - use apply_source_boosts instead."""
+    apply_source_boosts(chunks, query_terms)
+
+
+def apply_popularity_boost(chunks: list[Chunk]) -> None:
+    """Legacy function - use apply_source_boosts instead."""
+    apply_source_boosts(chunks, set())
 
 
 def fuse_scores_rrf(
@@ -242,12 +327,21 @@ async def search_chunks(
     # This helps find results that rank well in one method but not the other
     internal_limit = limit * CANDIDATE_MULTIPLIER
 
-    # Extract query text for HyDE expansion
-    search_data = list(data)  # Copy to avoid modifying original
+    # Extract query text and apply synonym/abbreviation expansion
+    query_text = " ".join(
+        c for chunk in data for c in chunk.data if isinstance(c, str)
+    )
+    expanded_query = expand_query(query_text)
+
+    # If query was expanded, use expanded version for search
+    if expanded_query != query_text:
+        logger.debug(f"Query expansion: '{query_text}' -> '{expanded_query}'")
+        search_data = [extract.DataChunk(data=[expanded_query])]
+    else:
+        search_data = list(data)  # Copy to avoid modifying original
+
+    # Apply HyDE expansion if enabled
     if settings.ENABLE_HYDE_EXPANSION:
-        query_text = " ".join(
-            c for chunk in data for c in chunk.data if isinstance(c, str)
-        )
         # Only expand queries with 4+ words (short queries are usually specific enough)
         if len(query_text.split()) >= 4:
             try:
@@ -316,15 +410,15 @@ async def search_chunks(
         c for chunk in data for c in chunk.data if isinstance(c, str)
     )
 
-    # Apply query term presence boost and title boost
+    # Apply query term presence boost
     if chunks and query_text.strip():
         query_terms = extract_query_terms(query_text)
         apply_query_term_boost(chunks, query_terms)
-        apply_title_boost(chunks, query_terms)
-
-    # Apply popularity boost (karma-based for forum posts)
-    if chunks:
-        apply_popularity_boost(chunks)
+        # Apply title + popularity boosts (single DB query)
+        apply_source_boosts(chunks, query_terms)
+    elif chunks:
+        # No query terms, just apply popularity boost
+        apply_source_boosts(chunks, set())
 
     # Rerank using cross-encoder for better precision
     if settings.ENABLE_RERANKING and chunks and query_text.strip():

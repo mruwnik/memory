@@ -6,17 +6,23 @@ title boosting, and source deduplication.
 import pytest
 from unittest.mock import MagicMock, patch
 
+from datetime import datetime, timedelta, timezone
+
 from memory.api.search.search import (
     extract_query_terms,
     apply_query_term_boost,
     deduplicate_by_source,
     apply_title_boost,
     apply_popularity_boost,
+    apply_source_boosts,
+    expand_query,
     fuse_scores_rrf,
     STOPWORDS,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
     POPULARITY_BOOST,
+    RECENCY_BOOST_MAX,
+    RECENCY_HALF_LIFE_DAYS,
     RRF_K,
 )
 
@@ -239,6 +245,8 @@ def test_apply_title_boost(mock_make_session, title, query_terms, initial_score,
     mock_source = MagicMock()
     mock_source.id = 1
     mock_source.title = title
+    mock_source.popularity = 1.0  # Default popularity, no boost
+    mock_source.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
     chunks = [_make_title_chunk(1, initial_score)]
@@ -268,6 +276,8 @@ def test_apply_title_boost_none_title(mock_make_session):
     mock_source = MagicMock()
     mock_source.id = 1
     mock_source.title = None
+    mock_source.popularity = 1.0  # Default popularity, no boost
+    mock_source.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
     chunks = [_make_title_chunk(1, 0.5)]
@@ -307,6 +317,7 @@ def test_apply_popularity_boost(mock_make_session, popularity, initial_score, ex
     mock_source = MagicMock()
     mock_source.id = 1
     mock_source.popularity = popularity
+    mock_source.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
     chunks = [_make_pop_chunk(1, initial_score)]
@@ -331,9 +342,11 @@ def test_apply_popularity_boost_multiple_sources(mock_make_session):
     source1 = MagicMock()
     source1.id = 1
     source1.popularity = 2.0  # High karma
+    source1.inserted_at = None  # No recency boost
     source2 = MagicMock()
     source2.id = 2
     source2.popularity = 1.0  # Default
+    source2.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [source1, source2]
 
     chunks = [_make_pop_chunk(1, 0.5), _make_pop_chunk(2, 0.5)]
@@ -423,3 +436,233 @@ def test_fuse_scores_rrf_only_ranks_matter():
     assert result1["a"] == pytest.approx(result2["a"])
     assert result1["b"] == pytest.approx(result2["b"])
     assert result1["c"] == pytest.approx(result2["c"])
+
+
+# ============================================================================
+# apply_source_boosts recency tests
+# ============================================================================
+
+
+def _make_recency_chunk(source_id: int, score: float = 0.5):
+    """Create a mock chunk for recency boost tests."""
+    chunk = MagicMock()
+    chunk.source_id = source_id
+    chunk.relevance_score = score
+    return chunk
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_new_content(mock_make_session):
+    """Brand new content should get full recency boost."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    now = datetime.now(timezone.utc)
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = None
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = now  # Just inserted
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_recency_chunk(1, 0.5)]
+    apply_source_boosts(chunks, set())
+
+    # Should get nearly full recency boost
+    expected = 0.5 + RECENCY_BOOST_MAX
+    assert chunks[0].relevance_score == pytest.approx(expected, rel=0.01)
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_half_life_decay(mock_make_session):
+    """Content at half-life age should get half the boost."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    now = datetime.now(timezone.utc)
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = None
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = now - timedelta(days=RECENCY_HALF_LIFE_DAYS)
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_recency_chunk(1, 0.5)]
+    apply_source_boosts(chunks, set())
+
+    # Should get half the recency boost
+    expected = 0.5 + RECENCY_BOOST_MAX * 0.5
+    assert chunks[0].relevance_score == pytest.approx(expected, rel=0.01)
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_old_content(mock_make_session):
+    """Very old content should get minimal recency boost."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    now = datetime.now(timezone.utc)
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = None
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = now - timedelta(days=365)  # 1 year old
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_recency_chunk(1, 0.5)]
+    apply_source_boosts(chunks, set())
+
+    # Should get very little boost (about 0.5^4 ≈ 0.0625 of max)
+    assert chunks[0].relevance_score > 0.5
+    assert chunks[0].relevance_score < 0.5 + RECENCY_BOOST_MAX * 0.1
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_none_timestamp(mock_make_session):
+    """Should handle None inserted_at gracefully."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = None
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = None
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_recency_chunk(1, 0.5)]
+    apply_source_boosts(chunks, set())
+
+    # No recency boost applied
+    assert chunks[0].relevance_score == 0.5
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_timezone_naive(mock_make_session):
+    """Should handle timezone-naive timestamps."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    # Timezone-naive timestamp
+    naive_dt = datetime.now().replace(tzinfo=None)
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = None
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = naive_dt
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_recency_chunk(1, 0.5)]
+    apply_source_boosts(chunks, set())  # Should not raise
+
+    # Should get nearly full boost since it's very recent
+    assert chunks[0].relevance_score > 0.5
+
+
+@patch("memory.api.search.search.make_session")
+def test_recency_boost_ordering(mock_make_session):
+    """Newer content should rank higher than older content."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    now = datetime.now(timezone.utc)
+    source_new = MagicMock()
+    source_new.id = 1
+    source_new.title = None
+    source_new.popularity = 1.0
+    source_new.inserted_at = now - timedelta(days=1)
+
+    source_old = MagicMock()
+    source_old.id = 2
+    source_old.title = None
+    source_old.popularity = 1.0
+    source_old.inserted_at = now - timedelta(days=180)
+
+    mock_session.query.return_value.filter.return_value.all.return_value = [source_new, source_old]
+
+    chunks = [_make_recency_chunk(1, 0.5), _make_recency_chunk(2, 0.5)]
+    apply_source_boosts(chunks, set())
+
+    # Newer content should have higher score
+    assert chunks[0].relevance_score > chunks[1].relevance_score
+
+
+# ============================================================================
+# expand_query tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "query,expected_expansion",
+    [
+        # AI/ML abbreviations
+        ("ML algorithms", "artificial intelligence"),  # Not "ML" -> won't have AI
+        ("AI safety research", "artificial intelligence"),
+        ("NLP models for text", "natural language processing"),
+        ("deep learning vs DL", "deep learning"),
+        # Rationality/EA terms
+        ("EA organizations", "effective altruism"),
+        ("AGI timeline predictions", "artificial general intelligence"),
+        ("x-risk reduction", "existential risk"),
+        # Reverse mappings
+        ("machine learning basics", "ml"),
+        ("artificial intelligence ethics", "ai"),
+    ],
+)
+def test_expand_query_adds_synonyms(query, expected_expansion):
+    """Should expand abbreviations and add synonyms."""
+    result = expand_query(query)
+    assert expected_expansion in result.lower()
+    assert query in result  # Original query preserved
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "hello world",  # No expansions
+        "python programming",  # No expansions
+        "database optimization",  # No expansions
+    ],
+)
+def test_expand_query_no_match(query):
+    """Should return original query when no expansions match."""
+    result = expand_query(query)
+    assert result == query
+
+
+def test_expand_query_case_insensitive():
+    """Should match terms regardless of case."""
+    assert "artificial intelligence" in expand_query("AI research").lower()
+    assert "artificial intelligence" in expand_query("ai research").lower()
+    assert "artificial intelligence" in expand_query("Ai Research").lower()
+
+
+def test_expand_query_word_boundaries():
+    """Should only match whole words, not partial matches."""
+    # "mail" contains "ai" but shouldn't trigger expansion
+    result = expand_query("email server")
+    assert result == "email server"
+
+    # "claim" contains "ai" but shouldn't trigger expansion
+    result = expand_query("insurance claim")
+    assert result == "insurance claim"
+
+
+def test_expand_query_multiple_terms():
+    """Should expand multiple matching terms."""
+    result = expand_query("AI and ML applications")
+    assert "artificial intelligence" in result.lower()
+    assert "machine learning" in result.lower()
+
+
+def test_expand_query_preserves_original():
+    """Should preserve original query text."""
+    original = "AI safety research"
+    result = expand_query(original)
+    assert result.startswith(original)
