@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 def extract_query_terms(query: str) -> set[str]:
     """Extract meaningful terms from query, filtering stopwords."""
     words = query.lower().split()
-    return {w for w in words if w not in STOPWORDS and len(w) > 2}
+    return {w for w in words if w not in STOPWORDS and len(w) >= 2}
 
 
 def apply_query_term_boost(
@@ -150,17 +150,6 @@ def apply_source_boosts(
             score += RECENCY_BOOST_MAX * decay
 
         chunk.relevance_score = score
-
-
-# Keep legacy functions for backwards compatibility and testing
-def apply_title_boost(chunks: list[Chunk], query_terms: set[str]) -> None:
-    """Legacy function - use apply_source_boosts instead."""
-    apply_source_boosts(chunks, query_terms)
-
-
-def apply_popularity_boost(chunks: list[Chunk]) -> None:
-    """Legacy function - use apply_source_boosts instead."""
-    apply_source_boosts(chunks, set())
 
 
 def fuse_scores_rrf(
@@ -561,7 +550,7 @@ async def search(
         config.timeout,
         config,
     )
-    if settings.ENABLE_SEARCH_SCORING and config.useScores:
+    if settings.ENABLE_SEARCH_SCORING and config.useScores and data and data[0].data:
         chunks = await scorer.rank_chunks(data[0].data[0], chunks, min_score=0.3)
 
     sources = await search_sources(chunks, config.previews)

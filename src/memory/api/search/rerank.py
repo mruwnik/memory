@@ -51,9 +51,10 @@ async def rerank_chunks(
 
     # Extract text content from chunks
     documents = []
-    chunk_map = {}  # Map index to chunk
+    chunk_map = {}  # Map document index to chunk
+    no_content_chunks = []  # Chunks without content (can't be reranked)
 
-    for i, chunk in enumerate(chunks):
+    for chunk in chunks:
         content = chunk.content or ""
         if not content and hasattr(chunk, "data"):
             try:
@@ -65,6 +66,9 @@ async def rerank_chunks(
         if content:
             documents.append(content[:8000])  # VoyageAI has length limits
             chunk_map[len(documents) - 1] = chunk
+        else:
+            # Track chunks with no content - they'll be appended at the end
+            no_content_chunks.append(chunk)
 
     if not documents:
         return chunks
@@ -87,6 +91,8 @@ async def rerank_chunks(
                 chunk.relevance_score = item.relevance_score
                 reranked.append(chunk)
 
+        # Append chunks without content at the end (they couldn't be reranked)
+        reranked.extend(no_content_chunks)
         return reranked
 
     except Exception as e:
