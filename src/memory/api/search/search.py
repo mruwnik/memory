@@ -101,7 +101,90 @@ QUERY_EXPANSIONS: dict[str, list[str]] = {
     "neural network": ["nn"],
     "effective altruism": ["ea"],
     "existential risk": ["x-risk", "xrisk"],
+    # Family relationships (bidirectional)
+    "father": ["son", "daughter", "child", "parent", "dad"],
+    "mother": ["son", "daughter", "child", "parent", "mom"],
+    "parent": ["child", "son", "daughter", "father", "mother"],
+    "son": ["father", "parent", "child"],
+    "daughter": ["mother", "parent", "child"],
+    "child": ["parent", "father", "mother"],
+    "dad": ["father", "son", "daughter", "child"],
+    "mom": ["mother", "son", "daughter", "child"],
 }
+
+# Modality detection patterns: map query phrases to collection names
+# Each entry is (pattern, modalities, strip_pattern)
+# - pattern: regex to match in query
+# - modalities: set of collection names to filter to
+# - strip_pattern: whether to remove the matched text from query
+MODALITY_PATTERNS: list[tuple[str, set[str], bool]] = [
+    # Comics
+    (r"\b(comic|comics|webcomic|webcomics)\b", {"comic"}, True),
+    # Forum posts (LessWrong, EA Forum, etc.)
+    (r"\b(on\s+)?(lesswrong|lw|less\s+wrong)\b", {"forum"}, True),
+    (r"\b(on\s+)?(ea\s+forum|effective\s+altruism\s+forum)\b", {"forum"}, True),
+    (r"\b(on\s+)?(alignment\s+forum|af)\b", {"forum"}, True),
+    (r"\b(forum\s+post|lw\s+post|post\s+on)\b", {"forum"}, True),
+    # Books
+    (r"\b(in\s+a\s+book|in\s+the\s+book|book|chapter)\b", {"book"}, True),
+    # Blog posts / articles
+    (r"\b(blog\s+post|blog|article)\b", {"blog"}, True),
+    # Email
+    (r"\b(email|e-mail|mail)\b", {"mail"}, True),
+    # Photos / images
+    (r"\b(photo|photograph|picture|image)\b", {"photo"}, True),
+    # Documents
+    (r"\b(document|pdf|doc)\b", {"doc"}, True),
+    # Chat / messages
+    (r"\b(chat|message|discord|slack)\b", {"chat"}, True),
+    # Git
+    (r"\b(commit|git|pull\s+request|pr)\b", {"git"}, True),
+]
+
+# Meta-language patterns to strip (these don't indicate modality, just noise)
+META_LANGUAGE_PATTERNS: list[str] = [
+    r"\bthere\s+was\s+(something|some|some\s+\w+|an?\s+\w+)\s+(about|on)\b",
+    r"\bi\s+remember\s+(reading|seeing|there\s+being)\s*(an?\s+)?",
+    r"\bi\s+(read|saw|found)\s+(something|an?\s+\w+)\s+about\b",
+    r"\bsomething\s+about\b",
+    r"\bsome\s+about\b",
+    r"\bthis\s+whole\s+\w+\s+thing\b",
+    r"\bthat\s+\w+\s+thing\b",
+    r"\bthat\s+about\b",  # Clean up leftover "that about"
+    r"\ba\s+about\b",  # Clean up leftover "a about"
+    r"\bthe\s+about\b",  # Clean up leftover "the about"
+    r"\bthere\s+was\s+some\s+about\b",  # Clean up leftover
+]
+
+
+def detect_modality_hints(query: str) -> tuple[str, set[str]]:
+    """
+    Detect content type hints in query and extract modalities.
+
+    Returns:
+        (cleaned_query, detected_modalities)
+        - cleaned_query: query with modality indicators and meta-language removed
+        - detected_modalities: set of collection names detected from query
+    """
+    query_lower = query.lower()
+    detected: set[str] = set()
+    cleaned = query
+
+    # First, detect and strip modality patterns
+    for pattern, modalities, strip in MODALITY_PATTERNS:
+        if re.search(pattern, query_lower, re.IGNORECASE):
+            detected.update(modalities)
+            if strip:
+                cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+    # Strip meta-language patterns (regardless of modality detection)
+    for pattern in META_LANGUAGE_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+    # Clean up whitespace
+    cleaned = " ".join(cleaned.split())
+
+    return cleaned, detected
 
 
 def expand_query(query: str) -> str:
@@ -332,21 +415,36 @@ async def search_chunks(
     - useHyde: Enable HyDE query expansion
     - useReranking: Enable cross-encoder reranking
     - useQueryExpansion: Enable synonym/abbreviation expansion
+    - useModalityDetection: Detect content type hints from query
     """
     # Resolve enhancement flags: config overrides global settings
     use_bm25 = config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
     use_hyde = config.useHyde if config.useHyde is not None else settings.ENABLE_HYDE_EXPANSION
     use_reranking = config.useReranking if config.useReranking is not None else settings.ENABLE_RERANKING
     use_query_expansion = config.useQueryExpansion if config.useQueryExpansion is not None else True
+    use_modality_detection = config.useModalityDetection if config.useModalityDetection is not None else False
 
     # Search for more candidates than requested, fuse scores, then return top N
     # This helps find results that rank well in one method but not the other
     internal_limit = limit * CANDIDATE_MULTIPLIER
 
-    # Extract query text and apply synonym/abbreviation expansion
+    # Extract query text
     query_text = " ".join(
         c for chunk in data for c in chunk.data if isinstance(c, str)
     )
+
+    # Detect modality hints and clean query if enabled
+    if use_modality_detection:
+        cleaned_query, detected_modalities = detect_modality_hints(query_text)
+        if detected_modalities:
+            # Override passed modalities with detected ones
+            modalities = detected_modalities
+            logger.debug(f"Modality detection: '{query_text[:50]}...' -> modalities={detected_modalities}")
+        if cleaned_query != query_text:
+            logger.debug(f"Query cleaning: '{query_text[:50]}...' -> '{cleaned_query[:50]}...'")
+            query_text = cleaned_query
+            # Update data with cleaned query for downstream processing
+            data = [extract.DataChunk(data=[cleaned_query])]
 
     if use_query_expansion:
         expanded_query = expand_query(query_text)
