@@ -15,8 +15,9 @@ from memory.api.search.search import (
     apply_title_boost,
     apply_popularity_boost,
     apply_source_boosts,
-    expand_query,
     fuse_scores_rrf,
+)
+from memory.api.search.constants import (
     STOPWORDS,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
@@ -591,78 +592,3 @@ def test_recency_boost_ordering(mock_make_session):
 
     # Newer content should have higher score
     assert chunks[0].relevance_score > chunks[1].relevance_score
-
-
-# ============================================================================
-# expand_query tests
-# ============================================================================
-
-
-@pytest.mark.parametrize(
-    "query,expected_expansion",
-    [
-        # AI/ML abbreviations
-        ("ML algorithms", "artificial intelligence"),  # Not "ML" -> won't have AI
-        ("AI safety research", "artificial intelligence"),
-        ("NLP models for text", "natural language processing"),
-        ("deep learning vs DL", "deep learning"),
-        # Rationality/EA terms
-        ("EA organizations", "effective altruism"),
-        ("AGI timeline predictions", "artificial general intelligence"),
-        ("x-risk reduction", "existential risk"),
-        # Reverse mappings
-        ("machine learning basics", "ml"),
-        ("artificial intelligence ethics", "ai"),
-    ],
-)
-def test_expand_query_adds_synonyms(query, expected_expansion):
-    """Should expand abbreviations and add synonyms."""
-    result = expand_query(query)
-    assert expected_expansion in result.lower()
-    assert query in result  # Original query preserved
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        "hello world",  # No expansions
-        "python programming",  # No expansions
-        "database optimization",  # No expansions
-    ],
-)
-def test_expand_query_no_match(query):
-    """Should return original query when no expansions match."""
-    result = expand_query(query)
-    assert result == query
-
-
-def test_expand_query_case_insensitive():
-    """Should match terms regardless of case."""
-    assert "artificial intelligence" in expand_query("AI research").lower()
-    assert "artificial intelligence" in expand_query("ai research").lower()
-    assert "artificial intelligence" in expand_query("Ai Research").lower()
-
-
-def test_expand_query_word_boundaries():
-    """Should only match whole words, not partial matches."""
-    # "mail" contains "ai" but shouldn't trigger expansion
-    result = expand_query("email server")
-    assert result == "email server"
-
-    # "claim" contains "ai" but shouldn't trigger expansion
-    result = expand_query("insurance claim")
-    assert result == "insurance claim"
-
-
-def test_expand_query_multiple_terms():
-    """Should expand multiple matching terms."""
-    result = expand_query("AI and ML applications")
-    assert "artificial intelligence" in result.lower()
-    assert "machine learning" in result.lower()
-
-
-def test_expand_query_preserves_original():
-    """Should preserve original query text."""
-    original = "AI safety research"
-    result = expand_query(original)
-    assert result.startswith(original)

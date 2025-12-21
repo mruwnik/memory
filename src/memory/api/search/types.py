@@ -87,8 +87,7 @@ class SearchConfig(BaseModel):
     useBm25: Optional[bool] = None
     useHyde: Optional[bool] = None
     useReranking: Optional[bool] = None
-    useQueryExpansion: Optional[bool] = None
-    useModalityDetection: Optional[bool] = None
+    useQueryAnalysis: Optional[bool] = None  # LLM-based query analysis (Haiku)
 
     def model_post_init(self, __context) -> None:
         # Enforce reasonable limits

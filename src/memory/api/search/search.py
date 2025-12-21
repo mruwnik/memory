@@ -5,10 +5,8 @@ Search endpoints for the knowledge base API.
 import asyncio
 import logging
 import math
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Optional
 from sqlalchemy.orm import load_only
 from memory.common import extract, settings
 from memory.common.db.connection import make_session
@@ -16,6 +14,17 @@ from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.embeddings import search_chunks_embeddings
 from memory.api.search import scorer
+from memory.api.search.constants import (
+    RRF_K,
+    CANDIDATE_MULTIPLIER,
+    RERANK_CANDIDATE_MULTIPLIER,
+    QUERY_TERM_BOOST,
+    TITLE_MATCH_BOOST,
+    POPULARITY_BOOST,
+    RECENCY_BOOST_MAX,
+    RECENCY_HALF_LIFE_DAYS,
+    STOPWORDS,
+)
 
 if settings.ENABLE_BM25_SEARCH:
     from memory.api.search.bm25 import search_bm25_chunks
@@ -26,208 +35,13 @@ if settings.ENABLE_HYDE_EXPANSION:
 if settings.ENABLE_RERANKING:
     from memory.api.search.rerank import rerank_chunks
 
+from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
 # Default config for when none is provided
 _DEFAULT_CONFIG = SearchConfig()
 
 logger = logging.getLogger(__name__)
-
-# Reciprocal Rank Fusion constant (k parameter)
-# Higher values reduce the influence of top-ranked documents
-# 60 is the standard value from the original RRF paper
-RRF_K = 60
-
-# Multiplier for internal search limit before fusion
-# We search for more candidates than requested, fuse scores, then return top N
-# This helps find results that rank well in one method but not the other
-CANDIDATE_MULTIPLIER = 5
-
-# How many candidates to pass to reranker (multiplier of final limit)
-# Higher = more accurate but slower and more expensive
-RERANK_CANDIDATE_MULTIPLIER = 3
-
-# Bonus for chunks containing query terms (added to RRF score)
-QUERY_TERM_BOOST = 0.005
-
-# Bonus when query terms match the source title (stronger signal)
-TITLE_MATCH_BOOST = 0.01
-
-# Bonus multiplier for popularity (applied as: score * (1 + POPULARITY_BOOST * (popularity - 1)))
-# This gives a small boost to popular items without dominating relevance
-POPULARITY_BOOST = 0.02
-
-# Recency boost settings
-# Maximum bonus for brand new content (additive)
-RECENCY_BOOST_MAX = 0.005
-# Half-life in days: content loses half its recency boost every N days
-RECENCY_HALF_LIFE_DAYS = 90
-
-# Query expansion: map abbreviations/acronyms to full forms
-# These help match when users search for "ML" but documents say "machine learning"
-QUERY_EXPANSIONS: dict[str, list[str]] = {
-    # AI/ML abbreviations
-    "ai": ["artificial intelligence"],
-    "ml": ["machine learning"],
-    "dl": ["deep learning"],
-    "nlp": ["natural language processing"],
-    "cv": ["computer vision"],
-    "rl": ["reinforcement learning"],
-    "llm": ["large language model", "language model"],
-    "gpt": ["generative pretrained transformer", "language model"],
-    "nn": ["neural network"],
-    "cnn": ["convolutional neural network"],
-    "rnn": ["recurrent neural network"],
-    "lstm": ["long short term memory"],
-    "gan": ["generative adversarial network"],
-    "rag": ["retrieval augmented generation"],
-    # Rationality/EA terms
-    "ea": ["effective altruism"],
-    "lw": ["lesswrong", "less wrong"],
-    "gwwc": ["giving what we can"],
-    "agi": ["artificial general intelligence"],
-    "asi": ["artificial superintelligence"],
-    "fai": ["friendly ai", "ai alignment"],
-    "x-risk": ["existential risk"],
-    "xrisk": ["existential risk"],
-    "p(doom)": ["probability of doom", "ai risk"],
-    # Reverse mappings (full forms -> abbreviations)
-    "artificial intelligence": ["ai"],
-    "machine learning": ["ml"],
-    "deep learning": ["dl"],
-    "natural language processing": ["nlp"],
-    "computer vision": ["cv"],
-    "reinforcement learning": ["rl"],
-    "neural network": ["nn"],
-    "effective altruism": ["ea"],
-    "existential risk": ["x-risk", "xrisk"],
-    # Family relationships (bidirectional)
-    "father": ["son", "daughter", "child", "parent", "dad"],
-    "mother": ["son", "daughter", "child", "parent", "mom"],
-    "parent": ["child", "son", "daughter", "father", "mother"],
-    "son": ["father", "parent", "child"],
-    "daughter": ["mother", "parent", "child"],
-    "child": ["parent", "father", "mother"],
-    "dad": ["father", "son", "daughter", "child"],
-    "mom": ["mother", "son", "daughter", "child"],
-}
-
-# Modality detection patterns: map query phrases to collection names
-# Each entry is (pattern, modalities, strip_pattern)
-# - pattern: regex to match in query
-# - modalities: set of collection names to filter to
-# - strip_pattern: whether to remove the matched text from query
-MODALITY_PATTERNS: list[tuple[str, set[str], bool]] = [
-    # Comics
-    (r"\b(comic|comics|webcomic|webcomics)\b", {"comic"}, True),
-    # Forum posts (LessWrong, EA Forum, etc.)
-    (r"\b(on\s+)?(lesswrong|lw|less\s+wrong)\b", {"forum"}, True),
-    (r"\b(on\s+)?(ea\s+forum|effective\s+altruism\s+forum)\b", {"forum"}, True),
-    (r"\b(on\s+)?(alignment\s+forum|af)\b", {"forum"}, True),
-    (r"\b(forum\s+post|lw\s+post|post\s+on)\b", {"forum"}, True),
-    # Books
-    (r"\b(in\s+a\s+book|in\s+the\s+book|book|chapter)\b", {"book"}, True),
-    # Blog posts / articles
-    (r"\b(blog\s+post|blog|article)\b", {"blog"}, True),
-    # Email
-    (r"\b(email|e-mail|mail)\b", {"mail"}, True),
-    # Photos / images
-    (r"\b(photo|photograph|picture|image)\b", {"photo"}, True),
-    # Documents
-    (r"\b(document|pdf|doc)\b", {"doc"}, True),
-    # Chat / messages
-    (r"\b(chat|message|discord|slack)\b", {"chat"}, True),
-    # Git
-    (r"\b(commit|git|pull\s+request|pr)\b", {"git"}, True),
-]
-
-# Meta-language patterns to strip (these don't indicate modality, just noise)
-META_LANGUAGE_PATTERNS: list[str] = [
-    r"\bthere\s+was\s+(something|some|some\s+\w+|an?\s+\w+)\s+(about|on)\b",
-    r"\bi\s+remember\s+(reading|seeing|there\s+being)\s*(an?\s+)?",
-    r"\bi\s+(read|saw|found)\s+(something|an?\s+\w+)\s+about\b",
-    r"\bsomething\s+about\b",
-    r"\bsome\s+about\b",
-    r"\bthis\s+whole\s+\w+\s+thing\b",
-    r"\bthat\s+\w+\s+thing\b",
-    r"\bthat\s+about\b",  # Clean up leftover "that about"
-    r"\ba\s+about\b",  # Clean up leftover "a about"
-    r"\bthe\s+about\b",  # Clean up leftover "the about"
-    r"\bthere\s+was\s+some\s+about\b",  # Clean up leftover
-]
-
-
-def detect_modality_hints(query: str) -> tuple[str, set[str]]:
-    """
-    Detect content type hints in query and extract modalities.
-
-    Returns:
-        (cleaned_query, detected_modalities)
-        - cleaned_query: query with modality indicators and meta-language removed
-        - detected_modalities: set of collection names detected from query
-    """
-    query_lower = query.lower()
-    detected: set[str] = set()
-    cleaned = query
-
-    # First, detect and strip modality patterns
-    for pattern, modalities, strip in MODALITY_PATTERNS:
-        if re.search(pattern, query_lower, re.IGNORECASE):
-            detected.update(modalities)
-            if strip:
-                cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
-
-    # Strip meta-language patterns (regardless of modality detection)
-    for pattern in META_LANGUAGE_PATTERNS:
-        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
-
-    # Clean up whitespace
-    cleaned = " ".join(cleaned.split())
-
-    return cleaned, detected
-
-
-def expand_query(query: str) -> str:
-    """
-    Expand query with synonyms and abbreviations.
-
-    This helps match documents that use different terminology for the same concept.
-    For example, "ML algorithms" -> "ML machine learning algorithms"
-    """
-    query_lower = query.lower()
-    expansions = []
-
-    for term, synonyms in QUERY_EXPANSIONS.items():
-        # Check if term appears as a whole word in the query
-        # Use word boundaries to avoid matching partial words
-        pattern = r'\b' + re.escape(term) + r'\b'
-        if re.search(pattern, query_lower):
-            expansions.extend(synonyms)
-
-    if expansions:
-        # Add expansions to the original query
-        return query + " " + " ".join(expansions)
-    return query
-
-
-# Common words to ignore when checking for query term presence
-STOPWORDS = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "must", "shall", "can", "need", "dare",
-    "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
-    "from", "as", "into", "through", "during", "before", "after", "above",
-    "below", "between", "under", "again", "further", "then", "once", "here",
-    "there", "when", "where", "why", "how", "all", "each", "few", "more",
-    "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-    "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
-    "because", "until", "while", "although", "though", "after", "before",
-    "what", "which", "who", "whom", "this", "that", "these", "those", "i",
-    "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your",
-    "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she",
-    "her", "hers", "herself", "it", "its", "itself", "they", "them", "their",
-    "theirs", "themselves", "about", "get", "got", "getting", "like", "also",
-}
 
 
 def extract_query_terms(query: str) -> set[str]:
@@ -270,7 +84,9 @@ def deduplicate_by_source(chunks: list[Chunk]) -> list[Chunk]:
         source_id = chunk.source_id
         if source_id not in best_by_source:
             best_by_source[source_id] = chunk
-        elif (chunk.relevance_score or 0) > (best_by_source[source_id].relevance_score or 0):
+        elif (chunk.relevance_score or 0) > (
+            best_by_source[source_id].relevance_score or 0
+        ):
             best_by_source[source_id] = chunk
     return list(best_by_source.values())
 
@@ -294,9 +110,7 @@ def apply_source_boosts(
 
     # Single query to fetch all source metadata
     with make_session() as db:
-        sources = db.query(SourceItem).filter(
-            SourceItem.id.in_(source_ids)
-        ).all()
+        sources = db.query(SourceItem).filter(SourceItem.id.in_(source_ids)).all()
         source_map = {
             s.id: {
                 "title": (getattr(s, "title", None) or "").lower(),
@@ -369,7 +183,9 @@ def fuse_scores_rrf(
         Dict mapping chunk IDs to RRF scores
     """
     # Convert scores to ranks (1-indexed)
-    emb_ranked = sorted(embedding_scores.keys(), key=lambda x: embedding_scores[x], reverse=True)
+    emb_ranked = sorted(
+        embedding_scores.keys(), key=lambda x: embedding_scores[x], reverse=True
+    )
     bm25_ranked = sorted(bm25_scores.keys(), key=lambda x: bm25_scores[x], reverse=True)
 
     emb_ranks = {chunk_id: rank + 1 for rank, chunk_id in enumerate(emb_ranked)}
@@ -393,84 +209,131 @@ def fuse_scores_rrf(
     return fused
 
 
-async def search_chunks(
+async def _run_llm_analysis(
+    query_text: str,
+    use_query_analysis: bool,
+    use_hyde: bool,
+) -> tuple[QueryAnalysis | None, str | None]:
+    """
+    Run LLM-based query analysis and/or HyDE expansion in parallel.
+
+    Returns:
+        (analysis_result, hyde_doc) tuple
+    """
+    analysis_result: QueryAnalysis | None = None
+    hyde_doc: str | None = None
+
+    if not (use_query_analysis or use_hyde):
+        return analysis_result, hyde_doc
+
+    tasks = []
+
+    if use_query_analysis:
+        tasks.append(("analysis", analyze_query(query_text, timeout=3.0)))
+
+    if use_hyde and len(query_text.split()) >= 4:
+        tasks.append(
+            ("hyde", expand_query_hyde(query_text, timeout=settings.HYDE_TIMEOUT))
+        )
+
+    if not tasks:
+        return analysis_result, hyde_doc
+
+    try:
+        results = await asyncio.gather(
+            *[task for _, task in tasks], return_exceptions=True
+        )
+
+        for i, (name, _) in enumerate(tasks):
+            result = results[i]
+            if isinstance(result, Exception):
+                logger.warning(f"{name} failed: {result}")
+                continue
+
+            if name == "analysis" and result:
+                analysis_result = result
+            elif name == "hyde" and result:
+                hyde_doc = result
+
+    except Exception as e:
+        logger.warning(f"Parallel LLM calls failed: {e}")
+
+    return analysis_result, hyde_doc
+
+
+def _apply_query_analysis(
+    analysis_result: QueryAnalysis,
+    query_text: str,
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
-    limit: int = 10,
-    filters: SearchFilters = {},
-    timeout: int = 2,
-    config: SearchConfig = _DEFAULT_CONFIG,
-) -> list[Chunk]:
+    modalities: set[str],
+) -> tuple[str, list[extract.DataChunk], set[str], list[str]]:
     """
-    Search chunks using embedding similarity and optionally BM25.
+    Apply query analysis results to modify query, data, and modalities.
 
-    Combines results using weighted score fusion, giving bonus to documents
-    that match both semantically and lexically.
-
-    If HyDE is enabled, also generates a hypothetical document from the query
-    and includes it in the embedding search for better semantic matching.
-
-    Enhancement flags in config override global settings when set:
-    - useBm25: Enable BM25 lexical search
-    - useHyde: Enable HyDE query expansion
-    - useReranking: Enable cross-encoder reranking
-    - useQueryExpansion: Enable synonym/abbreviation expansion
-    - useModalityDetection: Detect content type hints from query
+    Returns:
+        (updated_query_text, updated_data, updated_modalities, query_variants)
     """
-    # Resolve enhancement flags: config overrides global settings
-    use_bm25 = config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
-    use_hyde = config.useHyde if config.useHyde is not None else settings.ENABLE_HYDE_EXPANSION
-    use_reranking = config.useReranking if config.useReranking is not None else settings.ENABLE_RERANKING
-    use_query_expansion = config.useQueryExpansion if config.useQueryExpansion is not None else True
-    use_modality_detection = config.useModalityDetection if config.useModalityDetection is not None else False
+    query_variants: list[str] = []
 
-    # Search for more candidates than requested, fuse scores, then return top N
-    # This helps find results that rank well in one method but not the other
-    internal_limit = limit * CANDIDATE_MULTIPLIER
+    if not (analysis_result and analysis_result.success):
+        return query_text, data, modalities, query_variants
 
-    # Extract query text
-    query_text = " ".join(
-        c for chunk in data for c in chunk.data if isinstance(c, str)
-    )
+    # Use detected modalities if any
+    if analysis_result.modalities:
+        modalities = analysis_result.modalities
+        logger.debug(f"Query analysis modalities: {modalities}")
 
-    # Detect modality hints and clean query if enabled
-    if use_modality_detection:
-        cleaned_query, detected_modalities = detect_modality_hints(query_text)
-        if detected_modalities:
-            # Override passed modalities with detected ones
-            modalities = detected_modalities
-            logger.debug(f"Modality detection: '{query_text[:50]}...' -> modalities={detected_modalities}")
-        if cleaned_query != query_text:
-            logger.debug(f"Query cleaning: '{query_text[:50]}...' -> '{cleaned_query[:50]}...'")
-            query_text = cleaned_query
-            # Update data with cleaned query for downstream processing
-            data = [extract.DataChunk(data=[cleaned_query])]
+    # Use cleaned query
+    if analysis_result.cleaned_query and analysis_result.cleaned_query != query_text:
+        logger.debug(
+            f"Query analysis cleaning: '{query_text[:40]}...' -> '{analysis_result.cleaned_query[:40]}...'"
+        )
+        query_text = analysis_result.cleaned_query
+        data = [extract.DataChunk(data=[analysis_result.cleaned_query])]
 
-    if use_query_expansion:
-        expanded_query = expand_query(query_text)
-        # If query was expanded, use expanded version for search
-        if expanded_query != query_text:
-            logger.debug(f"Query expansion: '{query_text}' -> '{expanded_query}'")
-            search_data = [extract.DataChunk(data=[expanded_query])]
-        else:
-            search_data = list(data)  # Copy to avoid modifying original
-    else:
-        search_data = list(data)
+    # Collect query variants
+    query_variants.extend(analysis_result.query_variants)
 
-    # Apply HyDE expansion if enabled
-    if use_hyde:
-        # Only expand queries with 4+ words (short queries are usually specific enough)
-        if len(query_text.split()) >= 4:
-            try:
-                hyde_doc = await expand_query_hyde(
-                    query_text, timeout=settings.HYDE_TIMEOUT
-                )
-                if hyde_doc:
-                    logger.debug(f"HyDE expansion: '{query_text[:30]}...' -> '{hyde_doc[:50]}...'")
-                    search_data.append(extract.DataChunk(data=[hyde_doc]))
-            except Exception as e:
-                logger.warning(f"HyDE expansion failed, using original query: {e}")
+    return query_text, data, modalities, query_variants
 
+
+def _build_search_data(
+    data: list[extract.DataChunk],
+    hyde_doc: str | None,
+    query_variants: list[str],
+    query_text: str,
+) -> list[extract.DataChunk]:
+    """
+    Build the list of data chunks to search with.
+
+    Includes original query, HyDE expansion, and query variants.
+    """
+    search_data = list(data)
+
+    # Add HyDE expansion if we got one
+    if hyde_doc:
+        logger.debug(f"HyDE expansion: '{query_text[:30]}...' -> '{hyde_doc[:50]}...'")
+        search_data.append(extract.DataChunk(data=[hyde_doc]))
+
+    # Add query variants from analysis (limit to 3)
+    for variant in query_variants[:3]:
+        search_data.append(extract.DataChunk(data=[variant]))
+
+    return search_data
+
+
+async def _run_searches(
+    search_data: list[extract.DataChunk],
+    data: list[extract.DataChunk],
+    modalities: set[str],
+    internal_limit: int,
+    filters: SearchFilters,
+    timeout: int,
+    use_bm25: bool,
+) -> dict[str, float]:
+    """
+    Run embedding and optionally BM25 searches, returning fused scores.
+    """
     # Run embedding search
     embedding_scores = await search_chunks_embeddings(
         search_data, modalities, internal_limit, filters, timeout
@@ -487,14 +350,25 @@ async def search_chunks(
             logger.warning("BM25 search timed out, using embedding results only")
 
     # Fuse scores from both methods using Reciprocal Rank Fusion
-    fused_scores = fuse_scores_rrf(embedding_scores, bm25_scores)
+    return fuse_scores_rrf(embedding_scores, bm25_scores)
 
+
+def _fetch_chunks(
+    fused_scores: dict[str, float],
+    limit: int,
+    use_reranking: bool,
+) -> list[Chunk]:
+    """
+    Fetch chunk objects from database and set their relevance scores.
+    """
     if not fused_scores:
         return []
 
     # Sort by score and take top results
     # If reranking is enabled, fetch more candidates for the reranker to work with
-    sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
+    sorted_ids = sorted(
+        fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True
+    )
     if use_reranking:
         fetch_limit = limit * RERANK_CANDIDATE_MULTIPLIER
     else:
@@ -522,29 +396,125 @@ async def search_chunks(
 
         db.expunge_all()
 
-    # Extract query text for boosting and reranking
+    return chunks
+
+
+def _apply_boosts(
+    chunks: list[Chunk],
+    data: list[extract.DataChunk],
+) -> None:
+    """
+    Apply query term, title, popularity, and recency boosts to chunks.
+    """
+    if not chunks:
+        return
+
+    # Extract query text for boosting
     query_text = " ".join(
         c for chunk in data for c in chunk.data if isinstance(c, str)
     )
 
-    # Apply query term presence boost
-    if chunks and query_text.strip():
+    if query_text.strip():
         query_terms = extract_query_terms(query_text)
         apply_query_term_boost(chunks, query_terms)
         # Apply title + popularity boosts (single DB query)
         apply_source_boosts(chunks, query_terms)
-    elif chunks:
+    else:
         # No query terms, just apply popularity boost
         apply_source_boosts(chunks, set())
 
-    # Rerank using cross-encoder for better precision
-    if use_reranking and chunks and query_text.strip():
-        try:
-            chunks = await rerank_chunks(
-                query_text, chunks, model=settings.RERANK_MODEL, top_k=limit
-            )
-        except Exception as e:
-            logger.warning(f"Reranking failed, using RRF order: {e}")
+
+async def _apply_reranking(
+    chunks: list[Chunk],
+    query_text: str,
+    limit: int,
+    use_reranking: bool,
+) -> list[Chunk]:
+    """
+    Apply cross-encoder reranking if enabled.
+    """
+    if not (use_reranking and chunks and query_text.strip()):
+        return chunks
+
+    try:
+        return await rerank_chunks(
+            query_text, chunks, model=settings.RERANK_MODEL, top_k=limit
+        )
+    except Exception as e:
+        logger.warning(f"Reranking failed, using RRF order: {e}")
+        return chunks
+
+
+async def search_chunks(
+    data: list[extract.DataChunk],
+    modalities: set[str] = set(),
+    limit: int = 10,
+    filters: SearchFilters = {},
+    timeout: int = 2,
+    config: SearchConfig = _DEFAULT_CONFIG,
+) -> list[Chunk]:
+    """
+    Search chunks using embedding similarity and optionally BM25.
+
+    Combines results using weighted score fusion, giving bonus to documents
+    that match both semantically and lexically.
+
+    If HyDE is enabled, also generates a hypothetical document from the query
+    and includes it in the embedding search for better semantic matching.
+
+    Enhancement flags in config override global settings when set:
+    - useBm25: Enable BM25 lexical search
+    - useHyde: Enable HyDE query expansion
+    - useReranking: Enable cross-encoder reranking
+    - useQueryAnalysis: LLM-based query analysis (extracts modalities, cleans query, generates variants)
+    """
+    # Resolve enhancement flags: config overrides global settings
+    use_bm25 = (
+        config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
+    )
+    use_hyde = (
+        config.useHyde if config.useHyde is not None else settings.ENABLE_HYDE_EXPANSION
+    )
+    use_reranking = (
+        config.useReranking
+        if config.useReranking is not None
+        else settings.ENABLE_RERANKING
+    )
+    use_query_analysis = (
+        config.useQueryAnalysis if config.useQueryAnalysis is not None else False
+    )
+
+    internal_limit = limit * CANDIDATE_MULTIPLIER
+
+    # Extract query text
+    query_text = " ".join(c for chunk in data for c in chunk.data if isinstance(c, str))
+
+    # Run LLM-based operations in parallel (query analysis + HyDE)
+    analysis_result, hyde_doc = await _run_llm_analysis(
+        query_text, use_query_analysis, use_hyde
+    )
+
+    # Apply query analysis results
+    query_text, data, modalities, query_variants = _apply_query_analysis(
+        analysis_result, query_text, data, modalities
+    )
+
+    # Build search data with HyDE and variants
+    search_data = _build_search_data(data, hyde_doc, query_variants, query_text)
+
+    # Run searches and fuse scores
+    fused_scores = await _run_searches(
+        search_data, data, modalities, internal_limit, filters, timeout, use_bm25
+    )
+
+    # Fetch chunks from database
+    chunks = _fetch_chunks(fused_scores, limit, use_reranking)
+
+    # Apply various boosts
+    _apply_boosts(chunks, data)
+
+    # Apply reranking if enabled
+    chunks = await _apply_reranking(chunks, query_text, limit, use_reranking)
 
     return chunks
 
