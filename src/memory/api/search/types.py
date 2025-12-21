@@ -83,6 +83,12 @@ class SearchConfig(BaseModel):
     previews: bool = False
     useScores: bool = False
 
+    # Optional enhancement flags (None = use global setting from env)
+    useBm25: Optional[bool] = None
+    useHyde: Optional[bool] = None
+    useReranking: Optional[bool] = None
+    useQueryExpansion: Optional[bool] = None
+
     def model_post_init(self, __context) -> None:
         # Enforce reasonable limits
         if self.limit < 1:
