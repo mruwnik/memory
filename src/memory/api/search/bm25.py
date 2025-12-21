@@ -53,7 +53,7 @@ def build_tsquery(query: str) -> str:
     words = [
         w.strip().lower()
         for w in clean_query.split()
-        if w.strip() and len(w.strip()) > 2 and w.strip().lower() not in _STOPWORDS
+        if w.strip() and len(w.strip()) >= 2 and w.strip().lower() not in _STOPWORDS
     ]
     if not words:
         return ""
