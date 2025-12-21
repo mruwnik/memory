@@ -14,6 +14,11 @@ type SearchConfig = {
     previews: boolean
     useScores: boolean
     limit: number
+    // Search enhancement options
+    useBm25?: boolean
+    useHyde?: boolean
+    useReranking?: boolean
+    useQueryAnalysis?: boolean
 }
 
 export interface SearchParams {
@@ -51,6 +56,11 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     const [tags, setTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState(10)
+    // Search enhancement options (undefined = use server defaults)
+    const [useBm25, setUseBm25] = useState<boolean | undefined>(undefined)
+    const [useHyde, setUseHyde] = useState<boolean | undefined>(undefined)
+    const [useReranking, setUseReranking] = useState<boolean | undefined>(undefined)
+    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(undefined)
     const { getMetadataSchemas, getTags } = useMCP()
     
     useEffect(() => {
@@ -71,14 +81,18 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault()
-        
+
         onSearch({
             query,
             modalities: getSelectedItems(modalities),
             config: {
                 previews,
                 useScores,
-                limit
+                limit,
+                useBm25,
+                useHyde,
+                useReranking,
+                useQueryAnalysis,
             },
             filters: {
                 tags: getSelectedItems(tags),
@@ -124,6 +138,52 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                         Score results with a LLM before returning
                     </label>
                 </div>
+
+                <details className="search-enhancements">
+                    <summary>Search Enhancements</summary>
+                    <div className="enhancement-options">
+                        <div className="search-option">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={useBm25 ?? false}
+                                    onChange={(e) => setUseBm25(e.target.checked)}
+                                />
+                                Enable BM25 (keyword search)
+                            </label>
+                        </div>
+                        <div className="search-option">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={useHyde ?? false}
+                                    onChange={(e) => setUseHyde(e.target.checked)}
+                                />
+                                Enable HyDE (hypothetical document expansion)
+                            </label>
+                        </div>
+                        <div className="search-option">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={useReranking ?? false}
+                                    onChange={(e) => setUseReranking(e.target.checked)}
+                                />
+                                Enable reranking (cross-encoder)
+                            </label>
+                        </div>
+                        <div className="search-option">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={useQueryAnalysis ?? false}
+                                    onChange={(e) => setUseQueryAnalysis(e.target.checked)}
+                                />
+                                Enable query analysis (LLM-based)
+                            </label>
+                        </div>
+                    </div>
+                </details>
 
                 <SelectableTags 
                     title="Modalities" 

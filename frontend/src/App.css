@@ -352,6 +352,44 @@ body {
   accent-color: #667eea;
 }
 
+/* Search Enhancements */
+.search-enhancements {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e2e8f0;
+}
+
+.search-enhancements summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: #4a5568;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.search-enhancements summary:hover {
+  color: #667eea;
+}
+
+.search-enhancements[open] summary {
+  margin-bottom: 0.75rem;
+}
+
+.enhancement-options {
+  display: grid;
+  gap: 0.5rem;
+  padding-left: 0.5rem;
+}
+
+.enhancement-options .search-option {
+  margin: 0;
+}
+
+.enhancement-options .search-option label {
+  font-size: 0.85rem;
+}
+
 /* Search Results */
 .search-results {
   margin-top: 2rem;
