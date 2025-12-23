@@ -824,6 +824,23 @@ class GithubItem(SourceItem):
 
     payload = Column(JSONB)
 
+    # New fields for change detection and tracking
+    github_updated_at = Column(DateTime(timezone=True))  # GitHub's updated_at
+    content_hash = Column(Text)  # Hash of body + comments for change detection
+    repo_id = Column(
+        BigInteger, ForeignKey("github_repos.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # GitHub Projects v2 fields
+    project_status = Column(Text, nullable=True)
+    project_priority = Column(Text, nullable=True)
+    project_fields = Column(JSONB, nullable=True)  # All project field values
+
+    # Additional tracking
+    assignees = Column(ARRAY(Text), nullable=True)
+    milestone = Column(Text, nullable=True)
+    comment_count = Column(Integer, nullable=True)
+
     __mapper_args__ = {
         "polymorphic_identity": "github_item",
     }
@@ -833,6 +850,8 @@ class GithubItem(SourceItem):
         Index("gh_repo_kind_idx", "repo_path", "kind"),
         Index("gh_issue_lookup_idx", "repo_path", "kind", "number"),
         Index("gh_labels_idx", "labels", postgresql_using="gin"),
+        Index("gh_github_updated_at_idx", "github_updated_at"),
+        Index("gh_repo_id_idx", "repo_id"),
     )
 
 

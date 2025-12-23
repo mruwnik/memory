@@ -50,6 +50,8 @@ from memory.common.db.models.sources import (
     Book,
     ArticleFeed,
     EmailAccount,
+    GithubAccount,
+    GithubRepo,
 )
 from memory.common.db.models.users import (
     User,
@@ -107,6 +109,8 @@ __all__ = [
     "Book",
     "ArticleFeed",
     "EmailAccount",
+    "GithubAccount",
+    "GithubRepo",
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",

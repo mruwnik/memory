@@ -14,6 +14,9 @@ from memory.common.db.models import (
     BookSection,
     Chunk,
     Comic,
+    GithubAccount,
+    GithubItem,
+    GithubRepo,
     MCPServer,
     DiscordMessage,
     EmailAccount,
@@ -337,6 +340,61 @@ class ScheduledLLMCallAdmin(ModelView, model=ScheduledLLMCall):
     column_sortable_list = ["executed_at", "scheduled_time", "created_at", "updated_at"]
 
 
+class GithubAccountAdmin(ModelView, model=GithubAccount):
+    column_list = [
+        "id",
+        "name",
+        "auth_type",
+        "active",
+        "last_sync_at",
+        "created_at",
+        "updated_at",
+    ]
+    column_searchable_list = ["name", "id"]
+    # Hide sensitive columns from display
+    column_exclude_list = ["access_token", "private_key"]
+    form_excluded_columns = ["repos"]
+
+
+class GithubRepoAdmin(ModelView, model=GithubRepo):
+    column_list = [
+        "id",
+        "account",
+        "owner",
+        "name",
+        "track_issues",
+        "track_prs",
+        "track_comments",
+        "track_project_fields",
+        "labels_filter",
+        "tags",
+        "check_interval",
+        "full_sync_interval",
+        "active",
+        "last_sync_at",
+        "last_full_sync_at",
+        "created_at",
+    ]
+    column_searchable_list = ["owner", "name", "id"]
+
+
+class GithubItemAdmin(ModelView, model=GithubItem):
+    column_list = source_columns(
+        GithubItem,
+        "kind",
+        "repo_path",
+        "number",
+        "title",
+        "state",
+        "author",
+        "labels",
+        "github_updated_at",
+        "project_status",
+    )
+    column_searchable_list = ["title", "repo_path", "author", "id", "number"]
+    column_sortable_list = ["github_updated_at", "created_at"]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance with OAuth protection."""
     admin.add_view(SourceItemAdmin)
@@ -361,3 +419,6 @@ def setup_admin(admin: Admin):
     admin.add_view(DiscordChannelAdmin)
     admin.add_view(MCPServerAdmin)
     admin.add_view(ScheduledLLMCallAdmin)
+    admin.add_view(GithubAccountAdmin)
+    admin.add_view(GithubRepoAdmin)
+    admin.add_view(GithubItemAdmin)
