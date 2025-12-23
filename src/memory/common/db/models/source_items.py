@@ -802,6 +802,23 @@ class MiscDoc(SourceItem):
     }
 
 
+class GithubItemPayload(SourceItemPayload):
+    kind: Annotated[str, "Type: issue, pr, comment, or project_card"]
+    repo_path: Annotated[str, "Repository path (owner/name)"]
+    number: Annotated[int | None, "Issue or PR number"]
+    state: Annotated[str | None, "State: open, closed, merged"]
+    title: Annotated[str | None, "Issue or PR title"]
+    author: Annotated[str | None, "Author username"]
+    labels: Annotated[list[str] | None, "GitHub labels"]
+    assignees: Annotated[list[str] | None, "Assigned users"]
+    milestone: Annotated[str | None, "Milestone name"]
+    project_status: Annotated[str | None, "GitHub Project status"]
+    project_priority: Annotated[str | None, "GitHub Project priority"]
+    created_at: Annotated[datetime | None, "Creation date"]
+    closed_at: Annotated[datetime | None, "Close date"]
+    merged_at: Annotated[datetime | None, "Merge date (PRs only)"]
+
+
 class GithubItem(SourceItem):
     __tablename__ = "github_item"
 
@@ -853,6 +870,29 @@ class GithubItem(SourceItem):
         Index("gh_github_updated_at_idx", "github_updated_at"),
         Index("gh_repo_id_idx", "repo_id"),
     )
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["github"]
+
+    def as_payload(self) -> GithubItemPayload:
+        return GithubItemPayload(
+            **super().as_payload(),
+            kind=cast(str, self.kind),
+            repo_path=cast(str, self.repo_path),
+            number=cast(int | None, self.number),
+            state=cast(str | None, self.state),
+            title=cast(str | None, self.title),
+            author=cast(str | None, self.author),
+            labels=cast(list[str] | None, self.labels),
+            assignees=cast(list[str] | None, self.assignees),
+            milestone=cast(str | None, self.milestone),
+            project_status=cast(str | None, self.project_status),
+            project_priority=cast(str | None, self.project_priority),
+            created_at=cast(datetime | None, self.created_at),
+            closed_at=cast(datetime | None, self.closed_at),
+            merged_at=cast(datetime | None, self.merged_at),
+        )
 
 
 class NotePayload(SourceItemPayload):

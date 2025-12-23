@@ -15,6 +15,8 @@ Usage:
     python run_celery_task.py blogs sync-webpage --url "https://example.com"
     python run_celery_task.py comic sync-all-comics
     python run_celery_task.py forums sync-lesswrong --since-date "2025-01-01" --min-karma 10 --limit 50 --cooldown 0.5 --max-items 1000
+    python run_celery_task.py github sync-all-repos
+    python run_celery_task.py github sync-repo --repo-id 1 --force-full
 """
 
 import json
@@ -51,8 +53,10 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
-    BACKUP_TO_S3_DIRECTORY,
+    BACKUP_PATH,
     BACKUP_ALL,
+    SYNC_GITHUB_REPO,
+    SYNC_ALL_GITHUB_REPOS,
     app,
 )
 
@@ -100,8 +104,12 @@ TASK_MAPPINGS = {
         "track_git_changes": TRACK_GIT_CHANGES,
     },
     "backup": {
-        "backup_to_s3_directory": BACKUP_TO_S3_DIRECTORY,
+        "backup_path": BACKUP_PATH,
         "backup_all": BACKUP_ALL,
+    },
+    "github": {
+        "sync_all_repos": SYNC_ALL_GITHUB_REPOS,
+        "sync_repo": SYNC_GITHUB_REPO,
     },
 }
 QUEUE_MAPPINGS = {
@@ -200,9 +208,9 @@ def backup_all(ctx):
 @backup.command("path")
 @click.option("--path", required=True, help="Path to backup")
 @click.pass_context
-def backup_to_s3_directory(ctx, path):
+def backup_path_cmd(ctx, path):
     """Backup a specific path."""
-    execute_task(ctx, "backup", "backup_to_s3_directory", path=path)
+    execute_task(ctx, "backup", "backup_path", path=path)
 
 
 @cli.group()
@@ -531,6 +539,29 @@ def forums_sync_lesswrong(ctx, since_date, min_karma, limit, cooldown, max_items
 def forums_sync_lesswrong_post(ctx, url):
     """Sync a specific LessWrong post."""
     execute_task(ctx, "forums", "sync_lesswrong_post", url=url)
+
+
+@cli.group()
+@click.pass_context
+def github(ctx):
+    """GitHub-related tasks."""
+    pass
+
+
+@github.command("sync-all-repos")
+@click.pass_context
+def github_sync_all_repos(ctx):
+    """Sync all active GitHub repos."""
+    execute_task(ctx, "github", "sync_all_repos")
+
+
+@github.command("sync-repo")
+@click.option("--repo-id", type=int, required=True, help="GitHub repo ID")
+@click.option("--force-full", is_flag=True, help="Force a full sync instead of incremental")
+@click.pass_context
+def github_sync_repo(ctx, repo_id, force_full):
+    """Sync a specific GitHub repo."""
+    execute_task(ctx, "github", "sync_repo", repo_id=repo_id, force_full=force_full)
 
 
 if __name__ == "__main__":

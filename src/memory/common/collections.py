@@ -58,6 +58,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": True,
     },
+    "github": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": False,
+    },
     "text": {
         "dimension": 1024,
         "distance": "Cosine",

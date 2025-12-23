@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from kombu.utils.url import safequote
 from memory.common import settings
 
@@ -122,6 +123,12 @@ app.conf.update(
         },
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
+    },
+    beat_schedule={
+        "sync-github-repos-hourly": {
+            "task": SYNC_ALL_GITHUB_REPOS,
+            "schedule": crontab(minute=0),  # Every hour at :00
+        },
     },
 )
 

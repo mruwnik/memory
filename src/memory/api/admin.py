@@ -351,9 +351,8 @@ class GithubAccountAdmin(ModelView, model=GithubAccount):
         "updated_at",
     ]
     column_searchable_list = ["name", "id"]
-    # Hide sensitive columns from display
-    column_exclude_list = ["access_token", "private_key"]
-    form_excluded_columns = ["repos"]
+    # Sensitive columns (access_token, private_key) are already excluded from column_list
+    form_excluded_columns = ["repos", "access_token", "private_key"]
 
 
 class GithubRepoAdmin(ModelView, model=GithubRepo):
