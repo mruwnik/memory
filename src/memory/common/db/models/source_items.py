@@ -894,6 +894,13 @@ class GithubItem(SourceItem):
             merged_at=cast(datetime | None, self.merged_at),
         )
 
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        """Override to use 'github' modality instead of default 'text'."""
+        content = cast(str | None, self.content)
+        if content:
+            return extract.extract_text(content, modality="github")
+        return []
+
 
 class NotePayload(SourceItemPayload):
     note_type: Annotated[str | None, "Category of the note"]

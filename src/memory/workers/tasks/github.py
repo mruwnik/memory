@@ -58,7 +58,7 @@ def _create_github_item(
     repo_tags = cast(list[str], repo.tags) or []
 
     return GithubItem(
-        modality="text",
+        modality="github",
         sha256=create_content_hash(content),
         content=content,
         kind=issue_data["kind"],
