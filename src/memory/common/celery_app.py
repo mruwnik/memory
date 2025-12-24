@@ -71,6 +71,7 @@ SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
 # People tasks
 SYNC_PERSON = f"{PEOPLE_ROOT}.sync_person"
 UPDATE_PERSON = f"{PEOPLE_ROOT}.update_person"
+SYNC_PROFILE_FROM_FILE = f"{PEOPLE_ROOT}.sync_profile_from_file"
 
 
 def get_broker_url() -> str:

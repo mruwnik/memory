@@ -142,6 +142,10 @@ def _needs_reindex(existing: GithubItem, new_data: GithubIssueData) -> bool:
     if existing_fields != new_fields:
         return True
 
+    # Check if PR is missing pr_data (needs backfill)
+    if new_data["kind"] == "pr" and new_data.get("pr_data") and not existing.pr_data:
+        return True
+
     return False
 
 
@@ -431,8 +435,12 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
 
 
 @app.task(name=SYNC_ALL_GITHUB_REPOS)
-def sync_all_github_repos() -> list[dict[str, Any]]:
-    """Trigger sync for all active GitHub repos."""
+def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
+    """Trigger sync for all active GitHub repos.
+
+    Args:
+        force_full: If True, re-sync all items instead of incremental sync.
+    """
     with make_session() as session:
         active_repos = (
             session.query(GithubRepo)
@@ -445,9 +453,11 @@ def sync_all_github_repos() -> list[dict[str, Any]]:
             {
                 "repo_id": repo.id,
                 "repo_path": repo.repo_path,
-                "task_id": sync_github_repo.delay(repo.id).id,
+                "task_id": sync_github_repo.delay(repo.id, force_full=force_full).id,
             }
             for repo in active_repos
         ]
-        logger.info(f"Scheduled sync for {len(results)} active GitHub repos")
+        logger.info(
+            f"Scheduled {'full' if force_full else 'incremental'} sync for {len(results)} active GitHub repos"
+        )
         return results

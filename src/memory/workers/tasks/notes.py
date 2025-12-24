@@ -13,6 +13,7 @@ from memory.common.celery_app import (
     SYNC_NOTES,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
+    SYNC_PROFILE_FROM_FILE,
 )
 from memory.workers.tasks.content_processing import (
     check_content_exists,
@@ -149,20 +150,44 @@ def sync_notes(folder: str):
     logger.info(f"Syncing notes from {folder}")
 
     new_notes = 0
+    new_profiles = 0
     all_files = list(path.rglob("*.md"))
+
+    # Import here to avoid circular imports
+    from memory.common.db.models import Person
+    from memory.workers.tasks.people import sync_profile_from_file
+
     with make_session() as session:
         for filename in all_files:
-            if not check_content_exists(session, Note, filename=filename.as_posix()):
-                new_notes += 1
-                sync_note.delay(
-                    subject=filename.stem,
-                    content=filename.read_text(),
-                    filename=filename.relative_to(path).as_posix(),
+            relative_path = filename.relative_to(path).as_posix()
+
+            # Check if this is a profile file
+            if relative_path.startswith(f"{settings.PROFILES_FOLDER}/"):
+                # Check if person already exists
+                identifier = filename.stem
+                existing = (
+                    session.query(Person)
+                    .filter(Person.identifier == identifier)
+                    .first()
                 )
+                if not existing:
+                    new_profiles += 1
+                    sync_profile_from_file.delay(relative_path)
+            else:
+                if not check_content_exists(
+                    session, Note, filename=filename.as_posix()
+                ):
+                    new_notes += 1
+                    sync_note.delay(
+                        subject=filename.stem,
+                        content=filename.read_text(),
+                        filename=relative_path,
+                    )
 
     return {
         "notes_num": len(all_files),
         "new_notes": new_notes,
+        "new_profiles": new_profiles,
     }
 
 
@@ -233,12 +258,20 @@ def track_git_changes():
         if not file.exists():
             logger.warning(f"File not found: {filename}")
             continue
-        sync_note.delay(
-            subject=file.stem,
-            content=file.read_text(),
-            filename=filename,
-            save_to_file=False,
-        )
+
+        # Check if this is a profile file
+        if filename.startswith(f"{settings.PROFILES_FOLDER}/"):
+            # Import here to avoid circular imports
+            from memory.workers.tasks.people import sync_profile_from_file
+
+            sync_profile_from_file.delay(filename)
+        else:
+            sync_note.delay(
+                subject=file.stem,
+                content=file.read_text(),
+                filename=filename,
+                save_to_file=False,
+            )
 
     return {
         "status": "success",

@@ -402,3 +402,138 @@ def test_update_person_first_notes(mock_make_session, qdrant):
     assert person.content == "First notes!"
     # Should not have separator when there were no previous notes
     assert "---" not in person.content
+
+
+@pytest.fixture
+def mock_make_session_with_file(db_session, tmp_path):
+    """Mock make_session, embedding functions, and provide temp directory for files."""
+
+    @contextmanager
+    def _mock_session():
+        yield db_session
+
+    with patch("memory.workers.tasks.people.make_session", _mock_session):
+        with patch(
+            "memory.common.embedding.embed_source_item",
+            side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
+        ):
+            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+                with patch("memory.common.settings.NOTES_STORAGE_DIR", tmp_path):
+                    # Create profiles directory
+                    (tmp_path / "profiles").mkdir(exist_ok=True)
+                    yield db_session, tmp_path
+
+
+def test_sync_profile_from_file_new_person(mock_make_session_with_file, qdrant):
+    """Test syncing a new person from a profile file."""
+    db_session, tmp_path = mock_make_session_with_file
+
+    # Create a profile file
+    profile_content = """---
+identifier: new_profile_person
+display_name: New Profile Person
+aliases:
+  - "@newprofile"
+contact_info:
+  email: new@example.com
+tags:
+  - test
+---
+
+Notes from the profile file."""
+
+    profile_path = tmp_path / "profiles" / "new_profile_person.md"
+    profile_path.write_text(profile_content)
+
+    result = people.sync_profile_from_file("profiles/new_profile_person.md")
+
+    assert result["status"] == "processed"
+
+    person = db_session.query(Person).filter_by(identifier="new_profile_person").first()
+    assert person is not None
+    assert person.display_name == "New Profile Person"
+    assert "@newprofile" in person.aliases
+    assert person.contact_info["email"] == "new@example.com"
+    assert "test" in person.tags
+    assert "Notes from the profile file" in person.content
+
+
+def test_sync_profile_from_file_update_existing(mock_make_session_with_file, qdrant):
+    """Test syncing updates to an existing person from a profile file."""
+    db_session, tmp_path = mock_make_session_with_file
+
+    # Create person first
+    people.sync_person(
+        identifier="existing_profile_person",
+        display_name="Old Name",
+        aliases=["@old_alias"],
+        tags=["old_tag"],
+        notes="Old notes.",
+        save_to_file=False,
+    )
+
+    # Create updated profile file
+    profile_content = """---
+identifier: existing_profile_person
+display_name: New Name
+aliases:
+  - "@new_alias"
+contact_info:
+  twitter: "@updated"
+tags:
+  - new_tag
+---
+
+New notes from file."""
+
+    profile_path = tmp_path / "profiles" / "existing_profile_person.md"
+    profile_path.write_text(profile_content)
+
+    result = people.sync_profile_from_file("profiles/existing_profile_person.md")
+
+    assert result["status"] == "processed"
+
+    person = db_session.query(Person).filter_by(identifier="existing_profile_person").first()
+    assert person.display_name == "New Name"
+    # Aliases should be merged
+    assert "@old_alias" in person.aliases
+    assert "@new_alias" in person.aliases
+    # Tags should be merged
+    assert "old_tag" in person.tags
+    assert "new_tag" in person.tags
+    # Contact info should be merged
+    assert person.contact_info["twitter"] == "@updated"
+    # Notes should be replaced (file is source of truth)
+    assert person.content == "New notes from file."
+
+
+def test_sync_profile_from_file_not_found(mock_make_session_with_file, qdrant):
+    """Test syncing a profile file that doesn't exist."""
+    db_session, tmp_path = mock_make_session_with_file
+
+    result = people.sync_profile_from_file("profiles/nonexistent.md")
+
+    assert result["status"] == "not_found"
+
+
+def test_sync_profile_from_file_infer_identifier(mock_make_session_with_file, qdrant):
+    """Test that identifier is inferred from filename if not in frontmatter."""
+    db_session, tmp_path = mock_make_session_with_file
+
+    # Create profile without identifier in frontmatter
+    profile_content = """---
+display_name: Inferred Person
+---
+
+Notes."""
+
+    profile_path = tmp_path / "profiles" / "inferred_person.md"
+    profile_path.write_text(profile_content)
+
+    result = people.sync_profile_from_file("profiles/inferred_person.md")
+
+    assert result["status"] == "processed"
+
+    person = db_session.query(Person).filter_by(identifier="inferred_person").first()
+    assert person is not None
+    assert person.display_name == "Inferred Person"

@@ -247,3 +247,185 @@ def test_person_unique_identifier(db_session, qdrant):
 
     with pytest.raises(Exception):  # Should raise IntegrityError
         db_session.commit()
+
+
+def test_person_to_profile_markdown(person_data):
+    """Test serializing Person to profile markdown."""
+    sha256 = create_content_hash(f"person:{person_data['identifier']}")
+    person = Person(**person_data, sha256=sha256, size=100)
+
+    markdown = person.to_profile_markdown()
+
+    # Should have YAML frontmatter
+    assert markdown.startswith("---")
+    assert "identifier: alice_chen" in markdown
+    assert "display_name: Alice Chen" in markdown
+    assert "aliases:" in markdown
+    assert "- '@alice_c'" in markdown or "- @alice_c" in markdown
+    assert "contact_info:" in markdown
+    assert "email: alice@example.com" in markdown
+    assert "tags:" in markdown
+    assert "- work" in markdown
+    # Should have content after frontmatter
+    assert "Tech lead on Platform team" in markdown
+
+
+def test_person_to_profile_markdown_minimal(minimal_person_data):
+    """Test serializing minimal Person to profile markdown."""
+    sha256 = create_content_hash(f"person:{minimal_person_data['identifier']}")
+    person = Person(**minimal_person_data, sha256=sha256, size=0)
+
+    markdown = person.to_profile_markdown()
+
+    assert markdown.startswith("---")
+    assert "identifier: bob_smith" in markdown
+    assert "display_name: Bob Smith" in markdown
+    # Should not have empty arrays/dicts in output
+    assert "aliases:" not in markdown or "aliases: []" not in markdown
+
+
+def test_person_from_profile_markdown():
+    """Test parsing profile markdown back to Person fields."""
+    markdown = """---
+identifier: john_doe
+display_name: John Doe
+aliases:
+  - "@johnd"
+  - john.doe@work.com
+contact_info:
+  email: john@example.com
+  phone: "555-9876"
+tags:
+  - friend
+  - climbing
+---
+
+Met John at the climbing gym. Great belayer."""
+
+    data = Person.from_profile_markdown(markdown)
+
+    assert data["identifier"] == "john_doe"
+    assert data["display_name"] == "John Doe"
+    assert data["aliases"] == ["@johnd", "john.doe@work.com"]
+    assert data["contact_info"]["email"] == "john@example.com"
+    assert data["contact_info"]["phone"] == "555-9876"
+    assert data["tags"] == ["friend", "climbing"]
+    assert "Met John at the climbing gym" in data["notes"]
+
+
+def test_person_from_profile_markdown_no_frontmatter():
+    """Test parsing markdown without frontmatter."""
+    markdown = "Just some notes about a person."
+
+    data = Person.from_profile_markdown(markdown)
+
+    assert data["notes"] == "Just some notes about a person."
+    assert "identifier" not in data
+
+
+def test_person_from_profile_markdown_empty_body():
+    """Test parsing markdown with frontmatter but no body."""
+    markdown = """---
+identifier: jane_smith
+display_name: Jane Smith
+---
+"""
+
+    data = Person.from_profile_markdown(markdown)
+
+    assert data["identifier"] == "jane_smith"
+    assert data["display_name"] == "Jane Smith"
+    assert "notes" not in data or data.get("notes") is None
+
+
+def test_person_profile_roundtrip(person_data):
+    """Test that Person -> markdown -> dict preserves data."""
+    sha256 = create_content_hash(f"person:{person_data['identifier']}")
+    person = Person(**person_data, sha256=sha256, size=100)
+
+    markdown = person.to_profile_markdown()
+    data = Person.from_profile_markdown(markdown)
+
+    assert data["identifier"] == person.identifier
+    assert data["display_name"] == person.display_name
+    assert set(data["aliases"]) == set(person.aliases)
+    assert data["contact_info"] == person.contact_info
+    assert set(data["tags"]) == set(person.tags)
+    assert data["notes"] == person.content
+
+
+def test_person_get_profile_path():
+    """Test getting the profile path for a person."""
+    sha256 = create_content_hash("person:test_user")
+    person = Person(
+        identifier="test_user",
+        display_name="Test User",
+        modality="person",
+        sha256=sha256,
+        size=0,
+    )
+
+    path = person.get_profile_path()
+
+    # Should be in profiles folder with .md extension
+    assert path.endswith(".md")
+    assert "test_user" in path
+    assert "/" in path  # Should have folder separator
+
+
+def test_person_save_profile_note(tmp_path):
+    """Test saving Person data to a profile note file."""
+    from unittest.mock import patch
+
+    sha256 = create_content_hash("person:file_test_user")
+    person = Person(
+        identifier="file_test_user",
+        display_name="File Test User",
+        aliases=["@filetest"],
+        contact_info={"email": "filetest@example.com"},
+        tags=["test"],
+        content="Test notes content.",
+        modality="person",
+        sha256=sha256,
+        size=20,
+    )
+
+    with patch("memory.common.settings.NOTES_STORAGE_DIR", tmp_path):
+        person.save_profile_note()
+
+        # Verify file was created
+        profile_path = tmp_path / "profiles" / "file_test_user.md"
+        assert profile_path.exists()
+
+        # Verify content
+        content = profile_path.read_text()
+        assert "identifier: file_test_user" in content
+        assert "display_name: File Test User" in content
+        assert "@filetest" in content
+        assert "email: filetest@example.com" in content
+        assert "Test notes content." in content
+
+
+def test_person_save_profile_note_creates_directory(tmp_path):
+    """Test that save_profile_note creates the profiles directory if needed."""
+    from unittest.mock import patch
+
+    sha256 = create_content_hash("person:dir_test_user")
+    person = Person(
+        identifier="dir_test_user",
+        display_name="Dir Test User",
+        modality="person",
+        sha256=sha256,
+        size=0,
+    )
+
+    # profiles directory doesn't exist yet
+    profiles_dir = tmp_path / "profiles"
+    assert not profiles_dir.exists()
+
+    with patch("memory.common.settings.NOTES_STORAGE_DIR", tmp_path):
+        person.save_profile_note()
+
+        # Directory should now exist
+        assert profiles_dir.exists()
+        assert (profiles_dir / "dir_test_user.md").exists()

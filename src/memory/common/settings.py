@@ -76,6 +76,7 @@ WEBPAGE_STORAGE_DIR = pathlib.Path(
 NOTES_STORAGE_DIR = pathlib.Path(
     os.getenv("NOTES_STORAGE_DIR", FILE_STORAGE_DIR / "notes")
 )
+PROFILES_FOLDER = os.getenv("PROFILES_FOLDER", "profiles")
 DISCORD_STORAGE_DIR = pathlib.Path(
     os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
 )

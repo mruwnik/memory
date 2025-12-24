@@ -4,9 +4,10 @@ Celery tasks for tracking people.
 
 import logging
 
+from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Person
-from memory.common.celery_app import app, SYNC_PERSON, UPDATE_PERSON
+from memory.common.celery_app import app, SYNC_PERSON, UPDATE_PERSON, SYNC_PROFILE_FROM_FILE
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -14,6 +15,7 @@ from memory.workers.tasks.content_processing import (
     process_content_item,
     safe_task_execution,
 )
+from memory.workers.tasks.notes import git_tracking
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,25 @@ def _deep_merge(base: dict, updates: dict) -> dict:
     return result
 
 
+def _save_profile_note(person_id: int, save_to_file: bool = True) -> None:
+    """Save person data to profile note file with git tracking."""
+    if not save_to_file:
+        return
+
+    with make_session() as session:
+        person = session.get(Person, person_id)
+        if not person:
+            logger.warning(f"Person not found for profile save: {person_id}")
+            return
+
+        profile_path = person.get_profile_path()
+        with git_tracking(
+            settings.NOTES_STORAGE_DIR,
+            f"Sync profile {profile_path}: {person.display_name}",
+        ):
+            person.save_profile_note()
+
+
 @app.task(name=SYNC_PERSON)
 @safe_task_execution
 def sync_person(
@@ -38,6 +59,7 @@ def sync_person(
     contact_info: dict | None = None,
     tags: list[str] | None = None,
     notes: str | None = None,
+    save_to_file: bool = True,
 ):
     """
     Create or update a person in the knowledge base.
@@ -49,6 +71,7 @@ def sync_person(
         contact_info: Contact information dict
         tags: Categorization tags
         notes: Free-form notes about the person
+        save_to_file: Whether to save to profile note file (default True)
     """
     logger.info(f"Syncing person: {identifier}")
 
@@ -82,7 +105,13 @@ def sync_person(
             size=len(notes or ""),
         )
 
-        return process_content_item(person, session)
+        result = process_content_item(person, session)
+
+    # Save profile note outside transaction (git operations are slow)
+    if result.get("status") == "processed":
+        _save_profile_note(result.get("person_id"), save_to_file)
+
+    return result
 
 
 @app.task(name=UPDATE_PERSON)
@@ -95,6 +124,7 @@ def update_person(
     tags: list[str] | None = None,
     notes: str | None = None,
     replace_notes: bool = False,
+    save_to_file: bool = True,
 ):
     """
     Update a person with merge semantics.
@@ -105,6 +135,9 @@ def update_person(
     - contact_info: Deep merge with existing
     - tags: Union with existing
     - notes: Append to existing (or replace if replace_notes=True)
+
+    Args:
+        save_to_file: Whether to save to profile note file (default True)
     """
     logger.info(f"Updating person: {identifier}")
 
@@ -142,4 +175,89 @@ def update_person(
         person.size = len(person.content or "")
         person.embed_status = "RAW"  # Re-embed with updated content
 
-        return process_content_item(person, session)
+        result = process_content_item(person, session)
+
+    # Save profile note outside transaction (git operations are slow)
+    if result.get("status") == "processed":
+        _save_profile_note(result.get("person_id"), save_to_file)
+
+    return result
+
+
+@app.task(name=SYNC_PROFILE_FROM_FILE)
+@safe_task_execution
+def sync_profile_from_file(filename: str):
+    """
+    Sync a profile note file to a Person record.
+
+    Reads a markdown file with YAML frontmatter and creates/updates
+    the corresponding Person record. Does NOT save back to file
+    to avoid infinite loops.
+
+    Args:
+        filename: Relative path to the profile file (e.g., "profiles/john_doe.md")
+    """
+    file_path = settings.NOTES_STORAGE_DIR / filename
+    if not file_path.exists():
+        logger.warning(f"Profile file not found: {filename}")
+        return {"status": "not_found", "filename": filename}
+
+    content = file_path.read_text()
+    data = Person.from_profile_markdown(content)
+
+    if "identifier" not in data:
+        # Try to infer identifier from filename
+        stem = file_path.stem  # e.g., "john_doe" from "profiles/john_doe.md"
+        data["identifier"] = stem
+
+    if "display_name" not in data:
+        # Use identifier as display name if not provided
+        data["display_name"] = data["identifier"].replace("_", " ").title()
+
+    identifier = data["identifier"]
+    logger.info(f"Syncing profile from file: {filename} -> {identifier}")
+
+    with make_session() as session:
+        person = session.query(Person).filter(Person.identifier == identifier).first()
+
+        if person:
+            # Update existing person with merge semantics
+            if "display_name" in data:
+                person.display_name = data["display_name"]
+            if "aliases" in data:
+                existing_aliases = set(person.aliases or [])
+                new_aliases = existing_aliases | set(data["aliases"])
+                person.aliases = list(new_aliases)
+            if "contact_info" in data:
+                existing_contact = dict(person.contact_info or {})
+                person.contact_info = _deep_merge(existing_contact, data["contact_info"])
+            if "tags" in data:
+                existing_tags = set(person.tags or [])
+                new_tags = existing_tags | set(data["tags"])
+                person.tags = list(new_tags)
+            if "notes" in data:
+                # Replace notes from file (file is source of truth)
+                person.content = data["notes"]
+
+            person.sha256 = create_content_hash(f"person:{identifier}")
+            person.size = len(person.content or "")
+            person.embed_status = "RAW"
+
+            return process_content_item(person, session)
+        else:
+            # Create new person
+            sha256 = create_content_hash(f"person:{identifier}")
+            person = Person(
+                identifier=identifier,
+                display_name=data.get("display_name", identifier),
+                aliases=data.get("aliases", []),
+                contact_info=data.get("contact_info", {}),
+                tags=data.get("tags", []),
+                content=data.get("notes"),
+                modality="person",
+                mime_type="text/plain",
+                sha256=sha256,
+                size=len(data.get("notes") or ""),
+            )
+
+            return process_content_item(person, session)
