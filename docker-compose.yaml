@@ -206,7 +206,7 @@ services:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,comic,discord,ebooks,email,forums,github,photo_embed,maintenance,notes,scheduler"
+      QUEUES: "backup,blogs,comic,discord,ebooks,email,forums,github,people,photo_embed,maintenance,notes,scheduler"
 
   ingest-hub:
     <<: *worker-base

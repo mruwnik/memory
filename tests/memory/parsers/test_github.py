@@ -333,7 +333,13 @@ def test_fetch_prs_basic():
 
         page = kwargs.get("params", {}).get("page", 1)
 
-        if "/pulls" in url and "/comments" not in url:
+        # PR list endpoint
+        if "/pulls" in url and "/comments" not in url and "/reviews" not in url and "/files" not in url:
+            # Check if this is the diff request
+            if kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
+                response.ok = True
+                response.text = "+100 lines added\n-50 lines removed"
+                return response
             if page == 1:
                 response.json.return_value = [
                     {
@@ -355,10 +361,22 @@ def test_fetch_prs_basic():
                 ]
             else:
                 response.json.return_value = []
-        elif ".diff" in url:
-            response.ok = True
-            response.text = "+100 lines added\n-50 lines removed"
-        elif "/comments" in url:
+        elif "/pulls/" in url and "/comments" in url:
+            # Review comments endpoint
+            response.json.return_value = []
+        elif "/pulls/" in url and "/reviews" in url:
+            # Reviews endpoint
+            response.json.return_value = []
+        elif "/pulls/" in url and "/files" in url:
+            # Files endpoint
+            if page == 1:
+                response.json.return_value = [
+                    {"filename": "test.py", "status": "added", "additions": 100, "deletions": 50, "patch": "+code"}
+                ]
+            else:
+                response.json.return_value = []
+        elif "/issues/" in url and "/comments" in url:
+            # Regular comments endpoint
             response.json.return_value = []
         else:
             response.json.return_value = []
@@ -376,43 +394,66 @@ def test_fetch_prs_basic():
     assert pr["kind"] == "pr"
     assert pr["diff_summary"] is not None
     assert "100 lines added" in pr["diff_summary"]
+    # Verify pr_data is populated
+    assert pr["pr_data"] is not None
+    assert pr["pr_data"]["additions"] == 100
+    assert pr["pr_data"]["deletions"] == 50
 
 
 def test_fetch_prs_merged():
     """Test fetching merged PR."""
     credentials = GithubCredentials(auth_type="pat", access_token="token")
 
-    mock_response = Mock()
-    mock_response.json.return_value = [
-        {
-            "number": 20,
-            "title": "Merged PR",
-            "body": "Body",
-            "state": "closed",
-            "user": {"login": "user"},
-            "labels": [],
-            "assignees": [],
-            "milestone": None,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-10T00:00:00Z",
-            "closed_at": "2024-01-10T00:00:00Z",
-            "merged_at": "2024-01-10T00:00:00Z",
-            "additions": 10,
-            "deletions": 5,
-            "comments": 0,
-        }
-    ]
-    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
-    mock_response.raise_for_status = Mock()
+    def mock_get(url, **kwargs):
+        """Route mock responses based on URL."""
+        response = Mock()
+        response.headers = {"X-RateLimit-Remaining": "4999"}
+        response.raise_for_status = Mock()
 
-    mock_empty = Mock()
-    mock_empty.json.return_value = []
-    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
-    mock_empty.raise_for_status = Mock()
+        page = kwargs.get("params", {}).get("page", 1)
 
-    with patch.object(requests.Session, "get") as mock_get:
-        mock_get.side_effect = [mock_response, mock_empty, mock_empty]
+        # PR list endpoint
+        if "/pulls" in url and "/comments" not in url and "/reviews" not in url and "/files" not in url:
+            if kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
+                response.ok = True
+                response.text = ""
+                return response
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "number": 20,
+                        "title": "Merged PR",
+                        "body": "Body",
+                        "state": "closed",
+                        "user": {"login": "user"},
+                        "labels": [],
+                        "assignees": [],
+                        "milestone": None,
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "updated_at": "2024-01-10T00:00:00Z",
+                        "closed_at": "2024-01-10T00:00:00Z",
+                        "merged_at": "2024-01-10T00:00:00Z",
+                        "additions": 10,
+                        "deletions": 5,
+                        "comments": 0,
+                    }
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/" in url and "/comments" in url:
+            response.json.return_value = []
+        elif "/pulls/" in url and "/reviews" in url:
+            response.json.return_value = []
+        elif "/pulls/" in url and "/files" in url:
+            response.json.return_value = []
+        elif "/issues/" in url and "/comments" in url:
+            response.json.return_value = []
+        else:
+            response.json.return_value = []
 
+        return response
+
+    with patch.object(requests.Session, "get", side_effect=mock_get):
         client = GithubClient(credentials)
         prs = list(client.fetch_prs("owner", "repo"))
 
@@ -425,54 +466,73 @@ def test_fetch_prs_stops_at_since():
     """Test that PR fetching stops when reaching older items."""
     credentials = GithubCredentials(auth_type="pat", access_token="token")
 
-    mock_response = Mock()
-    mock_response.json.return_value = [
-        {
-            "number": 30,
-            "title": "Recent PR",
-            "body": "Body",
-            "state": "open",
-            "user": {"login": "user"},
-            "labels": [],
-            "assignees": [],
-            "milestone": None,
-            "created_at": "2024-01-20T00:00:00Z",
-            "updated_at": "2024-01-20T00:00:00Z",
-            "closed_at": None,
-            "merged_at": None,
-            "additions": 1,
-            "deletions": 1,
-            "comments": 0,
-        },
-        {
-            "number": 29,
-            "title": "Old PR",
-            "body": "Body",
-            "state": "open",
-            "user": {"login": "user"},
-            "labels": [],
-            "assignees": [],
-            "milestone": None,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z",  # Older than since
-            "closed_at": None,
-            "merged_at": None,
-            "additions": 1,
-            "deletions": 1,
-            "comments": 0,
-        },
-    ]
-    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
-    mock_response.raise_for_status = Mock()
+    def mock_get(url, **kwargs):
+        """Route mock responses based on URL."""
+        response = Mock()
+        response.headers = {"X-RateLimit-Remaining": "4999"}
+        response.raise_for_status = Mock()
 
-    mock_empty = Mock()
-    mock_empty.json.return_value = []
-    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
-    mock_empty.raise_for_status = Mock()
+        page = kwargs.get("params", {}).get("page", 1)
 
-    with patch.object(requests.Session, "get") as mock_get:
-        mock_get.side_effect = [mock_response, mock_empty]
+        # PR list endpoint
+        if "/pulls" in url and "/comments" not in url and "/reviews" not in url and "/files" not in url:
+            if kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
+                response.ok = True
+                response.text = ""
+                return response
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "number": 30,
+                        "title": "Recent PR",
+                        "body": "Body",
+                        "state": "open",
+                        "user": {"login": "user"},
+                        "labels": [],
+                        "assignees": [],
+                        "milestone": None,
+                        "created_at": "2024-01-20T00:00:00Z",
+                        "updated_at": "2024-01-20T00:00:00Z",
+                        "closed_at": None,
+                        "merged_at": None,
+                        "additions": 1,
+                        "deletions": 1,
+                        "comments": 0,
+                    },
+                    {
+                        "number": 29,
+                        "title": "Old PR",
+                        "body": "Body",
+                        "state": "open",
+                        "user": {"login": "user"},
+                        "labels": [],
+                        "assignees": [],
+                        "milestone": None,
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "updated_at": "2024-01-01T00:00:00Z",  # Older than since
+                        "closed_at": None,
+                        "merged_at": None,
+                        "additions": 1,
+                        "deletions": 1,
+                        "comments": 0,
+                    },
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/" in url and "/comments" in url:
+            response.json.return_value = []
+        elif "/pulls/" in url and "/reviews" in url:
+            response.json.return_value = []
+        elif "/pulls/" in url and "/files" in url:
+            response.json.return_value = []
+        elif "/issues/" in url and "/comments" in url:
+            response.json.return_value = []
+        else:
+            response.json.return_value = []
 
+        return response
+
+    with patch.object(requests.Session, "get", side_effect=mock_get):
         client = GithubClient(credentials)
         since = datetime(2024, 1, 15, tzinfo=timezone.utc)
         prs = list(client.fetch_prs("owner", "repo", since=since))
@@ -703,3 +763,552 @@ def test_fetch_issues_handles_api_error():
 
         with pytest.raises(requests.HTTPError):
             list(client.fetch_issues("owner", "nonexistent"))
+
+
+# =============================================================================
+# Tests for fetch_review_comments
+# =============================================================================
+
+
+def test_fetch_review_comments_basic():
+    """Test fetching PR review comments."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "id": 1001,
+            "user": {"login": "reviewer1"},
+            "body": "This needs a test",
+            "path": "src/main.py",
+            "line": 42,
+            "side": "RIGHT",
+            "diff_hunk": "@@ -40,3 +40,5 @@",
+            "created_at": "2024-01-01T12:00:00Z",
+        },
+        {
+            "id": 1002,
+            "user": {"login": "reviewer2"},
+            "body": "Good refactoring",
+            "path": "src/utils.py",
+            "line": 10,
+            "side": "LEFT",
+            "diff_hunk": "@@ -8,5 +8,5 @@",
+            "created_at": "2024-01-02T10:00:00Z",
+        },
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        comments = client.fetch_review_comments("owner", "repo", 10)
+
+    assert len(comments) == 2
+    assert comments[0]["user"] == "reviewer1"
+    assert comments[0]["body"] == "This needs a test"
+    assert comments[0]["path"] == "src/main.py"
+    assert comments[0]["line"] == 42
+    assert comments[0]["side"] == "RIGHT"
+    assert comments[0]["diff_hunk"] == "@@ -40,3 +40,5 @@"
+    assert comments[1]["user"] == "reviewer2"
+
+
+def test_fetch_review_comments_ghost_user():
+    """Test review comments with deleted user."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "id": 1001,
+            "user": None,  # Deleted user
+            "body": "Legacy comment",
+            "path": "file.py",
+            "line": None,  # Line might be None for outdated comments
+            "side": "RIGHT",
+            "diff_hunk": "",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        comments = client.fetch_review_comments("owner", "repo", 10)
+
+    assert len(comments) == 1
+    assert comments[0]["user"] == "ghost"
+    assert comments[0]["line"] is None
+
+
+def test_fetch_review_comments_pagination():
+    """Test review comment fetching with pagination."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_page1 = Mock()
+    mock_page1.json.return_value = [
+        {
+            "id": i,
+            "user": {"login": f"user{i}"},
+            "body": f"Comment {i}",
+            "path": "file.py",
+            "line": i,
+            "side": "RIGHT",
+            "diff_hunk": "",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+        for i in range(100)
+    ]
+    mock_page1.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_page1.raise_for_status = Mock()
+
+    mock_page2 = Mock()
+    mock_page2.json.return_value = [
+        {
+            "id": 100,
+            "user": {"login": "user100"},
+            "body": "Final comment",
+            "path": "file.py",
+            "line": 100,
+            "side": "RIGHT",
+            "diff_hunk": "",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+    ]
+    mock_page2.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_page2.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4997"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_page1, mock_page2, mock_empty]
+
+        client = GithubClient(credentials)
+        comments = client.fetch_review_comments("owner", "repo", 10)
+
+    assert len(comments) == 101
+
+
+# =============================================================================
+# Tests for fetch_reviews
+# =============================================================================
+
+
+def test_fetch_reviews_basic():
+    """Test fetching PR reviews."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "id": 2001,
+            "user": {"login": "lead_dev"},
+            "state": "APPROVED",
+            "body": "LGTM!",
+            "submitted_at": "2024-01-05T15:00:00Z",
+        },
+        {
+            "id": 2002,
+            "user": {"login": "qa_engineer"},
+            "state": "CHANGES_REQUESTED",
+            "body": "Please add tests",
+            "submitted_at": "2024-01-04T10:00:00Z",
+        },
+        {
+            "id": 2003,
+            "user": {"login": "observer"},
+            "state": "COMMENTED",
+            "body": None,  # Some reviews have no body
+            "submitted_at": "2024-01-03T08:00:00Z",
+        },
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        reviews = client.fetch_reviews("owner", "repo", 10)
+
+    assert len(reviews) == 3
+    assert reviews[0]["user"] == "lead_dev"
+    assert reviews[0]["state"] == "approved"  # Lowercased
+    assert reviews[0]["body"] == "LGTM!"
+    assert reviews[1]["state"] == "changes_requested"
+    assert reviews[2]["body"] is None
+
+
+def test_fetch_reviews_ghost_user():
+    """Test reviews with deleted user."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "id": 2001,
+            "user": None,
+            "state": "APPROVED",
+            "body": "Approved by former employee",
+            "submitted_at": "2024-01-01T00:00:00Z",
+        }
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        reviews = client.fetch_reviews("owner", "repo", 10)
+
+    assert len(reviews) == 1
+    assert reviews[0]["user"] == "ghost"
+
+
+# =============================================================================
+# Tests for fetch_pr_files
+# =============================================================================
+
+
+def test_fetch_pr_files_basic():
+    """Test fetching PR file changes."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "filename": "src/main.py",
+            "status": "modified",
+            "additions": 10,
+            "deletions": 5,
+            "patch": "@@ -1,5 +1,10 @@\n+new code\n-old code",
+        },
+        {
+            "filename": "src/new_feature.py",
+            "status": "added",
+            "additions": 100,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1,100 @@\n+entire new file",
+        },
+        {
+            "filename": "old_file.py",
+            "status": "removed",
+            "additions": 0,
+            "deletions": 50,
+            "patch": "@@ -1,50 +0,0 @@\n-entire old file",
+        },
+        {
+            "filename": "image.png",
+            "status": "added",
+            "additions": 0,
+            "deletions": 0,
+            # No patch for binary files
+        },
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        files = client.fetch_pr_files("owner", "repo", 10)
+
+    assert len(files) == 4
+    assert files[0]["filename"] == "src/main.py"
+    assert files[0]["status"] == "modified"
+    assert files[0]["additions"] == 10
+    assert files[0]["deletions"] == 5
+    assert files[0]["patch"] is not None
+
+    assert files[1]["status"] == "added"
+    assert files[2]["status"] == "removed"
+    assert files[3]["patch"] is None  # Binary file
+
+
+def test_fetch_pr_files_renamed():
+    """Test PR with renamed files."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {
+            "filename": "new_name.py",
+            "status": "renamed",
+            "additions": 0,
+            "deletions": 0,
+            "patch": None,
+        }
+    ]
+    mock_response.headers = {"X-RateLimit-Remaining": "4999"}
+    mock_response.raise_for_status = Mock()
+
+    mock_empty = Mock()
+    mock_empty.json.return_value = []
+    mock_empty.headers = {"X-RateLimit-Remaining": "4998"}
+    mock_empty.raise_for_status = Mock()
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_response, mock_empty]
+
+        client = GithubClient(credentials)
+        files = client.fetch_pr_files("owner", "repo", 10)
+
+    assert len(files) == 1
+    assert files[0]["status"] == "renamed"
+
+
+# =============================================================================
+# Tests for fetch_pr_diff
+# =============================================================================
+
+
+def test_fetch_pr_diff_success():
+    """Test fetching full PR diff."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    diff_text = """diff --git a/file.py b/file.py
+index abc123..def456 100644
+--- a/file.py
++++ b/file.py
+@@ -1,5 +1,10 @@
++import os
++
+ def main():
+-    print("old")
++    print("new")
+"""
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.text = diff_text
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.return_value = mock_response
+
+        client = GithubClient(credentials)
+        diff = client.fetch_pr_diff("owner", "repo", 10)
+
+    assert diff == diff_text
+    # Verify Accept header was set for diff format
+    call_kwargs = mock_get.call_args.kwargs
+    assert call_kwargs["headers"]["Accept"] == "application/vnd.github.diff"
+
+
+def test_fetch_pr_diff_failure():
+    """Test handling diff fetch failure gracefully."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = Mock()
+    mock_response.ok = False
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.return_value = mock_response
+
+        client = GithubClient(credentials)
+        diff = client.fetch_pr_diff("owner", "repo", 10)
+
+    assert diff is None
+
+
+def test_fetch_pr_diff_exception():
+    """Test handling exceptions during diff fetch."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = requests.RequestException("Network error")
+
+        client = GithubClient(credentials)
+        diff = client.fetch_pr_diff("owner", "repo", 10)
+
+    assert diff is None
+
+
+# =============================================================================
+# Tests for _parse_pr with pr_data
+# =============================================================================
+
+
+def test_parse_pr_fetches_all_pr_data():
+    """Test that _parse_pr fetches and includes all PR-specific data."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    pr_raw = {
+        "number": 42,
+        "title": "Feature PR",
+        "body": "PR description",
+        "state": "open",
+        "user": {"login": "contributor"},
+        "labels": [{"name": "enhancement"}],
+        "assignees": [{"login": "reviewer"}],
+        "milestone": {"title": "v2.0"},
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-02T00:00:00Z",
+        "closed_at": None,
+        "merged_at": None,
+    }
+
+    # Mock responses for all the fetch methods
+    def mock_get(url, **kwargs):
+        response = Mock()
+        response.headers = {"X-RateLimit-Remaining": "4999"}
+        response.raise_for_status = Mock()
+
+        if "/issues/42/comments" in url:
+            # Regular comments
+            page = kwargs.get("params", {}).get("page", 1)
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "id": 1,
+                        "user": {"login": "user1"},
+                        "body": "Regular comment",
+                        "created_at": "2024-01-01T10:00:00Z",
+                        "updated_at": "2024-01-01T10:00:00Z",
+                    }
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/42/comments" in url:
+            # Review comments
+            page = kwargs.get("params", {}).get("page", 1)
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "id": 101,
+                        "user": {"login": "reviewer1"},
+                        "body": "Review comment",
+                        "path": "src/main.py",
+                        "line": 10,
+                        "side": "RIGHT",
+                        "diff_hunk": "@@ -1,5 +1,10 @@",
+                        "created_at": "2024-01-01T12:00:00Z",
+                    }
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/42/reviews" in url:
+            # Reviews
+            page = kwargs.get("params", {}).get("page", 1)
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "id": 201,
+                        "user": {"login": "lead"},
+                        "state": "APPROVED",
+                        "body": "LGTM",
+                        "submitted_at": "2024-01-02T08:00:00Z",
+                    }
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/42/files" in url:
+            # Files
+            page = kwargs.get("params", {}).get("page", 1)
+            if page == 1:
+                response.json.return_value = [
+                    {
+                        "filename": "src/main.py",
+                        "status": "modified",
+                        "additions": 50,
+                        "deletions": 10,
+                        "patch": "+new\n-old",
+                    },
+                    {
+                        "filename": "tests/test_main.py",
+                        "status": "added",
+                        "additions": 30,
+                        "deletions": 0,
+                        "patch": "+tests",
+                    },
+                ]
+            else:
+                response.json.return_value = []
+        elif "/pulls/42" in url and "diff" in kwargs.get("headers", {}).get(
+            "Accept", ""
+        ):
+            # Full diff
+            response.ok = True
+            response.text = "diff --git a/src/main.py\n+new code\n-old code"
+            return response
+        else:
+            response.json.return_value = []
+
+        return response
+
+    with patch.object(requests.Session, "get", side_effect=mock_get):
+        client = GithubClient(credentials)
+        result = client._parse_pr("owner", "repo", pr_raw)
+
+    # Verify basic fields
+    assert result["kind"] == "pr"
+    assert result["number"] == 42
+    assert result["title"] == "Feature PR"
+    assert result["author"] == "contributor"
+    assert len(result["comments"]) == 1
+
+    # Verify pr_data
+    pr_data = result["pr_data"]
+    assert pr_data is not None
+
+    # Verify diff
+    assert pr_data["diff"] is not None
+    assert "new code" in pr_data["diff"]
+
+    # Verify files
+    assert len(pr_data["files"]) == 2
+    assert pr_data["files"][0]["filename"] == "src/main.py"
+    assert pr_data["files"][0]["additions"] == 50
+
+    # Verify stats calculated from files
+    assert pr_data["additions"] == 80  # 50 + 30
+    assert pr_data["deletions"] == 10
+    assert pr_data["changed_files_count"] == 2
+
+    # Verify reviews
+    assert len(pr_data["reviews"]) == 1
+    assert pr_data["reviews"][0]["user"] == "lead"
+    assert pr_data["reviews"][0]["state"] == "approved"
+
+    # Verify review comments
+    assert len(pr_data["review_comments"]) == 1
+    assert pr_data["review_comments"][0]["user"] == "reviewer1"
+    assert pr_data["review_comments"][0]["path"] == "src/main.py"
+
+    # Verify diff_summary is truncated version of full diff
+    assert result["diff_summary"] == pr_data["diff"][:5000]

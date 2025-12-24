@@ -16,6 +16,7 @@ SCHEDULED_CALLS_ROOT = "memory.workers.tasks.scheduled_calls"
 DISCORD_ROOT = "memory.workers.tasks.discord"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
+PEOPLE_ROOT = "memory.workers.tasks.people"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -66,6 +67,10 @@ BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 SYNC_GITHUB_REPO = f"{GITHUB_ROOT}.sync_github_repo"
 SYNC_ALL_GITHUB_REPOS = f"{GITHUB_ROOT}.sync_all_github_repos"
 SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
+
+# People tasks
+SYNC_PERSON = f"{PEOPLE_ROOT}.sync_person"
+UPDATE_PERSON = f"{PEOPLE_ROOT}.update_person"
 
 
 def get_broker_url() -> str:
@@ -123,6 +128,7 @@ app.conf.update(
         },
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
+        f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
     },
     beat_schedule={
         "sync-github-repos-hourly": {

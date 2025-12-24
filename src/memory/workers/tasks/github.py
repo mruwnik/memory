@@ -12,12 +12,13 @@ from memory.common.celery_app import (
     SYNC_GITHUB_ITEM,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem
+from memory.common.db.models import GithubItem, GithubPRData
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.parsers.github import (
     GithubClient,
     GithubCredentials,
     GithubIssueData,
+    GithubPRDataDict,
 )
 from memory.workers.tasks.content_processing import (
     create_content_hash,
@@ -32,9 +33,40 @@ logger = logging.getLogger(__name__)
 def _build_content(issue_data: GithubIssueData) -> str:
     """Build searchable content from issue/PR data."""
     content_parts = [f"# {issue_data['title']}", issue_data["body"]]
+
+    # Add regular comments
     for comment in issue_data["comments"]:
         content_parts.append(f"\n---\n**{comment['author']}**: {comment['body']}")
+
+    # Add review comments for PRs (makes them searchable)
+    pr_data = issue_data.get("pr_data")
+    if pr_data and pr_data.get("review_comments"):
+        content_parts.append("\n---\n## Code Review Comments\n")
+        for rc in pr_data["review_comments"]:
+            content_parts.append(
+                f"**{rc['user']}** on `{rc['path']}`: {rc['body']}"
+            )
+
     return "\n\n".join(content_parts)
+
+
+def _create_pr_data(issue_data: GithubIssueData) -> GithubPRData | None:
+    """Create GithubPRData from PR-specific data if available."""
+    pr_data_dict = issue_data.get("pr_data")
+    if not pr_data_dict:
+        return None
+
+    pr_data = GithubPRData(
+        additions=pr_data_dict.get("additions"),
+        deletions=pr_data_dict.get("deletions"),
+        changed_files_count=pr_data_dict.get("changed_files_count"),
+        files=pr_data_dict.get("files"),
+        reviews=pr_data_dict.get("reviews"),
+        review_comments=pr_data_dict.get("review_comments"),
+    )
+    # Use the setter to compress the diff
+    pr_data.diff = pr_data_dict.get("diff")
+    return pr_data
 
 
 def _create_github_item(
@@ -57,7 +89,7 @@ def _create_github_item(
 
     repo_tags = cast(list[str], repo.tags) or []
 
-    return GithubItem(
+    github_item = GithubItem(
         modality="github",
         sha256=create_content_hash(content),
         content=content,
@@ -85,6 +117,12 @@ def _create_github_item(
         size=len(content.encode("utf-8")),
         mime_type="text/markdown",
     )
+
+    # Create PR data if this is a PR
+    if issue_data["kind"] == "pr":
+        github_item.pr_data = _create_pr_data(issue_data)
+
+    return github_item
 
 
 def _needs_reindex(existing: GithubItem, new_data: GithubIssueData) -> bool:
@@ -165,6 +203,23 @@ def _update_existing_item(
     repo_tags = cast(list[str], repo.tags) or []
     existing.tags = repo_tags + issue_data["labels"]  # type: ignore
 
+    # Update PR data if this is a PR
+    if issue_data["kind"] == "pr":
+        pr_data_dict = issue_data.get("pr_data")
+        if pr_data_dict:
+            if existing.pr_data:
+                # Update existing pr_data
+                existing.pr_data.additions = pr_data_dict.get("additions")
+                existing.pr_data.deletions = pr_data_dict.get("deletions")
+                existing.pr_data.changed_files_count = pr_data_dict.get("changed_files_count")
+                existing.pr_data.files = pr_data_dict.get("files")
+                existing.pr_data.reviews = pr_data_dict.get("reviews")
+                existing.pr_data.review_comments = pr_data_dict.get("review_comments")
+                existing.pr_data.diff = pr_data_dict.get("diff")
+            else:
+                # Create new pr_data
+                existing.pr_data = _create_pr_data(issue_data)
+
     session.flush()
 
     # Re-embed and push to Qdrant
@@ -193,12 +248,19 @@ def _serialize_issue_data(data: GithubIssueData) -> dict[str, Any]:
             }
             for c in data["comments"]
         ],
+        # pr_data is already JSON-serializable (TypedDict)
+        "pr_data": data.get("pr_data"),
     }
 
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
     """Deserialize issue data from Celery task."""
     from memory.parsers.github import parse_github_date
+
+    # Reconstruct pr_data if present
+    pr_data: GithubPRDataDict | None = None
+    if data.get("pr_data"):
+        pr_data = cast(GithubPRDataDict, data["pr_data"])
 
     return GithubIssueData(
         kind=data["kind"],
@@ -219,6 +281,7 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         diff_summary=data.get("diff_summary"),
         project_fields=data.get("project_fields"),
         content_hash=data["content_hash"],
+        pr_data=pr_data,
     )
 
 

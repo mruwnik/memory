@@ -42,6 +42,51 @@ class GithubComment(TypedDict):
     updated_at: str
 
 
+class GithubReviewComment(TypedDict):
+    """A line-by-line code review comment on a PR."""
+
+    id: int
+    user: str
+    body: str
+    path: str
+    line: int | None
+    side: str  # "LEFT" or "RIGHT"
+    diff_hunk: str
+    created_at: str
+
+
+class GithubReview(TypedDict):
+    """A PR review (approval, request changes, etc.)."""
+
+    id: int
+    user: str
+    state: str  # "approved", "changes_requested", "commented", "dismissed"
+    body: str | None
+    submitted_at: str
+
+
+class GithubFileChange(TypedDict):
+    """A file changed in a PR."""
+
+    filename: str
+    status: str  # "added", "modified", "removed", "renamed"
+    additions: int
+    deletions: int
+    patch: str | None  # Diff patch for this file
+
+
+class GithubPRDataDict(TypedDict):
+    """PR-specific data for storage in GithubPRData model."""
+
+    diff: str | None  # Full diff text
+    files: list[GithubFileChange]
+    additions: int
+    deletions: int
+    changed_files_count: int
+    reviews: list[GithubReview]
+    review_comments: list[GithubReviewComment]
+
+
 class GithubIssueData(TypedDict):
     """Parsed issue/PR data ready for storage."""
 
@@ -60,9 +105,11 @@ class GithubIssueData(TypedDict):
     github_updated_at: datetime
     comment_count: int
     comments: list[GithubComment]
-    diff_summary: str | None  # PRs only
+    diff_summary: str | None  # PRs only (truncated, for backward compat)
     project_fields: dict[str, Any] | None
     content_hash: str
+    # PR-specific extended data (None for issues)
+    pr_data: GithubPRDataDict | None
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:
@@ -266,6 +313,145 @@ class GithubClient:
             page += 1
 
         return comments
+
+    def fetch_review_comments(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> list[GithubReviewComment]:
+        """Fetch all line-by-line review comments for a PR."""
+        comments: list[GithubReviewComment] = []
+        page = 1
+
+        while True:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+                params={"page": page, "per_page": 100},
+                timeout=30,
+            )
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            page_comments = response.json()
+            if not page_comments:
+                break
+
+            comments.extend(
+                [
+                    GithubReviewComment(
+                        id=c["id"],
+                        user=c["user"]["login"] if c.get("user") else "ghost",
+                        body=c.get("body", ""),
+                        path=c.get("path", ""),
+                        line=c.get("line"),
+                        side=c.get("side", "RIGHT"),
+                        diff_hunk=c.get("diff_hunk", ""),
+                        created_at=c["created_at"],
+                    )
+                    for c in page_comments
+                ]
+            )
+            page += 1
+
+        return comments
+
+    def fetch_reviews(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> list[GithubReview]:
+        """Fetch all reviews (approvals, change requests) for a PR."""
+        reviews: list[GithubReview] = []
+        page = 1
+
+        while True:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                params={"page": page, "per_page": 100},
+                timeout=30,
+            )
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            page_reviews = response.json()
+            if not page_reviews:
+                break
+
+            reviews.extend(
+                [
+                    GithubReview(
+                        id=r["id"],
+                        user=r["user"]["login"] if r.get("user") else "ghost",
+                        state=r.get("state", "COMMENTED").lower(),
+                        body=r.get("body"),
+                        submitted_at=r.get("submitted_at", ""),
+                    )
+                    for r in page_reviews
+                ]
+            )
+            page += 1
+
+        return reviews
+
+    def fetch_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> list[GithubFileChange]:
+        """Fetch list of files changed in a PR with patches."""
+        files: list[GithubFileChange] = []
+        page = 1
+
+        while True:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls/{pr_number}/files",
+                params={"page": page, "per_page": 100},
+                timeout=30,
+            )
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            page_files = response.json()
+            if not page_files:
+                break
+
+            files.extend(
+                [
+                    GithubFileChange(
+                        filename=f["filename"],
+                        status=f.get("status", "modified"),
+                        additions=f.get("additions", 0),
+                        deletions=f.get("deletions", 0),
+                        patch=f.get("patch"),  # May be None for binary files
+                    )
+                    for f in page_files
+                ]
+            )
+            page += 1
+
+        return files
+
+    def fetch_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> str | None:
+        """Fetch the full diff for a PR (not truncated)."""
+        try:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls/{pr_number}",
+                headers={"Accept": "application/vnd.github.diff"},
+                timeout=60,  # Longer timeout for large diffs
+            )
+            if response.ok:
+                return response.text
+        except Exception as e:
+            logger.warning(f"Failed to fetch PR diff: {e}")
+        return None
 
     def fetch_project_fields(
         self,
@@ -490,28 +676,44 @@ class GithubClient:
             diff_summary=None,
             project_fields=None,  # Fetched separately if enabled
             content_hash=compute_content_hash(body, comments),
+            pr_data=None,  # Issues don't have PR data
         )
 
     def _parse_pr(
         self, owner: str, repo: str, pr: dict[str, Any]
     ) -> GithubIssueData:
         """Parse raw PR data into structured format."""
-        comments = self.fetch_comments(owner, repo, pr["number"])
+        pr_number = pr["number"]
+        comments = self.fetch_comments(owner, repo, pr_number)
         body = pr.get("body") or ""
 
-        # Get diff summary (truncated)
-        diff_summary = None
-        if diff_url := pr.get("diff_url"):
-            try:
-                diff_response = self.session.get(diff_url, timeout=30)
-                if diff_response.ok:
-                    diff_summary = diff_response.text[:5000]  # Truncate large diffs
-            except Exception as e:
-                logger.warning(f"Failed to fetch diff: {e}")
+        # Fetch PR-specific data
+        review_comments = self.fetch_review_comments(owner, repo, pr_number)
+        reviews = self.fetch_reviews(owner, repo, pr_number)
+        files = self.fetch_pr_files(owner, repo, pr_number)
+        full_diff = self.fetch_pr_diff(owner, repo, pr_number)
+
+        # Calculate stats from files
+        additions = sum(f["additions"] for f in files)
+        deletions = sum(f["deletions"] for f in files)
+
+        # Get diff summary (truncated, for backward compatibility)
+        diff_summary = full_diff[:5000] if full_diff else None
+
+        # Build PR data dict
+        pr_data = GithubPRDataDict(
+            diff=full_diff,
+            files=files,
+            additions=additions,
+            deletions=deletions,
+            changed_files_count=len(files),
+            reviews=reviews,
+            review_comments=review_comments,
+        )
 
         return GithubIssueData(
             kind="pr",
-            number=pr["number"],
+            number=pr_number,
             title=pr["title"],
             body=body,
             state=pr["state"],
@@ -528,4 +730,5 @@ class GithubClient:
             diff_summary=diff_summary,
             project_fields=None,  # Fetched separately if enabled
             content_hash=compute_content_hash(body, comments),
+            pr_data=pr_data,
         )

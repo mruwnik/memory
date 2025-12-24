@@ -9,15 +9,19 @@ from collections.abc import Collection
 from typing import Any, Annotated, Sequence, cast
 
 from PIL import Image
+import zlib
+
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     Text,
     func,
@@ -30,6 +34,7 @@ import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
 
+from memory.common.db.models.base import Base
 from memory.common.db.models.source_item import (
     SourceItem,
     SourceItemPayload,
@@ -858,6 +863,14 @@ class GithubItem(SourceItem):
     milestone = Column(Text, nullable=True)
     comment_count = Column(Integer, nullable=True)
 
+    # Relationship to PR-specific data
+    pr_data = relationship(
+        "GithubPRData",
+        back_populates="github_item",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     __mapper_args__ = {
         "polymorphic_identity": "github_item",
     }
@@ -900,6 +913,59 @@ class GithubItem(SourceItem):
         if content:
             return extract.extract_text(content, modality="github")
         return []
+
+
+class GithubPRData(Base):
+    """PR-specific data linked to GithubItem. Not a SourceItem - not indexed separately."""
+
+    __tablename__ = "github_pr_data"
+
+    id = Column(BigInteger, primary_key=True)
+    github_item_id = Column(
+        BigInteger,
+        ForeignKey("github_item.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    # Diff (compressed with zlib)
+    diff_compressed = Column(LargeBinary, nullable=True)
+
+    # File changes as structured data
+    # [{filename, status, additions, deletions, patch?}]
+    files = Column(JSONB, nullable=True)
+
+    # Stats
+    additions = Column(Integer, nullable=True)
+    deletions = Column(Integer, nullable=True)
+    changed_files_count = Column(Integer, nullable=True)
+
+    # Reviews (structured)
+    # [{user, state, body, submitted_at}]
+    reviews = Column(JSONB, nullable=True)
+
+    # Review comments (line-by-line code comments)
+    # [{user, body, path, line, diff_hunk, created_at}]
+    review_comments = Column(JSONB, nullable=True)
+
+    # Relationship back to GithubItem
+    github_item = relationship("GithubItem", back_populates="pr_data")
+
+    @property
+    def diff(self) -> str | None:
+        """Decompress and return the full diff text."""
+        if self.diff_compressed:
+            return zlib.decompress(self.diff_compressed).decode("utf-8")
+        return None
+
+    @diff.setter
+    def diff(self, value: str | None) -> None:
+        """Compress and store the diff text."""
+        if value:
+            self.diff_compressed = zlib.compress(value.encode("utf-8"))
+        else:
+            self.diff_compressed = None
 
 
 class NotePayload(SourceItemPayload):

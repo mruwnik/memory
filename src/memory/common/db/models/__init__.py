@@ -17,6 +17,7 @@ from memory.common.db.models.source_items import (
     BookSection,
     ForumPost,
     GithubItem,
+    GithubPRData,
     GitCommit,
     Photo,
     MiscDoc,
@@ -45,6 +46,10 @@ from memory.common.db.models.observations import (
     ObservationPattern,
     BeliefCluster,
     ConversationMetrics,
+)
+from memory.common.db.models.people import (
+    Person,
+    PersonPayload,
 )
 from memory.common.db.models.sources import (
     Book,
@@ -77,6 +82,7 @@ Payload = (
     | ForumPostPayload
     | EmailAttachmentPayload
     | MailMessagePayload
+    | PersonPayload
 )
 
 __all__ = [
@@ -95,6 +101,7 @@ __all__ = [
     "BookSection",
     "ForumPost",
     "GithubItem",
+    "GithubPRData",
     "GitCommit",
     "Photo",
     "MiscDoc",
@@ -105,6 +112,9 @@ __all__ = [
     "ObservationPattern",
     "BeliefCluster",
     "ConversationMetrics",
+    # People
+    "Person",
+    "PersonPayload",
     # Sources
     "Book",
     "ArticleFeed",

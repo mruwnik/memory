@@ -1123,3 +1123,521 @@ def test_tag_merging(repo_tags, issue_labels, expected_tags, github_account, db_
 
     item = db_session.query(GithubItem).filter_by(number=60).first()
     assert item.tags == expected_tags
+
+
+# =============================================================================
+# Tests for PR data handling
+# =============================================================================
+
+
+@pytest.fixture
+def mock_pr_data_with_extended() -> GithubIssueData:
+    """Mock PR data with full pr_data dict."""
+    from memory.parsers.github import GithubPRDataDict
+
+    pr_data: GithubPRDataDict = {
+        "diff": "diff --git a/file.py\n+new line\n-old line",
+        "files": [
+            {
+                "filename": "src/main.py",
+                "status": "modified",
+                "additions": 50,
+                "deletions": 10,
+                "patch": "+new\n-old",
+            },
+            {
+                "filename": "tests/test_main.py",
+                "status": "added",
+                "additions": 30,
+                "deletions": 0,
+                "patch": "+test code",
+            },
+        ],
+        "additions": 80,
+        "deletions": 10,
+        "changed_files_count": 2,
+        "reviews": [
+            {
+                "id": 1001,
+                "user": "lead_reviewer",
+                "state": "approved",
+                "body": "LGTM!",
+                "submitted_at": "2024-01-02T10:00:00Z",
+            }
+        ],
+        "review_comments": [
+            {
+                "id": 2001,
+                "user": "reviewer1",
+                "body": "Please add a docstring here",
+                "path": "src/main.py",
+                "line": 42,
+                "side": "RIGHT",
+                "diff_hunk": "@@ -40,3 +40,5 @@",
+                "created_at": "2024-01-01T15:00:00Z",
+            }
+        ],
+    }
+
+    return GithubIssueData(
+        kind="pr",
+        number=200,
+        title="Feature: Add new capability",
+        body="This PR adds a new capability to the system.",
+        state="open",
+        author="contributor",
+        labels=["enhancement", "needs-review"],
+        assignees=["reviewer1"],
+        milestone="v2.0",
+        created_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime(2024, 1, 2, 10, 0, 0, tzinfo=timezone.utc),
+        comment_count=1,
+        comments=[
+            {
+                "id": 5001,
+                "author": "maintainer",
+                "body": "Thanks for the PR!",
+                "created_at": "2024-01-01T14:00:00Z",
+                "updated_at": "2024-01-01T14:00:00Z",
+            }
+        ],
+        diff_summary="+new\n-old",
+        project_fields=None,
+        content_hash="pr_extended_hash",
+        pr_data=pr_data,
+    )
+
+
+def test_build_content_with_review_comments(mock_pr_data_with_extended):
+    """Test _build_content includes review comments for PRs."""
+    content = _build_content(mock_pr_data_with_extended)
+
+    # Basic content
+    assert "# Feature: Add new capability" in content
+    assert "This PR adds a new capability" in content
+
+    # Regular comment
+    assert "**maintainer**: Thanks for the PR!" in content
+
+    # Review comments section
+    assert "## Code Review Comments" in content
+    assert "**reviewer1**" in content
+    assert "Please add a docstring here" in content
+    assert "`src/main.py`" in content
+
+
+def test_build_content_pr_without_review_comments():
+    """Test _build_content for PR with no review comments."""
+    data = GithubIssueData(
+        kind="pr",
+        number=201,
+        title="Simple PR",
+        body="Body",
+        state="open",
+        author="user",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime.now(timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime.now(timezone.utc),
+        comment_count=0,
+        comments=[],
+        diff_summary=None,
+        project_fields=None,
+        content_hash="hash",
+        pr_data={
+            "diff": None,
+            "files": [],
+            "additions": 0,
+            "deletions": 0,
+            "changed_files_count": 0,
+            "reviews": [],
+            "review_comments": [],  # Empty
+        },
+    )
+
+    content = _build_content(data)
+
+    assert "# Simple PR" in content
+    assert "## Code Review Comments" not in content
+
+
+def test_build_content_issue_no_pr_data():
+    """Test _build_content for issue (no pr_data)."""
+    data = GithubIssueData(
+        kind="issue",
+        number=100,
+        title="Bug Report",
+        body="There's a bug",
+        state="open",
+        author="reporter",
+        labels=["bug"],
+        assignees=[],
+        milestone=None,
+        created_at=datetime.now(timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime.now(timezone.utc),
+        comment_count=0,
+        comments=[],
+        diff_summary=None,
+        project_fields=None,
+        content_hash="hash",
+        pr_data=None,  # Issues don't have pr_data
+    )
+
+    content = _build_content(data)
+
+    assert "# Bug Report" in content
+    assert "There's a bug" in content
+    assert "## Code Review Comments" not in content
+
+
+def test_create_pr_data_function(mock_pr_data_with_extended):
+    """Test _create_pr_data creates GithubPRData correctly."""
+    from memory.workers.tasks.github import _create_pr_data
+
+    result = _create_pr_data(mock_pr_data_with_extended)
+
+    assert result is not None
+    assert result.additions == 80
+    assert result.deletions == 10
+    assert result.changed_files_count == 2
+
+    # Files are stored as JSONB
+    assert len(result.files) == 2
+    assert result.files[0]["filename"] == "src/main.py"
+
+    # Reviews
+    assert len(result.reviews) == 1
+    assert result.reviews[0]["user"] == "lead_reviewer"
+    assert result.reviews[0]["state"] == "approved"
+
+    # Review comments
+    assert len(result.review_comments) == 1
+    assert result.review_comments[0]["path"] == "src/main.py"
+
+    # Diff is compressed - test the property getter
+    assert result.diff is not None
+    assert "new line" in result.diff
+
+
+def test_create_pr_data_none_for_issue():
+    """Test _create_pr_data returns None for issues."""
+    from memory.workers.tasks.github import _create_pr_data
+
+    data = GithubIssueData(
+        kind="issue",
+        number=100,
+        title="Issue",
+        body="Body",
+        state="open",
+        author="user",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime.now(timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime.now(timezone.utc),
+        comment_count=0,
+        comments=[],
+        diff_summary=None,
+        project_fields=None,
+        content_hash="hash",
+        pr_data=None,
+    )
+
+    result = _create_pr_data(data)
+    assert result is None
+
+
+def test_serialize_deserialize_with_pr_data(mock_pr_data_with_extended):
+    """Test serialization roundtrip preserves pr_data."""
+    serialized = _serialize_issue_data(mock_pr_data_with_extended)
+
+    # Verify pr_data is included in serialized form
+    assert "pr_data" in serialized
+    assert serialized["pr_data"]["additions"] == 80
+    assert len(serialized["pr_data"]["files"]) == 2
+    assert len(serialized["pr_data"]["reviews"]) == 1
+    assert len(serialized["pr_data"]["review_comments"]) == 1
+
+    # Deserialize and verify
+    deserialized = _deserialize_issue_data(serialized)
+
+    assert deserialized["pr_data"] is not None
+    assert deserialized["pr_data"]["additions"] == 80
+    assert deserialized["pr_data"]["deletions"] == 10
+    assert len(deserialized["pr_data"]["files"]) == 2
+    assert deserialized["pr_data"]["diff"] == mock_pr_data_with_extended["pr_data"]["diff"]
+
+
+def test_serialize_deserialize_without_pr_data(mock_issue_data):
+    """Test serialization roundtrip for issue without pr_data."""
+    # Add pr_data=None to the mock (issues don't have it)
+    issue_with_none = dict(mock_issue_data)
+    issue_with_none["pr_data"] = None
+
+    serialized = _serialize_issue_data(issue_with_none)
+    assert serialized.get("pr_data") is None
+
+    deserialized = _deserialize_issue_data(serialized)
+    assert deserialized.get("pr_data") is None
+
+
+def test_sync_github_item_creates_pr_data(
+    mock_pr_data_with_extended, github_repo, db_session, qdrant
+):
+    """Test that syncing a PR creates associated GithubPRData."""
+    serialized = _serialize_issue_data(mock_pr_data_with_extended)
+    result = github.sync_github_item(github_repo.id, serialized)
+
+    assert result["status"] == "processed"
+
+    # Query the created item
+    item = (
+        db_session.query(GithubItem)
+        .filter_by(repo_path="testorg/testrepo", number=200, kind="pr")
+        .first()
+    )
+    assert item is not None
+    assert item.kind == "pr"
+
+    # Check pr_data relationship
+    assert item.pr_data is not None
+    assert item.pr_data.additions == 80
+    assert item.pr_data.deletions == 10
+    assert item.pr_data.changed_files_count == 2
+    assert len(item.pr_data.files) == 2
+    assert len(item.pr_data.reviews) == 1
+    assert len(item.pr_data.review_comments) == 1
+
+    # Verify diff decompression works
+    assert item.pr_data.diff is not None
+    assert "new line" in item.pr_data.diff
+
+
+def test_sync_github_item_pr_without_pr_data(github_repo, db_session, qdrant):
+    """Test syncing a PR that doesn't have extended pr_data."""
+    data = GithubIssueData(
+        kind="pr",
+        number=202,
+        title="Legacy PR",
+        body="PR without extended data",
+        state="merged",
+        author="old_contributor",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        closed_at=datetime(2024, 1, 5, tzinfo=timezone.utc),
+        merged_at=datetime(2024, 1, 5, tzinfo=timezone.utc),
+        github_updated_at=datetime(2024, 1, 5, tzinfo=timezone.utc),
+        comment_count=0,
+        comments=[],
+        diff_summary="+10 -5",
+        project_fields=None,
+        content_hash="legacy_hash",
+        pr_data=None,  # No extended PR data
+    )
+
+    serialized = _serialize_issue_data(data)
+    result = github.sync_github_item(github_repo.id, serialized)
+
+    assert result["status"] == "processed"
+
+    item = db_session.query(GithubItem).filter_by(number=202).first()
+    assert item is not None
+    assert item.kind == "pr"
+    assert item.pr_data is None  # No pr_data created
+
+
+def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdrant):
+    """Test updating an existing PR with new pr_data."""
+    from memory.common.db.models import GithubPRData
+    from memory.workers.tasks.content_processing import create_content_hash
+
+    # Create initial PR with pr_data
+    initial_content = "# Initial PR\n\nOriginal body"
+    existing_item = GithubItem(
+        repo_path="testorg/testrepo",
+        repo_id=github_repo.id,
+        number=300,
+        kind="pr",
+        title="Initial PR",
+        content=initial_content,
+        state="open",
+        author="user",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        comment_count=0,
+        content_hash="initial_hash",
+        diff_summary="+5 -2",
+        modality="github",
+        mime_type="text/markdown",
+        sha256=create_content_hash(initial_content),
+        size=len(initial_content),
+        tags=["github", "test"],
+    )
+
+    # Create initial pr_data
+    initial_pr_data = GithubPRData(
+        additions=5,
+        deletions=2,
+        changed_files_count=1,
+        files=[{"filename": "old.py", "status": "modified", "additions": 5, "deletions": 2, "patch": None}],
+        reviews=[],
+        review_comments=[],
+    )
+    initial_pr_data.diff = "old diff"
+    existing_item.pr_data = initial_pr_data
+
+    db_session.add(existing_item)
+    db_session.commit()
+
+    # Now update with new data
+    updated_data = GithubIssueData(
+        kind="pr",
+        number=300,
+        title="Updated PR",
+        body="Updated body with more changes",
+        state="open",
+        author="user",
+        labels=["ready-for-review"],
+        assignees=["reviewer"],
+        milestone=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime(2024, 1, 5, tzinfo=timezone.utc),  # Newer
+        comment_count=2,
+        comments=[
+            {"id": 1, "author": "reviewer", "body": "LGTM", "created_at": "", "updated_at": ""}
+        ],
+        diff_summary="+50 -10",
+        project_fields=None,
+        content_hash="updated_hash",  # Different hash triggers update
+        pr_data={
+            "diff": "new diff with lots of changes",
+            "files": [
+                {"filename": "new.py", "status": "added", "additions": 50, "deletions": 0, "patch": "+code"},
+                {"filename": "old.py", "status": "modified", "additions": 0, "deletions": 10, "patch": "-code"},
+            ],
+            "additions": 50,
+            "deletions": 10,
+            "changed_files_count": 2,
+            "reviews": [
+                {"id": 1, "user": "reviewer", "state": "approved", "body": "Approved!", "submitted_at": ""}
+            ],
+            "review_comments": [
+                {"id": 1, "user": "reviewer", "body": "Nice!", "path": "new.py", "line": 10, "side": "RIGHT", "diff_hunk": "", "created_at": ""}
+            ],
+        },
+    )
+
+    serialized = _serialize_issue_data(updated_data)
+    result = github.sync_github_item(github_repo.id, serialized)
+
+    assert result["status"] == "processed"
+
+    # Refresh from DB
+    db_session.expire_all()
+    item = db_session.query(GithubItem).filter_by(number=300).first()
+
+    assert item.title == "Updated PR"
+    assert item.pr_data is not None
+    assert item.pr_data.additions == 50
+    assert item.pr_data.deletions == 10
+    assert item.pr_data.changed_files_count == 2
+    assert len(item.pr_data.files) == 2
+    assert len(item.pr_data.reviews) == 1
+    assert len(item.pr_data.review_comments) == 1
+    assert "new diff" in item.pr_data.diff
+
+
+def test_sync_github_item_creates_pr_data_for_existing_pr_without(
+    github_repo, db_session, qdrant
+):
+    """Test updating a PR that didn't have pr_data to add it."""
+    from memory.workers.tasks.content_processing import create_content_hash
+
+    # Create existing PR without pr_data (legacy data)
+    initial_content = "# Legacy PR\n\nOriginal"
+    existing_item = GithubItem(
+        repo_path="testorg/testrepo",
+        repo_id=github_repo.id,
+        number=301,
+        kind="pr",
+        title="Legacy PR",
+        content=initial_content,
+        state="open",
+        author="user",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        comment_count=0,
+        content_hash="legacy_hash",
+        diff_summary=None,
+        modality="github",
+        mime_type="text/markdown",
+        sha256=create_content_hash(initial_content),
+        size=len(initial_content),
+        tags=["github"],
+        pr_data=None,  # No pr_data initially
+    )
+    db_session.add(existing_item)
+    db_session.commit()
+
+    # Update with pr_data
+    updated_data = GithubIssueData(
+        kind="pr",
+        number=301,
+        title="Legacy PR",
+        body="Original with new review",
+        state="open",
+        author="user",
+        labels=[],
+        assignees=[],
+        milestone=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        closed_at=None,
+        merged_at=None,
+        github_updated_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        comment_count=0,
+        comments=[],
+        diff_summary="+10 -0",
+        project_fields=None,
+        content_hash="new_hash",  # Different
+        pr_data={
+            "diff": "the full diff",
+            "files": [{"filename": "new.py", "status": "added", "additions": 10, "deletions": 0, "patch": None}],
+            "additions": 10,
+            "deletions": 0,
+            "changed_files_count": 1,
+            "reviews": [],
+            "review_comments": [],
+        },
+    )
+
+    serialized = _serialize_issue_data(updated_data)
+    result = github.sync_github_item(github_repo.id, serialized)
+
+    assert result["status"] == "processed"
+
+    db_session.expire_all()
+    item = db_session.query(GithubItem).filter_by(number=301).first()
+
+    # Now should have pr_data
+    assert item.pr_data is not None
+    assert item.pr_data.additions == 10
+    assert item.pr_data.diff == "the full diff"
