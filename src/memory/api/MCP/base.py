@@ -1,60 +1,28 @@
 import logging
 import pathlib
-from typing import cast
 
-from mcp.server.auth.handlers.authorize import AuthorizationRequest
-from mcp.server.auth.handlers.token import (
-    AuthorizationCodeRequest,
-    RefreshTokenRequest,
-    TokenRequest,
-)
-from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.auth import OAuthClientMetadata
-from pydantic import AnyHttpUrl
+from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
-from memory.api.MCP.oauth_provider import (
-    ALLOWED_SCOPES,
-    BASE_SCOPES,
-    SimpleOAuthProvider,
-)
+from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+from memory.api.MCP.servers.books import books_mcp
+from memory.api.MCP.servers.core import core_mcp
+from memory.api.MCP.servers.github import github_mcp
+from memory.api.MCP.servers.meta import meta_mcp
+from memory.api.MCP.servers.meta import set_auth_provider as set_meta_auth
+from memory.api.MCP.servers.people import people_mcp
+from memory.api.MCP.servers.schedule import schedule_mcp
+from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
 from memory.common import settings
-from memory.common.db.connection import make_session
+from memory.common.db.connection import make_session, get_engine
 from memory.common.db.models import OAuthState, UserSession
 from memory.common.db.models.users import HumanUser
 
 logger = logging.getLogger(__name__)
-
-
-def validate_metadata(klass: type):
-    orig_validate = klass.model_validate
-
-    def validate(data: dict):
-        data = dict(data)
-        if "redirect_uris" in data:
-            data["redirect_uris"] = [
-                str(uri).replace("cursor://", "http://")
-                for uri in data["redirect_uris"]
-            ]
-        if "redirect_uri" in data:
-            data["redirect_uri"] = str(data["redirect_uri"]).replace(
-                "cursor://", "http://"
-            )
-
-        return orig_validate(data)
-
-    klass.model_validate = validate
-
-
-validate_metadata(OAuthClientMetadata)
-validate_metadata(AuthorizationRequest)
-validate_metadata(AuthorizationCodeRequest)
-validate_metadata(RefreshTokenRequest)
-validate_metadata(TokenRequest)
+engine = get_engine()
 
 
 # Setup templates
@@ -63,22 +31,10 @@ templates = Jinja2Templates(directory=template_dir)
 
 
 oauth_provider = SimpleOAuthProvider()
-auth_settings = AuthSettings(
-    issuer_url=cast(AnyHttpUrl, settings.SERVER_URL),
-    resource_server_url=cast(AnyHttpUrl, settings.SERVER_URL),  # type: ignore
-    client_registration_options=ClientRegistrationOptions(
-        enabled=True,
-        valid_scopes=ALLOWED_SCOPES,
-        default_scopes=BASE_SCOPES,
-    ),
-    required_scopes=BASE_SCOPES,
-)
 
 mcp = FastMCP(
     "memory",
-    stateless_http=True,
-    auth_server_provider=oauth_provider,
-    auth=auth_settings,
+    auth=oauth_provider,
 )
 
 
@@ -162,3 +118,52 @@ def get_current_user() -> dict:
         "client_id": access_token.client_id,
         "user": user_info,
     }
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request):
+    """Health check endpoint that verifies all dependencies are accessible."""
+    from sqlalchemy import text
+
+    checks = {"mcp_oauth": "enabled"}
+    all_healthy = True
+
+    # Check database connection
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        checks["database"] = "healthy"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        checks["database"] = "unhealthy"
+        all_healthy = False
+
+    # Check Qdrant connection
+    try:
+        from memory.common.qdrant import get_qdrant_client
+
+        client = get_qdrant_client()
+        client.get_collections()
+        checks["qdrant"] = "healthy"
+    except Exception as e:
+        logger.error(f"Qdrant health check failed: {e}")
+        checks["qdrant"] = "unhealthy"
+        all_healthy = False
+
+    checks["status"] = "healthy" if all_healthy else "degraded"
+    status_code = 200 if all_healthy else 503
+    return JSONResponse(checks, status_code=status_code)
+
+
+# Inject auth provider into subservers that need it
+set_schedule_auth(get_current_user)
+set_meta_auth(get_current_user)
+
+# Mount all subservers onto the main MCP server
+# Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
+mcp.mount(core_mcp, prefix="core")
+mcp.mount(github_mcp, prefix="github")
+mcp.mount(people_mcp, prefix="people")
+mcp.mount(schedule_mcp, prefix="schedule")
+mcp.mount(books_mcp, prefix="books")
+mcp.mount(meta_mcp, prefix="meta")

@@ -58,7 +58,6 @@ sync_code() {
         "$PROJECT_DIR/frontend" \
         "$PROJECT_DIR/requirements" \
         "$PROJECT_DIR/setup.py" \
-        "$PROJECT_DIR/pyproject.toml" \
         "$PROJECT_DIR/docker-compose.yaml" \
         "$PROJECT_DIR/pytest.ini" \
         "$REMOTE_HOST:$REMOTE_DIR/"

@@ -1,20 +1,37 @@
-"""
-MCP tools for the epistemic sparring partner system.
-"""
+"""MCP subserver for scheduling messages and LLM calls."""
 
 import logging
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from memory.api.MCP.base import get_current_user, mcp
+from fastmcp import FastMCP
+
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall, DiscordBotUser
+from memory.common.db.models import DiscordBotUser, ScheduledLLMCall
 from memory.discord.messages import schedule_discord_message
 
 logger = logging.getLogger(__name__)
 
+schedule_mcp = FastMCP("memory-schedule")
 
-@mcp.tool()
+# We need access to get_current_user from base - this will be injected at mount time
+_get_current_user = None
+
+
+def set_auth_provider(get_current_user_func):
+    """Set the authentication provider function."""
+    global _get_current_user
+    _get_current_user = get_current_user_func
+
+
+def get_current_user() -> dict:
+    """Get the current authenticated user."""
+    if _get_current_user is None:
+        return {"authenticated": False, "error": "Auth provider not configured"}
+    return _get_current_user()
+
+
+@schedule_mcp.tool()
 async def schedule_message(
     scheduled_time: str,
     message: str,
@@ -61,10 +78,8 @@ async def schedule_message(
     if not discord_user and not discord_channel:
         raise ValueError("Either discord_user or discord_channel must be provided")
 
-    # Parse scheduled time
     try:
         scheduled_dt = datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
-        # Ensure we store as naive datetime (remove timezone info for database storage)
         if scheduled_dt.tzinfo is not None:
             scheduled_dt = scheduled_dt.astimezone(timezone.utc).replace(tzinfo=None)
     except ValueError:
@@ -98,7 +113,7 @@ async def schedule_message(
         }
 
 
-@mcp.tool()
+@schedule_mcp.tool()
 async def list_scheduled_llm_calls(
     status: str | None = None, limit: int | None = 50
 ) -> dict[str, Any]:
@@ -143,7 +158,7 @@ async def list_scheduled_llm_calls(
         }
 
 
-@mcp.tool()
+@schedule_mcp.tool()
 async def cancel_scheduled_llm_call(scheduled_call_id: str) -> dict[str, Any]:
     """
     Cancel a scheduled LLM call.
@@ -164,7 +179,6 @@ async def cancel_scheduled_llm_call(scheduled_call_id: str) -> dict[str, Any]:
         return {"error": "User not found", "user": current_user}
 
     with make_session() as session:
-        # Find the scheduled call
         scheduled_call = (
             session.query(ScheduledLLMCall)
             .filter(
@@ -180,7 +194,6 @@ async def cancel_scheduled_llm_call(scheduled_call_id: str) -> dict[str, Any]:
         if not scheduled_call.can_be_cancelled():
             return {"error": f"Cannot cancel call with status: {scheduled_call.status}"}
 
-        # Update the status
         scheduled_call.status = "cancelled"
         session.commit()
 

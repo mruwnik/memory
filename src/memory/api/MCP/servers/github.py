@@ -1,14 +1,14 @@
-"""MCP tools for GitHub issue tracking and management."""
+"""MCP subserver for GitHub issue tracking and management."""
 
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Text, case, desc, func, asc
+from fastmcp import FastMCP
+from sqlalchemy import Text, case, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.base import mcp
 from memory.api.search.search import search
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract
@@ -16,6 +16,8 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import GithubItem
 
 logger = logging.getLogger(__name__)
+
+github_mcp = FastMCP("memory-github")
 
 
 def _build_github_url(repo_path: str, number: int | None, kind: str) -> str:
@@ -53,7 +55,6 @@ def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[st
     }
     if include_content:
         result["content"] = item.content
-        # Include PR-specific data if available
         if item.kind == "pr" and item.pr_data:
             result["pr_data"] = {
                 "additions": item.pr_data.additions,
@@ -62,12 +63,12 @@ def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[st
                 "files": item.pr_data.files,
                 "reviews": item.pr_data.reviews,
                 "review_comments": item.pr_data.review_comments,
-                "diff": item.pr_data.diff,  # Decompressed via property
+                "diff": item.pr_data.diff,
             }
     return result
 
 
-@mcp.tool()
+@github_mcp.tool()
 async def list_github_issues(
     repo: str | None = None,
     assignee: str | None = None,
@@ -109,64 +110,48 @@ async def list_github_issues(
     with make_session() as session:
         query = session.query(GithubItem)
 
-        # Apply filters
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
-
         if assignee:
             query = query.filter(GithubItem.assignees.any(assignee))
-
         if author:
             query = query.filter(GithubItem.author == author)
-
         if state:
             query = query.filter(GithubItem.state == state)
-
         if kind:
             query = query.filter(GithubItem.kind == kind)
         else:
-            # Exclude comments by default, only show issues and PRs
             query = query.filter(GithubItem.kind.in_(["issue", "pr"]))
-
         if labels:
-            # Match any label in the list using PostgreSQL array overlap
             query = query.filter(
                 GithubItem.labels.op("&&")(sql_cast(labels, ARRAY(Text)))
             )
-
         if project_status:
             query = query.filter(GithubItem.project_status == project_status)
-
         if project_field:
             for key, value in project_field.items():
-                query = query.filter(
-                    GithubItem.project_fields[key].astext == value
-                )
-
+                query = query.filter(GithubItem.project_fields[key].astext == value)
         if updated_since:
             since_dt = datetime.fromisoformat(updated_since.replace("Z", "+00:00"))
             query = query.filter(GithubItem.github_updated_at >= since_dt)
-
         if updated_before:
             before_dt = datetime.fromisoformat(updated_before.replace("Z", "+00:00"))
             query = query.filter(GithubItem.github_updated_at <= before_dt)
 
-        # Apply ordering
         if order_by == "created":
             query = query.order_by(desc(GithubItem.created_at))
         elif order_by == "number":
             query = query.order_by(desc(GithubItem.number))
-        else:  # default: updated
+        else:
             query = query.order_by(desc(GithubItem.github_updated_at))
 
         query = query.limit(limit)
-
         items = query.all()
 
         return [_serialize_issue(item) for item in items]
 
 
-@mcp.tool()
+@github_mcp.tool()
 async def search_github_issues(
     query: str,
     repo: str | None = None,
@@ -191,7 +176,6 @@ async def search_github_issues(
 
     limit = min(limit, 100)
 
-    # Pre-filter source_ids if repo/state/kind filters are specified
     source_ids = None
     if repo or state or kind:
         with make_session() as session:
@@ -206,7 +190,6 @@ async def search_github_issues(
                 q = q.filter(GithubItem.kind.in_(["issue", "pr"]))
             source_ids = [item.id for item in q.all()]
 
-    # Use the existing search infrastructure
     data = extract.extract_text(query, skip_summary=True)
     config = SearchConfig(limit=limit, previews=True)
     filters = SearchFilters()
@@ -220,7 +203,6 @@ async def search_github_issues(
         config=config,
     )
 
-    # Fetch full issue details for the results
     output = []
     with make_session() as session:
         for result in results:
@@ -233,7 +215,7 @@ async def search_github_issues(
     return output
 
 
-@mcp.tool()
+@github_mcp.tool()
 async def github_issue_details(
     repo: str,
     number: int,
@@ -267,7 +249,7 @@ async def github_issue_details(
         return _serialize_issue(item, include_content=True)
 
 
-@mcp.tool()
+@github_mcp.tool()
 async def github_work_summary(
     since: str,
     until: str | None = None,
@@ -294,7 +276,6 @@ async def github_work_summary(
     else:
         until_dt = datetime.now(timezone.utc)
 
-    # Map group_by to SQL expression
     group_mappings = {
         "client": GithubItem.project_fields["EquiStamp.Client"].astext,
         "status": GithubItem.project_status,
@@ -311,7 +292,6 @@ async def github_work_summary(
     group_col = group_mappings[group_by]
 
     with make_session() as session:
-        # Build base query for the period
         base_query = session.query(GithubItem).filter(
             GithubItem.github_updated_at >= since_dt,
             GithubItem.github_updated_at <= until_dt,
@@ -321,7 +301,6 @@ async def github_work_summary(
         if repo:
             base_query = base_query.filter(GithubItem.repo_path == repo)
 
-        # Get aggregated counts by group
         agg_query = (
             session.query(
                 group_col.label("group_name"),
@@ -346,7 +325,6 @@ async def github_work_summary(
 
         groups = agg_query.all()
 
-        # Build summary with sample issues for each group
         summary = []
         total_issues = 0
         total_prs = 0
@@ -358,7 +336,6 @@ async def github_work_summary(
             total_issues += issue_count
             total_prs += pr_count
 
-            # Get sample issues for this group
             sample_query = base_query.filter(group_col == group_name).limit(5)
             samples = [
                 {
@@ -394,7 +371,7 @@ async def github_work_summary(
         }
 
 
-@mcp.tool()
+@github_mcp.tool()
 async def github_repo_overview(
     repo: str,
 ) -> dict:
@@ -410,13 +387,6 @@ async def github_repo_overview(
     logger.info(f"github_repo_overview called: repo={repo}")
 
     with make_session() as session:
-        # Base query for this repo
-        base_query = session.query(GithubItem).filter(
-            GithubItem.repo_path == repo,
-            GithubItem.kind.in_(["issue", "pr"]),
-        )
-
-        # Get total counts
         counts_query = session.query(
             func.count(GithubItem.id).label("total"),
             func.count(case((GithubItem.kind == "issue", 1))).label("total_issues"),
@@ -441,7 +411,6 @@ async def github_repo_overview(
 
         counts = counts_query.first()
 
-        # Status breakdown (for project_status)
         status_query = (
             session.query(
                 GithubItem.project_status.label("status"),
@@ -458,7 +427,6 @@ async def github_repo_overview(
 
         status_breakdown = {row.status: row.count for row in status_query.all()}
 
-        # Top assignees (open issues only)
         assignee_query = (
             session.query(
                 func.unnest(GithubItem.assignees).label("assignee"),
@@ -479,7 +447,6 @@ async def github_repo_overview(
             for row in assignee_query.all()
         ]
 
-        # Label counts
         label_query = (
             session.query(
                 func.unnest(GithubItem.labels).label("label"),

@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+from fastmcp.server.auth import OAuthProvider
+from fastmcp.server.auth.auth import AccessToken as FastMCPAccessToken
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
-    OAuthAuthorizationServerProvider,
     RefreshToken,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -133,8 +134,45 @@ def make_token(
     )
 
 
-class SimpleOAuthProvider(OAuthAuthorizationServerProvider):
-    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+class SimpleOAuthProvider(OAuthProvider):
+    """OAuth provider that extends fastmcp's OAuthProvider with custom login flow."""
+
+    def __init__(self):
+        super().__init__(
+            base_url=settings.SERVER_URL,
+            issuer_url=settings.SERVER_URL,
+            client_registration_options=None,  # We handle registration ourselves
+            required_scopes=BASE_SCOPES,
+        )
+
+    async def verify_token(self, token: str) -> FastMCPAccessToken | None:
+        """Verify an access token and return token info if valid."""
+        with make_session() as session:
+            # Try as OAuth access token first
+            user_session = session.query(UserSession).get(token)
+            if user_session:
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if user_session.expires_at < now:
+                    return None
+                return FastMCPAccessToken(
+                    token=token,
+                    client_id=user_session.oauth_state.client_id,
+                    scopes=user_session.oauth_state.scopes,
+                )
+
+            # Try as bot API key
+            bot = session.query(User).filter(User.api_key == token).first()
+            if bot:
+                logger.info(f"Bot {bot.name} (id={bot.id}) authenticated via API key")
+                return FastMCPAccessToken(
+                    token=token,
+                    client_id=cast(str, bot.name or bot.email),
+                    scopes=["read", "write"],
+                )
+
+            return None
+
+    def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Get OAuth client information."""
         with make_session() as session:
             client = session.get(OAuthClientInformation, client_id)

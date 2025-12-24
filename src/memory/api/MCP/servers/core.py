@@ -1,53 +1,45 @@
 """
-MCP tools for the epistemic sparring partner system.
+Core MCP subserver for knowledge base search, observations, and notes.
 """
 
 import base64
 import logging
 import pathlib
 from datetime import datetime, timezone
-from PIL import Image
 
+from fastmcp import FastMCP
+from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.base import mcp
 from memory.api.search.search import search
-from memory.api.search.types import SearchFilters, SearchConfig
+from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract, settings
 from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
 from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
 from memory.common.db.connection import make_session
-from memory.common.db.models import SourceItem, AgentObservation
+from memory.common.db.models import AgentObservation, SourceItem
 from memory.common.formatters import observation
 
 logger = logging.getLogger(__name__)
+
+core_mcp = FastMCP("memory-core")
 
 
 def validate_path_within_directory(
     base_dir: pathlib.Path, requested_path: str
 ) -> pathlib.Path:
-    """Validate that a requested path resolves within the base directory.
-
-    Prevents path traversal attacks using ../ or similar techniques.
-
-    Args:
-        base_dir: The allowed base directory
-        requested_path: The user-provided path
-
-    Returns:
-        The resolved absolute path if valid
-
-    Raises:
-        ValueError: If the path would escape the base directory
-    """
+    """Validate that a requested path resolves within the base directory."""
     resolved = (base_dir / requested_path.lstrip("/")).resolve()
     base_resolved = base_dir.resolve()
 
-    if not str(resolved).startswith(str(base_resolved) + "/") and resolved != base_resolved:
+    if (
+        not str(resolved).startswith(str(base_resolved) + "/")
+        and resolved != base_resolved
+    ):
         raise ValueError(f"Path escapes allowed directory: {requested_path}")
 
     return resolved
@@ -63,7 +55,6 @@ def filter_observation_source_ids(
         items_query = session.query(AgentObservation.id)
 
         if tags:
-            # Use PostgreSQL array overlap operator with proper array casting
             items_query = items_query.filter(
                 AgentObservation.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
             )
@@ -89,7 +80,6 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
         items_query = session.query(SourceItem.id)
 
         if tags:
-            # Use PostgreSQL array overlap operator with proper array casting
             items_query = items_query.filter(
                 SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
             )
@@ -102,7 +92,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
     return source_ids
 
 
-@mcp.tool()
+@core_mcp.tool()
 async def search_knowledge_base(
     query: str,
     filters: SearchFilters = {},
@@ -141,7 +131,6 @@ async def search_knowledge_base(
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
-    # Filter to valid collections, excluding observation collections
     modalities = (set(modalities) & ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
 
     search_filters = SearchFilters(**filters)
@@ -167,7 +156,7 @@ class RawObservation(BaseModel):
     tags: list[str] = []
 
 
-@mcp.tool()
+@core_mcp.tool()
 async def observe(
     observations: list[RawObservation],
     session_id: str | None = None,
@@ -212,23 +201,23 @@ async def observe(
     logger.info("MCP: Observing")
     tasks = [
         (
-            observation,
+            obs,
             celery_app.send_task(
                 SYNC_OBSERVATION,
                 queue=f"{settings.CELERY_QUEUE_PREFIX}-notes",
                 kwargs={
-                    "subject": observation.subject,
-                    "content": observation.content,
-                    "observation_type": observation.observation_type,
-                    "confidences": observation.confidences,
-                    "evidence": observation.evidence,
-                    "tags": observation.tags,
+                    "subject": obs.subject,
+                    "content": obs.content,
+                    "observation_type": obs.observation_type,
+                    "confidences": obs.confidences,
+                    "evidence": obs.evidence,
+                    "tags": obs.tags,
                     "session_id": session_id,
                     "agent_model": agent_model,
                 },
             ),
         )
-        for observation in observations
+        for obs in observations
     ]
 
     def short_content(obs: RawObservation) -> str:
@@ -242,7 +231,7 @@ async def observe(
     }
 
 
-@mcp.tool()
+@core_mcp.tool()
 async def search_observations(
     query: str,
     subject: str = "",
@@ -308,7 +297,7 @@ async def search_observations(
     ]
 
 
-@mcp.tool()
+@core_mcp.tool()
 async def create_note(
     subject: str,
     content: str,
@@ -362,7 +351,7 @@ async def create_note(
     }
 
 
-@mcp.tool()
+@core_mcp.tool()
 async def note_files(path: str = "/"):
     """
     List note files in the user's note storage.
@@ -386,7 +375,7 @@ async def note_files(path: str = "/"):
     ]
 
 
-@mcp.tool()
+@core_mcp.tool()
 def fetch_file(filename: str) -> dict:
     """
     Read file content with automatic type detection.

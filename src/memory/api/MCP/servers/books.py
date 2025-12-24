@@ -1,15 +1,19 @@
+"""MCP subserver for ebook access."""
+
 import logging
 
+from fastmcp import FastMCP
 from sqlalchemy.orm import joinedload
 
-from memory.api.MCP.tools import mcp
 from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection, BookSectionPayload
 
 logger = logging.getLogger(__name__)
 
+books_mcp = FastMCP("memory-books")
 
-@mcp.tool()
+
+@books_mcp.tool()
 async def all_books(sections: bool = False) -> list[dict]:
     """
     Get all books in the database.
@@ -31,7 +35,7 @@ async def all_books(sections: bool = False) -> list[dict]:
         return [book.as_payload(sections=sections) for book in books]
 
 
-@mcp.tool()
+@books_mcp.tool()
 def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload]:
     """
     Read a book from the database.

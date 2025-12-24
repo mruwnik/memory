@@ -1,22 +1,22 @@
-"""
-MCP tools for tracking people.
-"""
+"""MCP subserver for tracking people."""
 
 import logging
 from typing import Any
 
+from fastmcp import FastMCP
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.base import mcp
-from memory.common.db.connection import make_session
-from memory.common.db.models import Person
+from memory.common import settings
 from memory.common.celery_app import SYNC_PERSON, UPDATE_PERSON
 from memory.common.celery_app import app as celery_app
-from memory.common import settings
+from memory.common.db.connection import make_session
+from memory.common.db.models import Person
 
 logger = logging.getLogger(__name__)
+
+people_mcp = FastMCP("memory-people")
 
 
 def _person_to_dict(person: Person) -> dict[str, Any]:
@@ -32,7 +32,7 @@ def _person_to_dict(person: Person) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@people_mcp.tool()
 async def add_person(
     identifier: str,
     display_name: str,
@@ -67,7 +67,6 @@ async def add_person(
     """
     logger.info(f"MCP: Adding person: {identifier}")
 
-    # Check if person already exists
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()
         if existing:
@@ -93,7 +92,7 @@ async def add_person(
     }
 
 
-@mcp.tool()
+@people_mcp.tool()
 async def update_person_info(
     identifier: str,
     display_name: str | None = None,
@@ -135,7 +134,6 @@ async def update_person_info(
     """
     logger.info(f"MCP: Updating person: {identifier}")
 
-    # Verify person exists
     with make_session() as session:
         person = session.query(Person).filter(Person.identifier == identifier).first()
         if not person:
@@ -162,7 +160,7 @@ async def update_person_info(
     }
 
 
-@mcp.tool()
+@people_mcp.tool()
 async def get_person(identifier: str) -> dict | None:
     """
     Get a person by their identifier.
@@ -182,7 +180,7 @@ async def get_person(identifier: str) -> dict | None:
         return _person_to_dict(person)
 
 
-@mcp.tool()
+@people_mcp.tool()
 async def list_people(
     tags: list[str] | None = None,
     search: str | None = None,
@@ -207,9 +205,7 @@ async def list_people(
         query = session.query(Person)
 
         if tags:
-            query = query.filter(
-                Person.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
-            )
+            query = query.filter(Person.tags.op("&&")(sql_cast(tags, ARRAY(Text))))
 
         if search:
             search_term = f"%{search.lower()}%"
@@ -225,7 +221,7 @@ async def list_people(
         return [_person_to_dict(p) for p in people]
 
 
-@mcp.tool()
+@people_mcp.tool()
 async def delete_person(identifier: str) -> dict:
     """
     Delete a person by their identifier.
