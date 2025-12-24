@@ -549,10 +549,11 @@ def github(ctx):
 
 
 @github.command("sync-all-repos")
+@click.option("--force-full", is_flag=True, help="Force a full sync instead of incremental")
 @click.pass_context
-def github_sync_all_repos(ctx):
+def github_sync_all_repos(ctx, force_full):
     """Sync all active GitHub repos."""
-    execute_task(ctx, "github", "sync_all_repos")
+    execute_task(ctx, "github", "sync_all_repos", force_full=force_full)
 
 
 @github.command("sync-repo")

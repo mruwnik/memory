@@ -1,11 +1,43 @@
+import uuid
 import pytest
 import pathlib
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import Note
+from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.workers.tasks.content_processing import create_content_hash
 from memory.common import settings
+
+
+def _make_mock_chunk(source_id: int) -> Chunk:
+    """Create a mock chunk for testing with a unique ID."""
+    return Chunk(
+        id=str(uuid.uuid4()),
+        content="test chunk content",
+        embedding_model="test-model",
+        vector=[0.1] * 1024,
+        item_metadata={"source_id": source_id, "tags": ["test"]},
+        collection_name="note",
+    )
+
+
+@pytest.fixture
+def mock_make_session(db_session):
+    """Mock make_session and embedding functions for note task tests."""
+
+    @contextmanager
+    def _mock_session():
+        yield db_session
+
+    with patch("memory.workers.tasks.notes.make_session", _mock_session):
+        with patch(
+            "memory.common.embedding.embed_source_item",
+            side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
+        ):
+            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+                yield db_session
 
 
 @pytest.fixture
@@ -74,13 +106,13 @@ def markdown_files_in_storage():
     return files
 
 
-def test_sync_note_success(mock_note_data, db_session, qdrant):
+def test_sync_note_success(mock_note_data, mock_make_session, qdrant):
     """Test successful note synchronization."""
     result = notes.sync_note(**mock_note_data)
-    db_session.commit()
+    mock_make_session.commit()
 
     # Verify the Note was created in the database
-    note = db_session.query(Note).filter_by(subject="Test Note Subject").first()
+    note = mock_make_session.query(Note).filter_by(subject="Test Note Subject").first()
     assert note is not None
     assert note.subject == "Test Note Subject"
     assert (
@@ -105,11 +137,11 @@ def test_sync_note_success(mock_note_data, db_session, qdrant):
     }
 
 
-def test_sync_note_minimal_data(mock_minimal_note, db_session, qdrant):
+def test_sync_note_minimal_data(mock_minimal_note, mock_make_session, qdrant):
     """Test note sync with minimal required data."""
     result = notes.sync_note(**mock_minimal_note)
 
-    note = db_session.query(Note).filter_by(subject="Minimal Note").first()
+    note = mock_make_session.query(Note).filter_by(subject="Minimal Note").first()
     assert note is not None
     assert note.subject == "Minimal Note"
     assert note.content == "Minimal content"
@@ -129,12 +161,12 @@ def test_sync_note_minimal_data(mock_minimal_note, db_session, qdrant):
     }
 
 
-def test_sync_note_empty_content(mock_empty_note, db_session, qdrant):
+def test_sync_note_empty_content(mock_empty_note, mock_make_session, qdrant):
     """Test note sync with empty content."""
     result = notes.sync_note(**mock_empty_note)
 
     # Note is still created even with empty content
-    note = db_session.query(Note).filter_by(subject="Empty Note").first()
+    note = mock_make_session.query(Note).filter_by(subject="Empty Note").first()
     assert note is not None
     assert note.subject == "Empty Note"
     assert note.content == ""
@@ -150,7 +182,7 @@ def test_sync_note_empty_content(mock_empty_note, db_session, qdrant):
     }
 
 
-def test_sync_note_already_exists(mock_note_data, db_session):
+def test_sync_note_already_exists(mock_note_data, mock_make_session):
     """Test note sync when content already exists."""
     # Create the content text the same way sync_note does
     text = Note.as_text(mock_note_data["content"], mock_note_data["subject"])
@@ -168,8 +200,8 @@ def test_sync_note_already_exists(mock_note_data, db_session):
         embed_status="RAW",
         filename="existing_note.md",
     )
-    db_session.add(existing_note)
-    db_session.commit()
+    mock_make_session.add(existing_note)
+    mock_make_session.commit()
 
     result = notes.sync_note(**mock_note_data)
 
@@ -183,11 +215,11 @@ def test_sync_note_already_exists(mock_note_data, db_session):
     }
 
     # Verify no duplicate was created
-    notes_with_hash = db_session.query(Note).filter_by(sha256=sha256).all()
+    notes_with_hash = mock_make_session.query(Note).filter_by(sha256=sha256).all()
     assert len(notes_with_hash) == 1
 
 
-def test_sync_note_edit(mock_note_data, db_session):
+def test_sync_note_edit(mock_note_data, mock_make_session):
     """Test note sync when content already exists."""
     # Create the content text the same way sync_note does
     text = Note.as_text(mock_note_data["content"], mock_note_data["subject"])
@@ -208,8 +240,8 @@ def test_sync_note_edit(mock_note_data, db_session):
     existing_note.update_confidences(
         {"observation_accuracy": 0.2, "predictive_value": 0.3}
     )
-    db_session.add(existing_note)
-    db_session.commit()
+    mock_make_session.add(existing_note)
+    mock_make_session.commit()
 
     result = notes.sync_note(
         **{**mock_note_data, "content": "bla bla bla", "subject": "blee"}
@@ -225,8 +257,8 @@ def test_sync_note_edit(mock_note_data, db_session):
     }
 
     # Verify no duplicate was created
-    assert len(db_session.query(Note).all()) == 1
-    db_session.refresh(existing_note)
+    assert len(mock_make_session.query(Note).all()) == 1
+    mock_make_session.refresh(existing_note)
     assert existing_note.content == "bla bla bla"  # type: ignore
     assert existing_note.confidence_dict == {
         "observation_accuracy": 0.8,
@@ -243,7 +275,7 @@ def test_sync_note_edit(mock_note_data, db_session):
         ("meeting", 1.0, ["work", "notes", "2024"]),
     ],
 )
-def test_sync_note_parameters(note_type, confidence, tags, db_session, qdrant):
+def test_sync_note_parameters(note_type, confidence, tags, mock_make_session, qdrant):
     """Test note sync with various parameter combinations."""
     result = notes.sync_note(
         subject=f"Test Note {note_type}",
@@ -253,7 +285,7 @@ def test_sync_note_parameters(note_type, confidence, tags, db_session, qdrant):
         tags=tags,
     )
 
-    note = db_session.query(Note).filter_by(subject=f"Test Note {note_type}").first()
+    note = mock_make_session.query(Note).filter_by(subject=f"Test Note {note_type}").first()
     assert note is not None
     assert note.note_type == note_type
     assert note.confidence_dict == {"observation_accuracy": confidence}
@@ -271,7 +303,7 @@ def test_sync_note_parameters(note_type, confidence, tags, db_session, qdrant):
     }
 
 
-def test_sync_note_content_hash_consistency(db_session):
+def test_sync_note_content_hash_consistency(mock_make_session):
     """Test that content hash is calculated consistently."""
     note_data = {
         "subject": "Hash Test",
@@ -289,12 +321,12 @@ def test_sync_note_content_hash_consistency(db_session):
     assert result1["note_id"] == result2["note_id"]
 
     # Verify only one note exists in database
-    notes_in_db = db_session.query(Note).filter_by(subject="Hash Test").all()
+    notes_in_db = mock_make_session.query(Note).filter_by(subject="Hash Test").all()
     assert len(notes_in_db) == 1
 
 
 @patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_success(mock_sync_note, markdown_files_in_storage, db_session):
+def test_sync_notes_success(mock_sync_note, markdown_files_in_storage, mock_make_session):
     """Test successful notes folder synchronization."""
     mock_sync_note.delay.return_value = Mock(id="task-123")
 
@@ -320,7 +352,7 @@ def test_sync_notes_success(mock_sync_note, markdown_files_in_storage, db_sessio
     ]
 
 
-def test_sync_notes_empty_folder(db_session):
+def test_sync_notes_empty_folder(mock_make_session):
     """Test sync when folder contains no markdown files."""
     # Create an empty directory
     empty_dir = pathlib.Path(settings.NOTES_STORAGE_DIR) / "empty"
@@ -334,7 +366,7 @@ def test_sync_notes_empty_folder(db_session):
 
 @patch("memory.workers.tasks.notes.sync_note")
 def test_sync_notes_with_existing_notes(
-    mock_sync_note, markdown_files_in_storage, db_session
+    mock_sync_note, markdown_files_in_storage, mock_make_session
 ):
     """Test sync when some notes already exist."""
     # Create one existing note in the database
@@ -350,8 +382,8 @@ def test_sync_notes_with_existing_notes(
         filename=str(existing_file),
         embed_status="RAW",
     )
-    db_session.add(existing_note)
-    db_session.commit()
+    mock_make_session.add(existing_note)
+    mock_make_session.commit()
 
     mock_sync_note.delay.return_value = Mock(id="task-456")
 
@@ -364,7 +396,7 @@ def test_sync_notes_with_existing_notes(
     assert mock_sync_note.delay.call_count == 3
 
 
-def test_sync_notes_nonexistent_folder(db_session):
+def test_sync_notes_nonexistent_folder(mock_make_session):
     """Test sync_notes with a folder that doesn't exist."""
     nonexistent_path = "/nonexistent/folder/path"
 
@@ -378,7 +410,7 @@ def test_sync_notes_nonexistent_folder(db_session):
 
 @patch("memory.workers.tasks.notes.sync_note")
 def test_sync_notes_only_processes_md_files(
-    mock_sync_note, markdown_files_in_storage, db_session
+    mock_sync_note, markdown_files_in_storage, mock_make_session
 ):
     """Test that sync_notes only processes markdown files."""
     mock_sync_note.delay.return_value = Mock(id="task-123")
@@ -403,7 +435,7 @@ def test_note_as_text_method():
     assert content in text
 
 
-def test_sync_note_with_long_content(db_session, qdrant):
+def test_sync_note_with_long_content(mock_make_session, qdrant):
     """Test sync_note with longer content to ensure proper chunking."""
     long_content = "This is a longer note content. " * 100  # Make it substantial
     result = notes.sync_note(
@@ -412,14 +444,14 @@ def test_sync_note_with_long_content(db_session, qdrant):
         tags=["long", "test"],
     )
 
-    note = db_session.query(Note).filter_by(subject="Long Note").first()
+    note = mock_make_session.query(Note).filter_by(subject="Long Note").first()
     assert note is not None
     assert note.content == long_content
     assert result["status"] == "processed"
     assert result["chunks_count"] > 0
 
 
-def test_sync_note_unicode_content(db_session, qdrant):
+def test_sync_note_unicode_content(mock_make_session, qdrant):
     """Test sync_note with unicode content."""
     unicode_content = "This note contains unicode: 你好世界 🌍 математика"
     result = notes.sync_note(
@@ -427,14 +459,14 @@ def test_sync_note_unicode_content(db_session, qdrant):
         content=unicode_content,
     )
 
-    note = db_session.query(Note).filter_by(subject="Unicode Note").first()
+    note = mock_make_session.query(Note).filter_by(subject="Unicode Note").first()
     assert note is not None
     assert note.content == unicode_content
     assert result["status"] == "processed"
 
 
 @patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_recursive_discovery(mock_sync_note, db_session):
+def test_sync_notes_recursive_discovery(mock_sync_note, mock_make_session):
     """Test that sync_notes discovers files recursively in subdirectories."""
     mock_sync_note.delay.return_value = Mock(id="task-123")
 
@@ -457,7 +489,7 @@ def test_sync_notes_recursive_discovery(mock_sync_note, db_session):
 
 
 @patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_handles_file_read_errors(mock_sync_note, db_session):
+def test_sync_notes_handles_file_read_errors(mock_sync_note, mock_make_session):
     """Test sync_notes handles file read errors gracefully."""
     # Create a markdown file
     notes_dir = pathlib.Path(settings.NOTES_STORAGE_DIR)
@@ -988,10 +1020,9 @@ def test_track_git_changes_logging(
 @patch("memory.workers.tasks.notes.sync_note")
 @patch("memory.workers.tasks.people.sync_profile_from_file")
 def test_sync_notes_routes_profiles_to_sync_profile_from_file(
-    mock_sync_profile, mock_sync_note, db_session, tmp_path
+    mock_sync_profile, mock_sync_note, mock_make_session, tmp_path
 ):
     """Test that sync_notes routes profile files to sync_profile_from_file."""
-    from unittest.mock import Mock
 
     # Create notes dir with profile and regular notes
     notes_dir = tmp_path / "notes"
@@ -1106,13 +1137,10 @@ Jane's notes."""
 @patch("memory.workers.tasks.notes.sync_note")
 @patch("memory.workers.tasks.people.sync_profile_from_file")
 def test_sync_notes_skips_existing_profiles(
-    mock_sync_profile, mock_sync_note, db_session, tmp_path
+    mock_sync_profile, mock_sync_note, mock_make_session, tmp_path
 ):
     """Test that sync_notes skips profiles that already have a Person record."""
-    from contextlib import contextmanager
-    from unittest.mock import Mock
     from memory.common.db.models import Person
-    from memory.workers.tasks.content_processing import create_content_hash
 
     # Create notes dir with profile
     notes_dir = tmp_path / "notes"
@@ -1132,19 +1160,14 @@ def test_sync_notes_skips_existing_profiles(
         sha256=sha256,
         size=0,
     )
-    db_session.add(existing_person)
-    db_session.commit()
+    mock_make_session.add(existing_person)
+    mock_make_session.commit()
 
     mock_sync_profile.delay.return_value = Mock(id="task-profile")
 
-    @contextmanager
-    def _mock_session():
-        yield db_session
-
-    with patch("memory.workers.tasks.notes.make_session", _mock_session):
-        with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
-            with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
-                result = notes.sync_notes(str(notes_dir))
+    with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
+        with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
+            result = notes.sync_notes(str(notes_dir))
 
     # Should not call sync_profile_from_file for existing person
     assert mock_sync_profile.delay.call_count == 0
