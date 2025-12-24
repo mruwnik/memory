@@ -137,10 +137,9 @@ class TestBuildPrompt:
         ):
             prompt = _build_prompt()
 
-        assert "lesswrong" in prompt.lower()
-        assert "comic" in prompt.lower()
-        assert "Remove" in prompt
+        assert "Remove meta-language" in prompt
         assert "Return ONLY valid JSON" in prompt
+        assert "recalled_content" in prompt
 
 
 class TestAnalyzeQuery:

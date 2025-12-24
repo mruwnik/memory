@@ -83,9 +83,10 @@ def test_logout_handles_missing_session(mock_get_user_session):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.auth.mcp_tools_list", new_callable=AsyncMock)
 @patch("memory.api.auth.complete_oauth_flow", new_callable=AsyncMock)
 @patch("memory.api.auth.make_session")
-async def test_oauth_callback_discord_success(mock_make_session, mock_complete):
+async def test_oauth_callback_discord_success(mock_make_session, mock_complete, mock_mcp_tools):
     mock_session = MagicMock()
 
     @contextmanager
@@ -95,9 +96,12 @@ async def test_oauth_callback_discord_success(mock_make_session, mock_complete):
     mock_make_session.return_value = session_cm()
 
     mcp_server = MagicMock()
+    mcp_server.mcp_server_url = "https://example.com"
+    mcp_server.access_token = "token123"
     mock_session.query.return_value.filter.return_value.first.return_value = mcp_server
 
     mock_complete.return_value = (200, "Authorized")
+    mock_mcp_tools.return_value = [{"name": "test_tool"}]
 
     request = make_request("code=abc123&state=state456")
     response = await auth.oauth_callback_discord(request)
@@ -107,14 +111,15 @@ async def test_oauth_callback_discord_success(mock_make_session, mock_complete):
     assert "Authorization Successful" in body
     assert "Authorized" in body
     mock_complete.assert_awaited_once_with(mcp_server, "abc123", "state456")
-    mock_session.commit.assert_called_once()
+    assert mock_session.commit.call_count == 2  # Once after complete_oauth_flow, once after tools list
 
 
 @pytest.mark.asyncio
+@patch("memory.api.auth.mcp_tools_list", new_callable=AsyncMock)
 @patch("memory.api.auth.complete_oauth_flow", new_callable=AsyncMock)
 @patch("memory.api.auth.make_session")
 async def test_oauth_callback_discord_handles_failures(
-    mock_make_session, mock_complete
+    mock_make_session, mock_complete, mock_mcp_tools
 ):
     mock_session = MagicMock()
 
@@ -125,9 +130,12 @@ async def test_oauth_callback_discord_handles_failures(
     mock_make_session.return_value = session_cm()
 
     mcp_server = MagicMock()
+    mcp_server.mcp_server_url = "https://example.com"
+    mcp_server.access_token = "token123"
     mock_session.query.return_value.filter.return_value.first.return_value = mcp_server
 
     mock_complete.return_value = (500, "Failure")
+    mock_mcp_tools.return_value = []
 
     request = make_request("code=abc123&state=state456")
     response = await auth.oauth_callback_discord(request)
@@ -137,7 +145,7 @@ async def test_oauth_callback_discord_handles_failures(
     assert "Authorization Failed" in body
     assert "Failure" in body
     mock_complete.assert_awaited_once_with(mcp_server, "abc123", "state456")
-    mock_session.commit.assert_called_once()
+    assert mock_session.commit.call_count == 2  # Once after complete_oauth_flow, once after tools list
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from memory.common.db.models import (
     DiscordUser,
     DiscordMessage,
     BotUser,
+    DiscordBotUser,
     HumanUser,
     ScheduledLLMCall,
 )
@@ -67,9 +68,10 @@ def sample_discord_user(db_session):
 
 
 @pytest.fixture
-def sample_bot_user(db_session):
+def sample_bot_user(db_session, sample_discord_user):
     """Create a sample bot user for testing."""
-    bot = BotUser.create_with_api_key(
+    bot = DiscordBotUser.create_with_api_key(
+        discord_users=[sample_discord_user],
         name="Test Bot",
         email="testbot@example.com",
     )
@@ -209,9 +211,9 @@ def test_schedule_message_with_user(
     future_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
     result = schedule_message(
-        user_id=sample_human_user.id,
-        user=sample_discord_user.id,
-        channel=None,
+        bot_id=sample_human_user.id,
+        recipient_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
         message="Test message",
         date_time=future_time,
@@ -240,9 +242,9 @@ def test_schedule_message_with_channel(
     future_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
     result = schedule_message(
-        user_id=sample_human_user.id,
-        user=None,
-        channel=sample_discord_channel.id,
+        bot_id=sample_human_user.id,
+        recipient_id=None,
+        channel_id=sample_discord_channel.id,
         model="test-model",
         message="Test message",
         date_time=future_time,
@@ -265,12 +267,12 @@ def test_make_message_scheduler_with_user(sample_bot_user, sample_discord_user):
     """Test creating a message scheduler tool for a user."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=sample_discord_user.id,
-        channel=None,
+        user_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
     )
 
-    assert tool.name == "schedule_message"
+    assert tool.name == "schedule_discord_message"
     assert "from your chat with this user" in tool.description
     assert tool.input_schema["type"] == "object"
     assert "message" in tool.input_schema["properties"]
@@ -282,12 +284,12 @@ def test_make_message_scheduler_with_channel(sample_bot_user, sample_discord_cha
     """Test creating a message scheduler tool for a channel."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=None,
-        channel=sample_discord_channel.id,
+        user_id=None,
+        channel_id=sample_discord_channel.id,
         model="test-model",
     )
 
-    assert tool.name == "schedule_message"
+    assert tool.name == "schedule_discord_message"
     assert "in this channel" in tool.description
     assert callable(tool.function)
 
@@ -297,8 +299,8 @@ def test_make_message_scheduler_without_user_or_channel(sample_bot_user):
     with pytest.raises(ValueError, match="Either user or channel must be provided"):
         make_message_scheduler(
             bot=sample_bot_user,
-            user=None,
-            channel=None,
+            user_id=None,
+            channel_id=None,
             model="test-model",
         )
 
@@ -310,8 +312,8 @@ def test_message_scheduler_handler_success(
     """Test message scheduler handler with valid input."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=sample_discord_user.id,
-        channel=None,
+        user_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
     )
 
@@ -330,8 +332,8 @@ def test_message_scheduler_handler_invalid_input(sample_bot_user, sample_discord
     """Test message scheduler handler with non-dict input."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=sample_discord_user.id,
-        channel=None,
+        user_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
     )
 
@@ -345,8 +347,8 @@ def test_message_scheduler_handler_invalid_datetime(
     """Test message scheduler handler with invalid datetime."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=sample_discord_user.id,
-        channel=None,
+        user_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
     )
 
@@ -365,8 +367,8 @@ def test_message_scheduler_handler_missing_datetime(
     """Test message scheduler handler with missing datetime."""
     tool = make_message_scheduler(
         bot=sample_bot_user,
-        user=sample_discord_user.id,
-        channel=None,
+        user_id=sample_discord_user.id,
+        channel_id=None,
         model="test-model",
     )
 
@@ -375,9 +377,9 @@ def test_message_scheduler_handler_missing_datetime(
 
 
 # Tests for make_prev_messages_tool
-def test_make_prev_messages_tool_with_user(sample_discord_user):
+def test_make_prev_messages_tool_with_user(sample_bot_user, sample_discord_user):
     """Test creating a previous messages tool for a user."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     assert tool.name == "previous_messages"
     assert "from your chat with this user" in tool.description
@@ -387,26 +389,26 @@ def test_make_prev_messages_tool_with_user(sample_discord_user):
     assert callable(tool.function)
 
 
-def test_make_prev_messages_tool_with_channel(sample_discord_channel):
+def test_make_prev_messages_tool_with_channel(sample_bot_user, sample_discord_channel):
     """Test creating a previous messages tool for a channel."""
-    tool = make_prev_messages_tool(user=None, channel=sample_discord_channel.id)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=None, channel_id=sample_discord_channel.id)
 
     assert tool.name == "previous_messages"
     assert "in this channel" in tool.description
     assert callable(tool.function)
 
 
-def test_make_prev_messages_tool_without_user_or_channel():
+def test_make_prev_messages_tool_without_user_or_channel(sample_bot_user):
     """Test that creating a tool without user or channel raises error."""
     with pytest.raises(ValueError, match="Either user or channel must be provided"):
-        make_prev_messages_tool(user=None, channel=None)
+        make_prev_messages_tool(bot=sample_bot_user, user_id=None, channel_id=None)
 
 
 def test_prev_messages_handler_success(
-    db_session, sample_discord_user, sample_discord_channel
+    db_session, sample_bot_user, sample_discord_user, sample_discord_channel
 ):
     """Test previous messages handler with valid input."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     # Create some actual messages in the database
     msg1 = DiscordMessage(
@@ -440,9 +442,9 @@ def test_prev_messages_handler_success(
     assert "Message 1" in result or "Message 2" in result
 
 
-def test_prev_messages_handler_with_defaults(db_session, sample_discord_user):
+def test_prev_messages_handler_with_defaults(db_session, sample_bot_user, sample_discord_user):
     """Test previous messages handler with default values."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     result = tool.function({})
 
@@ -450,35 +452,35 @@ def test_prev_messages_handler_with_defaults(db_session, sample_discord_user):
     assert isinstance(result, str)
 
 
-def test_prev_messages_handler_invalid_input(sample_discord_user):
+def test_prev_messages_handler_invalid_input(sample_bot_user, sample_discord_user):
     """Test previous messages handler with non-dict input."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     with pytest.raises(ValueError, match="Input must be a dictionary"):
         tool.function("not a dict")
 
 
-def test_prev_messages_handler_invalid_max_messages(sample_discord_user):
+def test_prev_messages_handler_invalid_max_messages(sample_bot_user, sample_discord_user):
     """Test previous messages handler with invalid max_messages (negative value)."""
     # Note: max_messages=0 doesn't trigger validation due to `or 10` defaulting,
     # so we test with -1 which actually triggers the validation
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     with pytest.raises(ValueError, match="Max messages must be greater than 0"):
         tool.function({"max_messages": -1})
 
 
-def test_prev_messages_handler_invalid_offset(sample_discord_user):
+def test_prev_messages_handler_invalid_offset(sample_bot_user, sample_discord_user):
     """Test previous messages handler with invalid offset."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     with pytest.raises(ValueError, match="Offset must be greater than or equal to 0"):
         tool.function({"offset": -1})
 
 
-def test_prev_messages_handler_non_integer_values(sample_discord_user):
+def test_prev_messages_handler_non_integer_values(sample_bot_user, sample_discord_user):
     """Test previous messages handler with non-integer values."""
-    tool = make_prev_messages_tool(user=sample_discord_user.id, channel=None)
+    tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 
     with pytest.raises(ValueError, match="Max messages and offset must be integers"):
         tool.function({"max_messages": "not an int"})
@@ -496,10 +498,10 @@ def test_make_discord_tools_with_user_and_channel(
         model="test-model",
     )
 
-    # Should have: schedule_message, previous_messages, update_channel_summary,
+    # Should have: schedule_discord_message, previous_messages, update_channel_summary,
     # update_user_summary, update_server_summary, add_reaction
     assert len(tools) == 6
-    assert "schedule_message" in tools
+    assert "schedule_discord_message" in tools
     assert "previous_messages" in tools
     assert "update_channel_summary" in tools
     assert "update_user_summary" in tools
@@ -516,10 +518,10 @@ def test_make_discord_tools_with_user_only(sample_bot_user, sample_discord_user)
         model="test-model",
     )
 
-    # Should have: schedule_message, previous_messages, update_user_summary
+    # Should have: schedule_discord_message, previous_messages, update_user_summary
     # Note: Without channel, there's no channel summary tool
     assert len(tools) >= 2  # At least schedule and previous messages
-    assert "schedule_message" in tools
+    assert "schedule_discord_message" in tools
     assert "previous_messages" in tools
     assert "update_user_summary" in tools
 
@@ -533,10 +535,10 @@ def test_make_discord_tools_with_channel_only(sample_bot_user, sample_discord_ch
         model="test-model",
     )
 
-    # Should have: schedule_message, previous_messages, update_channel_summary,
+    # Should have: schedule_discord_message, previous_messages, update_channel_summary,
     # update_server_summary, add_reaction (no user summary without author)
     assert len(tools) == 5
-    assert "schedule_message" in tools
+    assert "schedule_discord_message" in tools
     assert "previous_messages" in tools
     assert "update_channel_summary" in tools
     assert "update_server_summary" in tools

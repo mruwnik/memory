@@ -1,6 +1,5 @@
 """Tests for Discord MCP server management."""
 
-import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
@@ -8,8 +7,8 @@ import discord
 import pytest
 
 from memory.common.db.models import MCPServer, MCPServerAssignment
+from memory.common.mcp import mcp_call
 from memory.discord.mcp import (
-    call_mcp_server,
     find_mcp_server,
     handle_mcp_add,
     handle_mcp_connect,
@@ -142,7 +141,7 @@ async def test_call_mcp_server_success():
 
     with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
         results = []
-        async for data in call_mcp_server(
+        async for data in mcp_call(
             "https://mcp.example.com", "test_token", "tools/list", {}
         ):
             results.append(data)
@@ -172,7 +171,7 @@ async def test_call_mcp_server_error():
 
     with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
         with pytest.raises(ValueError, match="Failed to call MCP server"):
-            async for _ in call_mcp_server(
+            async for _ in mcp_call(
                 "https://mcp.example.com", "test_token", "tools/list"
             ):
                 pass
@@ -203,7 +202,7 @@ async def test_call_mcp_server_invalid_json():
 
     with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
         results = []
-        async for data in call_mcp_server(
+        async for data in mcp_call(
             "https://mcp.example.com", "test_token", "tools/list"
         ):
             results.append(data)

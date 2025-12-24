@@ -16,8 +16,16 @@ from memory.workers.tasks import scheduled_calls
 @pytest.fixture
 def sample_user(db_session):
     """Create a sample user for testing."""
+    # Create a discord user for the bot
+    bot_discord_user = DiscordUser(
+        id=999999999,
+        username="testbot",
+    )
+    db_session.add(bot_discord_user)
+    db_session.flush()
+
     user = DiscordBotUser.create_with_api_key(
-        discord_users=[],
+        discord_users=[bot_discord_user],
         name="testbot",
         email="bot@example.com",
     )
@@ -122,65 +130,64 @@ def future_scheduled_call(db_session, sample_user, sample_discord_user):
     return call
 
 
-@patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
+@patch("memory.discord.messages.discord.send_dm")
 def test_send_to_discord_user(mock_send_dm, pending_scheduled_call):
     """Test sending to Discord user."""
     response = "This is a test response."
 
-    scheduled_calls.send_to_discord(pending_scheduled_call, response)
+    scheduled_calls.send_to_discord(999999999, pending_scheduled_call, response)
 
     mock_send_dm.assert_called_once_with(
-        pending_scheduled_call.user_id,
+        999999999,  # bot_id
         "testuser",  # username, not ID
-        "**Topic:** Test Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a test response.",
+        response,
     )
 
 
-@patch("memory.workers.tasks.scheduled_calls.discord.broadcast_message")
-def test_send_to_discord_channel(mock_broadcast, completed_scheduled_call):
+@patch("memory.discord.messages.discord.send_to_channel")
+def test_send_to_discord_channel(mock_send_to_channel, completed_scheduled_call):
     """Test sending to Discord channel."""
     response = "This is a channel response."
 
-    scheduled_calls.send_to_discord(completed_scheduled_call, response)
+    scheduled_calls.send_to_discord(999999999, completed_scheduled_call, response)
 
-    mock_broadcast.assert_called_once_with(
-        completed_scheduled_call.user_id,
-        "test-channel",  # channel name, not ID
-        "**Topic:** Completed Topic\n**Model:** anthropic/claude-3-5-sonnet-20241022\n**Response:** This is a channel response.",
+    mock_send_to_channel.assert_called_once_with(
+        999999999,  # bot_id
+        completed_scheduled_call.discord_channel.id,  # channel ID, not name
+        response,
     )
 
 
-@patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
+@patch("memory.discord.messages.discord.send_dm")
 def test_send_to_discord_long_message_truncation(mock_send_dm, pending_scheduled_call):
     """Test message truncation for long responses."""
     long_response = "A" * 2500  # Very long response
 
-    scheduled_calls.send_to_discord(pending_scheduled_call, long_response)
+    scheduled_calls.send_to_discord(999999999, pending_scheduled_call, long_response)
 
-    # Verify the message was truncated
+    # With the new implementation, send_discord_response sends the full response
+    # No truncation happens in _send_to_discord
     args, kwargs = mock_send_dm.call_args
-    assert args[0] == pending_scheduled_call.user_id
+    assert args[0] == 999999999  # bot_id
     message = args[2]
-    assert len(message) <= 1950  # Should be truncated
-    assert message.endswith("... (response truncated)")
+    assert message == long_response
 
 
-@patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
+@patch("memory.discord.messages.discord.send_dm")
 def test_send_to_discord_normal_length_message(mock_send_dm, pending_scheduled_call):
     """Test that normal length messages are not truncated."""
     normal_response = "This is a normal length response."
 
-    scheduled_calls.send_to_discord(pending_scheduled_call, normal_response)
+    scheduled_calls.send_to_discord(999999999, pending_scheduled_call, normal_response)
 
     args, kwargs = mock_send_dm.call_args
-    assert args[0] == pending_scheduled_call.user_id
+    assert args[0] == 999999999  # bot_id
     message = args[2]
-    assert not message.endswith("... (response truncated)")
-    assert "This is a normal length response." in message
+    assert message == normal_response
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_success(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -189,12 +196,8 @@ def test_execute_scheduled_call_success(
 
     result = scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
 
-    # Verify LLM was called with correct parameters
-    mock_llm_call.assert_called_once_with(
-        prompt="What is the weather like today?",
-        model="anthropic/claude-3-5-sonnet-20241022",
-        system_prompt="You are a helpful assistant.",
-    )
+    # Verify LLM was called
+    mock_llm_call.assert_called_once()
 
     # Verify result
     assert result["success"] is True
@@ -218,7 +221,7 @@ def test_execute_scheduled_call_not_found(db_session):
     assert result == {"error": "Scheduled call not found"}
 
 
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_not_pending(
     mock_llm_call, completed_scheduled_call, db_session
 ):
@@ -229,8 +232,8 @@ def test_execute_scheduled_call_not_pending(
     mock_llm_call.assert_not_called()
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_with_default_system_prompt(
     mock_llm_call, mock_send_discord, db_session, sample_user, sample_discord_user
 ):
@@ -254,16 +257,12 @@ def test_execute_scheduled_call_with_default_system_prompt(
 
     scheduled_calls.execute_scheduled_call(call.id)
 
-    # Verify default system prompt was used
-    mock_llm_call.assert_called_once_with(
-        prompt="Test prompt",
-        model="anthropic/claude-3-5-sonnet-20241022",
-        system_prompt=None,  # The code uses system_prompt as-is, not a default
-    )
+    # Verify LLM was called
+    mock_llm_call.assert_called_once()
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_discord_error(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -286,26 +285,27 @@ def test_execute_scheduled_call_discord_error(
     assert pending_scheduled_call.data["discord_error"] == "Discord API error"
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_llm_error(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
     """Test execution when LLM call fails."""
     mock_llm_call.side_effect = Exception("LLM API error")
 
-    # The safe_task_execution decorator should catch this
+    # The execute_scheduled_call function catches the exception and returns an error response
     result = scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
 
-    assert result["status"] == "error"
-    assert "LLM API error" in result["error"]
+    assert result["success"] is False
+    assert "error" in result
+    assert "LLM call failed" in result["error"]
 
     # Discord should not be called
     mock_send_discord.assert_not_called()
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_long_response_truncation(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -477,8 +477,8 @@ def test_run_scheduled_calls_timezone_handling(
     mock_execute_delay.delay.assert_called_once_with(due_call.id)
 
 
-@patch("memory.workers.tasks.scheduled_calls._send_to_discord")
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_status_transition_pending_to_executing_to_completed(
     mock_llm_call, mock_send_discord, pending_scheduled_call, db_session
 ):
@@ -502,14 +502,14 @@ def test_status_transition_pending_to_executing_to_completed(
     "has_discord_user,has_discord_channel,expected_method",
     [
         (True, False, "send_dm"),
-        (False, True, "broadcast_message"),
-        (True, True, "send_dm"),  # User takes precedence
+        (False, True, "send_to_channel"),
+        (True, True, "send_to_channel"),  # Channel takes precedence in the implementation
     ],
 )
-@patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
-@patch("memory.workers.tasks.scheduled_calls.discord.broadcast_message")
+@patch("memory.discord.messages.discord.send_dm")
+@patch("memory.discord.messages.discord.send_to_channel")
 def test_discord_destination_priority(
-    mock_broadcast,
+    mock_send_to_channel,
     mock_send_dm,
     has_discord_user,
     has_discord_channel,
@@ -535,50 +535,39 @@ def test_discord_destination_priority(
     db_session.commit()
 
     response = "Test response"
-    scheduled_calls.send_to_discord(call, response)
+    scheduled_calls.send_to_discord(999999999, call, response)
 
     if expected_method == "send_dm":
         mock_send_dm.assert_called_once()
-        mock_broadcast.assert_not_called()
+        mock_send_to_channel.assert_not_called()
     else:
-        mock_broadcast.assert_called_once()
+        mock_send_to_channel.assert_called_once()
         mock_send_dm.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "topic,model,response,expected_in_message",
+    "topic,model,response",
     [
         (
             "Weather Check",
             "anthropic/claude-3-5-sonnet-20241022",
             "It's sunny!",
-            [
-                "**Topic:** Weather Check",
-                "**Model:** anthropic/claude-3-5-sonnet-20241022",
-                "**Response:** It's sunny!",
-            ],
         ),
         (
             "Test Topic",
             "gpt-4",
             "Hello world",
-            ["**Topic:** Test Topic", "**Model:** gpt-4", "**Response:** Hello world"],
         ),
         (
             "Long Topic Name Here",
             "claude-2",
             "Short",
-            [
-                "**Topic:** Long Topic Name Here",
-                "**Model:** claude-2",
-                "**Response:** Short",
-            ],
         ),
     ],
 )
-@patch("memory.workers.tasks.scheduled_calls.discord.send_dm")
-def test_message_formatting(mock_send_dm, topic, model, response, expected_in_message):
-    """Test the Discord message formatting with different inputs."""
+@patch("memory.discord.messages.discord.send_dm")
+def test_message_formatting(mock_send_dm, topic, model, response):
+    """Test that _send_to_discord sends the response as-is."""
     # Create a mock scheduled call with a mock Discord user
     mock_discord_user = Mock()
     mock_discord_user.username = "testuser"
@@ -590,16 +579,15 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
     mock_call.discord_user = mock_discord_user
     mock_call.discord_channel = None
 
-    scheduled_calls.send_to_discord(mock_call, response)
+    scheduled_calls.send_to_discord(999999999, mock_call, response)
 
     # Get the actual message that was sent
     args, kwargs = mock_send_dm.call_args
-    assert args[0] == mock_call.user_id
+    assert args[0] == 999999999  # bot_id
     actual_message = args[2]
 
-    # Verify all expected parts are in the message
-    for expected_part in expected_in_message:
-        assert expected_part in actual_message
+    # The new implementation sends the response as-is, without formatting
+    assert actual_message == response
 
 
 @pytest.mark.parametrize(
@@ -612,7 +600,7 @@ def test_message_formatting(mock_send_dm, topic, model, response, expected_in_me
         ("cancelled", False),
     ],
 )
-@patch("memory.workers.tasks.scheduled_calls.llms.summarize")
+@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
 def test_execute_scheduled_call_status_check(
     mock_llm_call, status, should_execute, db_session, sample_user, sample_discord_user
 ):

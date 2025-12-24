@@ -766,7 +766,7 @@ EXPECTED_OBSERVATION_RESULTS = {
             ),
             (
                 0.409,
-                "Time: 12:00 on Wednesday (afternoon) | Subject: domain_preference | Observation: The user prefers working on backend systems over frontend UI",
+                "Time: 12:00 on Wednesday (afternoon) | Subject: version_control_style | Observation: The user prefers small, focused commits over large feature branches",
             ),
         ],
     },
@@ -835,11 +835,11 @@ EXPECTED_OBSERVATION_RESULTS = {
         "semantic": [
             (0.489, "I find backend logic more interesting than UI work"),
             (0.462, "The user prefers working on backend systems over frontend UI"),
+            (0.455, "The user said pure functions are yucky"),
             (
                 0.455,
                 "The user believes functional programming leads to better code quality",
             ),
-            (0.455, "The user said pure functions are yucky"),
         ],
         "temporal": [
             (
