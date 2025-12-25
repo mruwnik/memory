@@ -63,11 +63,27 @@ class MessageProcessor:
         doc=textwrap.dedent(
             """
             A summary of this processor, made by and for AI systems.
-        
+
             The idea here is that AI systems can use this summary to keep notes on the given processor.
-            These should automatically be injected into the context of the messages that are processed by this processor.   
+            These should automatically be injected into the context of the messages that are processed by this processor.
             """
         ),
+    )
+
+    proactive_cron = Column(
+        Text,
+        nullable=True,
+        doc="Cron schedule for proactive check-ins (e.g., '0 9 * * *' for 9am daily). None = disabled.",
+    )
+    proactive_prompt = Column(
+        Text,
+        nullable=True,
+        doc="Custom instructions for proactive check-ins.",
+    )
+    last_proactive_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="When the last proactive check-in was sent.",
     )
 
     @property

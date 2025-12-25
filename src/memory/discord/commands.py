@@ -167,6 +167,25 @@ def _create_scope_group(
             url=url and url.strip(),
         )
 
+    # Proactive command
+    @group.command(name="proactive", description=f"Configure {name}'s proactive check-ins")
+    @discord.app_commands.describe(
+        cron="Cron schedule (e.g., '0 9 * * *' for 9am daily) or 'off' to disable",
+        prompt="Optional custom instructions for check-ins",
+    )
+    async def proactive_cmd(
+        interaction: discord.Interaction,
+        cron: str | None = None,
+        prompt: str | None = None,
+    ):
+        await _run_interaction_command(
+            interaction,
+            scope=scope,
+            handler=handle_proactive,
+            cron=cron and cron.strip(),
+            prompt=prompt,
+        )
+
     return group
 
 
@@ -263,6 +282,28 @@ def _create_user_scope_group(
             target_user=user,
             action=action,
             url=url and url.strip(),
+        )
+
+    # Proactive command
+    @group.command(name="proactive", description=f"Configure {name}'s proactive check-ins")
+    @discord.app_commands.describe(
+        user="Target user",
+        cron="Cron schedule (e.g., '0 9 * * *' for 9am daily) or 'off' to disable",
+        prompt="Optional custom instructions for check-ins",
+    )
+    async def proactive_cmd(
+        interaction: discord.Interaction,
+        user: discord.User,
+        cron: str | None = None,
+        prompt: str | None = None,
+    ):
+        await _run_interaction_command(
+            interaction,
+            scope=scope,
+            handler=handle_proactive,
+            target_user=user,
+            cron=cron and cron.strip(),
+            prompt=prompt,
         )
 
     return group
@@ -663,3 +704,68 @@ async def handle_mcp_servers(
     except Exception as exc:
         logger.error(f"Error running MCP server command: {exc}", exc_info=True)
         raise CommandError(f"Error: {exc}") from exc
+
+
+async def handle_proactive(
+    context: CommandContext,
+    *,
+    cron: str | None = None,
+    prompt: str | None = None,
+) -> CommandResponse:
+    """Handle proactive check-in configuration."""
+    from croniter import croniter
+
+    model = context.target
+
+    # If no arguments, show current settings
+    if cron is None and prompt is None:
+        current_cron = getattr(model, "proactive_cron", None)
+        current_prompt = getattr(model, "proactive_prompt", None)
+
+        if not current_cron:
+            return CommandResponse(
+                content=f"Proactive check-ins are disabled for {context.display_name}."
+            )
+
+        lines = [f"Proactive check-ins for {context.display_name}:"]
+        lines.append(f"  Schedule: `{current_cron}`")
+        if current_prompt:
+            lines.append(f"  Prompt: {current_prompt}")
+        return CommandResponse(content="\n".join(lines))
+
+    # Handle cron setting
+    if cron is not None:
+        if cron.lower() == "off":
+            setattr(model, "proactive_cron", None)
+            return CommandResponse(
+                content=f"Proactive check-ins disabled for {context.display_name}."
+            )
+
+        # Validate cron expression
+        try:
+            croniter(cron)
+        except (ValueError, KeyError) as e:
+            raise CommandError(
+                f"Invalid cron expression: {cron}\n"
+                "Examples:\n"
+                "  `0 9 * * *` - 9am daily\n"
+                "  `0 9,17 * * 1-5` - 9am and 5pm weekdays\n"
+                "  `0 */4 * * *` - every 4 hours"
+            ) from e
+
+        setattr(model, "proactive_cron", cron)
+
+    # Handle prompt setting
+    if prompt is not None:
+        setattr(model, "proactive_prompt", prompt or None)
+
+    # Build response
+    current_cron = getattr(model, "proactive_cron", None)
+    current_prompt = getattr(model, "proactive_prompt", None)
+
+    lines = [f"Updated proactive settings for {context.display_name}:"]
+    lines.append(f"  Schedule: `{current_cron}`")
+    if current_prompt:
+        lines.append(f"  Prompt: {current_prompt}")
+
+    return CommandResponse(content="\n".join(lines))

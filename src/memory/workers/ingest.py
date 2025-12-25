@@ -11,6 +11,7 @@ from memory.common.celery_app import (
     SYNC_LESSWRONG,
     RUN_SCHEDULED_CALLS,
     BACKUP_ALL,
+    EVALUATE_PROACTIVE_CHECKINS,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,5 +53,9 @@ app.conf.beat_schedule = {
     "backup-all": {
         "task": BACKUP_ALL,
         "schedule": settings.S3_BACKUP_INTERVAL,
+    },
+    "evaluate-proactive-checkins": {
+        "task": EVALUATE_PROACTIVE_CHECKINS,
+        "schedule": settings.PROACTIVE_CHECKIN_INTERVAL,
     },
 }

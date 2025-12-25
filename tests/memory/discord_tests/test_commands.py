@@ -15,6 +15,7 @@ from memory.discord.commands import (
     handle_chattiness,
     handle_ignore,
     handle_summary,
+    handle_proactive,
     respond,
     with_object_context,
     handle_mcp_servers,
@@ -377,3 +378,207 @@ async def test_handle_mcp_servers_wraps_errors(mock_run_mcp, interaction):
         await handle_mcp_servers(context, action="list", url=None)
 
     assert "Error: boom" in str(exc.value)
+
+
+# ============================================================================
+# Tests for handle_proactive
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_show_disabled(db_session, interaction, guild):
+    """Test showing proactive settings when disabled."""
+    server = DiscordServer(id=guild.id, name="Guild", proactive_cron=None)
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    response = await handle_proactive(context)
+
+    assert "disabled" in response.content.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_show_enabled(db_session, interaction, guild):
+    """Test showing proactive settings when enabled."""
+    server = DiscordServer(
+        id=guild.id,
+        name="Guild",
+        proactive_cron="0 9 * * *",
+        proactive_prompt="Check on projects",
+    )
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    response = await handle_proactive(context)
+
+    assert "0 9 * * *" in response.content
+    assert "Check on projects" in response.content
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_set_cron(db_session, interaction, guild):
+    """Test setting proactive cron schedule."""
+    server = DiscordServer(id=guild.id, name="Guild")
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    response = await handle_proactive(context, cron="0 9 * * *")
+
+    assert "Updated" in response.content
+    assert "0 9 * * *" in response.content
+    assert server.proactive_cron == "0 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_set_prompt(db_session, interaction, guild):
+    """Test setting proactive prompt."""
+    server = DiscordServer(id=guild.id, name="Guild", proactive_cron="0 9 * * *")
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    response = await handle_proactive(context, prompt="Focus on daily standups")
+
+    assert "Updated" in response.content
+    assert server.proactive_prompt == "Focus on daily standups"
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_disable(db_session, interaction, guild):
+    """Test disabling proactive check-ins."""
+    server = DiscordServer(
+        id=guild.id,
+        name="Guild",
+        proactive_cron="0 9 * * *",
+        proactive_prompt="Some prompt",
+    )
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    response = await handle_proactive(context, cron="off")
+
+    assert "disabled" in response.content.lower()
+    assert server.proactive_cron is None
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_invalid_cron(db_session, interaction, guild):
+    """Test error on invalid cron expression."""
+    server = DiscordServer(id=guild.id, name="Guild")
+    db_session.add(server)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="server",
+        target=server,
+        display_name="server **Guild**",
+    )
+
+    with pytest.raises(CommandError) as exc:
+        await handle_proactive(context, cron="not a valid cron")
+
+    assert "Invalid cron expression" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_user_scope(db_session, interaction, discord_user):
+    """Test proactive settings for user scope."""
+    user_model = DiscordUser(
+        id=discord_user.id, username="testuser", proactive_cron=None
+    )
+    db_session.add(user_model)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="me",
+        target=user_model,
+        display_name="you (**testuser**)",
+    )
+
+    response = await handle_proactive(context, cron="0 9,17 * * 1-5")
+
+    assert "Updated" in response.content
+    assert user_model.proactive_cron == "0 9,17 * * 1-5"
+
+
+@pytest.mark.asyncio
+async def test_handle_proactive_channel_scope(
+    db_session, interaction, guild, text_channel
+):
+    """Test proactive settings for channel scope."""
+    server = DiscordServer(id=guild.id, name="Guild")
+    db_session.add(server)
+    db_session.flush()
+
+    channel_model = DiscordChannel(
+        id=text_channel.id,
+        name="general",
+        channel_type="text",
+        server_id=guild.id,
+    )
+    db_session.add(channel_model)
+    db_session.commit()
+
+    context = CommandContext(
+        session=db_session,
+        interaction=interaction,
+        actor=MagicMock(spec=DiscordUser),
+        scope="channel",
+        target=channel_model,
+        display_name="channel **#general**",
+    )
+
+    response = await handle_proactive(context, cron="0 12 * * *")
+
+    assert "Updated" in response.content
+    assert channel_model.proactive_cron == "0 12 * * *"

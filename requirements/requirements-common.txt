@@ -10,5 +10,6 @@ openai==2.3.0
 # Updated for fastmcp>=2.10 compatibility (anthropic 0.69.0 supports httpx<1)
 httpx>=0.28.1
 celery[redis,sqs]==5.3.6
+croniter==2.0.1
 cryptography==43.0.0
 bcrypt==4.1.2

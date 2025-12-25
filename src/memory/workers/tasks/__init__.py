@@ -15,6 +15,7 @@ from memory.workers.tasks import (
     notes,
     observations,
     people,
+    proactive,
     scheduled_calls,
 )  # noqa
 
@@ -31,5 +32,6 @@ __all__ = [
     "notes",
     "observations",
     "people",
+    "proactive",
     "scheduled_calls",
 ]
