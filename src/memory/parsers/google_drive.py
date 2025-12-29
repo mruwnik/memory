@@ -106,6 +106,24 @@ class GoogleDriveClient:
             self._service = build("drive", "v3", credentials=creds)
         return self._service
 
+    def get_file_metadata(self, file_id: str) -> dict:
+        """Get metadata for a single file or folder."""
+        service = self._get_service()
+        return (
+            service.files()
+            .get(
+                fileId=file_id,
+                fields="id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+
+    def is_folder(self, file_id: str) -> bool:
+        """Check if a file ID refers to a folder."""
+        metadata = self.get_file_metadata(file_id)
+        return metadata.get("mimeType") == "application/vnd.google-apps.folder"
+
     def list_files_in_folder(
         self,
         folder_id: str,
@@ -141,6 +159,8 @@ class GoogleDriveClient:
                     fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size)",
                     pageToken=page_token,
                     pageSize=page_size,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
                 )
                 .execute()
             )
@@ -191,7 +211,11 @@ class GoogleDriveClient:
         while current_id:
             try:
                 file = (
-                    service.files().get(fileId=current_id, fields="name, parents").execute()
+                    service.files().get(
+                        fileId=current_id,
+                        fields="name, parents",
+                        supportsAllDrives=True,
+                    ).execute()
                 )
                 path_parts.insert(0, file["name"])
                 parents = file.get("parents", [])

@@ -85,7 +85,7 @@ ALL_COLLECTIONS: dict[str, Collection] = {
     "doc": {
         "dimension": 1024,
         "distance": "Cosine",
-        "text": False,
+        "text": True,
         "multimodal": True,
     },
     # Observations

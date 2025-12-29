@@ -237,25 +237,66 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
         docs_synced = 0
         task_ids = []
+        is_single_doc = False
 
         try:
-            # Get folder path for context
-            folder_path = client.get_folder_path(cast(str, folder.folder_id))
+            google_id = cast(str, folder.folder_id)
 
-            for file_meta in client.list_files_in_folder(
-                cast(str, folder.folder_id),
-                recursive=cast(bool, folder.recursive),
-                since=since,
-            ):
+            # Check if this is a single document or a folder
+            file_metadata = client.get_file_metadata(google_id)
+            is_folder = file_metadata.get("mimeType") == "application/vnd.google-apps.folder"
+            is_single_doc = not is_folder
+
+            if is_folder:
+                # It's a folder - list and sync all files inside
+                folder_path = client.get_folder_path(google_id)
+
+                for file_meta in client.list_files_in_folder(
+                    google_id,
+                    recursive=cast(bool, folder.recursive),
+                    since=since,
+                ):
+                    try:
+                        file_data = client.fetch_file(file_meta, folder_path)
+                        serialized = _serialize_file_data(file_data)
+                        task = sync_google_doc.delay(folder.id, serialized)
+                        task_ids.append(task.id)
+                        docs_synced += 1
+                    except Exception as e:
+                        logger.error(f"Error fetching file {file_meta.get('name')}: {e}")
+                        continue
+            else:
+                # It's a single document - sync it directly
+                logger.info(f"Syncing single document: {file_metadata.get('name')}")
+                folder_path = client.get_folder_path(google_id)
+
+                # Check if we need to sync based on modification time
+                if since and file_metadata.get("modifiedTime"):
+                    from memory.parsers.google_drive import parse_google_date
+                    modified_at = parse_google_date(file_metadata.get("modifiedTime"))
+                    if modified_at and modified_at <= since:
+                        logger.info(f"Document not modified since last sync, skipping")
+                        folder.last_sync_at = now
+                        session.commit()
+                        return {
+                            "status": "completed",
+                            "sync_type": "incremental",
+                            "folder_id": folder_id,
+                            "folder_name": folder.folder_name,
+                            "docs_synced": 0,
+                            "task_ids": [],
+                            "is_single_doc": True,
+                        }
+
                 try:
-                    file_data = client.fetch_file(file_meta, folder_path)
+                    file_data = client.fetch_file(file_metadata, folder_path)
                     serialized = _serialize_file_data(file_data)
                     task = sync_google_doc.delay(folder.id, serialized)
                     task_ids.append(task.id)
-                    docs_synced += 1
+                    docs_synced = 1
                 except Exception as e:
-                    logger.error(f"Error fetching file {file_meta.get('name')}: {e}")
-                    continue
+                    logger.error(f"Error fetching document {file_metadata.get('name')}: {e}")
+                    raise
 
             # Update sync timestamps
             folder.last_sync_at = now
@@ -275,6 +316,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             "folder_name": folder.folder_name,
             "docs_synced": docs_synced,
             "task_ids": task_ids,
+            "is_single_doc": is_single_doc,
         }
 
 
