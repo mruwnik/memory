@@ -23,6 +23,10 @@ from memory.api.auth import (
     AuthenticationMiddleware,
     router as auth_router,
 )
+from memory.api.google_drive import router as google_drive_router
+from memory.api.email_accounts import router as email_accounts_router
+from memory.api.article_feeds import router as article_feeds_router
+from memory.api.github_sources import router as github_sources_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
@@ -60,7 +64,7 @@ app.add_middleware(AuthenticationMiddleware)
 # allow_credentials=True requires specific origins, not wildcards.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.SERVER_URL],
+    allow_origins=[settings.SERVER_URL, "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -149,6 +153,10 @@ admin = Admin(app, engine)
 # Setup admin with OAuth protection using existing OAuth provider
 setup_admin(admin)
 app.include_router(auth_router)
+app.include_router(google_drive_router)
+app.include_router(email_accounts_router)
+app.include_router(article_feeds_router)
+app.include_router(github_sources_router)
 
 
 # Add health check to MCP server instead of main app

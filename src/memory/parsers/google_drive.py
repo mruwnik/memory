@@ -1,0 +1,339 @@
+"""Google Drive API client for fetching and exporting documents."""
+
+import hashlib
+import io
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Generator, TypedDict
+
+from memory.common import settings
+
+logger = logging.getLogger(__name__)
+
+# MIME types we support
+SUPPORTED_GOOGLE_MIMES = {
+    "application/vnd.google-apps.document",  # Google Docs
+}
+
+SUPPORTED_FILE_MIMES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "text/plain",
+    "text/markdown",
+    "text/html",
+    "text/csv",
+}
+
+# Export mappings for Google native formats
+EXPORT_MIMES = {
+    "application/vnd.google-apps.document": "text/plain",
+}
+
+
+@dataclass
+class GoogleCredentials:
+    """Credentials for Google Drive API access."""
+
+    access_token: str
+    refresh_token: str | None
+    token_expires_at: datetime | None
+    scopes: list[str]
+
+
+class GoogleFileData(TypedDict):
+    """Parsed file data ready for storage."""
+
+    file_id: str
+    title: str
+    mime_type: str
+    original_mime_type: str
+    folder_path: str | None
+    owner: str | None
+    last_modified_by: str | None
+    modified_at: datetime | None
+    created_at: datetime | None
+    content: str
+    content_hash: str
+    size: int
+    word_count: int
+
+
+def parse_google_date(date_str: str | None) -> datetime | None:
+    """Parse RFC 3339 date string from Google API."""
+    if not date_str:
+        return None
+    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+
+
+def compute_content_hash(content: str) -> str:
+    """Compute SHA256 hash of content for change detection."""
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+class GoogleDriveClient:
+    """Client for Google Drive API."""
+
+    def __init__(
+        self,
+        credentials: GoogleCredentials,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        token_uri: str = "https://oauth2.googleapis.com/token",
+    ):
+        self.credentials = credentials
+        self._service = None
+        # Use provided values or fall back to settings
+        self._client_id = client_id or settings.GOOGLE_CLIENT_ID
+        self._client_secret = client_secret or settings.GOOGLE_CLIENT_SECRET
+        self._token_uri = token_uri
+
+    def _get_service(self):
+        """Lazily build the Drive service."""
+        if self._service is None:
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+
+            creds = Credentials(
+                token=self.credentials.access_token,
+                refresh_token=self.credentials.refresh_token,
+                token_uri=self._token_uri,
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+                scopes=self.credentials.scopes,
+            )
+            self._service = build("drive", "v3", credentials=creds)
+        return self._service
+
+    def list_files_in_folder(
+        self,
+        folder_id: str,
+        recursive: bool = True,
+        since: datetime | None = None,
+        page_size: int = 100,
+    ) -> Generator[dict, None, None]:
+        """List all supported files in a folder with pagination."""
+        service = self._get_service()
+
+        # Build query for supported file types
+        all_mimes = SUPPORTED_GOOGLE_MIMES | SUPPORTED_FILE_MIMES
+        mime_conditions = " or ".join(f"mimeType='{mime}'" for mime in all_mimes)
+
+        query_parts = [
+            f"'{folder_id}' in parents",
+            "trashed=false",
+            f"({mime_conditions} or mimeType='application/vnd.google-apps.folder')",
+        ]
+
+        if since:
+            query_parts.append(f"modifiedTime > '{since.isoformat()}'")
+
+        query = " and ".join(query_parts)
+
+        page_token = None
+        while True:
+            response = (
+                service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size)",
+                    pageToken=page_token,
+                    pageSize=page_size,
+                )
+                .execute()
+            )
+
+            for file in response.get("files", []):
+                if file["mimeType"] == "application/vnd.google-apps.folder":
+                    if recursive:
+                        # Recursively list files in subfolder
+                        yield from self.list_files_in_folder(
+                            file["id"], recursive=True, since=since
+                        )
+                else:
+                    yield file
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+    def export_file(self, file_id: str, mime_type: str) -> bytes:
+        """Export a Google native file to the specified format."""
+        from googleapiclient.http import MediaIoBaseDownload
+
+        service = self._get_service()
+
+        if mime_type in SUPPORTED_GOOGLE_MIMES:
+            # Export Google Docs to text
+            export_mime = EXPORT_MIMES.get(mime_type, "text/plain")
+            request = service.files().export_media(fileId=file_id, mimeType=export_mime)
+        else:
+            # Download regular files directly
+            request = service.files().get_media(fileId=file_id)
+
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        return buffer.getvalue()
+
+    def get_folder_path(self, file_id: str) -> str:
+        """Build the full folder path for a file."""
+        service = self._get_service()
+        path_parts = []
+
+        current_id = file_id
+        while current_id:
+            try:
+                file = (
+                    service.files().get(fileId=current_id, fields="name, parents").execute()
+                )
+                path_parts.insert(0, file["name"])
+                parents = file.get("parents", [])
+                current_id = parents[0] if parents else None
+            except Exception:
+                break
+
+        return "/".join(path_parts)
+
+    def fetch_file(
+        self, file_metadata: dict, folder_path: str | None = None
+    ) -> GoogleFileData:
+        """Fetch and parse a single file."""
+        file_id = file_metadata["id"]
+        mime_type = file_metadata["mimeType"]
+
+        logger.info(f"Fetching file: {file_metadata['name']} ({mime_type})")
+
+        # Download/export content
+        content_bytes = self.export_file(file_id, mime_type)
+
+        # Handle encoding
+        try:
+            content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            content = content_bytes.decode("latin-1")
+
+        # For PDFs and Word docs, we need to extract text
+        if mime_type == "application/pdf":
+            content = self._extract_pdf_text(content_bytes)
+        elif mime_type in (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+        ):
+            content = self._extract_docx_text(content_bytes)
+
+        # Extract owner info
+        owners = file_metadata.get("owners", [])
+        owner = owners[0].get("emailAddress") if owners else None
+
+        last_modifier = file_metadata.get("lastModifyingUser", {})
+        last_modified_by = last_modifier.get("emailAddress")
+
+        return GoogleFileData(
+            file_id=file_id,
+            title=file_metadata["name"],
+            mime_type=EXPORT_MIMES.get(mime_type, mime_type),
+            original_mime_type=mime_type,
+            folder_path=folder_path,
+            owner=owner,
+            last_modified_by=last_modified_by,
+            modified_at=parse_google_date(file_metadata.get("modifiedTime")),
+            created_at=parse_google_date(file_metadata.get("createdTime")),
+            content=content,
+            content_hash=compute_content_hash(content),
+            size=len(content.encode("utf-8")),
+            word_count=len(content.split()),
+        )
+
+    def _extract_pdf_text(self, pdf_bytes: bytes) -> str:
+        """Extract text from PDF using PyMuPDF."""
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            text_parts = []
+            for page in doc:
+                text_parts.append(page.get_text())
+            doc.close()
+            return "\n\n".join(text_parts)
+        except Exception as e:
+            logger.warning(f"Failed to extract PDF text: {e}")
+            return ""
+
+    def _extract_docx_text(self, docx_bytes: bytes) -> str:
+        """Extract text from Word document."""
+        try:
+            import zipfile
+            from xml.etree import ElementTree
+
+            # docx is a zip file containing XML
+            with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+                with zf.open("word/document.xml") as doc_xml:
+                    tree = ElementTree.parse(doc_xml)
+                    root = tree.getroot()
+
+                    # Word uses namespaces
+                    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+
+                    text_parts = []
+                    for para in root.findall(".//w:p", ns):
+                        para_text = "".join(
+                            node.text or ""
+                            for node in para.findall(".//w:t", ns)
+                        )
+                        if para_text:
+                            text_parts.append(para_text)
+
+                    return "\n\n".join(text_parts)
+        except Exception as e:
+            logger.warning(f"Failed to extract docx text: {e}")
+            return ""
+
+
+def _get_oauth_config(session: Any) -> tuple[str, str, str]:
+    """Get OAuth client credentials from database or settings."""
+    from memory.common.db.models.sources import GoogleOAuthConfig
+
+    config = session.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    if config:
+        return config.client_id, config.client_secret, config.token_uri
+
+    # Fall back to environment variables
+    return (
+        settings.GOOGLE_CLIENT_ID,
+        settings.GOOGLE_CLIENT_SECRET,
+        "https://oauth2.googleapis.com/token",
+    )
+
+
+def refresh_credentials(account: Any, session: Any) -> Any:
+    """Refresh OAuth2 credentials if expired."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    client_id, client_secret, token_uri = _get_oauth_config(session)
+
+    credentials = Credentials(
+        token=account.access_token,
+        refresh_token=account.refresh_token,
+        token_uri=token_uri,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=account.scopes or [],
+    )
+
+    if credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())
+
+        # Update stored tokens
+        account.access_token = credentials.token
+        account.token_expires_at = credentials.expiry
+        session.commit()
+
+    return credentials

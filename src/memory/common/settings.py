@@ -244,3 +244,20 @@ S3_BACKUP_ENABLED = boolean_env("S3_BACKUP_ENABLED", bool(BACKUP_ENCRYPTION_KEY)
 S3_BACKUP_INTERVAL = int(
     os.getenv("S3_BACKUP_INTERVAL", 60 * 60 * 24)
 )  # Daily by default
+
+# Google OAuth settings
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google")
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
+# Google Drive sync settings
+GOOGLE_DRIVE_STORAGE_DIR = pathlib.Path(
+    os.getenv("GOOGLE_DRIVE_STORAGE_DIR", str(FILE_STORAGE_DIR / "google_drive"))
+)
+GOOGLE_DRIVE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+GOOGLE_SYNC_INTERVAL = int(os.getenv("GOOGLE_SYNC_INTERVAL", 60 * 60))  # 1 hour default

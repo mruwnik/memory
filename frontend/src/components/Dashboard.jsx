@@ -26,6 +26,11 @@ const Dashboard = ({ onLogout }) => {
                         <p>Search through your knowledge base</p>
                     </Link>
 
+                    <Link to="/ui/sources" className="feature-card">
+                        <h3>Sources</h3>
+                        <p>Manage email, GitHub, RSS feeds, and Google Drive</p>
+                    </Link>
+
                     <div className="feature-card" onClick={async () => console.log(await listNotes())}>
                         <h3>📝 Notes</h3>
                         <p>Create and manage your notes</p>

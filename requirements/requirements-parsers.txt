@@ -5,3 +5,8 @@ markdownify==0.13.1
 pillow==10.3.0
 pypandoc==1.15
 feedparser==6.0.10
+
+# Google Drive API
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.0.0

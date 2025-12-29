@@ -37,6 +37,7 @@ WHITELIST = {
     "/.well-known/",
     "/ui",
     "/admin/statics/",  # SQLAdmin static resources
+    "/google-drive/callback",  # Google OAuth callback
 }
 
 

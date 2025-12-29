@@ -18,6 +18,7 @@ BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
 PROACTIVE_ROOT = "memory.workers.tasks.proactive"
+GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -77,6 +78,10 @@ SYNC_PROFILE_FROM_FILE = f"{PEOPLE_ROOT}.sync_profile_from_file"
 # Proactive check-in tasks
 EVALUATE_PROACTIVE_CHECKINS = f"{PROACTIVE_ROOT}.evaluate_proactive_checkins"
 EXECUTE_PROACTIVE_CHECKIN = f"{PROACTIVE_ROOT}.execute_proactive_checkin"
+# Google Drive tasks
+SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
+SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
+SYNC_ALL_GOOGLE_ACCOUNTS = f"{GOOGLE_ROOT}.sync_all_google_accounts"
 
 
 def get_broker_url() -> str:
@@ -136,6 +141,7 @@ app.conf.update(
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
         f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
         f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
+        f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
     },
     beat_schedule={
         "sync-github-repos-hourly": {
@@ -145,6 +151,10 @@ app.conf.update(
         "evaluate-proactive-checkins": {
             "task": EVALUATE_PROACTIVE_CHECKINS,
             "schedule": crontab(),  # Every minute
+        },
+        "sync-google-drive-hourly": {
+            "task": SYNC_ALL_GOOGLE_ACCOUNTS,
+            "schedule": crontab(minute=30),  # Every hour at :30
         },
     },
 )

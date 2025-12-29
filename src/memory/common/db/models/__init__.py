@@ -22,6 +22,7 @@ from memory.common.db.models.source_items import (
     Photo,
     MiscDoc,
     Note,
+    GoogleDoc,
     MailMessagePayload,
     EmailAttachmentPayload,
     AgentObservationPayload,
@@ -30,6 +31,7 @@ from memory.common.db.models.source_items import (
     BookSectionPayload,
     NotePayload,
     ForumPostPayload,
+    GoogleDocPayload,
 )
 from memory.common.db.models.discord import (
     DiscordServer,
@@ -57,6 +59,9 @@ from memory.common.db.models.sources import (
     EmailAccount,
     GithubAccount,
     GithubRepo,
+    GoogleOAuthConfig,
+    GoogleAccount,
+    GoogleFolder,
 )
 from memory.common.db.models.users import (
     User,
@@ -83,6 +88,7 @@ Payload = (
     | EmailAttachmentPayload
     | MailMessagePayload
     | PersonPayload
+    | GoogleDocPayload
 )
 
 __all__ = [
@@ -106,6 +112,8 @@ __all__ = [
     "Photo",
     "MiscDoc",
     "Note",
+    "GoogleDoc",
+    "GoogleDocPayload",
     # Observations
     "ObservationContradiction",
     "ReactionPattern",
@@ -121,6 +129,9 @@ __all__ = [
     "EmailAccount",
     "GithubAccount",
     "GithubRepo",
+    "GoogleOAuthConfig",
+    "GoogleAccount",
+    "GoogleFolder",
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",

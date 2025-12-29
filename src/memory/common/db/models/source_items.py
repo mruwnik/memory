@@ -1203,3 +1203,86 @@ class AgentObservation(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["semantic", "temporal"]
+
+
+class GoogleDocPayload(SourceItemPayload):
+    google_file_id: Annotated[str, "Google Drive file ID"]
+    title: Annotated[str, "Document title"]
+    original_mime_type: Annotated[str | None, "Original Google/MIME type"]
+    folder_path: Annotated[str | None, "Path in Google Drive"]
+    owner: Annotated[str | None, "Document owner email"]
+    last_modified_by: Annotated[str | None, "Last modifier email"]
+    google_modified_at: Annotated[str | None, "Last modified time from Google"]
+    word_count: Annotated[int | None, "Approximate word count"]
+
+
+class GoogleDoc(SourceItem):
+    """Google Drive document (Docs, PDFs, Word files, text)."""
+
+    __tablename__ = "google_doc"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # Google-specific identifiers
+    google_file_id = Column(Text, nullable=False, unique=True)  # Drive file ID
+    google_modified_at = Column(
+        DateTime(timezone=True), nullable=True
+    )  # For change detection
+
+    # Document metadata
+    title = Column(Text, nullable=False)
+    original_mime_type = Column(
+        Text, nullable=True
+    )  # e.g., "application/vnd.google-apps.document"
+    folder_id = Column(
+        BigInteger, ForeignKey("google_folders.id", ondelete="SET NULL"), nullable=True
+    )
+    folder_path = Column(Text, nullable=True)  # e.g., "My Drive/Work/Projects"
+
+    # Authorship tracking
+    owner = Column(Text, nullable=True)  # Email of owner
+    last_modified_by = Column(Text, nullable=True)  # Email of last modifier
+
+    # Content stats
+    word_count = Column(Integer, nullable=True)
+
+    # Content hash for change detection
+    content_hash = Column(Text, nullable=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "google_doc",
+    }
+
+    __table_args__ = (
+        Index("google_doc_file_id_idx", "google_file_id", unique=True),
+        Index("google_doc_folder_idx", "folder_id"),
+        Index("google_doc_modified_idx", "google_modified_at"),
+        Index("google_doc_title_idx", "title"),
+    )
+
+    def as_payload(self) -> GoogleDocPayload:
+        return GoogleDocPayload(
+            **super().as_payload(),
+            google_file_id=cast(str, self.google_file_id),
+            title=cast(str, self.title),
+            original_mime_type=cast(str | None, self.original_mime_type),
+            folder_path=cast(str | None, self.folder_path),
+            owner=cast(str | None, self.owner),
+            last_modified_by=cast(str | None, self.last_modified_by),
+            google_modified_at=(
+                self.google_modified_at and self.google_modified_at.isoformat()
+            ),
+            word_count=cast(int | None, self.word_count),
+        )
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        content = cast(str | None, self.content)
+        if content:
+            return extract.extract_text(content, modality="doc")
+        return []
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["doc"]

@@ -11,4 +11,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      // Proxy API requests to backend during development
+      '/register': 'http://localhost:8000',
+      '/authorize': 'http://localhost:8000',
+      '/token': 'http://localhost:8000',
+      '/auth': 'http://localhost:8000',
+      '/health': 'http://localhost:8000',
+      '/email-accounts': 'http://localhost:8000',
+      '/article-feeds': 'http://localhost:8000',
+      '/github': 'http://localhost:8000',
+      '/google-drive': 'http://localhost:8000',
+    },
+  },
 })

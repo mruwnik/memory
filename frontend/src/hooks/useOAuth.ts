@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8000'
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
 const REDIRECT_URI = `${window.location.origin}/ui`
 
@@ -94,8 +94,8 @@ export const useOAuth = () => {
     localStorage.setItem('oauth_state', state)
     localStorage.setItem('code_verifier', codeVerifier)
 
-    // Build authorization URL
-    const authUrl = new URL(`${SERVER_URL}/authorize`)
+    // Build authorization URL (needs full URL for browser redirect)
+    const authUrl = new URL(`${window.location.origin}/authorize`)
     authUrl.searchParams.set('response_type', 'code')
     authUrl.searchParams.set('client_id', clientId)
     authUrl.searchParams.set('redirect_uri', REDIRECT_URI)

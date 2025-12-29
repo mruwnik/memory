@@ -1,5 +1,6 @@
 export { default as Loading } from './Loading'
 export { default as Dashboard } from './Dashboard'
 export { default as Search } from './search'
+export { default as Sources } from './sources'
 export { default as LoginPrompt } from './auth/LoginPrompt'
 export { default as AuthError } from './auth/AuthError' 
