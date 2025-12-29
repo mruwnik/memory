@@ -60,6 +60,7 @@ class FolderUpdate(BaseModel):
     tags: list[str] | None = None
     check_interval: int | None = None
     active: bool | None = None
+    exclude_folder_ids: list[str] | None = None
 
 
 class FolderResponse(BaseModel):
@@ -73,6 +74,7 @@ class FolderResponse(BaseModel):
     check_interval: int
     last_sync_at: str | None
     active: bool
+    exclude_folder_ids: list[str]
 
 
 class AccountResponse(BaseModel):
@@ -370,6 +372,7 @@ def list_accounts(
                         folder.last_sync_at.isoformat() if folder.last_sync_at else None
                     ),
                     active=cast(bool, folder.active),
+                    exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
                 )
                 for folder in account.folders
             ],
@@ -531,6 +534,7 @@ def add_folder(
         check_interval=cast(int, new_folder.check_interval),
         last_sync_at=None,
         active=cast(bool, new_folder.active),
+        exclude_folder_ids=[],
     )
 
 
@@ -567,6 +571,8 @@ def update_folder(
         folder.check_interval = updates.check_interval
     if updates.active is not None:
         folder.active = updates.active
+    if updates.exclude_folder_ids is not None:
+        folder.exclude_folder_ids = updates.exclude_folder_ids
 
     db.commit()
     db.refresh(folder)
@@ -584,6 +590,7 @@ def update_folder(
             folder.last_sync_at.isoformat() if folder.last_sync_at else None
         ),
         active=cast(bool, folder.active),
+        exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
     )
 
 

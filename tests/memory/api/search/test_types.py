@@ -69,8 +69,12 @@ class TestSearchResult:
         result = SearchResult.from_source_item(source, chunks)
         assert result.search_score == 0.9
 
-    def test_search_score_multiple_chunks_uses_mean(self):
-        """Multiple chunks should use mean of relevance scores, not sum."""
+    def test_search_score_multiple_chunks_uses_max(self):
+        """Multiple chunks should use max of relevance scores.
+
+        Using max finds documents with at least one highly relevant section,
+        which is better for 'half-remembered' searches where users recall one detail.
+        """
         source = self._make_source_item()
         chunks = [
             self._make_chunk(0.9),
@@ -79,8 +83,8 @@ class TestSearchResult:
         ]
 
         result = SearchResult.from_source_item(source, chunks)
-        # Mean of 0.9, 0.7, 0.8 = 0.8
-        assert result.search_score == pytest.approx(0.8)
+        # Max of 0.9, 0.7, 0.8 = 0.9
+        assert result.search_score == pytest.approx(0.9)
 
     def test_search_score_empty_chunks(self):
         """Empty chunk list should result in None or 0 score."""

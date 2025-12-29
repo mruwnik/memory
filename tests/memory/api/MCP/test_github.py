@@ -5,10 +5,27 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock, MagicMock, patch
 
-# Mock the mcp module and all its submodules before importing anything that uses it
+# Mock FastMCP - this creates a decorator factory that passes through the function unchanged
+class MockFastMCP:
+    def __init__(self, name):
+        self.name = name
+
+    def tool(self):
+        def decorator(func):
+            return func
+        return decorator
+
+
+# Mock the fastmcp module before importing anything that uses it
+_mock_fastmcp = MagicMock()
+_mock_fastmcp.FastMCP = MockFastMCP
+sys.modules["fastmcp"] = _mock_fastmcp
+
+# Mock the mcp module and all its submodules
 _mock_mcp = MagicMock()
-_mock_mcp.tool = lambda: lambda f: f  # Make @mcp.tool() a no-op decorator
+_mock_mcp.tool = lambda: lambda f: f
 sys.modules["mcp"] = _mock_mcp
+sys.modules["mcp.types"] = MagicMock()
 sys.modules["mcp.server"] = MagicMock()
 sys.modules["mcp.server.auth"] = MagicMock()
 sys.modules["mcp.server.auth.handlers"] = MagicMock()
@@ -21,7 +38,7 @@ sys.modules["mcp.server.fastmcp.server"] = MagicMock()
 # Also mock the memory.api.MCP.base module to avoid MCP imports
 _mock_base = MagicMock()
 _mock_base.mcp = MagicMock()
-_mock_base.mcp.tool = lambda: lambda f: f  # Make @mcp.tool() a no-op decorator
+_mock_base.mcp.tool = lambda: lambda f: f
 sys.modules["memory.api.MCP.base"] = _mock_base
 
 from memory.common.db.models import GithubItem
@@ -189,7 +206,7 @@ def sample_issues(db_session):
 @pytest.mark.asyncio
 async def test_list_github_issues_no_filters(db_session, sample_issues):
     """Test listing all issues without filters."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues()
@@ -203,7 +220,7 @@ async def test_list_github_issues_no_filters(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_repo(db_session, sample_issues):
     """Test filtering by repository."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(repo="owner/repo1")
@@ -215,7 +232,7 @@ async def test_list_github_issues_filter_by_repo(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_assignee(db_session, sample_issues):
     """Test filtering by assignee."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(assignee="alice")
@@ -227,7 +244,7 @@ async def test_list_github_issues_filter_by_assignee(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_author(db_session, sample_issues):
     """Test filtering by author."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(author="alice")
@@ -239,7 +256,7 @@ async def test_list_github_issues_filter_by_author(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_state(db_session, sample_issues):
     """Test filtering by state."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         open_results = await list_github_issues(state="open")
@@ -259,7 +276,7 @@ async def test_list_github_issues_filter_by_state(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_kind(db_session, sample_issues):
     """Test filtering by kind (issue vs PR)."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         issues = await list_github_issues(kind="issue")
@@ -275,7 +292,7 @@ async def test_list_github_issues_filter_by_kind(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_labels(db_session, sample_issues):
     """Test filtering by labels."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(labels=["bug"])
@@ -287,7 +304,7 @@ async def test_list_github_issues_filter_by_labels(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_project_status(db_session, sample_issues):
     """Test filtering by project status."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(project_status="In Progress")
@@ -300,7 +317,7 @@ async def test_list_github_issues_filter_by_project_status(db_session, sample_is
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_project_field(db_session, sample_issues):
     """Test filtering by project field (JSONB)."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(
@@ -316,7 +333,7 @@ async def test_list_github_issues_filter_by_project_field(db_session, sample_iss
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_updated_since(db_session, sample_issues):
     """Test filtering by updated_since."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=2)).isoformat()
@@ -332,7 +349,7 @@ async def test_list_github_issues_filter_by_updated_since(db_session, sample_iss
 @pytest.mark.asyncio
 async def test_list_github_issues_filter_by_updated_before(db_session, sample_issues):
     """Test filtering by updated_before (stale issues)."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     now = datetime.now(timezone.utc)
     before = (now - timedelta(days=30)).isoformat()
@@ -348,7 +365,7 @@ async def test_list_github_issues_filter_by_updated_before(db_session, sample_is
 @pytest.mark.asyncio
 async def test_list_github_issues_order_by_created(db_session, sample_issues):
     """Test ordering by created date."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(order_by="created")
@@ -360,7 +377,7 @@ async def test_list_github_issues_order_by_created(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_limit(db_session, sample_issues):
     """Test limiting results."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(limit=2)
@@ -371,7 +388,7 @@ async def test_list_github_issues_limit(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_limit_max_enforced(db_session, sample_issues):
     """Test that limit is capped at 200."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         # Request 500 but should be capped at 200
@@ -384,7 +401,7 @@ async def test_list_github_issues_limit_max_enforced(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_combined_filters(db_session, sample_issues):
     """Test combining multiple filters."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(
@@ -402,7 +419,7 @@ async def test_list_github_issues_combined_filters(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_list_github_issues_url_construction(db_session, sample_issues):
     """Test that URLs are correctly constructed."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(kind="issue", limit=1)
@@ -425,7 +442,7 @@ async def test_list_github_issues_url_construction(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_issue_details_found(db_session, sample_issues):
     """Test getting details for an existing issue."""
-    from memory.api.MCP.github import github_issue_details
+    from memory.api.MCP.servers.github import github_issue_details
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_issue_details(repo="owner/repo1", number=1)
@@ -440,7 +457,7 @@ async def test_github_issue_details_found(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_issue_details_not_found(db_session, sample_issues):
     """Test getting details for a non-existent issue."""
-    from memory.api.MCP.github import github_issue_details
+    from memory.api.MCP.servers.github import github_issue_details
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         with pytest.raises(ValueError, match="not found"):
@@ -450,7 +467,7 @@ async def test_github_issue_details_not_found(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_issue_details_pr(db_session, sample_issues):
     """Test getting details for a PR."""
-    from memory.api.MCP.github import github_issue_details
+    from memory.api.MCP.servers.github import github_issue_details
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_issue_details(repo="owner/repo1", number=50)
@@ -468,7 +485,7 @@ async def test_github_issue_details_pr(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_by_client(db_session, sample_issues):
     """Test work summary grouped by client."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -489,7 +506,7 @@ async def test_github_work_summary_by_client(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_by_status(db_session, sample_issues):
     """Test work summary grouped by status."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -506,7 +523,7 @@ async def test_github_work_summary_by_status(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_by_author(db_session, sample_issues):
     """Test work summary grouped by author."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -522,7 +539,7 @@ async def test_github_work_summary_by_author(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_by_repo(db_session, sample_issues):
     """Test work summary grouped by repository."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -538,7 +555,7 @@ async def test_github_work_summary_by_repo(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_with_until(db_session, sample_issues):
     """Test work summary with until date."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -553,7 +570,7 @@ async def test_github_work_summary_with_until(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_with_repo_filter(db_session, sample_issues):
     """Test work summary filtered by repository."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -571,7 +588,7 @@ async def test_github_work_summary_with_repo_filter(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_invalid_group_by(db_session, sample_issues):
     """Test work summary with invalid group_by value."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -584,7 +601,7 @@ async def test_github_work_summary_invalid_group_by(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_work_summary_includes_sample_issues(db_session, sample_issues):
     """Test that work summary includes sample issues."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -610,7 +627,7 @@ async def test_github_work_summary_includes_sample_issues(db_session, sample_iss
 @pytest.mark.asyncio
 async def test_github_repo_overview_basic(db_session, sample_issues):
     """Test basic repo overview."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -625,7 +642,7 @@ async def test_github_repo_overview_basic(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_counts(db_session, sample_issues):
     """Test repo overview counts are correct."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -638,7 +655,7 @@ async def test_github_repo_overview_counts(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_status_breakdown(db_session, sample_issues):
     """Test repo overview includes status breakdown."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -651,7 +668,7 @@ async def test_github_repo_overview_status_breakdown(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_top_assignees(db_session, sample_issues):
     """Test repo overview includes top assignees."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -663,7 +680,7 @@ async def test_github_repo_overview_top_assignees(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_labels(db_session, sample_issues):
     """Test repo overview includes labels."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -676,7 +693,7 @@ async def test_github_repo_overview_labels(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_last_updated(db_session, sample_issues):
     """Test repo overview includes last updated timestamp."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="owner/repo1")
@@ -688,7 +705,7 @@ async def test_github_repo_overview_last_updated(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_github_repo_overview_empty_repo(db_session):
     """Test repo overview for a repo with no issues."""
-    from memory.api.MCP.github import github_repo_overview
+    from memory.api.MCP.servers.github import github_repo_overview
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_repo_overview(repo="nonexistent/repo")
@@ -704,7 +721,7 @@ async def test_github_repo_overview_empty_repo(db_session):
 @pytest.mark.asyncio
 async def test_search_github_issues_basic(db_session, sample_issues):
     """Test basic search functionality."""
-    from memory.api.MCP.github import search_github_issues
+    from memory.api.MCP.servers.github import search_github_issues
 
     mock_search_result = Mock()
     mock_search_result.id = sample_issues[0].id
@@ -723,7 +740,7 @@ async def test_search_github_issues_basic(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_search_github_issues_with_repo_filter(db_session, sample_issues):
     """Test search with repository filter."""
-    from memory.api.MCP.github import search_github_issues
+    from memory.api.MCP.servers.github import search_github_issues
 
     mock_search_result = Mock()
     mock_search_result.id = sample_issues[0].id
@@ -745,7 +762,7 @@ async def test_search_github_issues_with_repo_filter(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_search_github_issues_with_state_filter(db_session, sample_issues):
     """Test search with state filter."""
-    from memory.api.MCP.github import search_github_issues
+    from memory.api.MCP.servers.github import search_github_issues
 
     mock_search_result = Mock()
     mock_search_result.id = sample_issues[0].id
@@ -762,7 +779,7 @@ async def test_search_github_issues_with_state_filter(db_session, sample_issues)
 @pytest.mark.asyncio
 async def test_search_github_issues_limit(db_session, sample_issues):
     """Test search respects limit."""
-    from memory.api.MCP.github import search_github_issues
+    from memory.api.MCP.servers.github import search_github_issues
 
     mock_results = [Mock(id=issue.id, score=0.9 - i * 0.1) for i, issue in enumerate(sample_issues[:3])]
 
@@ -779,7 +796,7 @@ async def test_search_github_issues_limit(db_session, sample_issues):
 @pytest.mark.asyncio
 async def test_search_github_issues_uses_github_modality(db_session, sample_issues):
     """Test that search uses github modality."""
-    from memory.api.MCP.github import search_github_issues
+    from memory.api.MCP.servers.github import search_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
@@ -797,7 +814,7 @@ async def test_search_github_issues_uses_github_modality(db_session, sample_issu
 
 def test_build_github_url_issue():
     """Test URL construction for issues."""
-    from memory.api.MCP.github import _build_github_url
+    from memory.api.MCP.servers.github import _build_github_url
 
     url = _build_github_url("owner/repo", 123, "issue")
     assert url == "https://github.com/owner/repo/issues/123"
@@ -805,7 +822,7 @@ def test_build_github_url_issue():
 
 def test_build_github_url_pr():
     """Test URL construction for PRs."""
-    from memory.api.MCP.github import _build_github_url
+    from memory.api.MCP.servers.github import _build_github_url
 
     url = _build_github_url("owner/repo", 456, "pr")
     assert url == "https://github.com/owner/repo/pull/456"
@@ -813,7 +830,7 @@ def test_build_github_url_pr():
 
 def test_build_github_url_no_number():
     """Test URL construction without number."""
-    from memory.api.MCP.github import _build_github_url
+    from memory.api.MCP.servers.github import _build_github_url
 
     url = _build_github_url("owner/repo", None, "issue")
     assert url == "https://github.com/owner/repo"
@@ -821,7 +838,7 @@ def test_build_github_url_no_number():
 
 def test_serialize_issue_basic(db_session, sample_issues):
     """Test issue serialization."""
-    from memory.api.MCP.github import _serialize_issue
+    from memory.api.MCP.servers.github import _serialize_issue
 
     issue = sample_issues[0]
     result = _serialize_issue(issue)
@@ -838,7 +855,7 @@ def test_serialize_issue_basic(db_session, sample_issues):
 
 def test_serialize_issue_with_content(db_session, sample_issues):
     """Test issue serialization with content."""
-    from memory.api.MCP.github import _serialize_issue
+    from memory.api.MCP.servers.github import _serialize_issue
 
     issue = sample_issues[0]
     result = _serialize_issue(issue, include_content=True)
@@ -865,7 +882,7 @@ async def test_list_github_issues_ordering(
     db_session, sample_issues, order_by, expected_first_number
 ):
     """Test different ordering options."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(order_by=order_by)
@@ -880,7 +897,7 @@ async def test_list_github_issues_ordering(
 )
 async def test_github_work_summary_all_group_by_options(db_session, sample_issues, group_by):
     """Test all valid group_by options."""
-    from memory.api.MCP.github import github_work_summary
+    from memory.api.MCP.servers.github import github_work_summary
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).isoformat()
@@ -906,7 +923,7 @@ async def test_list_github_issues_label_filtering(
     db_session, sample_issues, labels, expected_count
 ):
     """Test various label filtering scenarios."""
-    from memory.api.MCP.github import list_github_issues
+    from memory.api.MCP.servers.github import list_github_issues
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         results = await list_github_issues(labels=labels)
@@ -1014,7 +1031,7 @@ def sample_pr_with_data(db_session):
 @pytest.mark.asyncio
 async def test_github_issue_details_includes_pr_data(db_session, sample_pr_with_data):
     """Test that github_issue_details includes PR data for PRs."""
-    from memory.api.MCP.github import github_issue_details
+    from memory.api.MCP.servers.github import github_issue_details
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_issue_details(repo="owner/repo1", number=999)
@@ -1034,7 +1051,7 @@ async def test_github_issue_details_includes_pr_data(db_session, sample_pr_with_
 @pytest.mark.asyncio
 async def test_github_issue_details_no_pr_data_for_issues(db_session, sample_issues):
     """Test that github_issue_details does not include pr_data for issues."""
-    from memory.api.MCP.github import github_issue_details
+    from memory.api.MCP.servers.github import github_issue_details
 
     with patch("memory.api.MCP.github.make_session", return_value=db_session):
         result = await github_issue_details(repo="owner/repo1", number=1)
@@ -1045,7 +1062,7 @@ async def test_github_issue_details_no_pr_data_for_issues(db_session, sample_iss
 
 def test_serialize_issue_includes_pr_data(db_session, sample_pr_with_data):
     """Test that _serialize_issue includes pr_data when include_content=True."""
-    from memory.api.MCP.github import _serialize_issue
+    from memory.api.MCP.servers.github import _serialize_issue
 
     result = _serialize_issue(sample_pr_with_data, include_content=True)
 
@@ -1056,7 +1073,7 @@ def test_serialize_issue_includes_pr_data(db_session, sample_pr_with_data):
 
 def test_serialize_issue_no_pr_data_without_content(db_session, sample_pr_with_data):
     """Test that _serialize_issue excludes pr_data when include_content=False."""
-    from memory.api.MCP.github import _serialize_issue
+    from memory.api.MCP.servers.github import _serialize_issue
 
     result = _serialize_issue(sample_pr_with_data, include_content=False)
 

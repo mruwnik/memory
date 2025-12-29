@@ -177,6 +177,7 @@ export interface GoogleFolder {
   check_interval: number
   last_sync_at: string | null
   active: boolean
+  exclude_folder_ids: string[]
 }
 
 export interface GoogleAccount {
@@ -205,6 +206,7 @@ export interface GoogleFolderUpdate {
   tags?: string[]
   check_interval?: number
   active?: boolean
+  exclude_folder_ids?: string[]
 }
 
 // Types for Google Drive browsing

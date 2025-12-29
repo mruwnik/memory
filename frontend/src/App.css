@@ -1936,3 +1936,97 @@ a.folder-item-name:hover {
 .add-btn.secondary:hover {
   background: #edf2f7;
 }
+
+/* === Exclusion Browser === */
+
+.exclusion-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+  max-height: 60vh;
+}
+
+.excluded-list {
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.excluded-list h5 {
+  font-size: 0.85rem;
+  color: #92400e;
+  margin-bottom: 0.5rem;
+}
+
+.excluded-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.excluded-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: #fef3c7;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.excluded-name {
+  color: #92400e;
+}
+
+.remove-exclusion-btn {
+  background: none;
+  border: none;
+  color: #b45309;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.remove-exclusion-btn:hover {
+  color: #dc2626;
+}
+
+.folder-item.excluded {
+  background: #fffbeb;
+  border-color: #f59e0b;
+}
+
+.exclusion-badge {
+  background: #f59e0b;
+  color: white;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  margin-left: auto;
+  margin-right: 0.5rem;
+}
+
+.exclusions-btn {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #f59e0b;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.exclusions-btn:hover {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.setting-badge.warning {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #f59e0b;
+}

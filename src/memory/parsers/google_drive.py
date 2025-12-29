@@ -130,9 +130,19 @@ class GoogleDriveClient:
         recursive: bool = True,
         since: datetime | None = None,
         page_size: int = 100,
+        exclude_folder_ids: set[str] | None = None,
     ) -> Generator[dict, None, None]:
-        """List all supported files in a folder with pagination."""
+        """List all supported files in a folder with pagination.
+
+        Args:
+            folder_id: The Google Drive folder ID to list
+            recursive: Whether to recurse into subfolders
+            since: Only return files modified after this time
+            page_size: Number of files per API page
+            exclude_folder_ids: Set of folder IDs to skip during recursive traversal
+        """
         service = self._get_service()
+        exclude_folder_ids = exclude_folder_ids or set()
 
         # Build query for supported file types
         all_mimes = SUPPORTED_GOOGLE_MIMES | SUPPORTED_FILE_MIMES
@@ -167,11 +177,16 @@ class GoogleDriveClient:
 
             for file in response.get("files", []):
                 if file["mimeType"] == "application/vnd.google-apps.folder":
-                    if recursive:
+                    if recursive and file["id"] not in exclude_folder_ids:
                         # Recursively list files in subfolder
                         yield from self.list_files_in_folder(
-                            file["id"], recursive=True, since=since
+                            file["id"],
+                            recursive=True,
+                            since=since,
+                            exclude_folder_ids=exclude_folder_ids,
                         )
+                    elif file["id"] in exclude_folder_ids:
+                        logger.info(f"Skipping excluded folder: {file['name']} ({file['id']})")
                 else:
                     yield file
 

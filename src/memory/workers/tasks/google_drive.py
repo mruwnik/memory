@@ -251,10 +251,16 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                 # It's a folder - list and sync all files inside
                 folder_path = client.get_folder_path(google_id)
 
+                # Get excluded folder IDs
+                exclude_ids = set(cast(list[str], folder.exclude_folder_ids) or [])
+                if exclude_ids:
+                    logger.info(f"Excluding {len(exclude_ids)} folder(s) from sync")
+
                 for file_meta in client.list_files_in_folder(
                     google_id,
                     recursive=cast(bool, folder.recursive),
                     since=since,
+                    exclude_folder_ids=exclude_ids,
                 ):
                     try:
                         file_data = client.fetch_file(file_meta, folder_path)

@@ -350,6 +350,9 @@ class GoogleFolder(Base):
     # File type filters (empty = all text documents)
     mime_type_filter = Column(ARRAY(Text), nullable=False, server_default="{}")
 
+    # Excluded subfolder IDs (skip these when syncing recursively)
+    exclude_folder_ids = Column(ARRAY(Text), nullable=False, server_default="{}")
+
     # Tags to apply to all documents from this folder
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
 

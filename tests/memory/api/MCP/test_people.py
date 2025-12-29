@@ -4,10 +4,27 @@ import sys
 import pytest
 from unittest.mock import AsyncMock, Mock, MagicMock, patch
 
-# Mock the mcp module and all its submodules before importing anything that uses it
+# Mock FastMCP - this creates a decorator factory that passes through the function unchanged
+class MockFastMCP:
+    def __init__(self, name):
+        self.name = name
+
+    def tool(self):
+        def decorator(func):
+            return func
+        return decorator
+
+
+# Mock the fastmcp module before importing anything that uses it
+_mock_fastmcp = MagicMock()
+_mock_fastmcp.FastMCP = MockFastMCP
+sys.modules["fastmcp"] = _mock_fastmcp
+
+# Mock the mcp module and all its submodules
 _mock_mcp = MagicMock()
-_mock_mcp.tool = lambda: lambda f: f  # Make @mcp.tool() a no-op decorator
+_mock_mcp.tool = lambda: lambda f: f
 sys.modules["mcp"] = _mock_mcp
+sys.modules["mcp.types"] = MagicMock()
 sys.modules["mcp.server"] = MagicMock()
 sys.modules["mcp.server.auth"] = MagicMock()
 sys.modules["mcp.server.auth.handlers"] = MagicMock()
@@ -20,7 +37,7 @@ sys.modules["mcp.server.fastmcp.server"] = MagicMock()
 # Also mock the memory.api.MCP.base module to avoid MCP imports
 _mock_base = MagicMock()
 _mock_base.mcp = MagicMock()
-_mock_base.mcp.tool = lambda: lambda f: f  # Make @mcp.tool() a no-op decorator
+_mock_base.mcp.tool = lambda: lambda f: f
 sys.modules["memory.api.MCP.base"] = _mock_base
 
 from memory.common.db.models import Person
@@ -97,7 +114,7 @@ def sample_people(db_session):
 @pytest.mark.asyncio
 async def test_add_person_success(db_session):
     """Test adding a new person."""
-    from memory.api.MCP.people import add_person
+    from memory.api.MCP.servers.people import add_person
 
     mock_task = Mock()
     mock_task.id = "task-123"
@@ -128,7 +145,7 @@ async def test_add_person_success(db_session):
 @pytest.mark.asyncio
 async def test_add_person_already_exists(db_session, sample_people):
     """Test adding a person that already exists."""
-    from memory.api.MCP.people import add_person
+    from memory.api.MCP.servers.people import add_person
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         with pytest.raises(ValueError, match="already exists"):
@@ -141,7 +158,7 @@ async def test_add_person_already_exists(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_add_person_minimal(db_session):
     """Test adding a person with minimal data."""
-    from memory.api.MCP.people import add_person
+    from memory.api.MCP.servers.people import add_person
 
     mock_task = Mock()
     mock_task.id = "task-456"
@@ -166,7 +183,7 @@ async def test_add_person_minimal(db_session):
 @pytest.mark.asyncio
 async def test_update_person_info_success(db_session, sample_people):
     """Test updating a person's info."""
-    from memory.api.MCP.people import update_person_info
+    from memory.api.MCP.servers.people import update_person_info
 
     mock_task = Mock()
     mock_task.id = "task-789"
@@ -188,7 +205,7 @@ async def test_update_person_info_success(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_update_person_info_not_found(db_session, sample_people):
     """Test updating a person that doesn't exist."""
-    from memory.api.MCP.people import update_person_info
+    from memory.api.MCP.servers.people import update_person_info
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         with pytest.raises(ValueError, match="not found"):
@@ -201,7 +218,7 @@ async def test_update_person_info_not_found(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_update_person_info_with_merge_params(db_session, sample_people):
     """Test that update passes all merge parameters."""
-    from memory.api.MCP.people import update_person_info
+    from memory.api.MCP.servers.people import update_person_info
 
     mock_task = Mock()
     mock_task.id = "task-merge"
@@ -234,7 +251,7 @@ async def test_update_person_info_with_merge_params(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_get_person_found(db_session, sample_people):
     """Test getting a person that exists."""
-    from memory.api.MCP.people import get_person
+    from memory.api.MCP.servers.people import get_person
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         result = await get_person(identifier="alice_chen")
@@ -251,7 +268,7 @@ async def test_get_person_found(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_get_person_not_found(db_session, sample_people):
     """Test getting a person that doesn't exist."""
-    from memory.api.MCP.people import get_person
+    from memory.api.MCP.servers.people import get_person
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         result = await get_person(identifier="nonexistent_person")
@@ -267,7 +284,7 @@ async def test_get_person_not_found(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_no_filters(db_session, sample_people):
     """Test listing all people without filters."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people()
@@ -282,7 +299,7 @@ async def test_list_people_no_filters(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_filter_by_tags(db_session, sample_people):
     """Test filtering by tags."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(tags=["work"])
@@ -294,7 +311,7 @@ async def test_list_people_filter_by_tags(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_filter_by_search(db_session, sample_people):
     """Test filtering by search term."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(search="alice")
@@ -306,7 +323,7 @@ async def test_list_people_filter_by_search(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_search_in_notes(db_session, sample_people):
     """Test that search works on notes content."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(search="climbing")
@@ -318,7 +335,7 @@ async def test_list_people_search_in_notes(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_limit(db_session, sample_people):
     """Test limiting results."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(limit=1)
@@ -329,7 +346,7 @@ async def test_list_people_limit(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_limit_max_enforced(db_session, sample_people):
     """Test that limit is capped at 200."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         # Request 500 but should be capped at 200
@@ -342,7 +359,7 @@ async def test_list_people_limit_max_enforced(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_list_people_combined_filters(db_session, sample_people):
     """Test combining tag and search filters."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(tags=["work"], search="chen")
@@ -359,7 +376,7 @@ async def test_list_people_combined_filters(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_delete_person_success(db_session, sample_people):
     """Test deleting a person."""
-    from memory.api.MCP.people import delete_person
+    from memory.api.MCP.servers.people import delete_person
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         result = await delete_person(identifier="bob_smith")
@@ -376,7 +393,7 @@ async def test_delete_person_success(db_session, sample_people):
 @pytest.mark.asyncio
 async def test_delete_person_not_found(db_session, sample_people):
     """Test deleting a person that doesn't exist."""
-    from memory.api.MCP.people import delete_person
+    from memory.api.MCP.servers.people import delete_person
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         with pytest.raises(ValueError, match="not found"):
@@ -390,7 +407,7 @@ async def test_delete_person_not_found(db_session, sample_people):
 
 def test_person_to_dict(sample_people):
     """Test the _person_to_dict helper function."""
-    from memory.api.MCP.people import _person_to_dict
+    from memory.api.MCP.servers.people import _person_to_dict
 
     person = sample_people[0]
     result = _person_to_dict(person)
@@ -406,7 +423,7 @@ def test_person_to_dict(sample_people):
 
 def test_person_to_dict_empty_fields(db_session):
     """Test _person_to_dict with empty optional fields."""
-    from memory.api.MCP.people import _person_to_dict
+    from memory.api.MCP.servers.people import _person_to_dict
 
     person = Person(
         identifier="empty_person",
@@ -448,7 +465,7 @@ def test_person_to_dict_empty_fields(db_session):
 )
 async def test_list_people_various_tags(db_session, sample_people, tag, expected_count):
     """Test filtering by various tags."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(tags=[tag])
@@ -473,7 +490,7 @@ async def test_list_people_various_searches(
     db_session, sample_people, search_term, expected_identifiers
 ):
     """Test search with various terms."""
-    from memory.api.MCP.people import list_people
+    from memory.api.MCP.servers.people import list_people
 
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         results = await list_people(search=search_term)

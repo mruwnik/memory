@@ -29,6 +29,9 @@ from memory.common.db.models import (
     ScheduledLLMCall,
     SourceItem,
     User,
+    GoogleDoc,
+    GoogleFolder,
+    GoogleAccount,
 )
 from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
 
@@ -394,6 +397,42 @@ class GithubItemAdmin(ModelView, model=GithubItem):
     column_sortable_list = ["github_updated_at", "created_at"]
 
 
+class GoogleDocAdmin(ModelView, model=GoogleDoc):
+    column_list = source_columns(
+        GoogleDoc,
+        "title",
+        "folder_path",
+        "owner",
+        "last_modified_by",
+        "word_count",
+        "content_hash",
+    )
+    column_searchable_list = ["title", "folder_path", "owner", "last_modified_by", "id"]
+    column_sortable_list = ["google_modified_at", "created_at"]
+
+
+class GoogleFolderAdmin(ModelView, model=GoogleFolder):
+    column_list = source_columns(
+        GoogleFolder, "folder_name", "folder_path", "account", "active"
+    )
+    column_searchable_list = ["folder_name", "folder_path", "id"]
+    column_sortable_list = ["last_sync_at", "created_at"]
+
+
+class GoogleAccountAdmin(ModelView, model=GoogleAccount):
+    column_list = [
+        "id",
+        "name",
+        "email",
+        "active",
+        "last_sync_at",
+        "created_at",
+        "updated_at",
+    ]
+    column_searchable_list = ["name", "email", "id"]
+    column_sortable_list = ["last_sync_at", "created_at"]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance with OAuth protection."""
     admin.add_view(SourceItemAdmin)
@@ -421,3 +460,6 @@ def setup_admin(admin: Admin):
     admin.add_view(GithubAccountAdmin)
     admin.add_view(GithubRepoAdmin)
     admin.add_view(GithubItemAdmin)
+    admin.add_view(GoogleDocAdmin)
+    admin.add_view(GoogleFolderAdmin)
+    admin.add_view(GoogleAccountAdmin)

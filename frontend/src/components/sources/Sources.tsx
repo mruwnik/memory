@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate } from '@/hooks/useSources'
 import {
   SourceCard,
   Modal,
@@ -956,6 +956,7 @@ const GoogleDrivePanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
   const [browsingFoldersFor, setBrowsingFoldersFor] = useState<number | null>(null)
+  const [managingExclusionsFor, setManagingExclusionsFor] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
   const [uploadingConfig, setUploadingConfig] = useState(false)
 
   const loadData = useCallback(async () => {
@@ -1041,6 +1042,12 @@ const GoogleDrivePanel = () => {
       })
     }
     setBrowsingFoldersFor(null)
+    loadData()
+  }
+
+  const handleUpdateExclusions = async (accountId: number, folderId: number, excludeIds: string[]) => {
+    await updateGoogleFolder(accountId, folderId, { exclude_folder_ids: excludeIds })
+    setManagingExclusionsFor(null)
     loadData()
   }
 
@@ -1188,6 +1195,11 @@ const GoogleDrivePanel = () => {
                         <div className="folder-settings">
                           {folder.recursive && <span className="setting-badge">Recursive</span>}
                           {folder.include_shared && <span className="setting-badge">Shared</span>}
+                          {folder.exclude_folder_ids.length > 0 && (
+                            <span className="setting-badge warning">
+                              {folder.exclude_folder_ids.length} excluded
+                            </span>
+                          )}
                         </div>
                         <div className="folder-actions">
                           <SyncButton
@@ -1195,6 +1207,14 @@ const GoogleDrivePanel = () => {
                             disabled={!folder.active || !account.active}
                             label="Sync"
                           />
+                          {folder.recursive && (
+                            <button
+                              className="exclusions-btn"
+                              onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}
+                            >
+                              Exclusions
+                            </button>
+                          )}
                           <button
                             className="toggle-btn"
                             onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}
@@ -1231,6 +1251,15 @@ const GoogleDrivePanel = () => {
           accountId={browsingFoldersFor}
           onSelect={(items) => handleBrowseSelect(browsingFoldersFor, items)}
           onCancel={() => setBrowsingFoldersFor(null)}
+        />
+      )}
+
+      {managingExclusionsFor && (
+        <ExclusionBrowser
+          accountId={managingExclusionsFor.accountId}
+          folder={managingExclusionsFor.folder}
+          onSave={(excludeIds) => handleUpdateExclusions(managingExclusionsFor.accountId, managingExclusionsFor.folder.id, excludeIds)}
+          onCancel={() => setManagingExclusionsFor(null)}
         />
       )}
     </div>
@@ -1414,6 +1443,195 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
               disabled={selected.size === 0}
             >
               Add Selected
+            </button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// === Exclusion Browser ===
+
+interface ExclusionBrowserProps {
+  accountId: number
+  folder: GoogleFolder
+  onSave: (excludeIds: string[]) => void
+  onCancel: () => void
+}
+
+interface ExcludedFolder {
+  id: string
+  name: string
+  path: string
+}
+
+const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrowserProps) => {
+  const { browseGoogleDrive } = useSources()
+  const [path, setPath] = useState<PathItem[]>([{ id: folder.folder_id, name: folder.folder_name }])
+  const [items, setItems] = useState<DriveItem[]>([])
+  const [excluded, setExcluded] = useState<Map<string, ExcludedFolder>>(() => {
+    // Initialize with current exclusions (we don't have names, so use ID as name)
+    const map = new Map<string, ExcludedFolder>()
+    for (const id of folder.exclude_folder_ids) {
+      map.set(id, { id, name: id, path: '(previously excluded)' })
+    }
+    return map
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const currentFolderId = path[path.length - 1].id
+  const currentPath = path.map(p => p.name).join(' > ')
+
+  const loadFolder = useCallback(async (folderId: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await browseGoogleDrive(accountId, folderId)
+      // Only show folders, not files
+      setItems(response.items.filter(item => item.is_folder))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load folder')
+    } finally {
+      setLoading(false)
+    }
+  }, [accountId, browseGoogleDrive])
+
+  useEffect(() => {
+    loadFolder(currentFolderId)
+  }, [currentFolderId, loadFolder])
+
+  const navigateToFolder = (item: DriveItem) => {
+    setPath([...path, { id: item.id, name: item.name }])
+  }
+
+  const navigateToPathIndex = (index: number) => {
+    setPath(path.slice(0, index + 1))
+  }
+
+  const toggleExclude = (item: DriveItem) => {
+    const newExcluded = new Map(excluded)
+    if (newExcluded.has(item.id)) {
+      newExcluded.delete(item.id)
+    } else {
+      newExcluded.set(item.id, {
+        id: item.id,
+        name: item.name,
+        path: currentPath + ' > ' + item.name,
+      })
+    }
+    setExcluded(newExcluded)
+  }
+
+  const removeExclusion = (id: string) => {
+    const newExcluded = new Map(excluded)
+    newExcluded.delete(id)
+    setExcluded(newExcluded)
+  }
+
+  const handleSave = () => {
+    onSave(Array.from(excluded.keys()))
+  }
+
+  return (
+    <Modal title={`Manage Exclusions: ${folder.folder_name}`} onClose={onCancel}>
+      <div className="exclusion-browser">
+        {/* Current exclusions */}
+        {excluded.size > 0 && (
+          <div className="excluded-list">
+            <h5>Excluded Folders ({excluded.size})</h5>
+            <div className="excluded-items">
+              {Array.from(excluded.values()).map(item => (
+                <div key={item.id} className="excluded-item">
+                  <span className="excluded-name" title={item.path}>
+                    📁 {item.name}
+                  </span>
+                  <button
+                    className="remove-exclusion-btn"
+                    onClick={() => removeExclusion(item.id)}
+                    title="Remove exclusion"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Breadcrumb */}
+        <div className="folder-breadcrumb">
+          {path.map((item, index) => (
+            <span key={item.id}>
+              {index > 0 && <span className="breadcrumb-sep">&gt;</span>}
+              <button
+                className={`breadcrumb-item ${index === path.length - 1 ? 'current' : ''}`}
+                onClick={() => navigateToPathIndex(index)}
+                disabled={index === path.length - 1}
+              >
+                {item.name}
+              </button>
+            </span>
+          ))}
+        </div>
+
+        {/* Content */}
+        {error && <div className="form-error">{error}</div>}
+
+        {loading ? (
+          <div className="folder-loading">Loading...</div>
+        ) : items.length === 0 ? (
+          <div className="folder-empty">No subfolders in this folder</div>
+        ) : (
+          <div className="folder-list">
+            {items.map(item => (
+              <div key={item.id} className={`folder-item ${excluded.has(item.id) ? 'excluded' : ''}`}>
+                <label className="folder-item-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={excluded.has(item.id)}
+                    onChange={() => toggleExclude(item)}
+                  />
+                </label>
+                <span className="folder-item-icon">📁</span>
+                <a
+                  className="folder-item-name"
+                  href={`https://drive.google.com/drive/folders/${item.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {item.name}
+                </a>
+                {excluded.has(item.id) && (
+                  <span className="exclusion-badge">Excluded</span>
+                )}
+                <button
+                  className="folder-item-enter"
+                  onClick={() => navigateToFolder(item)}
+                  title="Browse subfolder"
+                >
+                  →
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="folder-browser-footer">
+          <span className="selected-count">
+            {excluded.size} folder{excluded.size !== 1 ? 's' : ''} excluded
+          </span>
+          <div className="folder-browser-actions">
+            <button type="button" className="cancel-btn" onClick={onCancel}>Cancel</button>
+            <button
+              type="button"
+              className="submit-btn"
+              onClick={handleSave}
+            >
+              Save Exclusions
             </button>
           </div>
         </div>
