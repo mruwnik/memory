@@ -1,7 +1,8 @@
-fastapi==0.112.2
+fastapi>=0.115.12
 uvicorn==0.29.0
 python-jose==3.3.0
 python-multipart==0.0.9
 sqladmin==0.20.1
 mcp==1.10.0
+fastmcp>=2.10.0
 slowapi==0.1.9

@@ -2,7 +2,6 @@
 FastAPI application for the knowledge base.
 """
 
-import contextlib
 import os
 import logging
 import mimetypes
@@ -35,15 +34,10 @@ limiter = Limiter(
     enabled=settings.API_RATE_LIMIT_ENABLED,
 )
 
+# Create the MCP http app to get its lifespan
+mcp_http_app = mcp.http_app(stateless_http=True)
 
-@contextlib.asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with contextlib.AsyncExitStack() as stack:
-        await stack.enter_async_context(mcp.session_manager.run())
-        yield
-
-
-app = FastAPI(title="Knowledge Base API", lifespan=lifespan)
+app = FastAPI(title="Knowledge Base API", lifespan=mcp_http_app.lifespan)
 app.state.limiter = limiter
 
 # Rate limit exception handler
@@ -158,46 +152,9 @@ app.include_router(auth_router)
 
 
 # Add health check to MCP server instead of main app
-@mcp.custom_route("/health", methods=["GET"])
-async def health_check(request: Request):
-    """Health check endpoint that verifies all dependencies are accessible."""
-    from fastapi.responses import JSONResponse
-    from sqlalchemy import text
-
-    checks = {"mcp_oauth": "enabled"}
-    all_healthy = True
-
-    # Check database connection
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        checks["database"] = "healthy"
-    except Exception as e:
-        # Log error details but don't expose in response
-        logger.error(f"Database health check failed: {e}")
-        checks["database"] = "unhealthy"
-        all_healthy = False
-
-    # Check Qdrant connection
-    try:
-        from memory.common.qdrant import get_qdrant_client
-
-        client = get_qdrant_client()
-        client.get_collections()
-        checks["qdrant"] = "healthy"
-    except Exception as e:
-        # Log error details but don't expose in response
-        logger.error(f"Qdrant health check failed: {e}")
-        checks["qdrant"] = "unhealthy"
-        all_healthy = False
-
-    checks["status"] = "healthy" if all_healthy else "degraded"
-    status_code = 200 if all_healthy else 503
-    return JSONResponse(checks, status_code=status_code)
-
-
 # Mount MCP server at root - OAuth endpoints need to be at root level
-app.mount("/", mcp.streamable_http_app())
+# Health check is defined in MCP/base.py
+app.mount("/", mcp_http_app)
 
 
 def main(reload: bool = False):

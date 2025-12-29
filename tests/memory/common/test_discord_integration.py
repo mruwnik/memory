@@ -91,7 +91,7 @@ def test_broadcast_message_success(mock_post, mock_api_url):
         "http://localhost:8000/send_channel",
         json={
             "bot_id": BOT_ID,
-            "channel_name": "general",
+            "channel": "general",
             "message": "Announcement!",
         },
         timeout=10,

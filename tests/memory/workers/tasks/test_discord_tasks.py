@@ -14,12 +14,25 @@ from memory.workers.tasks import discord
 
 @pytest.fixture
 def discord_bot_user(db_session):
+    # Create a discord user for the bot first
+    bot_discord_user = DiscordUser(
+        id=999999999,
+        username="testbot",
+    )
+    db_session.add(bot_discord_user)
+    db_session.flush()
+
     bot = DiscordBotUser.create_with_api_key(
-        discord_users=[],
+        discord_users=[bot_discord_user],
         name="Test Bot",
         email="bot@example.com",
     )
     db_session.add(bot)
+    db_session.flush()
+
+    # Link the discord user to the system user
+    bot_discord_user.system_user_id = bot.id
+
     db_session.commit()
     return bot
 
@@ -176,26 +189,29 @@ def test_get_prev_empty_channel(db_session, mock_discord_channel):
 
 @patch("memory.common.settings.DISCORD_PROCESS_MESSAGES", True)
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-@patch("memory.workers.tasks.discord.create_provider")
+@patch("memory.workers.tasks.discord.call_llm")
+@patch("memory.workers.tasks.discord.discord.trigger_typing_channel")
 def test_should_process_normal_message(
-    mock_create_provider,
+    mock_trigger_typing,
+    mock_call_llm,
     db_session,
     mock_discord_user,
     mock_discord_server,
     mock_discord_channel,
+    discord_bot_user,
 ):
     """Test should_process returns True for normal messages."""
-    # Mock the LLM provider to return "yes"
-    mock_provider = Mock()
-    mock_provider.generate.return_value = "<response>yes</response>"
-    mock_provider.as_messages.return_value = []
-    mock_create_provider.return_value = mock_provider
+    # Create a separate recipient user (the bot)
+    bot_discord_user = discord_bot_user.discord_users[0]
+
+    # Mock call_llm to return a high number (100 = always process)
+    mock_call_llm.return_value = "<response><number>100</number><reason>Test</reason></response>"
 
     message = DiscordMessage(
         message_id=1,
         channel_id=mock_discord_channel.id,
         from_id=mock_discord_user.id,
-        recipient_id=mock_discord_user.id,
+        recipient_id=bot_discord_user.id,  # Bot is recipient, not the from_user
         server_id=mock_discord_server.id,
         content="Test",
         sent_at=datetime.now(timezone.utc),
@@ -207,6 +223,8 @@ def test_should_process_normal_message(
     db_session.refresh(message)
 
     assert discord.should_process(message) is True
+    mock_call_llm.assert_called_once()
+    mock_trigger_typing.assert_called_once()
 
 
 @patch("memory.common.settings.DISCORD_PROCESS_MESSAGES", False)
@@ -344,6 +362,7 @@ def test_add_discord_message_success(db_session, sample_message_data, qdrant):
 def test_add_discord_message_with_reply(db_session, sample_message_data, qdrant):
     """Test adding a Discord message that is a reply."""
     sample_message_data["message_reference_id"] = 111222333
+    sample_message_data["message_type"] = "reply"  # Explicitly set message_type
 
     discord.add_discord_message(**sample_message_data)
 
@@ -523,8 +542,17 @@ def test_edit_discord_message_updates_context(
     assert result["status"] == "processed"
 
 
-def test_process_discord_message_success(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.discord.send_discord_response")
+@patch("memory.workers.tasks.discord.call_llm")
+def test_process_discord_message_success(
+    mock_call_llm, mock_send_response, db_session, sample_message_data, qdrant
+):
     """Test processing a Discord message."""
+    # Mock LLM to return a response
+    mock_call_llm.return_value = "Test response from bot"
+    # Mock Discord API to succeed
+    mock_send_response.return_value = True
+
     # Add a message first
     add_result = discord.add_discord_message(**sample_message_data)
     message_id = add_result["discordmessage_id"]
@@ -534,6 +562,8 @@ def test_process_discord_message_success(db_session, sample_message_data, qdrant
 
     assert result["status"] == "processed"
     assert result["message_id"] == message_id
+    mock_call_llm.assert_called_once()
+    mock_send_response.assert_called_once()
 
 
 def test_process_discord_message_not_found(db_session):

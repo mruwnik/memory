@@ -19,6 +19,7 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordServer,
     DiscordMessage,
+    DiscordBotUser,
     HumanUser,
     ScheduledLLMCall,
 )
@@ -32,6 +33,19 @@ def sample_discord_user(db_session):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+@pytest.fixture
+def sample_bot_user(db_session, sample_discord_user):
+    """Create a sample Discord bot user."""
+    bot = DiscordBotUser.create_with_api_key(
+        discord_users=[sample_discord_user],
+        name="Test Bot",
+        email="testbot@example.com",
+    )
+    db_session.add(bot)
+    db_session.commit()
+    return bot
 
 
 @pytest.fixture
@@ -290,13 +304,13 @@ def test_upsert_scheduled_message_cancels_earlier_call(
 # Test previous_messages
 
 
-def test_previous_messages_empty(db_session):
+def test_previous_messages_empty(db_session, sample_bot_user):
     """Test getting previous messages when none exist."""
-    result = previous_messages(db_session, user_id=123, channel_id=456)
+    result = previous_messages(db_session, bot_id=sample_bot_user.discord_id, user_id=123, channel_id=456)
     assert result == []
 
 
-def test_previous_messages_filters_by_user(db_session, sample_discord_user, sample_discord_channel):
+def test_previous_messages_filters_by_user(db_session, sample_bot_user, sample_discord_user, sample_discord_channel):
     """Test filtering messages by recipient user."""
     # Create some messages
     msg1 = DiscordMessage(
@@ -322,14 +336,14 @@ def test_previous_messages_filters_by_user(db_session, sample_discord_user, samp
     db_session.add_all([msg1, msg2])
     db_session.commit()
 
-    result = previous_messages(db_session, user_id=sample_discord_user.id, channel_id=None)
+    result = previous_messages(db_session, bot_id=sample_bot_user.discord_id, user_id=sample_discord_user.id, channel_id=None)
     assert len(result) == 2
     # Should be in chronological order (oldest first)
     assert result[0].message_id == 1
     assert result[1].message_id == 2
 
 
-def test_previous_messages_limits_results(db_session, sample_discord_user, sample_discord_channel):
+def test_previous_messages_limits_results(db_session, sample_bot_user, sample_discord_user, sample_discord_channel):
     """Test limiting the number of previous messages."""
     # Create 15 messages
     for i in range(15):
@@ -347,7 +361,7 @@ def test_previous_messages_limits_results(db_session, sample_discord_user, sampl
     db_session.commit()
 
     result = previous_messages(
-        db_session, user_id=sample_discord_user.id, channel_id=None, max_messages=5
+        db_session, bot_id=sample_bot_user.discord_id, user_id=sample_discord_user.id, channel_id=None, max_messages=5
     )
     assert len(result) == 5
 
@@ -355,10 +369,10 @@ def test_previous_messages_limits_results(db_session, sample_discord_user, sampl
 # Test comm_channel_prompt
 
 
-def test_comm_channel_prompt_basic(db_session, sample_discord_user, sample_discord_channel):
+def test_comm_channel_prompt_basic(db_session, sample_bot_user, sample_discord_user, sample_discord_channel):
     """Test generating a basic communication channel prompt."""
     result = comm_channel_prompt(
-        db_session, user=sample_discord_user, channel=sample_discord_channel
+        db_session, bot=sample_bot_user.discord_id, user=sample_discord_user, channel=sample_discord_channel
     )
 
     assert "You are a bot communicating on Discord" in result
@@ -366,31 +380,31 @@ def test_comm_channel_prompt_basic(db_session, sample_discord_user, sample_disco
     assert len(result) > 0
 
 
-def test_comm_channel_prompt_includes_server_context(db_session, sample_discord_channel):
+def test_comm_channel_prompt_includes_server_context(db_session, sample_bot_user, sample_discord_channel):
     """Test that prompt includes server context when available."""
     server = sample_discord_channel.server
     server.summary = "Gaming community server"
     db_session.commit()
 
-    result = comm_channel_prompt(db_session, user=None, channel=sample_discord_channel)
+    result = comm_channel_prompt(db_session, bot=sample_bot_user.discord_id, user=None, channel=sample_discord_channel)
 
     assert "server_context" in result.lower()
     assert "Gaming community server" in result
 
 
-def test_comm_channel_prompt_includes_channel_context(db_session, sample_discord_channel):
+def test_comm_channel_prompt_includes_channel_context(db_session, sample_bot_user, sample_discord_channel):
     """Test that prompt includes channel context."""
     sample_discord_channel.summary = "General discussion channel"
     db_session.commit()
 
-    result = comm_channel_prompt(db_session, user=None, channel=sample_discord_channel)
+    result = comm_channel_prompt(db_session, bot=sample_bot_user.discord_id, user=None, channel=sample_discord_channel)
 
     assert "channel_context" in result.lower()
     assert "General discussion channel" in result
 
 
 def test_comm_channel_prompt_includes_user_notes(
-    db_session, sample_discord_user, sample_discord_channel
+    db_session, sample_bot_user, sample_discord_user, sample_discord_channel
 ):
     """Test that prompt includes user notes from previous messages."""
     sample_discord_user.summary = "Helpful community member"
@@ -411,7 +425,7 @@ def test_comm_channel_prompt_includes_user_notes(
     db_session.commit()
 
     result = comm_channel_prompt(
-        db_session, user=sample_discord_user, channel=sample_discord_channel
+        db_session, bot=sample_bot_user.discord_id, user=sample_discord_user, channel=sample_discord_channel
     )
 
     assert "user_notes" in result.lower()
@@ -442,12 +456,16 @@ def test_call_llm_includes_web_search_and_mcp_servers(
     web_tool_instance = MagicMock(name="web_tool")
     mock_web_search.return_value = web_tool_instance
 
-    bot_user = SimpleNamespace(system_user="system-user", system_prompt="bot prompt")
+    bot_user = SimpleNamespace(
+        system_user=SimpleNamespace(discord_id=999888777),
+        system_prompt="bot prompt"
+    )
     from_user = SimpleNamespace(id=123)
     mcp_model = SimpleNamespace(
         name="Server",
         mcp_server_url="https://mcp.example.com",
         access_token="token123",
+        disabled_tools=[],
     )
 
     result = call_llm(
@@ -502,7 +520,10 @@ def test_call_llm_filters_disallowed_tools(
 
     mock_web_search.return_value = MagicMock(name="web_tool")
 
-    bot_user = SimpleNamespace(system_user="system-user", system_prompt=None)
+    bot_user = SimpleNamespace(
+        system_user=SimpleNamespace(discord_id=999888777),
+        system_prompt=None
+    )
     from_user = SimpleNamespace(id=1)
 
     call_llm(

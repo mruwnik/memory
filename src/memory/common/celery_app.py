@@ -17,6 +17,7 @@ DISCORD_ROOT = "memory.workers.tasks.discord"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
+PROACTIVE_ROOT = "memory.workers.tasks.proactive"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -72,6 +73,10 @@ SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
 SYNC_PERSON = f"{PEOPLE_ROOT}.sync_person"
 UPDATE_PERSON = f"{PEOPLE_ROOT}.update_person"
 SYNC_PROFILE_FROM_FILE = f"{PEOPLE_ROOT}.sync_profile_from_file"
+
+# Proactive check-in tasks
+EVALUATE_PROACTIVE_CHECKINS = f"{PROACTIVE_ROOT}.evaluate_proactive_checkins"
+EXECUTE_PROACTIVE_CHECKIN = f"{PROACTIVE_ROOT}.execute_proactive_checkin"
 
 
 def get_broker_url() -> str:
@@ -130,11 +135,16 @@ app.conf.update(
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
         f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
+        f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
     },
     beat_schedule={
         "sync-github-repos-hourly": {
             "task": SYNC_ALL_GITHUB_REPOS,
             "schedule": crontab(minute=0),  # Every hour at :00
+        },
+        "evaluate-proactive-checkins": {
+            "task": EVALUATE_PROACTIVE_CHECKINS,
+            "schedule": crontab(),  # Every minute
         },
     },
 )

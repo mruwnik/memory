@@ -14,20 +14,24 @@ from memory.workers.tasks import (
     maintenance,
     notes,
     observations,
+    people,
+    proactive,
     scheduled_calls,
 )  # noqa
 
 __all__ = [
     "backup",
-    "email",
-    "comic",
     "blogs",
-    "ebook",
+    "comic",
     "discord",
+    "ebook",
+    "email",
     "forums",
     "github",
     "maintenance",
     "notes",
     "observations",
+    "people",
+    "proactive",
     "scheduled_calls",
 ]
