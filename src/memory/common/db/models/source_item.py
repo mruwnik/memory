@@ -382,6 +382,16 @@ class SourceItem(Base):
         return 1.0
 
     @property
+    def title(self) -> str | None:
+        """
+        Return a display title for this item.
+
+        Subclasses should override to return their specific title field
+        (e.g., subject for emails, title for blog posts).
+        """
+        return cast(str | None, self.filename)
+
+    @property
     def display_contents(self) -> dict | None:
         payload = self.as_payload()
         payload.pop("source_id", None)  # type: ignore

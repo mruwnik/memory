@@ -101,6 +101,7 @@ def _create_google_doc(
         content=file_data["content"],
         google_file_id=file_data["file_id"],
         title=file_data["title"],
+        filename=file_data["title"],
         original_mime_type=file_data["original_mime_type"],
         folder_id=folder.id,
         folder_path=file_data["folder_path"],
@@ -144,6 +145,7 @@ def _update_existing_doc(
     existing.content = file_data["content"]
     existing.sha256 = create_content_hash(file_data["content"])
     existing.title = file_data["title"]
+    existing.filename = file_data["title"]
     existing.google_modified_at = file_data["modified_at"]
     existing.last_modified_by = file_data["last_modified_by"]
     existing.word_count = file_data["word_count"]
@@ -249,21 +251,19 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
             if is_folder:
                 # It's a folder - list and sync all files inside
-                folder_path = client.get_folder_path(google_id)
-
                 # Get excluded folder IDs
                 exclude_ids = set(cast(list[str], folder.exclude_folder_ids) or [])
                 if exclude_ids:
                     logger.info(f"Excluding {len(exclude_ids)} folder(s) from sync")
 
-                for file_meta in client.list_files_in_folder(
+                for file_meta, file_folder_path in client.list_files_in_folder(
                     google_id,
                     recursive=cast(bool, folder.recursive),
                     since=since,
                     exclude_folder_ids=exclude_ids,
                 ):
                     try:
-                        file_data = client.fetch_file(file_meta, folder_path)
+                        file_data = client.fetch_file(file_meta, file_folder_path)
                         serialized = _serialize_file_data(file_data)
                         task = sync_google_doc.delay(folder.id, serialized)
                         task_ids.append(task.id)

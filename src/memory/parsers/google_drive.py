@@ -131,7 +131,8 @@ class GoogleDriveClient:
         since: datetime | None = None,
         page_size: int = 100,
         exclude_folder_ids: set[str] | None = None,
-    ) -> Generator[dict, None, None]:
+        _current_path: str | None = None,
+    ) -> Generator[tuple[dict, str], None, None]:
         """List all supported files in a folder with pagination.
 
         Args:
@@ -140,9 +141,17 @@ class GoogleDriveClient:
             since: Only return files modified after this time
             page_size: Number of files per API page
             exclude_folder_ids: Set of folder IDs to skip during recursive traversal
+            _current_path: Internal param tracking the current folder path
+
+        Yields:
+            Tuples of (file_metadata, parent_folder_path)
         """
         service = self._get_service()
         exclude_folder_ids = exclude_folder_ids or set()
+
+        # Build the current path if not provided
+        if _current_path is None:
+            _current_path = self.get_folder_path(folder_id)
 
         # Build query for supported file types
         all_mimes = SUPPORTED_GOOGLE_MIMES | SUPPORTED_FILE_MIMES
@@ -178,17 +187,19 @@ class GoogleDriveClient:
             for file in response.get("files", []):
                 if file["mimeType"] == "application/vnd.google-apps.folder":
                     if recursive and file["id"] not in exclude_folder_ids:
-                        # Recursively list files in subfolder
+                        # Recursively list files in subfolder with updated path
+                        subfolder_path = f"{_current_path}/{file['name']}"
                         yield from self.list_files_in_folder(
                             file["id"],
                             recursive=True,
                             since=since,
                             exclude_folder_ids=exclude_folder_ids,
+                            _current_path=subfolder_path,
                         )
                     elif file["id"] in exclude_folder_ids:
                         logger.info(f"Skipping excluded folder: {file['name']} ({file['id']})")
                 else:
-                    yield file
+                    yield file, _current_path
 
             page_token = response.get("nextPageToken")
             if not page_token:

@@ -416,3 +416,197 @@ def fetch_file(filename: str) -> dict:
             serialize_chunk(chunk, data) for chunk in chunks for data in chunk.data
         ]
     }
+
+
+# --- Enumeration tools for systematic investigations ---
+
+
+@core_mcp.tool()
+async def get_source_item(id: int, include_content: bool = True) -> dict:
+    """
+    Get full details of a source item by ID.
+    Use after search to drill down into specific results.
+
+    Args:
+        id: The source item ID (from search results)
+        include_content: Whether to include full content (default True)
+
+    Returns: Full item details including metadata, tags, and optionally content.
+    """
+    with make_session() as session:
+        item = (
+            session.query(SourceItem)
+            .filter(
+                SourceItem.id == id,
+                SourceItem.embed_status == "STORED",
+            )
+            .first()
+        )
+        if not item:
+            raise ValueError(f"Item {id} not found or not yet indexed")
+
+        result = {
+            "id": item.id,
+            "modality": item.modality,
+            "title": item.title,
+            "mime_type": item.mime_type,
+            "filename": item.filename,
+            "size": item.size,
+            "tags": item.tags,
+            "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
+            "metadata": item.as_payload(),
+        }
+
+        if include_content:
+            result["content"] = item.content
+
+        return result
+
+
+@core_mcp.tool()
+async def list_items(
+    modalities: set[str] = set(),
+    filters: SearchFilters = {},
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "inserted_at",
+    sort_order: str = "desc",
+    include_metadata: bool = True,
+) -> dict:
+    """
+    List items without semantic search - for systematic enumeration.
+    Use for reviewing all items matching criteria, not finding best matches.
+
+    Args:
+        modalities: Filter by type: email, blog, book, forum, photo, comic, etc. (empty = all)
+        filters: Same filters as search_knowledge_base (tags, min_size, max_size, etc.)
+        limit: Max results per page (default 50, max 200)
+        offset: Skip first N results for pagination
+        sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
+        sort_order: "asc" or "desc" (default: desc)
+        include_metadata: Include full as_payload() metadata (default True)
+
+    Returns: {items: [...], total: int, has_more: bool}
+    """
+    limit = min(limit, 200)
+    if sort_by not in ("inserted_at", "size", "id"):
+        sort_by = "inserted_at"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "desc"
+
+    with make_session() as session:
+        query = session.query(SourceItem).filter(SourceItem.embed_status == "STORED")
+
+        # Filter by modalities
+        if modalities:
+            query = query.filter(SourceItem.modality.in_(modalities))
+
+        # Apply filters
+        if tags := filters.get("tags"):
+            query = query.filter(
+                SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
+            )
+        if min_size := filters.get("min_size"):
+            query = query.filter(SourceItem.size >= min_size)
+        if max_size := filters.get("max_size"):
+            query = query.filter(SourceItem.size <= max_size)
+        if source_ids := filters.get("source_ids"):
+            query = query.filter(SourceItem.id.in_(source_ids))
+
+        # Get total count
+        total = query.count()
+
+        # Apply sorting
+        sort_column = getattr(SourceItem, sort_by)
+        if sort_order == "desc":
+            sort_column = sort_column.desc()
+        query = query.order_by(sort_column)
+
+        # Apply pagination
+        query = query.offset(offset).limit(limit)
+
+        items = []
+        for item in query.all():
+            preview = None
+            if item.content:
+                preview = item.content[:200] + "..." if len(item.content) > 200 else item.content
+
+            item_dict = {
+                "id": item.id,
+                "modality": item.modality,
+                "title": item.title,
+                "mime_type": item.mime_type,
+                "filename": item.filename,
+                "size": item.size,
+                "tags": item.tags,
+                "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
+                "preview": preview,
+            }
+
+            if include_metadata:
+                item_dict["metadata"] = item.as_payload()
+            else:
+                item_dict["metadata"] = None
+
+            items.append(item_dict)
+
+        return {
+            "items": items,
+            "total": total,
+            "has_more": offset + len(items) < total,
+        }
+
+
+@core_mcp.tool()
+async def count_items(
+    modalities: set[str] = set(),
+    filters: SearchFilters = {},
+) -> dict:
+    """
+    Count items matching criteria without retrieving them.
+    Use to understand scope before systematic review.
+
+    Args:
+        modalities: Filter by type (empty = all)
+        filters: Same filters as search_knowledge_base
+
+    Returns: {total: int, by_modality: {email: 100, blog: 50, ...}}
+    """
+    from sqlalchemy import func as sql_func
+
+    with make_session() as session:
+        base_query = session.query(SourceItem).filter(
+            SourceItem.embed_status == "STORED"
+        )
+
+        # Apply filters
+        if modalities:
+            base_query = base_query.filter(SourceItem.modality.in_(modalities))
+        if tags := filters.get("tags"):
+            base_query = base_query.filter(
+                SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
+            )
+        if min_size := filters.get("min_size"):
+            base_query = base_query.filter(SourceItem.size >= min_size)
+        if max_size := filters.get("max_size"):
+            base_query = base_query.filter(SourceItem.size <= max_size)
+        if source_ids := filters.get("source_ids"):
+            base_query = base_query.filter(SourceItem.id.in_(source_ids))
+
+        # Get total
+        total = base_query.count()
+
+        # Get counts by modality
+        by_modality_query = (
+            base_query.with_entities(
+                SourceItem.modality, sql_func.count(SourceItem.id)
+            )
+            .group_by(SourceItem.modality)
+        )
+
+        by_modality = {row[0]: row[1] for row in by_modality_query.all()}
+
+        return {
+            "total": total,
+            "by_modality": by_modality,
+        }

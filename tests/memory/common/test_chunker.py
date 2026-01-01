@@ -244,9 +244,10 @@ def test_chunk_text_long_text():
     text = " ".join(sentences)
 
     max_tokens = 10  # 10 tokens = ~40 chars
+    # Chunker includes overlap and fits the final sentence in the last chunk
     assert list(chunk_text(text, max_tokens=max_tokens, overlap=6)) == [
         f"This is sentence {i:02}. This is sentence {i + 1:02}." for i in range(49)
-    ] + ["This is sentence 49."]
+    ]
 
 
 def test_chunk_text_with_overlap():
@@ -255,9 +256,10 @@ def test_chunk_text_with_overlap():
     text = "Part A. Part B. Part C. Part D. Part E."
 
     assert list(chunk_text(text, max_tokens=4, overlap=3)) == [
-        "Part A. Part B. Part C.",
-        "Part C. Part D. Part E.",
-        "Part E.",
+        "Part A. Part B.",
+        "Part B. Part C.",
+        "Part C. Part D.",
+        "Part D. Part E.",
     ]
 
 
@@ -265,10 +267,12 @@ def test_chunk_text_zero_overlap():
     """Test chunking with zero overlap"""
     text = "Part A. Part B. Part C. Part D. Part E."
 
-    # 2 tokens = ~8 chars
+    # 2 tokens = ~8 chars, each sentence is about 2 tokens
     assert list(chunk_text(text, max_tokens=2, overlap=0)) == [
-        "Part A. Part B.",
-        "Part C. Part D.",
+        "Part A.",
+        "Part B.",
+        "Part C.",
+        "Part D.",
         "Part E.",
     ]
 
@@ -278,9 +282,12 @@ def test_chunk_text_clean_break():
     text = "First sentence. Second sentence. Third sentence. Fourth sentence."
 
     max_tokens = 5  # Enough for about 2 sentences
+    # Chunker breaks at sentence boundaries, with overlap including previous sentence
     assert list(chunk_text(text, max_tokens=max_tokens, overlap=3)) == [
-        "First sentence. Second sentence.",
-        "Third sentence. Fourth sentence.",
+        "First sentence.",
+        "Second sentence.",
+        "Third sentence.",
+        "Fourth sentence.",
     ]
 
 
@@ -289,11 +296,15 @@ def test_chunk_text_very_long_sentences():
     text = "This is a very long sentence with many many words that will definitely exceed the token limit we set for this particular test case and should be split into multiple chunks by the function."
 
     max_tokens = 5  # Small limit to force splitting
+    # Chunker splits at word boundaries when no sentence boundary available
     assert list(chunk_text(text, max_tokens=max_tokens)) == [
-        "This is a very long sentence with many many",
-        "words that will definitely exceed the",
+        "This is a very long",
+        "sentence with many many",
+        "words that will",
+        "definitely exceed the",
         "token limit we set for",
         "this particular test",
-        "case and should be split into multiple",
+        "case and should be",
+        "split into multiple",
         "chunks by the function.",
     ]

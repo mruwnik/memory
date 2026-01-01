@@ -681,27 +681,27 @@ def test_process_content_item(
     assert str(db_item.embed_status) == expected_embed_status
 
 
-@pytest.mark.parametrize(
-    "task_behavior,expected_status",
-    [
-        ("success", "success"),
-        ("exception", "error"),
-    ],
-)
-def test_safe_task_execution(task_behavior, expected_status):
+def test_safe_task_execution_success():
+    """Test that safe_task_execution passes through successful results."""
+
     @safe_task_execution
     def test_task(arg1, arg2):
-        if task_behavior == "exception":
-            raise ValueError("Test error message")
         return {"status": "success", "result": arg1 + arg2}
 
     result = test_task(1, 2)
+    assert result["status"] == "success"
+    assert result["result"] == 3
 
-    assert result["status"] == expected_status
-    if expected_status == "success":
-        assert result["result"] == 3
-    else:
-        assert result["error"] == "Test error message"
+
+def test_safe_task_execution_reraises_exceptions():
+    """Test that safe_task_execution logs but re-raises exceptions for Celery retries."""
+
+    @safe_task_execution
+    def test_task():
+        raise ValueError("Test error message")
+
+    with pytest.raises(ValueError, match="Test error message"):
+        test_task()
 
 
 def test_safe_task_execution_preserves_function_name():
@@ -709,7 +709,8 @@ def test_safe_task_execution_preserves_function_name():
     def test_function():
         return {"status": "success"}
 
-    assert test_function.__name__ == "wrapper"
+    # @wraps(func) should preserve the original function name
+    assert test_function.__name__ == "test_function"
 
 
 def test_safe_task_execution_with_kwargs():
@@ -727,14 +728,14 @@ def test_safe_task_execution_with_kwargs():
 
 
 def test_safe_task_execution_exception_logging(caplog):
+    """Test that exceptions are logged before being re-raised."""
+
     @safe_task_execution
     def failing_task():
         raise RuntimeError("Test runtime error")
 
-    result = failing_task()
+    with pytest.raises(RuntimeError, match="Test runtime error"):
+        failing_task()
 
-    assert result["status"] == "error"
-    assert result["error"] == "Test runtime error"
-    assert "traceback" in result
     assert "Task failing_task failed:" in caplog.text
     assert "Test runtime error" in caplog.text

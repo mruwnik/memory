@@ -190,6 +190,10 @@ class MailMessage(SourceItem):
     def get_collections(cls) -> list[str]:
         return ["mail"]
 
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.subject)
+
     # Add indexes
     __table_args__ = (
         Index("mail_sent_idx", "sent_at"),
@@ -591,6 +595,10 @@ class BookSection(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["book"]
+
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.section_title)
 
     def as_payload(self) -> BookSectionPayload:
         return BookSectionPayload(
@@ -1035,6 +1043,10 @@ class Note(SourceItem):
     def get_collections(cls) -> list[str]:
         return ["text"]  # Notes go to the text collection
 
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.subject)
+
 
 class AgentObservationPayload(SourceItemPayload):
     session_id: Annotated[str | None, "Session ID for the observation"]
@@ -1203,6 +1215,10 @@ class AgentObservation(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["semantic", "temporal"]
+
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.subject)
 
 
 class GoogleDocPayload(SourceItemPayload):
