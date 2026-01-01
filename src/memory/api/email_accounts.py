@@ -192,13 +192,17 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an email account."""
-    from memory.workers.tasks.email import sync_account
+    from memory.common.celery_app import app, SYNC_ACCOUNT
 
     account = db.get(EmailAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    task = sync_account.delay(account_id, since_date=since_date)
+    task = app.send_task(
+        SYNC_ACCOUNT,
+        args=[account_id],
+        kwargs={"since_date": since_date},
+    )
 
     return {"task_id": task.id, "status": "scheduled"}
 

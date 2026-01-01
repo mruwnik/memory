@@ -13,6 +13,7 @@ from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.github import github_mcp
 from memory.api.MCP.servers.meta import meta_mcp
 from memory.api.MCP.servers.meta import set_auth_provider as set_meta_auth
+from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.schedule import schedule_mcp
 from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
@@ -163,6 +164,7 @@ set_meta_auth(get_current_user)
 # Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
 mcp.mount(core_mcp, prefix="core")
 mcp.mount(github_mcp, prefix="github")
+mcp.mount(organizer_mcp, prefix="organizer")
 mcp.mount(people_mcp, prefix="people")
 mcp.mount(schedule_mcp, prefix="schedule")
 mcp.mount(books_mcp, prefix="books")

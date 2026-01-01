@@ -38,7 +38,7 @@ DB_URL = os.getenv("DATABASE_URL", make_db_url())
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_DB = os.getenv("REDIS_DB", "0")
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None  # Treat empty string as None
 if REDIS_PASSWORD:
     REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 else:
@@ -180,7 +180,9 @@ ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
 ENABLE_HYDE_EXPANSION = boolean_env("ENABLE_HYDE_EXPANSION", True)
 HYDE_TIMEOUT = float(os.getenv("HYDE_TIMEOUT", "3.0"))
-ENABLE_QUERY_ANALYSIS = boolean_env("ENABLE_QUERY_ANALYSIS", True)  # Runs in parallel with HyDE
+ENABLE_QUERY_ANALYSIS = boolean_env(
+    "ENABLE_QUERY_ANALYSIS", True
+)  # Runs in parallel with HyDE
 ENABLE_RERANKING = boolean_env("ENABLE_RERANKING", True)
 RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2-lite")
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
@@ -248,7 +250,9 @@ S3_BACKUP_INTERVAL = int(
 # Google OAuth settings
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google")
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google"
+)
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/userinfo.email",

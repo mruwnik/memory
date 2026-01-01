@@ -59,7 +59,9 @@ def feed_to_response(feed: ArticleFeed) -> ArticleFeedResponse:
         description=cast(str | None, feed.description),
         tags=list(feed.tags or []),
         check_interval=cast(int, feed.check_interval),
-        last_checked_at=feed.last_checked_at.isoformat() if feed.last_checked_at else None,
+        last_checked_at=feed.last_checked_at.isoformat()
+        if feed.last_checked_at
+        else None,
         active=cast(bool, feed.active),
         created_at=feed.created_at.isoformat() if feed.created_at else "",
         updated_at=feed.updated_at.isoformat() if feed.updated_at else "",
@@ -171,13 +173,16 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an article feed."""
-    from memory.workers.tasks.blogs import sync_article_feed
+    from memory.common.celery_app import app, SYNC_ARTICLE_FEED
 
     feed = db.get(ArticleFeed, feed_id)
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    task = sync_article_feed.delay(feed_id)
+    task = app.send_task(
+        SYNC_ARTICLE_FEED,
+        args=[feed_id],
+    )
 
     return {"task_id": task.id, "status": "scheduled"}
 

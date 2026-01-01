@@ -31,6 +31,11 @@ const Dashboard = ({ onLogout }) => {
                         <p>Manage email, GitHub, RSS feeds, and Google Drive</p>
                     </Link>
 
+                    <Link to="/ui/calendar" className="feature-card">
+                        <h3>Calendar</h3>
+                        <p>View upcoming events from your calendars</p>
+                    </Link>
+
                     <div className="feature-card" onClick={async () => console.log(await listNotes())}>
                         <h3>📝 Notes</h3>
                         <p>Create and manage your notes</p>

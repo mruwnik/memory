@@ -124,7 +124,9 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         check_interval=cast(int, repo.check_interval),
         full_sync_interval=cast(int, repo.full_sync_interval),
         last_sync_at=repo.last_sync_at.isoformat() if repo.last_sync_at else None,
-        last_full_sync_at=repo.last_full_sync_at.isoformat() if repo.last_full_sync_at else None,
+        last_full_sync_at=repo.last_full_sync_at.isoformat()
+        if repo.last_full_sync_at
+        else None,
         active=cast(bool, repo.active),
         created_at=repo.created_at.isoformat() if repo.created_at else "",
     )
@@ -432,7 +434,7 @@ def trigger_repo_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a repo."""
-    from memory.workers.tasks.github import sync_github_repo
+    from memory.common.celery_app import app, SYNC_GITHUB_REPO
 
     repo = (
         db.query(GithubRepo)
@@ -442,6 +444,10 @@ def trigger_repo_sync(
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
 
-    task = sync_github_repo.delay(repo_id, force_full=force_full)
+    task = app.send_task(
+        SYNC_GITHUB_REPO,
+        args=[repo_id],
+        kwargs={"force_full": force_full},
+    )
 
     return {"task_id": task.id, "status": "scheduled"}

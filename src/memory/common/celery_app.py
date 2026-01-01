@@ -19,6 +19,7 @@ GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
 PROACTIVE_ROOT = "memory.workers.tasks.proactive"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
+CALENDAR_ROOT = "memory.workers.tasks.calendar"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -83,6 +84,11 @@ SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
 SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
 SYNC_ALL_GOOGLE_ACCOUNTS = f"{GOOGLE_ROOT}.sync_all_google_accounts"
 
+# Calendar tasks
+SYNC_CALENDAR_ACCOUNT = f"{CALENDAR_ROOT}.sync_calendar_account"
+SYNC_CALENDAR_EVENT = f"{CALENDAR_ROOT}.sync_calendar_event"
+SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
+
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
@@ -142,6 +148,7 @@ app.conf.update(
         f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
         f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
+        f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
     },
     beat_schedule={
         "sync-github-repos-hourly": {
@@ -155,6 +162,10 @@ app.conf.update(
         "sync-google-drive-hourly": {
             "task": SYNC_ALL_GOOGLE_ACCOUNTS,
             "schedule": crontab(minute=30),  # Every hour at :30
+        },
+        "sync-calendars-hourly": {
+            "task": SYNC_ALL_CALENDARS,
+            "schedule": crontab(minute=45),  # Every hour at :45
         },
     },
 )

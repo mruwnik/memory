@@ -227,10 +227,77 @@ export interface BrowseResponse {
   next_page_token: string | null
 }
 
+// Types for Calendar Accounts
+export interface CalendarGoogleAccountInfo {
+  id: number
+  name: string
+  email: string
+}
+
+export interface CalendarAccount {
+  id: number
+  name: string
+  calendar_type: 'caldav' | 'google'
+  caldav_url: string | null
+  caldav_username: string | null
+  google_account_id: number | null
+  google_account: CalendarGoogleAccountInfo | null
+  calendar_ids: string[]
+  tags: string[]
+  check_interval: number
+  sync_past_days: number
+  sync_future_days: number
+  last_sync_at: string | null
+  sync_error: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CalendarAccountCreate {
+  name: string
+  calendar_type: 'caldav' | 'google'
+  caldav_url?: string
+  caldav_username?: string
+  caldav_password?: string
+  google_account_id?: number
+  calendar_ids?: string[]
+  tags?: string[]
+  check_interval?: number
+  sync_past_days?: number
+  sync_future_days?: number
+}
+
+export interface CalendarAccountUpdate {
+  name?: string
+  caldav_url?: string
+  caldav_username?: string
+  caldav_password?: string
+  google_account_id?: number
+  calendar_ids?: string[]
+  tags?: string[]
+  check_interval?: number
+  sync_past_days?: number
+  sync_future_days?: number
+  active?: boolean
+}
+
 // Task response
 export interface TaskResponse {
   task_id: string
   status: string
+}
+
+// Calendar Event
+export interface CalendarEvent {
+  id: number
+  event_title: string
+  start_time: string
+  end_time: string | null
+  all_day: boolean
+  location: string | null
+  calendar_name: string | null
+  recurrence_rule: string | null
 }
 
 export const useSources = () => {
@@ -525,6 +592,64 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete Google OAuth config')
   }, [apiCall])
 
+  // === Calendar Accounts ===
+
+  const listCalendarAccounts = useCallback(async (): Promise<CalendarAccount[]> => {
+    const response = await apiCall('/calendar-accounts')
+    if (!response.ok) throw new Error('Failed to fetch calendar accounts')
+    return response.json()
+  }, [apiCall])
+
+  const createCalendarAccount = useCallback(async (data: CalendarAccountCreate): Promise<CalendarAccount> => {
+    const response = await apiCall('/calendar-accounts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to create calendar account')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const updateCalendarAccount = useCallback(async (id: number, data: CalendarAccountUpdate): Promise<CalendarAccount> => {
+    const response = await apiCall(`/calendar-accounts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to update calendar account')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const deleteCalendarAccount = useCallback(async (id: number): Promise<void> => {
+    const response = await apiCall(`/calendar-accounts/${id}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Failed to delete calendar account')
+  }, [apiCall])
+
+  const syncCalendarAccount = useCallback(async (id: number, forceFull = false): Promise<TaskResponse> => {
+    const response = await apiCall(`/calendar-accounts/${id}/sync?force_full=${forceFull}`, { method: 'POST' })
+    if (!response.ok) throw new Error('Failed to sync calendar account')
+    return response.json()
+  }, [apiCall])
+
+  const getUpcomingEvents = useCallback(async (
+    options: { days?: number; limit?: number; startDate?: string; endDate?: string } = {}
+  ): Promise<CalendarEvent[]> => {
+    const { days = 7, limit = 100, startDate, endDate } = options
+    let url = `/calendar-accounts/events/upcoming?limit=${limit}`
+    if (startDate && endDate) {
+      url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`
+    } else {
+      url += `&days=${days}`
+    }
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch upcoming events')
+    return response.json()
+  }, [apiCall])
+
   return {
     // Email
     listEmailAccounts,
@@ -564,5 +689,13 @@ export const useSources = () => {
     getGoogleOAuthConfig,
     uploadGoogleOAuthConfig,
     deleteGoogleOAuthConfig,
+    // Calendar Accounts
+    listCalendarAccounts,
+    createCalendarAccount,
+    updateCalendarAccount,
+    deleteCalendarAccount,
+    syncCalendarAccount,
+    // Calendar Events
+    getUpcomingEvents,
   }
 }

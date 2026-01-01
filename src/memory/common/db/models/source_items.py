@@ -1302,3 +1302,226 @@ class GoogleDoc(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["doc"]
+
+
+class TaskPayload(SourceItemPayload):
+    title: Annotated[str, "Title of the task"]
+    due_date: Annotated[str | None, "Due date in ISO format"]
+    priority: Annotated[str | None, "Priority level: low, medium, high, urgent"]
+    status: Annotated[str, "Status: pending, in_progress, done, cancelled"]
+    recurrence: Annotated[str | None, "Recurrence rule (RRULE format)"]
+    source_item_id: Annotated[int | None, "Source item that spawned this task"]
+
+
+class Task(SourceItem):
+    """Explicit task/todo item."""
+
+    __tablename__ = "task"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    task_title = Column(Text, nullable=False)
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    priority = Column(Text, nullable=True)  # low, medium, high, urgent
+    status = Column(Text, nullable=False, server_default="pending")
+    recurrence = Column(Text, nullable=True)  # RRULE format for habits
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Link to source that spawned this task (email, note, etc.)
+    source_item_id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="SET NULL"), nullable=True
+    )
+    source_item = relationship(
+        "SourceItem", foreign_keys=[source_item_id], backref="spawned_tasks"
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "task",
+        "inherit_condition": id == SourceItem.id,
+    }
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'done', 'cancelled')",
+            name="task_status_check",
+        ),
+        CheckConstraint(
+            "priority IS NULL OR priority IN ('low', 'medium', 'high', 'urgent')",
+            name="task_priority_check",
+        ),
+        Index("task_due_date_idx", "due_date"),
+        Index("task_status_idx", "status"),
+        Index("task_priority_idx", "priority"),
+        Index("task_source_item_idx", "source_item_id"),
+    )
+
+    def __init__(self, **kwargs):
+        if not kwargs.get("modality"):
+            kwargs["modality"] = "task"
+        super().__init__(**kwargs)
+
+    def as_payload(self) -> TaskPayload:
+        return TaskPayload(
+            **super().as_payload(),
+            title=cast(str, self.task_title),
+            due_date=(self.due_date and self.due_date.isoformat() or None),
+            priority=cast(str | None, self.priority),
+            status=cast(str, self.status),
+            recurrence=cast(str | None, self.recurrence),
+            source_item_id=cast(int | None, self.source_item_id),
+        )
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "title": self.task_title,
+            "description": self.content,
+            "due_date": self.due_date and self.due_date.isoformat(),
+            "priority": self.priority,
+            "status": self.status,
+            "recurrence": self.recurrence,
+            "tags": self.tags,
+        }
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        parts = [cast(str, self.task_title)]
+        if self.content:
+            parts.append(cast(str, self.content))
+        if self.due_date:
+            parts.append(f"Due: {self.due_date.isoformat()}")
+        text = "\n\n".join(parts)
+        return extract.extract_text(text, modality="task")
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["task"]
+
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.task_title)
+
+
+class CalendarEventPayload(SourceItemPayload):
+    event_title: Annotated[str, "Title of the event"]
+    start_time: Annotated[str, "Start time in ISO format"]
+    end_time: Annotated[str | None, "End time in ISO format"]
+    all_day: Annotated[bool, "Whether this is an all-day event"]
+    location: Annotated[str | None, "Event location"]
+    recurrence_rule: Annotated[str | None, "Recurrence rule (RRULE format)"]
+    calendar_account_id: Annotated[int | None, "Calendar account this event belongs to"]
+    calendar_name: Annotated[str | None, "Name of the calendar"]
+    external_id: Annotated[str | None, "External calendar ID for sync"]
+    event_metadata: Annotated[dict | None, "Additional metadata (attendees, links, etc.)"]
+
+
+class CalendarEvent(SourceItem):
+    """Calendar event from external calendar sources (CalDAV, Google, etc.)."""
+
+    __tablename__ = "calendar_event"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # Core event fields
+    event_title = Column(Text, nullable=False)
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=True)
+    all_day = Column(Boolean, default=False, nullable=False)
+    location = Column(Text, nullable=True)
+    recurrence_rule = Column(Text, nullable=True)  # RRULE format
+
+    # Sync metadata
+    calendar_account_id = Column(
+        BigInteger, ForeignKey("calendar_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    calendar_name = Column(Text, nullable=True)
+    external_id = Column(Text, nullable=True)  # For dedup/sync
+
+    # Relationship
+    calendar_account = relationship("CalendarAccount", foreign_keys=[calendar_account_id])
+
+    # Flexible metadata (attendees, meeting links, conference info, etc.)
+    event_metadata = Column(JSONB, default=dict)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "calendar_event",
+    }
+
+    __table_args__ = (
+        Index("calendar_event_start_idx", "start_time"),
+        Index("calendar_event_end_idx", "end_time"),
+        Index("calendar_event_account_idx", "calendar_account_id"),
+        Index("calendar_event_calendar_idx", "calendar_name"),
+        Index(
+            "calendar_event_external_idx",
+            "calendar_account_id",
+            "external_id",
+            unique=True,
+            postgresql_where="external_id IS NOT NULL",
+        ),
+    )
+
+    def __init__(self, **kwargs):
+        if not kwargs.get("modality"):
+            kwargs["modality"] = "calendar"
+        super().__init__(**kwargs)
+
+    def as_payload(self) -> CalendarEventPayload:
+        return CalendarEventPayload(
+            **super().as_payload(),
+            event_title=cast(str, self.event_title),
+            start_time=cast(datetime, self.start_time).isoformat(),
+            end_time=(self.end_time and self.end_time.isoformat() or None),
+            all_day=cast(bool, self.all_day),
+            location=cast(str | None, self.location),
+            recurrence_rule=cast(str | None, self.recurrence_rule),
+            calendar_account_id=cast(int | None, self.calendar_account_id),
+            calendar_name=cast(str | None, self.calendar_name),
+            external_id=cast(str | None, self.external_id),
+            event_metadata=cast(dict | None, self.event_metadata),
+        )
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "title": self.event_title,
+            "description": self.content,
+            "start_time": cast(datetime, self.start_time).isoformat(),
+            "end_time": self.end_time and self.end_time.isoformat(),
+            "all_day": self.all_day,
+            "location": self.location,
+            "calendar": self.calendar_name,
+            "attendees": (self.event_metadata or {}).get("attendees"),
+            "tags": self.tags,
+        }
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        parts = [cast(str, self.event_title)]
+
+        if self.content:
+            parts.append(cast(str, self.content))
+
+        if self.location:
+            parts.append(f"Location: {self.location}")
+
+        metadata = cast(dict | None, self.event_metadata) or {}
+        if attendees := metadata.get("attendees"):
+            if isinstance(attendees, list):
+                parts.append(f"Attendees: {', '.join(str(a) for a in attendees)}")
+
+        if meeting_link := metadata.get("meeting_link"):
+            parts.append(f"Meeting link: {meeting_link}")
+
+        text = "\n\n".join(parts)
+        return extract.extract_text(text, modality="calendar")
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["calendar"]
+
+    @property
+    def title(self) -> str | None:
+        return cast(str | None, self.event_title)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount } from '@/hooks/useSources'
 import {
   SourceCard,
   Modal,
@@ -15,7 +15,7 @@ import {
   ConfirmDialog,
 } from './shared'
 
-type TabType = 'email' | 'feeds' | 'github' | 'google'
+type TabType = 'email' | 'feeds' | 'github' | 'google' | 'calendar'
 
 const Sources = () => {
   const [activeTab, setActiveTab] = useState<TabType>('email')
@@ -52,6 +52,12 @@ const Sources = () => {
         >
           Google Drive
         </button>
+        <button
+          className={`tab ${activeTab === 'calendar' ? 'active' : ''}`}
+          onClick={() => setActiveTab('calendar')}
+        >
+          Calendar
+        </button>
       </div>
 
       <div className="sources-content">
@@ -59,6 +65,7 @@ const Sources = () => {
         {activeTab === 'feeds' && <FeedsPanel />}
         {activeTab === 'github' && <GitHubPanel />}
         {activeTab === 'google' && <GoogleDrivePanel />}
+        {activeTab === 'calendar' && <CalendarPanel />}
       </div>
     </div>
   )
@@ -1636,6 +1643,407 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
           </div>
         </div>
       </div>
+    </Modal>
+  )
+}
+
+// === Calendar Panel ===
+
+import { CalendarEvent } from '@/hooks/useSources'
+
+interface GroupedEvents {
+  [calendarName: string]: CalendarEvent[]
+}
+
+const CalendarPanel = () => {
+  const {
+    listCalendarAccounts, createCalendarAccount, updateCalendarAccount,
+    deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts, getUpcomingEvents
+  } = useSources()
+  const [accounts, setAccounts] = useState<CalendarAccount[]>([])
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
+  const [events, setEvents] = useState<CalendarEvent[]>([])
+  const [expandedCalendars, setExpandedCalendars] = useState<Set<string>>(new Set())
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [editingAccount, setEditingAccount] = useState<CalendarAccount | null>(null)
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [calendarData, googleData, eventsData] = await Promise.all([
+        listCalendarAccounts(),
+        listGoogleAccounts(),
+        getUpcomingEvents({ days: 365, limit: 200 })
+      ])
+      setAccounts(calendarData)
+      setGoogleAccounts(googleData)
+      setEvents(eventsData)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load accounts')
+    } finally {
+      setLoading(false)
+    }
+  }, [listCalendarAccounts, listGoogleAccounts, getUpcomingEvents])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  const handleCreate = async (data: any) => {
+    await createCalendarAccount(data)
+    setShowForm(false)
+    loadData()
+  }
+
+  const handleUpdate = async (data: any) => {
+    if (editingAccount) {
+      await updateCalendarAccount(editingAccount.id, data)
+      setEditingAccount(null)
+      loadData()
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    await deleteCalendarAccount(id)
+    loadData()
+  }
+
+  const handleToggleActive = async (account: CalendarAccount) => {
+    await updateCalendarAccount(account.id, { active: !account.active })
+    loadData()
+  }
+
+  const handleSync = async (id: number) => {
+    await syncCalendarAccount(id)
+    loadData()
+  }
+
+  const toggleCalendar = (calendarName: string) => {
+    const newExpanded = new Set(expandedCalendars)
+    if (newExpanded.has(calendarName)) {
+      newExpanded.delete(calendarName)
+    } else {
+      newExpanded.add(calendarName)
+    }
+    setExpandedCalendars(newExpanded)
+  }
+
+  // Group events by calendar name
+  const groupedEvents: GroupedEvents = events.reduce((acc, event) => {
+    const calName = event.calendar_name || 'Unknown'
+    if (!acc[calName]) acc[calName] = []
+    acc[calName].push(event)
+    return acc
+  }, {} as GroupedEvents)
+
+  const formatEventDate = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  const formatEventTime = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+
+  if (loading) return <LoadingState />
+  if (error) return <ErrorState message={error} onRetry={loadData} />
+
+  return (
+    <div className="source-panel">
+      <div className="panel-header">
+        <h3>Calendar Accounts</h3>
+        <button className="add-btn" onClick={() => setShowForm(true)}>Add Calendar</button>
+      </div>
+
+      {accounts.length === 0 ? (
+        <EmptyState
+          message="No calendar accounts configured"
+          actionLabel="Add Calendar"
+          onAction={() => setShowForm(true)}
+        />
+      ) : (
+        <div className="source-list">
+          {accounts.map(account => (
+            <div key={account.id} className="calendar-account-card">
+              <div className="source-card-header">
+                <div className="source-card-info">
+                  <h4>{account.name}</h4>
+                  <p className="source-subtitle">
+                    {account.calendar_type === 'google'
+                      ? `Google Calendar (${account.google_account?.email || 'linked'})`
+                      : `CalDAV: ${account.caldav_url}`
+                    }
+                  </p>
+                </div>
+                <div className="source-card-actions-inline">
+                  <StatusBadge active={account.active} onClick={() => handleToggleActive(account)} />
+                  <SyncButton onSync={() => handleSync(account.id)} disabled={!account.active} label="Sync" />
+                  <button className="edit-btn" onClick={() => setEditingAccount(account)}>Edit</button>
+                  <button className="delete-btn" onClick={() => handleDelete(account.id)}>Delete</button>
+                </div>
+              </div>
+
+              <div className="source-details">
+                <span>Type: {account.calendar_type === 'google' ? 'Google Calendar' : 'CalDAV'}</span>
+                <SyncStatus lastSyncAt={account.last_sync_at} />
+                {account.sync_error && (
+                  <span className="sync-error">Error: {account.sync_error}</span>
+                )}
+              </div>
+
+              {/* Events grouped by calendar */}
+              <div className="calendar-events-section">
+                <h5>Calendars & Events</h5>
+                {Object.keys(groupedEvents).length === 0 ? (
+                  <p className="no-events">No events synced yet</p>
+                ) : (
+                  <div className="calendar-groups">
+                    {Object.entries(groupedEvents).map(([calendarName, calEvents]) => (
+                      <div key={calendarName} className="calendar-group">
+                        <button
+                          className={`calendar-group-header ${expandedCalendars.has(calendarName) ? 'expanded' : ''}`}
+                          onClick={() => toggleCalendar(calendarName)}
+                        >
+                          <span className="calendar-expand-icon">
+                            {expandedCalendars.has(calendarName) ? '▼' : '▶'}
+                          </span>
+                          <span className="calendar-group-name">{calendarName}</span>
+                          <span className="calendar-event-count">{calEvents.length} events</span>
+                        </button>
+                        {expandedCalendars.has(calendarName) && (
+                          <div className="calendar-events-list">
+                            {calEvents.map((event, idx) => (
+                              <div key={`${event.id}-${idx}`} className={`calendar-event-item ${event.all_day ? 'all-day' : ''}`}>
+                                <div className="event-date-col">
+                                  <span className="event-date">{formatEventDate(event.start_time)}</span>
+                                  {!event.all_day && (
+                                    <span className="event-time">{formatEventTime(event.start_time)}</span>
+                                  )}
+                                  {event.all_day && <span className="event-time all-day-badge">All day</span>}
+                                </div>
+                                <div className="event-info-col">
+                                  <span className="event-title">{event.event_title}</span>
+                                  {event.location && <span className="event-location">{event.location}</span>}
+                                  {event.recurrence_rule && <span className="event-recurring-badge">Recurring</span>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showForm && (
+        <CalendarForm
+          googleAccounts={googleAccounts}
+          onSubmit={handleCreate}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {editingAccount && (
+        <CalendarForm
+          account={editingAccount}
+          googleAccounts={googleAccounts}
+          onSubmit={handleUpdate}
+          onCancel={() => setEditingAccount(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+interface CalendarFormProps {
+  account?: CalendarAccount
+  googleAccounts: GoogleAccount[]
+  onSubmit: (data: any) => Promise<void>
+  onCancel: () => void
+}
+
+const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarFormProps) => {
+  const [formData, setFormData] = useState({
+    name: account?.name || '',
+    calendar_type: account?.calendar_type || 'caldav' as 'caldav' | 'google',
+    caldav_url: account?.caldav_url || '',
+    caldav_username: account?.caldav_username || '',
+    caldav_password: '',
+    google_account_id: account?.google_account_id || undefined as number | undefined,
+    tags: account?.tags || [],
+    check_interval: account?.check_interval || 15,
+    sync_past_days: account?.sync_past_days || 30,
+    sync_future_days: account?.sync_future_days || 90,
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      const data: any = {
+        name: formData.name,
+        calendar_type: formData.calendar_type,
+        tags: formData.tags,
+        check_interval: formData.check_interval,
+        sync_past_days: formData.sync_past_days,
+        sync_future_days: formData.sync_future_days,
+      }
+
+      if (formData.calendar_type === 'caldav') {
+        data.caldav_url = formData.caldav_url
+        data.caldav_username = formData.caldav_username
+        if (formData.caldav_password) {
+          data.caldav_password = formData.caldav_password
+        }
+      } else {
+        data.google_account_id = formData.google_account_id
+      }
+
+      await onSubmit(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal title={account ? 'Edit Calendar Account' : 'Add Calendar Account'} onClose={onCancel}>
+      <form onSubmit={handleSubmit} className="source-form">
+        {error && <div className="form-error">{error}</div>}
+
+        <div className="form-group">
+          <label>Name</label>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={e => setFormData({ ...formData, name: e.target.value })}
+            required
+            placeholder="My Calendar"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Calendar Type</label>
+          <select
+            value={formData.calendar_type}
+            onChange={e => setFormData({ ...formData, calendar_type: e.target.value as 'caldav' | 'google' })}
+            disabled={!!account}
+          >
+            <option value="caldav">CalDAV (Radicale, Nextcloud, etc.)</option>
+            <option value="google">Google Calendar</option>
+          </select>
+        </div>
+
+        {formData.calendar_type === 'caldav' ? (
+          <>
+            <div className="form-group">
+              <label>CalDAV Server URL</label>
+              <input
+                type="url"
+                value={formData.caldav_url}
+                onChange={e => setFormData({ ...formData, caldav_url: e.target.value })}
+                required={!account}
+                placeholder="https://caldav.example.com/user/calendar/"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Username</label>
+              <input
+                type="text"
+                value={formData.caldav_username}
+                onChange={e => setFormData({ ...formData, caldav_username: e.target.value })}
+                required={!account}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Password {account && '(leave blank to keep current)'}</label>
+              <input
+                type="password"
+                value={formData.caldav_password}
+                onChange={e => setFormData({ ...formData, caldav_password: e.target.value })}
+                required={!account}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="form-group">
+            <label>Google Account</label>
+            {googleAccounts.length === 0 ? (
+              <p className="form-hint">
+                No Google accounts connected. Connect a Google account in the Google Drive tab first.
+              </p>
+            ) : (
+              <select
+                value={formData.google_account_id || ''}
+                onChange={e => setFormData({ ...formData, google_account_id: parseInt(e.target.value) || undefined })}
+                required
+              >
+                <option value="">Select a Google account...</option>
+                {googleAccounts.map(ga => (
+                  <option key={ga.id} value={ga.id}>{ga.email}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
+        <div className="form-row">
+          <div className="form-group">
+            <label>Sync Past Days</label>
+            <input
+              type="number"
+              value={formData.sync_past_days}
+              onChange={e => setFormData({ ...formData, sync_past_days: parseInt(e.target.value) || 30 })}
+              min={0}
+              max={365}
+            />
+          </div>
+          <div className="form-group">
+            <label>Sync Future Days</label>
+            <input
+              type="number"
+              value={formData.sync_future_days}
+              onChange={e => setFormData({ ...formData, sync_future_days: parseInt(e.target.value) || 90 })}
+              min={0}
+              max={365}
+            />
+          </div>
+        </div>
+
+        <IntervalInput
+          value={formData.check_interval}
+          onChange={check_interval => setFormData({ ...formData, check_interval })}
+          label="Check interval"
+        />
+
+        <div className="form-group">
+          <label>Tags</label>
+          <TagsInput
+            tags={formData.tags}
+            onChange={tags => setFormData({ ...formData, tags })}
+          />
+        </div>
+
+        <div className="form-actions">
+          <button type="button" className="cancel-btn" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="submit-btn" disabled={submitting}>
+            {submitting ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </form>
     </Modal>
   )
 }

@@ -172,7 +172,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             return None
 
-    def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Get OAuth client information."""
         with make_session() as session:
             client = session.get(OAuthClientInformation, client_id)

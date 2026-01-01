@@ -20,6 +20,7 @@ export default defineConfig({
       '/auth': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
       '/email-accounts': 'http://localhost:8000',
+      '/calendar-accounts': 'http://localhost:8000',
       '/article-feeds': 'http://localhost:8000',
       '/github': 'http://localhost:8000',
       '/google-drive': 'http://localhost:8000',

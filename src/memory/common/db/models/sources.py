@@ -376,3 +376,56 @@ class GoogleFolder(Base):
         UniqueConstraint("account_id", "folder_id", name="unique_folder_per_account"),
         Index("google_folders_active_idx", "active", "last_sync_at"),
     )
+
+
+class CalendarAccount(Base):
+    """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
+
+    __tablename__ = "calendar_accounts"
+
+    id = Column(BigInteger, primary_key=True)
+    name = Column(Text, nullable=False)  # Display name
+
+    # Calendar type
+    calendar_type = Column(Text, nullable=False)  # 'caldav', 'google'
+
+    # For CalDAV (Radicale, etc.)
+    caldav_url = Column(Text, nullable=True)  # CalDAV server URL
+    caldav_username = Column(Text, nullable=True)
+    caldav_password = Column(Text, nullable=True)
+
+    # For Google Calendar - link to existing GoogleAccount
+    google_account_id = Column(
+        BigInteger, ForeignKey("google_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Which calendars to sync (empty = all)
+    calendar_ids = Column(ARRAY(Text), nullable=False, server_default="{}")
+
+    # Tags to apply to all events from this account
+    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+
+    # Sync configuration
+    check_interval = Column(Integer, nullable=False, server_default="15")  # Minutes
+    sync_past_days = Column(Integer, nullable=False, server_default="30")  # How far back
+    sync_future_days = Column(Integer, nullable=False, server_default="90")  # How far ahead
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    sync_error = Column(Text, nullable=True)
+
+    # Status
+    active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Relationships
+    google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
+
+    __table_args__ = (
+        CheckConstraint("calendar_type IN ('caldav', 'google')"),
+        Index("calendar_accounts_active_idx", "active", "last_sync_at"),
+        Index("calendar_accounts_type_idx", "calendar_type"),
+    )

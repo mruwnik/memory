@@ -3,7 +3,6 @@
 import json
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
 from typing import cast
 
 # Allow Google to return additional scopes (like 'openid') without raising an error
@@ -17,7 +16,11 @@ from sqlalchemy.orm import Session
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import User
-from memory.common.db.models.sources import GoogleAccount, GoogleFolder, GoogleOAuthConfig
+from memory.common.db.models.sources import (
+    GoogleAccount,
+    GoogleFolder,
+    GoogleOAuthConfig,
+)
 from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
@@ -25,7 +28,11 @@ router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
 def get_oauth_config(session: Session) -> GoogleOAuthConfig:
     """Get the OAuth config from database, falling back to env vars if not found."""
-    config = session.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    config = (
+        session.query(GoogleOAuthConfig)
+        .filter(GoogleOAuthConfig.name == "default")
+        .first()
+    )
     if config:
         return config
 
@@ -116,6 +123,7 @@ class OAuthConfigResponse(BaseModel):
 # Browse endpoint models
 class DriveItem(BaseModel):
     """A file or folder in Google Drive."""
+
     id: str
     name: str
     mime_type: str
@@ -126,6 +134,7 @@ class DriveItem(BaseModel):
 
 class BrowseResponse(BaseModel):
     """Response from browsing a Google Drive folder."""
+
     folder_id: str
     folder_name: str
     parent_id: str | None = None
@@ -151,15 +160,21 @@ async def upload_oauth_config(
         raise HTTPException(status_code=400, detail=f"Invalid JSON file: {e}")
 
     # Check if config already exists
-    existing = db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == name).first()
+    existing = (
+        db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == name).first()
+    )
     if existing:
         # Update existing config
         creds = json_data.get("web") or json_data.get("installed") or json_data
         existing.client_id = creds["client_id"]
         existing.client_secret = creds["client_secret"]
         existing.project_id = creds.get("project_id")
-        existing.auth_uri = creds.get("auth_uri", "https://accounts.google.com/o/oauth2/auth")
-        existing.token_uri = creds.get("token_uri", "https://oauth2.googleapis.com/token")
+        existing.auth_uri = creds.get(
+            "auth_uri", "https://accounts.google.com/o/oauth2/auth"
+        )
+        existing.token_uri = creds.get(
+            "token_uri", "https://oauth2.googleapis.com/token"
+        )
         existing.redirect_uris = creds.get("redirect_uris", [])
         existing.javascript_origins = creds.get("javascript_origins", [])
         db.commit()
@@ -188,7 +203,9 @@ def get_config(
     db: Session = Depends(get_session),
 ) -> OAuthConfigResponse | None:
     """Get current OAuth configuration (without secrets)."""
-    config = db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    config = (
+        db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    )
     if not config:
         return None
 
@@ -208,7 +225,9 @@ def delete_config(
     db: Session = Depends(get_session),
 ):
     """Delete OAuth configuration."""
-    config = db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    config = (
+        db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
+    )
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
 
@@ -426,11 +445,15 @@ def browse_folder(
     else:
         # Get folder info for a specific folder
         try:
-            folder_info = service.files().get(
-                fileId=folder_id,
-                fields="name, parents",
-                supportsAllDrives=True,
-            ).execute()
+            folder_info = (
+                service.files()
+                .get(
+                    fileId=folder_id,
+                    fields="name, parents",
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
             folder_name = folder_info.get("name", folder_id)
             parents = folder_info.get("parents", [])
             parent_id = parents[0] if parents else None
@@ -439,16 +462,20 @@ def browse_folder(
         query = f"'{folder_id}' in parents and trashed=false"
 
     try:
-        response = service.files().list(
-            q=query,
-            spaces="drive",
-            fields="nextPageToken, files(id, name, mimeType, size, modifiedTime)",
-            pageToken=page_token,
-            pageSize=page_size,
-            orderBy="folder,name",  # Folders first, then by name
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-        ).execute()
+        response = (
+            service.files()
+            .list(
+                q=query,
+                spaces="drive",
+                fields="nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+                pageToken=page_token,
+                pageSize=page_size,
+                orderBy="folder,name",  # Folders first, then by name
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list folder: {e}")
 
@@ -457,25 +484,29 @@ def browse_folder(
 
     # Add "Shared with me" as a virtual folder when at root
     if folder_id == "root":
-        items.append(DriveItem(
-            id="shared",
-            name="Shared with me",
-            mime_type="application/vnd.google-apps.folder",
-            is_folder=True,
-            size=None,
-            modified_at=None,
-        ))
+        items.append(
+            DriveItem(
+                id="shared",
+                name="Shared with me",
+                mime_type="application/vnd.google-apps.folder",
+                is_folder=True,
+                size=None,
+                modified_at=None,
+            )
+        )
 
     for file in response.get("files", []):
         is_folder = file["mimeType"] == "application/vnd.google-apps.folder"
-        items.append(DriveItem(
-            id=file["id"],
-            name=file["name"],
-            mime_type=file["mimeType"],
-            is_folder=is_folder,
-            size=file.get("size"),
-            modified_at=file.get("modifiedTime"),
-        ))
+        items.append(
+            DriveItem(
+                id=file["id"],
+                name=file["name"],
+                mime_type=file["mimeType"],
+                is_folder=is_folder,
+                size=file.get("size"),
+                modified_at=file.get("modifiedTime"),
+            )
+        )
 
     return BrowseResponse(
         folder_id=folder_id,
@@ -586,9 +617,7 @@ def update_folder(
         include_shared=cast(bool, folder.include_shared),
         tags=cast(list[str], folder.tags) or [],
         check_interval=cast(int, folder.check_interval),
-        last_sync_at=(
-            folder.last_sync_at.isoformat() if folder.last_sync_at else None
-        ),
+        last_sync_at=(folder.last_sync_at.isoformat() if folder.last_sync_at else None),
         active=cast(bool, folder.active),
         exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
     )
@@ -629,7 +658,7 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a folder."""
-    from memory.workers.tasks.google_drive import sync_google_folder
+    from memory.common.celery_app import app, SYNC_GOOGLE_FOLDER
 
     folder = (
         db.query(GoogleFolder)
@@ -643,7 +672,11 @@ def trigger_sync(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    task = sync_google_folder.delay(folder.id, force_full=force_full)
+    task = app.send_task(
+        SYNC_GOOGLE_FOLDER,
+        args=[folder.id],
+        kwargs={"force_full": force_full},
+    )
 
     return {"task_id": task.id, "status": "scheduled"}
 

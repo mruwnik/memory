@@ -23,6 +23,8 @@ from memory.common.db.models.source_items import (
     MiscDoc,
     Note,
     GoogleDoc,
+    Task,
+    CalendarEvent,
     MailMessagePayload,
     EmailAttachmentPayload,
     AgentObservationPayload,
@@ -32,6 +34,8 @@ from memory.common.db.models.source_items import (
     NotePayload,
     ForumPostPayload,
     GoogleDocPayload,
+    TaskPayload,
+    CalendarEventPayload,
 )
 from memory.common.db.models.discord import (
     DiscordServer,
@@ -62,6 +66,7 @@ from memory.common.db.models.sources import (
     GoogleOAuthConfig,
     GoogleAccount,
     GoogleFolder,
+    CalendarAccount,
 )
 from memory.common.db.models.users import (
     User,
@@ -89,6 +94,8 @@ Payload = (
     | MailMessagePayload
     | PersonPayload
     | GoogleDocPayload
+    | TaskPayload
+    | CalendarEventPayload
 )
 
 __all__ = [
@@ -114,6 +121,10 @@ __all__ = [
     "Note",
     "GoogleDoc",
     "GoogleDocPayload",
+    "Task",
+    "TaskPayload",
+    "CalendarEvent",
+    "CalendarEventPayload",
     # Observations
     "ObservationContradiction",
     "ReactionPattern",
@@ -123,6 +134,10 @@ __all__ = [
     # People
     "Person",
     "PersonPayload",
+    # Calendar
+    "CalendarAccount",
+    "CalendarEvent",
+    "CalendarEventPayload",
     # Sources
     "Book",
     "ArticleFeed",
@@ -132,6 +147,9 @@ __all__ = [
     "GoogleOAuthConfig",
     "GoogleAccount",
     "GoogleFolder",
+    "CalendarAccount",
+    "CalendarEvent",
+    "CalendarEventPayload",
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",
