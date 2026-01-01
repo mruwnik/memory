@@ -24,6 +24,7 @@ export default defineConfig({
       '/article-feeds': 'http://localhost:8000',
       '/github': 'http://localhost:8000',
       '/google-drive': 'http://localhost:8000',
+      '/tasks': 'http://localhost:8000',
     },
   },
 })

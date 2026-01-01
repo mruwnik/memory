@@ -17,12 +17,11 @@ const Dashboard = ({ onLogout }) => {
                 <div className="welcome">
                     <h2>Welcome to your Memory Database!</h2>
                     <p>You are successfully authenticated.</p>
-                    <p>Access token is stored in cookies and ready for API calls.</p>
                 </div>
 
                 <div className="features">
                     <Link to="/ui/search" className="feature-card">
-                        <h3>🔍 Search</h3>
+                        <h3>Search</h3>
                         <p>Search through your knowledge base</p>
                     </Link>
 
@@ -36,13 +35,18 @@ const Dashboard = ({ onLogout }) => {
                         <p>View upcoming events from your calendars</p>
                     </Link>
 
+                    <Link to="/ui/tasks" className="feature-card">
+                        <h3>Tasks</h3>
+                        <p>Manage your todos and tasks</p>
+                    </Link>
+
                     <div className="feature-card" onClick={async () => console.log(await listNotes())}>
-                        <h3>📝 Notes</h3>
+                        <h3>Notes</h3>
                         <p>Create and manage your notes</p>
                     </div>
 
                     <div className="feature-card">
-                        <h3>🤖 AI Assistant</h3>
+                        <h3>AI Assistant</h3>
                         <p>Chat with your memory-enhanced AI</p>
                     </div>
                 </div>

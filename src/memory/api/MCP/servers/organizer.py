@@ -3,11 +3,15 @@ MCP subserver for organizational tools: calendar, todos, reminders.
 """
 
 import logging
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastmcp import FastMCP
 
 from memory.common.calendar import get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
+from memory.common.db.models import Task
+from memory.common.tasks import get_tasks, complete_task, task_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -43,3 +47,153 @@ async def get_upcoming_events(
 
     with make_session() as session:
         return get_events_in_range(session, range_start, range_end, limit)
+
+
+# =============================================================================
+# Task/Todo Tools
+# =============================================================================
+
+
+@organizer_mcp.tool()
+async def list_tasks(
+    status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
+    priority: Literal["low", "medium", "high", "urgent"] | None = None,
+    include_completed: bool = False,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    List the user's tasks/todos with optional filtering.
+    Use to check what tasks are pending, find high-priority items, or review completed work.
+
+    Args:
+        status: Filter by status (pending, in_progress, done, cancelled)
+        priority: Filter by priority (low, medium, high, urgent)
+        include_completed: Include done/cancelled tasks (default False)
+        limit: Maximum tasks to return (default 50, max 200)
+
+    Returns: List of tasks with id, task_title, due_date, priority, status,
+             recurrence, completed_at, tags. Sorted by due_date then priority.
+    """
+    limit = min(max(limit, 1), 200)
+
+    with make_session() as session:
+        return get_tasks(
+            session,
+            status=status,
+            priority=priority,
+            include_completed=include_completed,
+            limit=limit,
+        )
+
+
+@organizer_mcp.tool()
+async def create_task(
+    title: str,
+    due_date: str | None = None,
+    priority: Literal["low", "medium", "high", "urgent"] | None = None,
+    recurrence: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """
+    Create a new task/todo for the user.
+    Use when the user asks you to remember something, add a task, or create a reminder.
+
+    Args:
+        title: The task title/description (required)
+        due_date: ISO format due date (e.g., "2024-01-15" or "2024-01-15T09:00:00Z")
+        priority: Priority level (low, medium, high, urgent)
+        recurrence: RRULE format for recurring tasks (e.g., "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR")
+        tags: List of tags for categorization
+
+    Returns: The created task with id, task_title, due_date, priority, status, etc.
+    """
+    parsed_due_date = None
+    if due_date:
+        try:
+            parsed_due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid due_date format: {due_date}")
+
+    with make_session() as session:
+        task = Task(
+            task_title=title,
+            due_date=parsed_due_date,
+            priority=priority,
+            status="pending",
+            recurrence=recurrence,
+            tags=tags or [],
+            sha256=b"task:" + title.encode()[:24],
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        return task_to_dict(task)
+
+
+@organizer_mcp.tool()
+async def update_task(
+    task_id: int,
+    title: str | None = None,
+    due_date: str | None = None,
+    priority: Literal["low", "medium", "high", "urgent"] | None = None,
+    status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """
+    Update an existing task.
+    Use to modify task details, change priority, or update status.
+
+    Args:
+        task_id: ID of the task to update (required)
+        title: New task title
+        due_date: New due date in ISO format
+        priority: New priority (low, medium, high, urgent)
+        status: New status (pending, in_progress, done, cancelled)
+        tags: New tags list
+
+    Returns: The updated task, or error if not found.
+    """
+    with make_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+
+        if title is not None:
+            task.task_title = title
+        if due_date is not None:
+            try:
+                task.due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
+            except ValueError:
+                raise ValueError(f"Invalid due_date format: {due_date}")
+        if priority is not None:
+            task.priority = priority
+        if status is not None:
+            task.status = status
+            if status == "done" and not task.completed_at:
+                task.completed_at = datetime.now(timezone.utc)
+            elif status in ("pending", "in_progress"):
+                task.completed_at = None
+        if tags is not None:
+            task.tags = tags
+
+        session.commit()
+        session.refresh(task)
+        return task_to_dict(task)
+
+
+@organizer_mcp.tool()
+async def complete_task_by_id(task_id: int) -> dict:
+    """
+    Mark a task as complete.
+    Use when the user says they finished a task or want to check it off.
+
+    Args:
+        task_id: ID of the task to complete
+
+    Returns: The completed task with updated status and completed_at timestamp.
+    """
+    with make_session() as session:
+        task = complete_task(session, task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+        return task_to_dict(task)

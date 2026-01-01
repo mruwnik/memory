@@ -2217,3 +2217,33 @@ a.folder-item-name:hover {
     min-width: auto;
   }
 }
+
+/* ============================================
+   Dashboard Layout
+   ============================================ */
+
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+.dashboard-sidebar {
+  position: sticky;
+  top: 2rem;
+}
+
+.dashboard-content {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-sidebar {
+    position: static;
+  }
+}

@@ -4,7 +4,7 @@ import './App.css'
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks } from '@/components'
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
@@ -105,6 +105,14 @@ const AuthWrapper = () => {
       <Route path="/ui/calendar" element={
         isAuthenticated ? (
           <Calendar />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/tasks" element={
+        isAuthenticated ? (
+          <Tasks />
         ) : (
           <Navigate to="/ui/login" replace />
         )

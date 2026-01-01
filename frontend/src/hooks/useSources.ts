@@ -282,10 +282,50 @@ export interface CalendarAccountUpdate {
   active?: boolean
 }
 
-// Task response
-export interface TaskResponse {
+// Celery task response (for async jobs)
+export interface CeleryTaskResponse {
   task_id: string
   status: string
+}
+
+// Todo/Task types
+export interface TodoTask {
+  id: number
+  task_title: string
+  due_date: string | null
+  priority: 'low' | 'medium' | 'high' | 'urgent' | null
+  status: 'pending' | 'in_progress' | 'done' | 'cancelled'
+  recurrence: string | null
+  completed_at: string | null
+  source_item_id: number | null
+  tags: string[]
+  inserted_at: string | null
+}
+
+export interface TodoTaskCreate {
+  task_title: string
+  due_date?: string
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
+  recurrence?: string
+  tags?: string[]
+}
+
+export interface TodoTaskUpdate {
+  task_title?: string
+  due_date?: string
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
+  status?: 'pending' | 'in_progress' | 'done' | 'cancelled'
+  recurrence?: string
+  tags?: string[]
+}
+
+export interface TodoTaskFilters {
+  status?: string
+  priority?: string
+  include_completed?: boolean
+  due_before?: string
+  due_after?: string
+  limit?: number
 }
 
 // Calendar Event
@@ -340,7 +380,7 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete email account')
   }, [apiCall])
 
-  const syncEmailAccount = useCallback(async (id: number): Promise<TaskResponse> => {
+  const syncEmailAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/email-accounts/${id}/sync`, { method: 'POST' })
     if (!response.ok) throw new Error('Failed to sync email account')
     return response.json()
@@ -389,7 +429,7 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete article feed')
   }, [apiCall])
 
-  const syncArticleFeed = useCallback(async (id: number): Promise<TaskResponse> => {
+  const syncArticleFeed = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/article-feeds/${id}/sync`, { method: 'POST' })
     if (!response.ok) throw new Error('Failed to sync article feed')
     return response.json()
@@ -477,7 +517,7 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete GitHub repo')
   }, [apiCall])
 
-  const syncGithubRepo = useCallback(async (accountId: number, repoId: number, forceFull = false): Promise<TaskResponse> => {
+  const syncGithubRepo = useCallback(async (accountId: number, repoId: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/github/accounts/${accountId}/repos/${repoId}/sync?force_full=${forceFull}`, { method: 'POST' })
     if (!response.ok) throw new Error('Failed to sync GitHub repo')
     return response.json()
@@ -546,7 +586,7 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete Google folder')
   }, [apiCall])
 
-  const syncGoogleFolder = useCallback(async (accountId: number, folderId: number, forceFull = false): Promise<TaskResponse> => {
+  const syncGoogleFolder = useCallback(async (accountId: number, folderId: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/google-drive/accounts/${accountId}/folders/${folderId}/sync?force_full=${forceFull}`, { method: 'POST' })
     if (!response.ok) throw new Error('Failed to sync Google folder')
     return response.json()
@@ -629,7 +669,7 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete calendar account')
   }, [apiCall])
 
-  const syncCalendarAccount = useCallback(async (id: number, forceFull = false): Promise<TaskResponse> => {
+  const syncCalendarAccount = useCallback(async (id: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/calendar-accounts/${id}/sync?force_full=${forceFull}`, { method: 'POST' })
     if (!response.ok) throw new Error('Failed to sync calendar account')
     return response.json()
@@ -647,6 +687,59 @@ export const useSources = () => {
     }
     const response = await apiCall(url)
     if (!response.ok) throw new Error('Failed to fetch upcoming events')
+    return response.json()
+  }, [apiCall])
+
+  // === Tasks/Todos ===
+
+  const listTasks = useCallback(async (filters: TodoTaskFilters = {}): Promise<TodoTask[]> => {
+    const params = new URLSearchParams()
+    if (filters.status) params.append('status', filters.status)
+    if (filters.priority) params.append('priority', filters.priority)
+    if (filters.include_completed) params.append('include_completed', 'true')
+    if (filters.due_before) params.append('due_before', filters.due_before)
+    if (filters.due_after) params.append('due_after', filters.due_after)
+    if (filters.limit) params.append('limit', filters.limit.toString())
+
+    const queryString = params.toString()
+    const url = queryString ? `/tasks?${queryString}` : '/tasks'
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch tasks')
+    return response.json()
+  }, [apiCall])
+
+  const createTask = useCallback(async (data: TodoTaskCreate): Promise<TodoTask> => {
+    const response = await apiCall('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to create task')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const updateTask = useCallback(async (id: number, data: TodoTaskUpdate): Promise<TodoTask> => {
+    const response = await apiCall(`/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to update task')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const deleteTask = useCallback(async (id: number): Promise<void> => {
+    const response = await apiCall(`/tasks/${id}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Failed to delete task')
+  }, [apiCall])
+
+  const completeTask = useCallback(async (id: number): Promise<TodoTask> => {
+    const response = await apiCall(`/tasks/${id}/complete`, { method: 'POST' })
+    if (!response.ok) throw new Error('Failed to complete task')
     return response.json()
   }, [apiCall])
 
@@ -697,5 +790,11 @@ export const useSources = () => {
     syncCalendarAccount,
     // Calendar Events
     getUpcomingEvents,
+    // Tasks/Todos
+    listTasks,
+    createTask,
+    updateTask,
+    deleteTask,
+    completeTask,
   }
 }
