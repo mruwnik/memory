@@ -228,6 +228,50 @@ class GithubRepo(Base):
         return f"{self.owner}/{self.name}"
 
 
+class GithubMilestone(Base):
+    """GitHub milestone for tracking progress toward goals."""
+
+    __tablename__ = "github_milestones"
+
+    id = Column(BigInteger, primary_key=True)
+    repo_id = Column(
+        BigInteger, ForeignKey("github_repos.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # GitHub identifiers
+    github_id = Column(BigInteger, nullable=False)
+    number = Column(Integer, nullable=False)
+
+    # Data
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    state = Column(Text, nullable=False)  # 'open' or 'closed'
+    due_on = Column(DateTime(timezone=True), nullable=True)
+
+    # Timestamps from GitHub
+    github_created_at = Column(DateTime(timezone=True), nullable=True)
+    github_updated_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Local timestamps
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Relationships
+    repo = relationship("GithubRepo", backref="milestones")
+    items = relationship("GithubItem", back_populates="milestone_rel")
+
+    __table_args__ = (
+        UniqueConstraint("repo_id", "number", name="unique_milestone_per_repo"),
+        Index("github_milestones_repo_idx", "repo_id"),
+        Index("github_milestones_due_idx", "due_on"),
+    )
+
+
 class GoogleOAuthConfig(Base):
     """OAuth client configuration for Google APIs (from credentials JSON)."""
 

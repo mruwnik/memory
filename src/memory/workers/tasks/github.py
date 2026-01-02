@@ -12,12 +12,13 @@ from memory.common.celery_app import (
     SYNC_GITHUB_ITEM,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubPRData
+from memory.common.db.models import GithubItem, GithubPRData, GithubMilestone
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.parsers.github import (
     GithubClient,
     GithubCredentials,
     GithubIssueData,
+    GithubMilestoneData,
     GithubPRDataDict,
 )
 from memory.workers.tasks.content_processing import (
@@ -28,6 +29,49 @@ from memory.workers.tasks.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_milestone(
+    session: Any,
+    repo: GithubRepo,
+    milestone_data: GithubMilestoneData,
+) -> GithubMilestone:
+    """Sync a milestone, creating or updating as needed."""
+    existing = (
+        session.query(GithubMilestone)
+        .filter(
+            GithubMilestone.repo_id == repo.id,
+            GithubMilestone.number == milestone_data["number"],
+        )
+        .first()
+    )
+
+    if existing:
+        # Update existing milestone
+        existing.title = milestone_data["title"]
+        existing.description = milestone_data["description"]
+        existing.state = milestone_data["state"]
+        existing.due_on = milestone_data["due_on"]
+        existing.github_updated_at = milestone_data["github_updated_at"]
+        existing.closed_at = milestone_data["closed_at"]
+        return existing
+
+    # Create new milestone
+    milestone = GithubMilestone(
+        repo_id=repo.id,
+        github_id=milestone_data["github_id"],
+        number=milestone_data["number"],
+        title=milestone_data["title"],
+        description=milestone_data["description"],
+        state=milestone_data["state"],
+        due_on=milestone_data["due_on"],
+        github_created_at=milestone_data["github_created_at"],
+        github_updated_at=milestone_data["github_updated_at"],
+        closed_at=milestone_data["closed_at"],
+    )
+    session.add(milestone)
+    session.flush()
+    return milestone
 
 
 def _build_content(issue_data: GithubIssueData) -> str:
@@ -72,6 +116,7 @@ def _create_pr_data(issue_data: GithubIssueData) -> GithubPRData | None:
 def _create_github_item(
     repo: GithubRepo,
     issue_data: GithubIssueData,
+    milestone_id: int | None = None,
 ) -> GithubItem:
     """Create a GithubItem from parsed issue/PR data."""
     content = _build_content(issue_data)
@@ -102,7 +147,7 @@ def _create_github_item(
         author=issue_data["author"],
         labels=issue_data["labels"],
         assignees=issue_data["assignees"],
-        milestone=issue_data["milestone"],
+        milestone_id=milestone_id,
         created_at=issue_data["created_at"],
         closed_at=issue_data["closed_at"],
         merged_at=issue_data["merged_at"],
@@ -154,6 +199,7 @@ def _update_existing_item(
     existing: GithubItem,
     repo: GithubRepo,
     issue_data: GithubIssueData,
+    milestone_id: int | None = None,
 ) -> dict[str, Any]:
     """Update an existing GithubItem and reindex if content changed."""
     if not _needs_reindex(existing, issue_data):
@@ -184,7 +230,7 @@ def _update_existing_item(
     existing.state = issue_data["state"]  # type: ignore
     existing.labels = issue_data["labels"]  # type: ignore
     existing.assignees = issue_data["assignees"]  # type: ignore
-    existing.milestone = issue_data["milestone"]  # type: ignore
+    existing.milestone_id = milestone_id  # type: ignore
     existing.closed_at = issue_data["closed_at"]  # type: ignore
     existing.merged_at = issue_data["merged_at"]  # type: ignore
     existing.github_updated_at = issue_data["github_updated_at"]  # type: ignore
@@ -297,6 +343,8 @@ def sync_github_item(
 ) -> dict[str, Any]:
     """Sync a single GitHub issue or PR."""
     issue_data = _deserialize_issue_data(issue_data_serialized)
+    # Extract milestone_id that was added by sync_github_repo
+    milestone_id = issue_data_serialized.get("milestone_id")
     logger.info(f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}")
 
     with make_session() as session:
@@ -316,10 +364,10 @@ def sync_github_item(
         )
 
         if existing:
-            return _update_existing_item(session, existing, repo, issue_data)
+            return _update_existing_item(session, existing, repo, issue_data, milestone_id)
 
         # Create new item
-        github_item = _create_github_item(repo, issue_data)
+        github_item = _create_github_item(repo, issue_data, milestone_id)
         return process_content_item(github_item, session)
 
 
@@ -374,6 +422,16 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
         labels = cast(list[str], repo.labels_filter) or None
         state = cast(str | None, repo.state_filter) or "all"
 
+        # Sync milestones first (they're referenced by issues/PRs)
+        milestone_map: dict[int, int] = {}  # GitHub milestone number -> DB milestone id
+        milestones_synced = 0
+        for ms_data in client.fetch_milestones(owner, name):
+            milestone = _sync_milestone(session, repo, ms_data)
+            milestone_map[ms_data["number"]] = cast(int, milestone.id)
+            milestones_synced += 1
+        session.flush()
+        logger.info(f"Synced {milestones_synced} milestones for {repo.repo_path}")
+
         # For full syncs triggered by full_sync_interval, only sync open issues
         # (closed issues rarely have project field changes that matter)
         if needs_full_sync and not force_full:
@@ -399,6 +457,9 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = _serialize_issue_data(issue_data)
+                # Look up milestone_id from the map
+                ms_num = issue_data.get("milestone_number")
+                serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None
                 task_id = sync_github_item.delay(repo.id, serialized)
                 task_ids.append(task_id.id)
                 issues_synced += 1
@@ -413,6 +474,9 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = _serialize_issue_data(pr_data)
+                # Look up milestone_id from the map
+                ms_num = pr_data.get("milestone_number")
+                serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None
                 task_id = sync_github_item.delay(repo.id, serialized)
                 task_ids.append(task_id.id)
                 prs_synced += 1

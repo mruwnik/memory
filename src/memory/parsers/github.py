@@ -87,6 +87,20 @@ class GithubPRDataDict(TypedDict):
     review_comments: list[GithubReviewComment]
 
 
+class GithubMilestoneData(TypedDict):
+    """Parsed milestone data ready for storage."""
+
+    github_id: int
+    number: int
+    title: str
+    description: str | None
+    state: str
+    due_on: datetime | None
+    github_created_at: datetime
+    github_updated_at: datetime
+    closed_at: datetime | None
+
+
 class GithubIssueData(TypedDict):
     """Parsed issue/PR data ready for storage."""
 
@@ -98,7 +112,7 @@ class GithubIssueData(TypedDict):
     author: str
     labels: list[str]
     assignees: list[str]
-    milestone: str | None
+    milestone_number: int | None  # For FK lookup during sync
     created_at: datetime
     closed_at: datetime | None
     merged_at: datetime | None  # PRs only
@@ -648,6 +662,57 @@ class GithubClient:
 
         return fields if fields else None
 
+    def fetch_milestones(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "all",
+    ) -> Generator[GithubMilestoneData, None, None]:
+        """Fetch all milestones for a repository.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            state: Filter by state: 'open', 'closed', or 'all' (default)
+
+        Yields:
+            GithubMilestoneData for each milestone
+        """
+        params: dict[str, Any] = {
+            "state": state,
+            "per_page": 100,
+        }
+
+        page = 1
+        while True:
+            params["page"] = page
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/milestones",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            milestones = response.json()
+            if not milestones:
+                break
+
+            for ms in milestones:
+                yield GithubMilestoneData(
+                    github_id=ms["id"],
+                    number=ms["number"],
+                    title=ms["title"],
+                    description=ms.get("description"),
+                    state=ms["state"],
+                    due_on=parse_github_date(ms.get("due_on")),
+                    github_created_at=parse_github_date(ms["created_at"]),  # type: ignore
+                    github_updated_at=parse_github_date(ms["updated_at"]),  # type: ignore
+                    closed_at=parse_github_date(ms.get("closed_at")),
+                )
+
+            page += 1
+
     def _parse_issue(
         self, owner: str, repo: str, issue: dict[str, Any]
     ) -> GithubIssueData:
@@ -664,8 +729,8 @@ class GithubClient:
             author=issue["user"]["login"] if issue.get("user") else "ghost",
             labels=[label["name"] for label in issue.get("labels", [])],
             assignees=[a["login"] for a in issue.get("assignees", [])],
-            milestone=(
-                issue["milestone"]["title"] if issue.get("milestone") else None
+            milestone_number=(
+                issue["milestone"]["number"] if issue.get("milestone") else None
             ),
             created_at=parse_github_date(issue["created_at"]),  # type: ignore
             closed_at=parse_github_date(issue.get("closed_at")),
@@ -720,7 +785,7 @@ class GithubClient:
             author=pr["user"]["login"] if pr.get("user") else "ghost",
             labels=[label["name"] for label in pr.get("labels", [])],
             assignees=[a["login"] for a in pr.get("assignees", [])],
-            milestone=pr["milestone"]["title"] if pr.get("milestone") else None,
+            milestone_number=pr["milestone"]["number"] if pr.get("milestone") else None,
             created_at=parse_github_date(pr["created_at"]),  # type: ignore
             closed_at=parse_github_date(pr.get("closed_at")),
             merged_at=parse_github_date(pr.get("merged_at")),

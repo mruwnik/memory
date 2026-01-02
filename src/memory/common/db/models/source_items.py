@@ -868,8 +868,15 @@ class GithubItem(SourceItem):
 
     # Additional tracking
     assignees = Column(ARRAY(Text), nullable=True)
-    milestone = Column(Text, nullable=True)
+    milestone_id = Column(
+        BigInteger,
+        ForeignKey("github_milestones.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     comment_count = Column(Integer, nullable=True)
+
+    # Relationship to milestone
+    milestone_rel = relationship("GithubMilestone", back_populates="items")
 
     # Relationship to PR-specific data
     pr_data = relationship(
@@ -890,6 +897,7 @@ class GithubItem(SourceItem):
         Index("gh_labels_idx", "labels", postgresql_using="gin"),
         Index("gh_github_updated_at_idx", "github_updated_at"),
         Index("gh_repo_id_idx", "repo_id"),
+        Index("gh_milestone_id_idx", "milestone_id"),
     )
 
     @classmethod
@@ -907,7 +915,7 @@ class GithubItem(SourceItem):
             author=cast(str | None, self.author),
             labels=cast(list[str] | None, self.labels),
             assignees=cast(list[str] | None, self.assignees),
-            milestone=cast(str | None, self.milestone),
+            milestone=self.milestone_rel.title if self.milestone_rel else None,
             project_status=cast(str | None, self.project_status),
             project_priority=cast(str | None, self.project_priority),
             created_at=cast(datetime | None, self.created_at),

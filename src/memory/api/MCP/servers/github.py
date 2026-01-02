@@ -13,7 +13,8 @@ from memory.api.search.search import search
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem
+from memory.common.db.models import GithubItem, GithubMilestone
+from memory.common.db.models.sources import GithubRepo
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,8 @@ def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[st
         "author": item.author,
         "assignees": item.assignees or [],
         "labels": item.labels or [],
-        "milestone": item.milestone,
+        "milestone": item.milestone_rel.title if item.milestone_rel else None,
+        "milestone_id": item.milestone_id,
         "project_status": item.project_status,
         "project_priority": item.project_priority,
         "project_fields": item.project_fields,
@@ -76,6 +78,7 @@ async def list_github_issues(
     state: str | None = None,
     kind: str | None = None,
     labels: list[str] | None = None,
+    milestone: str | int | None = None,
     project_status: str | None = None,
     project_field: dict[str, str] | None = None,
     updated_since: str | None = None,
@@ -94,6 +97,7 @@ async def list_github_issues(
         state: Filter by state: "open", "closed", "merged" (default: all)
         kind: Filter by type: "issue" or "pr" (default: both)
         labels: Filter by GitHub labels (matches ANY label in list)
+        milestone: Filter by milestone title (string) or milestone ID (int)
         project_status: Filter by project status (e.g., "In Progress", "Backlog")
         project_field: Filter by project field values (e.g., {"EquiStamp.Client": "Redwood"})
         updated_since: ISO date - only issues updated after this time
@@ -126,6 +130,14 @@ async def list_github_issues(
             query = query.filter(
                 GithubItem.labels.op("&&")(sql_cast(labels, ARRAY(Text)))
             )
+        if milestone is not None:
+            if isinstance(milestone, int):
+                query = query.filter(GithubItem.milestone_id == milestone)
+            else:
+                # Filter by milestone title via join
+                query = query.join(GithubMilestone).filter(
+                    GithubMilestone.title == milestone
+                )
         if project_status:
             query = query.filter(GithubItem.project_status == project_status)
         if project_field:
@@ -149,6 +161,100 @@ async def list_github_issues(
         items = query.all()
 
         return [_serialize_issue(item) for item in items]
+
+
+@github_mcp.tool()
+async def list_milestones(
+    repo: str | None = None,
+    state: str | None = None,
+    has_due_date: bool | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    List GitHub milestones with filtering options.
+    Use to track project progress, find upcoming deadlines, or review milestone status.
+
+    Args:
+        repo: Filter by repository path (e.g., "owner/name")
+        state: Filter by state: "open" or "closed" (default: all)
+        has_due_date: If True, only milestones with due dates; if False, only without
+        limit: Maximum results (default 50, max 200)
+
+    Returns: List of milestones with id, number, title, description, state, due_on,
+             open_issues, closed_issues (computed), progress percentage, url
+    """
+    logger.info(f"list_milestones called: repo={repo}, state={state}")
+
+    limit = min(limit, 200)
+
+    with make_session() as session:
+        query = session.query(GithubMilestone).join(GithubRepo)
+
+        if repo:
+            parts = repo.split("/")
+            if len(parts) == 2:
+                owner, name = parts
+                query = query.filter(
+                    GithubRepo.owner == owner,
+                    GithubRepo.name == name,
+                )
+
+        if state:
+            query = query.filter(GithubMilestone.state == state)
+
+        if has_due_date is True:
+            query = query.filter(GithubMilestone.due_on.isnot(None))
+        elif has_due_date is False:
+            query = query.filter(GithubMilestone.due_on.is_(None))
+
+        # Order: due dates first (soonest), then by updated
+        query = query.order_by(
+            desc(GithubMilestone.due_on.isnot(None)),
+            GithubMilestone.due_on,
+            desc(GithubMilestone.github_updated_at),
+        ).limit(limit)
+
+        milestones = query.all()
+
+        results = []
+        for ms in milestones:
+            # Count open and closed issues for this milestone
+            open_count = (
+                session.query(func.count(GithubItem.id))
+                .filter(
+                    GithubItem.milestone_id == ms.id,
+                    GithubItem.state == "open",
+                )
+                .scalar()
+                or 0
+            )
+            closed_count = (
+                session.query(func.count(GithubItem.id))
+                .filter(
+                    GithubItem.milestone_id == ms.id,
+                    GithubItem.state.in_(["closed", "merged"]),
+                )
+                .scalar()
+                or 0
+            )
+            total = open_count + closed_count
+            progress = round(closed_count / total * 100, 1) if total > 0 else 0
+
+            results.append({
+                "id": ms.id,
+                "repo_path": f"{ms.repo.owner}/{ms.repo.name}",
+                "number": ms.number,
+                "title": ms.title,
+                "description": ms.description,
+                "state": ms.state,
+                "due_on": ms.due_on.isoformat() if ms.due_on else None,
+                "open_issues": open_count,
+                "closed_issues": closed_count,
+                "progress_percent": progress,
+                "url": f"https://github.com/{ms.repo.owner}/{ms.repo.name}/milestone/{ms.number}",
+            })
+
+        return results
 
 
 @github_mcp.tool()
