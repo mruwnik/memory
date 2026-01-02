@@ -12,6 +12,9 @@ from memory.common.celery_app import (
     RUN_SCHEDULED_CALLS,
     BACKUP_ALL,
     EVALUATE_PROACTIVE_CHECKINS,
+    SYNC_ALL_GITHUB_REPOS,
+    SYNC_ALL_GOOGLE_ACCOUNTS,
+    SYNC_ALL_CALENDARS,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,5 +60,17 @@ app.conf.beat_schedule = {
     "evaluate-proactive-checkins": {
         "task": EVALUATE_PROACTIVE_CHECKINS,
         "schedule": settings.PROACTIVE_CHECKIN_INTERVAL,
+    },
+    "sync-github-repos": {
+        "task": SYNC_ALL_GITHUB_REPOS,
+        "schedule": settings.GITHUB_SYNC_INTERVAL,
+    },
+    "sync-google-drive": {
+        "task": SYNC_ALL_GOOGLE_ACCOUNTS,
+        "schedule": settings.GOOGLE_DRIVE_SYNC_INTERVAL,
+    },
+    "sync-calendars": {
+        "task": SYNC_ALL_CALENDARS,
+        "schedule": settings.CALENDAR_SYNC_INTERVAL,
     },
 }
