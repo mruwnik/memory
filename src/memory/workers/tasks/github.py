@@ -321,7 +321,7 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         author=data["author"],
         labels=data["labels"],
         assignees=data["assignees"],
-        milestone=data["milestone"],
+        milestone_number=data.get("milestone_number"),
         created_at=parse_github_date(data["created_at"]),  # type: ignore
         closed_at=parse_github_date(data.get("closed_at")),
         merged_at=parse_github_date(data.get("merged_at")),

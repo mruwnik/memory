@@ -61,6 +61,7 @@ class CalendarEventResponse(BaseModel):
     location: str | None
     calendar_name: str | None
     recurrence_rule: str | None
+    calendar_account_id: int | None
 
 
 class CalendarAccountResponse(BaseModel):
@@ -298,6 +299,7 @@ def get_upcoming_events(
             location=e["location"],
             calendar_name=e["calendar_name"],
             recurrence_rule=e["recurrence_rule"],
+            calendar_account_id=e["calendar_account_id"],
         )
         for e in events
     ]

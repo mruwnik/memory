@@ -20,6 +20,7 @@ class EventDict(TypedDict):
     location: str | None
     calendar_name: str | None
     recurrence_rule: str | None
+    calendar_account_id: int | None
 
 
 def expand_recurring_event(
@@ -76,6 +77,7 @@ def event_to_dict(
         location=event.location,  # type: ignore
         calendar_name=event.calendar_name,  # type: ignore
         recurrence_rule=event.recurrence_rule,  # type: ignore
+        calendar_account_id=event.calendar_account_id,  # type: ignore
     )
 
 

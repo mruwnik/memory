@@ -1729,13 +1729,17 @@ const CalendarPanel = () => {
     setExpandedCalendars(newExpanded)
   }
 
-  // Group events by calendar name
-  const groupedEvents: GroupedEvents = events.reduce((acc, event) => {
-    const calName = event.calendar_name || 'Unknown'
-    if (!acc[calName]) acc[calName] = []
-    acc[calName].push(event)
-    return acc
-  }, {} as GroupedEvents)
+  // Group events by account ID and then by calendar name
+  const getEventsForAccount = (accountId: number): GroupedEvents => {
+    return events
+      .filter(event => event.calendar_account_id === accountId)
+      .reduce((acc, event) => {
+        const calName = event.calendar_name || 'Unknown'
+        if (!acc[calName]) acc[calName] = []
+        acc[calName].push(event)
+        return acc
+      }, {} as GroupedEvents)
+  }
 
   const formatEventDate = (dateStr: string) => {
     const date = new Date(dateStr)
@@ -1796,11 +1800,13 @@ const CalendarPanel = () => {
               {/* Events grouped by calendar */}
               <div className="calendar-events-section">
                 <h5>Calendars & Events</h5>
-                {Object.keys(groupedEvents).length === 0 ? (
-                  <p className="no-events">No events synced yet</p>
-                ) : (
+                {(() => {
+                  const accountEvents = getEventsForAccount(account.id)
+                  return Object.keys(accountEvents).length === 0 ? (
+                    <p className="no-events">No events synced yet</p>
+                  ) : (
                   <div className="calendar-groups">
-                    {Object.entries(groupedEvents).map(([calendarName, calEvents]) => (
+                    {Object.entries(accountEvents).map(([calendarName, calEvents]) => (
                       <div key={calendarName} className="calendar-group">
                         <button
                           className={`calendar-group-header ${expandedCalendars.has(calendarName) ? 'expanded' : ''}`}
@@ -1835,7 +1841,8 @@ const CalendarPanel = () => {
                       </div>
                     ))}
                   </div>
-                )}
+                  )
+                })()}
               </div>
             </div>
           ))}

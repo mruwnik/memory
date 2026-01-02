@@ -128,31 +128,31 @@ export const useMCP = () => {
   }, [apiCall])
 
   const listNotes = useCallback(async (path: string = "/") => {
-    return await mcpCall('note_files', { path })
+    return await mcpCall('core_note_files', { path })
   }, [mcpCall])
 
   const fetchFile = useCallback(async (filename: string) => {
-    return await mcpCall('fetch_file', { filename })
+    return await mcpCall('core_fetch_file', { filename })
   }, [mcpCall])
 
   const getTags = useCallback(async () => {
-    return await mcpCall('get_all_tags')
+    return await mcpCall('meta_get_all_tags')
   }, [mcpCall])
 
   const getSubjects = useCallback(async () => {
-    return await mcpCall('get_all_subjects')
+    return await mcpCall('meta_get_all_subjects')
   }, [mcpCall])
 
   const getObservationTypes = useCallback(async () => {
-    return await mcpCall('get_all_observation_types')
+    return await mcpCall('meta_get_all_observation_types')
   }, [mcpCall])
 
   const getMetadataSchemas = useCallback(async () => {
-    return (await mcpCall('get_metadata_schemas'))[0]
+    return (await mcpCall('meta_get_metadata_schemas'))[0]
   }, [mcpCall])
 
   const searchKnowledgeBase = useCallback(async (query: string, modalities: string[] = [], filters: Record<string, any> = {}, config: Record<string, any> = {}) => {
-    return await mcpCall('search_knowledge_base', {
+    return await mcpCall('core_search_knowledge_base', {
       query,
       filters,
       config,

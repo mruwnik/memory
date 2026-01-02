@@ -338,6 +338,7 @@ export interface CalendarEvent {
   location: string | null
   calendar_name: string | null
   recurrence_rule: string | null
+  calendar_account_id: number | null
 }
 
 export const useSources = () => {
