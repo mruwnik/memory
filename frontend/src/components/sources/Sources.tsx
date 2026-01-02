@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount } from '@/hooks/useSources'
+import { useAuth } from '@/hooks/useAuth'
 import {
   SourceCard,
   Modal,
@@ -15,7 +16,7 @@ import {
   ConfirmDialog,
 } from './shared'
 
-type TabType = 'email' | 'feeds' | 'github' | 'google' | 'calendar'
+type TabType = 'email' | 'feeds' | 'github' | 'google' | 'calendar' | 'books' | 'forums' | 'photos'
 
 const Sources = () => {
   const [activeTab, setActiveTab] = useState<TabType>('email')
@@ -58,6 +59,24 @@ const Sources = () => {
         >
           Calendar
         </button>
+        <button
+          className={`tab ${activeTab === 'books' ? 'active' : ''}`}
+          onClick={() => setActiveTab('books')}
+        >
+          Books
+        </button>
+        <button
+          className={`tab ${activeTab === 'forums' ? 'active' : ''}`}
+          onClick={() => setActiveTab('forums')}
+        >
+          Forums
+        </button>
+        <button
+          className={`tab ${activeTab === 'photos' ? 'active' : ''}`}
+          onClick={() => setActiveTab('photos')}
+        >
+          Photos
+        </button>
       </div>
 
       <div className="sources-content">
@@ -66,6 +85,9 @@ const Sources = () => {
         {activeTab === 'github' && <GitHubPanel />}
         {activeTab === 'google' && <GoogleDrivePanel />}
         {activeTab === 'calendar' && <CalendarPanel />}
+        {activeTab === 'books' && <BooksPanel />}
+        {activeTab === 'forums' && <ForumsPanel />}
+        {activeTab === 'photos' && <PhotosPanel />}
       </div>
     </div>
   )
@@ -2052,6 +2074,422 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
         </div>
       </form>
     </Modal>
+  )
+}
+
+// === Books Panel ===
+
+interface Book {
+  id: number
+  title: string
+  author: string | null
+  publisher: string | null
+  published: string | null
+  language: string | null
+  total_pages: number | null
+  tags: string[]
+  section_count: number
+  file_path: string | null
+}
+
+const BooksPanel = () => {
+  const { apiCall } = useAuth()
+  const [books, setBooks] = useState<Book[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const loadBooks = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await apiCall('/books')
+      if (!response.ok) throw new Error('Failed to fetch books')
+      const data = await response.json()
+      setBooks(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load books')
+    } finally {
+      setLoading(false)
+    }
+  }, [apiCall])
+
+  useEffect(() => { loadBooks() }, [loadBooks])
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    setUploading(true)
+    setUploadError(null)
+    setUploadSuccess(null)
+
+    try {
+      for (const file of Array.from(files)) {
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const response = await apiCall('/books/upload', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.detail || 'Upload failed')
+        }
+      }
+      setUploadSuccess(`${files.length} book(s) uploaded and queued for processing`)
+      loadBooks()
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  if (loading) return <LoadingState />
+  if (error) return <ErrorState message={error} onRetry={loadBooks} />
+
+  return (
+    <div className="source-panel">
+      <div className="panel-header">
+        <h3>Books</h3>
+        <div className="panel-header-actions">
+          <span className="item-count">{books.length} books</span>
+          <label className="upload-btn">
+            {uploading ? 'Uploading...' : 'Upload Books'}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".epub,.pdf,.mobi,.azw,.azw3"
+              multiple
+              onChange={handleUpload}
+              disabled={uploading}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </div>
+      </div>
+
+      {uploadError && <div className="upload-error">{uploadError}</div>}
+      {uploadSuccess && <div className="upload-success">{uploadSuccess}</div>}
+
+      {books.length === 0 ? (
+        <EmptyState
+          message="No books indexed yet"
+          actionLabel="Upload Books"
+          onAction={() => fileInputRef.current?.click()}
+        />
+      ) : (
+        <div className="source-list">
+          {books.map(book => (
+            <div key={book.id} className="source-card">
+              <div className="source-card-header">
+                <div className="source-card-info">
+                  <h4>
+                    {book.file_path ? (
+                      <a href={`/files/${book.file_path}?download=true`} title="Download book">
+                        {book.title}
+                      </a>
+                    ) : (
+                      book.title
+                    )}
+                  </h4>
+                  {book.author && <p className="source-subtitle">by {book.author}</p>}
+                </div>
+              </div>
+              <div className="source-details">
+                {book.publisher && <span>Publisher: {book.publisher}</span>}
+                {book.total_pages && <span>{book.total_pages} pages</span>}
+                {book.section_count > 0 && <span>{book.section_count} sections</span>}
+                {book.language && <span>Language: {book.language}</span>}
+              </div>
+              {book.tags.length > 0 && (
+                <div className="tags">
+                  {book.tags.map(tag => <span key={tag} className="tag">{tag}</span>)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// === Forums Panel ===
+
+const ForumsPanel = () => {
+  const { apiCall } = useAuth()
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null)
+
+  // Sync settings
+  const [minKarma, setMinKarma] = useState(10)
+  const [limit, setLimit] = useState(50)
+  const [maxItems, setMaxItems] = useState(1000)
+  const [daysBack, setDaysBack] = useState(30)
+  const [af, setAf] = useState(false)
+
+  const handleSync = async () => {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncSuccess(null)
+
+    try {
+      const sinceDate = new Date()
+      sinceDate.setDate(sinceDate.getDate() - daysBack)
+
+      const response = await apiCall('/forums/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          since: sinceDate.toISOString(),
+          min_karma: minKarma,
+          limit: limit,
+          max_items: maxItems,
+          af: af,
+          tags: [],
+        }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.detail || 'Sync failed')
+      }
+
+      setSyncSuccess('LessWrong sync started. Posts will be indexed in the background.')
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="source-panel">
+      <div className="panel-header">
+        <h3>Forums (LessWrong)</h3>
+      </div>
+
+      <div className="sync-settings-card">
+        <h4>Sync Settings</h4>
+        <p className="sync-description">
+          Configure and trigger synchronization of posts from LessWrong. Posts matching your criteria will be indexed for search.
+        </p>
+        <div className="sync-settings-form">
+          <div className="form-row">
+            <div className="form-group">
+              <label>Days Back</label>
+              <input
+                type="number"
+                value={daysBack}
+                onChange={e => setDaysBack(parseInt(e.target.value) || 30)}
+                min={1}
+                max={365}
+              />
+            </div>
+            <div className="form-group">
+              <label>Min Karma</label>
+              <input
+                type="number"
+                value={minKarma}
+                onChange={e => setMinKarma(parseInt(e.target.value) || 0)}
+                min={0}
+              />
+            </div>
+            <div className="form-group">
+              <label>Posts per request</label>
+              <input
+                type="number"
+                value={limit}
+                onChange={e => setLimit(parseInt(e.target.value) || 50)}
+                min={1}
+                max={100}
+              />
+            </div>
+            <div className="form-group">
+              <label>Max Items</label>
+              <input
+                type="number"
+                value={maxItems}
+                onChange={e => setMaxItems(parseInt(e.target.value) || 1000)}
+                min={1}
+                max={10000}
+              />
+            </div>
+          </div>
+          <div className="form-group checkbox">
+            <label>
+              <input
+                type="checkbox"
+                checked={af}
+                onChange={e => setAf(e.target.checked)}
+              />
+              Alignment Forum only
+            </label>
+          </div>
+          <button
+            className="sync-btn"
+            onClick={handleSync}
+            disabled={syncing}
+          >
+            {syncing ? 'Syncing...' : 'Sync LessWrong'}
+          </button>
+        </div>
+        {syncError && <div className="sync-error">{syncError}</div>}
+        {syncSuccess && <div className="sync-success">{syncSuccess}</div>}
+      </div>
+    </div>
+  )
+}
+
+// === Photos Panel ===
+
+interface Photo {
+  id: number
+  filename: string
+  file_path: string | null
+  exif_taken_at: string | null
+  camera: string | null
+  tags: string[]
+  mime_type: string | null
+}
+
+const PhotosPanel = () => {
+  const { apiCall } = useAuth()
+  const [photos, setPhotos] = useState<Photo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const loadPhotos = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await apiCall('/photos')
+      if (!response.ok) throw new Error('Failed to fetch photos')
+      const data = await response.json()
+      setPhotos(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load photos')
+    } finally {
+      setLoading(false)
+    }
+  }, [apiCall])
+
+  useEffect(() => { loadPhotos() }, [loadPhotos])
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    setUploading(true)
+    setUploadError(null)
+    setUploadSuccess(null)
+
+    try {
+      let successCount = 0
+      for (const file of Array.from(files)) {
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const response = await apiCall('/photos/upload', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.detail || 'Upload failed')
+        }
+        successCount++
+      }
+      setUploadSuccess(`${successCount} photo(s) uploaded successfully`)
+      loadPhotos()
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr) return null
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  if (loading) return <LoadingState />
+  if (error) return <ErrorState message={error} onRetry={loadPhotos} />
+
+  return (
+    <div className="source-panel">
+      <div className="panel-header">
+        <h3>Photos</h3>
+        <div className="panel-header-actions">
+          <span className="item-count">{photos.length} photos</span>
+          <label className="upload-btn">
+            {uploading ? 'Uploading...' : 'Upload Photos'}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif"
+              multiple
+              onChange={handleUpload}
+              disabled={uploading}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </div>
+      </div>
+
+      {uploadError && <div className="upload-error">{uploadError}</div>}
+      {uploadSuccess && <div className="upload-success">{uploadSuccess}</div>}
+
+      {photos.length === 0 ? (
+        <EmptyState
+          message="No photos indexed yet"
+          actionLabel="Upload Photos"
+          onAction={() => fileInputRef.current?.click()}
+        />
+      ) : (
+        <div className="photos-grid">
+          {photos.map(photo => (
+            <div key={photo.id} className="photo-card">
+              {photo.file_path && (
+                <div className="photo-preview">
+                  <img src={`/files/${photo.file_path}`} alt={photo.filename} loading="lazy" />
+                </div>
+              )}
+              <div className="photo-info">
+                <span className="photo-filename" title={photo.filename}>
+                  {photo.filename}
+                </span>
+                <div className="photo-meta">
+                  {photo.exif_taken_at && <span>{formatDate(photo.exif_taken_at)}</span>}
+                  {photo.camera && <span>{photo.camera}</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

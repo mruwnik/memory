@@ -34,6 +34,7 @@ SYNC_SMBC = f"{COMIC_ROOT}.sync_smbc"
 SYNC_XKCD = f"{COMIC_ROOT}.sync_xkcd"
 SYNC_COMIC = f"{COMIC_ROOT}.sync_comic"
 SYNC_BOOK = f"{EBOOK_ROOT}.sync_book"
+SYNC_PHOTO = f"{PHOTO_ROOT}.sync_photo"
 PROCESS_EMAIL = f"{EMAIL_ROOT}.process_message"
 SYNC_ACCOUNT = f"{EMAIL_ROOT}.sync_account"
 SYNC_ALL_ACCOUNTS = f"{EMAIL_ROOT}.sync_all_accounts"
@@ -139,7 +140,7 @@ app.conf.update(
         },
         f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
-        f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photo-embed"},
+        f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photos"},
         f"{SCHEDULED_CALLS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"
         },
@@ -149,24 +150,6 @@ app.conf.update(
         f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
-    },
-    beat_schedule={
-        "sync-github-repos-hourly": {
-            "task": SYNC_ALL_GITHUB_REPOS,
-            "schedule": crontab(minute=0),  # Every hour at :00
-        },
-        "evaluate-proactive-checkins": {
-            "task": EVALUATE_PROACTIVE_CHECKINS,
-            "schedule": crontab(),  # Every minute
-        },
-        "sync-google-drive-hourly": {
-            "task": SYNC_ALL_GOOGLE_ACCOUNTS,
-            "schedule": crontab(minute=30),  # Every hour at :30
-        },
-        "sync-calendars-hourly": {
-            "task": SYNC_ALL_CALENDARS,
-            "schedule": crontab(minute=45),  # Every hour at :45
-        },
     },
 )
 

@@ -117,7 +117,7 @@ async def get_all_tags() -> list[str]:
         return sorted({row[0] for row in tags_query if row[0] is not None})
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(tags={"scope:observe"})
 async def get_all_subjects() -> list[str]:
     """Get all unique subjects from observations about the user.
 
@@ -129,7 +129,7 @@ async def get_all_subjects() -> list[str]:
         )
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(tags={"scope:observe"})
 async def get_all_observation_types() -> list[str]:
     """Get all observation types that have been used.
 

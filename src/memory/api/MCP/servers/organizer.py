@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 organizer_mcp = FastMCP("memory-organizer")
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(tags={"scope:private"})
 async def get_upcoming_events(
     start_date: str | None = None,
     end_date: str | None = None,
@@ -54,7 +54,7 @@ async def get_upcoming_events(
 # =============================================================================
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(tags={"scope:private"})
 async def list_tasks(
     status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
     priority: Literal["low", "medium", "high", "urgent"] | None = None,
@@ -86,7 +86,7 @@ async def list_tasks(
         )
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(tags={"scope:private"})
 async def create_task(
     title: str,
     due_date: str | None = None,
@@ -130,7 +130,7 @@ async def create_task(
         return task_to_dict(task)
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(tags={"scope:private"})
 async def update_task(
     task_id: int,
     title: str | None = None,
@@ -181,7 +181,7 @@ async def update_task(
         return task_to_dict(task)
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(tags={"scope:private"})
 async def complete_task_by_id(task_id: int) -> dict:
     """
     Mark a task as complete.

@@ -45,10 +45,6 @@ app.conf.beat_schedule = {
         "task": TRACK_GIT_CHANGES,
         "schedule": settings.NOTES_SYNC_INTERVAL,
     },
-    "sync-lesswrong": {
-        "task": SYNC_LESSWRONG,
-        "schedule": settings.LESSWRONG_SYNC_INTERVAL,
-    },
     "run-scheduled-calls": {
         "task": RUN_SCHEDULED_CALLS,
         "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,
@@ -74,3 +70,9 @@ app.conf.beat_schedule = {
         "schedule": settings.CALENDAR_SYNC_INTERVAL,
     },
 }
+
+if settings.LESSWRONG_SYNC_INTERVAL > 0:
+    app.conf.beat_schedule["sync-lesswrong"] = {
+        "task": SYNC_LESSWRONG,
+        "schedule": settings.LESSWRONG_SYNC_INTERVAL,
+    }

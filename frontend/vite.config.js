@@ -25,6 +25,9 @@ export default defineConfig({
       '/github': 'http://localhost:8000',
       '/google-drive': 'http://localhost:8000',
       '/tasks': 'http://localhost:8000',
+      "/photos": "http://localhost:8000",
+      "/books": "http://localhost:8000",
+      "/forum-posts": "http://localhost:8000",
     },
   },
 })

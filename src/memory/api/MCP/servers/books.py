@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 books_mcp = FastMCP("memory-books")
 
 
-@books_mcp.tool()
+@books_mcp.tool(tags={"scope:read"})
 async def all_books(sections: bool = False) -> list[dict]:
     """
     Get all books in the database.
@@ -35,7 +35,7 @@ async def all_books(sections: bool = False) -> list[dict]:
         return [book.as_payload(sections=sections) for book in books]
 
 
-@books_mcp.tool()
+@books_mcp.tool(tags={"scope:read"})
 def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload]:
     """
     Read a book from the database.

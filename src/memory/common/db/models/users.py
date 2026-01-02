@@ -62,6 +62,10 @@ class User(Base):
     password_hash = Column(String, nullable=True)
     api_key = Column(String, nullable=True, unique=True)
 
+    # MCP tool scopes - controls which tools this user can access
+    # Example: ["read", "observe", "github"] or ["*"] for full access
+    scopes = Column(ARRAY(String), nullable=False, default=["read"])
+
     # Relationship to sessions
     sessions = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan"
@@ -82,6 +86,7 @@ class User(Base):
             "name": self.name,
             "email": self.email,
             "user_type": self.user_type,
+            "scopes": self.scopes or ["read"],
             "discord_users": {
                 discord_user.id: discord_user.username
                 for discord_user in self.discord_users

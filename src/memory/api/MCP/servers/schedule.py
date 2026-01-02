@@ -31,7 +31,7 @@ def get_current_user() -> dict:
     return _get_current_user()
 
 
-@schedule_mcp.tool()
+@schedule_mcp.tool(tags={"scope:schedule"})
 async def schedule_message(
     scheduled_time: str,
     message: str,
@@ -113,7 +113,7 @@ async def schedule_message(
         }
 
 
-@schedule_mcp.tool()
+@schedule_mcp.tool(tags={"scope:schedule"})
 async def list_scheduled_llm_calls(
     status: str | None = None, limit: int | None = 50
 ) -> dict[str, Any]:
@@ -158,7 +158,7 @@ async def list_scheduled_llm_calls(
         }
 
 
-@schedule_mcp.tool()
+@schedule_mcp.tool(tags={"scope:schedule"})
 async def cancel_scheduled_llm_call(scheduled_call_id: str) -> dict[str, Any]:
     """
     Cancel a scheduled LLM call.

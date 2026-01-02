@@ -118,14 +118,18 @@ export const useAuth = () => {
       throw new Error('No access token available')
     }
 
-    const defaultHeaders = {
+    // Don't set Content-Type for FormData - browser sets it with boundary
+    const isFormData = options.body instanceof FormData
+    const defaultHeaders: Record<string, string> = {
       'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
+    }
+    if (!isFormData) {
+      defaultHeaders['Content-Type'] = 'application/json'
     }
 
     const requestOptions: RequestInit & { headers: Record<string, string> } = {
       ...options,
-      headers: { ...defaultHeaders, ...options.headers },
+      headers: { ...defaultHeaders, ...options.headers as Record<string, string> },
     }
 
     try {

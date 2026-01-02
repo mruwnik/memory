@@ -8,6 +8,7 @@ from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+from memory.api.MCP.scope_middleware import ScopeMiddleware
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.github import github_mcp
@@ -17,7 +18,6 @@ from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.schedule import schedule_mcp
 from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
-from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.common.db.models import OAuthState, UserSession
 from memory.common.db.models.users import HumanUser
@@ -37,6 +37,27 @@ mcp = FastMCP(
     "memory",
     auth=oauth_provider,
 )
+
+
+def _get_user_scopes() -> list[str]:
+    """Get the current user's MCP tool scopes (for middleware)."""
+    # This is defined here to avoid circular import issues
+    # The actual implementation is in get_user_scopes() below
+    access_token = get_access_token()
+    logger.info(f"_get_user_scopes: access_token={access_token}")
+    if not access_token:
+        logger.warning("_get_user_scopes: No access token, returning empty scopes")
+        return []
+
+    # The access_token already has scopes from verify_token
+    # Use those directly instead of re-querying
+    scopes = list(access_token.scopes) if access_token.scopes else ["read"]
+    logger.info(f"_get_user_scopes: returning scopes={scopes}")
+    return scopes
+
+
+# Add scope-based tool filtering middleware
+mcp.add_middleware(ScopeMiddleware(_get_user_scopes))
 
 
 @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
@@ -119,6 +140,14 @@ def get_current_user() -> dict:
         "client_id": access_token.client_id,
         "user": user_info,
     }
+
+
+def get_user_scopes() -> list[str]:
+    """Get the current user's MCP tool scopes."""
+    user_info = get_current_user()
+    if not user_info.get("authenticated"):
+        return []
+    return user_info.get("user", {}).get("scopes", ["read"])
 
 
 @mcp.custom_route("/health", methods=["GET"])

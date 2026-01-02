@@ -70,7 +70,7 @@ def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[st
     return result
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def list_github_issues(
     repo: str | None = None,
     assignee: str | None = None,
@@ -163,7 +163,7 @@ async def list_github_issues(
         return [_serialize_issue(item) for item in items]
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def list_milestones(
     repo: str | None = None,
     state: str | None = None,
@@ -257,7 +257,7 @@ async def list_milestones(
         return results
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def search_github_issues(
     query: str,
     repo: str | None = None,
@@ -321,7 +321,7 @@ async def search_github_issues(
     return output
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def github_issue_details(
     repo: str,
     number: int,
@@ -355,7 +355,7 @@ async def github_issue_details(
         return _serialize_issue(item, include_content=True)
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def github_work_summary(
     since: str,
     until: str | None = None,
@@ -477,7 +477,7 @@ async def github_work_summary(
         }
 
 
-@github_mcp.tool()
+@github_mcp.tool(tags={"scope:github"})
 async def github_repo_overview(
     repo: str,
 ) -> dict:

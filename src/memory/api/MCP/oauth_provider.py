@@ -13,6 +13,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     RefreshToken,
 )
+from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from memory.common import settings
@@ -141,7 +142,11 @@ class SimpleOAuthProvider(OAuthProvider):
         super().__init__(
             base_url=settings.SERVER_URL,
             issuer_url=settings.SERVER_URL,
-            client_registration_options=None,  # We handle registration ourselves
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=ALLOWED_SCOPES,
+                default_scopes=BASE_SCOPES,
+            ),
             required_scopes=BASE_SCOPES,
         )
 
@@ -154,10 +159,21 @@ class SimpleOAuthProvider(OAuthProvider):
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 if user_session.expires_at < now:
                     return None
+
+                # Sessions created via OAuth have oauth_state
+                # Sessions created via direct login (frontend) don't
+                if user_session.oauth_state:
+                    client_id = user_session.oauth_state.client_id
+                    scopes = user_session.oauth_state.scopes
+                else:
+                    # Fall back to user's configured scopes
+                    client_id = "frontend"
+                    scopes = user_session.user.scopes if user_session.user else ["read"]
+
                 return FastMCPAccessToken(
                     token=token,
-                    client_id=user_session.oauth_state.client_id,
-                    scopes=user_session.oauth_state.scopes,
+                    client_id=client_id,
+                    scopes=scopes or ["read"],
                 )
 
             # Try as bot API key

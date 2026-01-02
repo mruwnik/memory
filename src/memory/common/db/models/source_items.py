@@ -495,6 +495,14 @@ class Photo(SourceItem):
     # Add index
     __table_args__ = (Index("photo_taken_idx", "exif_taken_at"),)
 
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        image = Image.open(settings.FILE_STORAGE_DIR / cast(str, self.filename))
+        return [extract.DataChunk(data=[image])]
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["photo"]
+
 
 class ComicPayload(SourceItemPayload):
     title: Annotated[str, "Title of the comic"]

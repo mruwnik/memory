@@ -36,10 +36,10 @@ x-worker-base: &worker-base
     context: .
     dockerfile: docker/workers/Dockerfile
   restart: unless-stopped
-  networks: [ kbnet ]
-  security_opt: [ "no-new-privileges=true" ]
-  depends_on: [ postgres, redis, qdrant ]
-  env_file: [ .env ]
+  networks: [kbnet]
+  security_opt: ["no-new-privileges=true"]
+  depends_on: [postgres, redis, qdrant]
+  env_file: [.env]
   environment: &worker-env
     <<: *env
     POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -50,13 +50,21 @@ x-worker-base: &worker-base
     VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
     DISCORD_COLLECTOR_PORT: 8003
-  secrets: [ postgres_password, openai_key, anthropic_key, ssh_private_key, ssh_public_key, ssh_known_hosts ]
+  secrets:
+    [
+      postgres_password,
+      openai_key,
+      anthropic_key,
+      ssh_private_key,
+      ssh_public_key,
+      ssh_known_hosts,
+    ]
   read_only: true
-  tmpfs: 
+  tmpfs:
     - /tmp
     - /var/tmp
     - /home/kb/.ssh:uid=1000,gid=1000,mode=700
-  cap_drop: [ ALL ]
+  cap_drop: [ALL]
   volumes:
     - ./memory_files:/app/memory_files:rw
   logging:
@@ -70,21 +78,21 @@ services:
   postgres:
     image: postgres:15
     restart: unless-stopped
-    networks: [ kbnet ]
+    networks: [kbnet]
     environment:
       <<: *env
       POSTGRES_USER: kb
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: kb
-    secrets: [ postgres_password ]
+    secrets: [postgres_password]
     volumes:
       - db_data:/var/lib/postgresql/data:rw
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U kb" ]
+      test: ["CMD-SHELL", "pg_isready -U kb"]
       interval: 10s
       timeout: 5s
       retries: 5
-    security_opt: [ "no-new-privileges=true" ]
+    security_opt: ["no-new-privileges=true"]
     deploy:
       resources:
         limits:
@@ -112,18 +120,27 @@ services:
   redis:
     image: redis:7.2-alpine
     restart: unless-stopped
-    networks: [ kbnet ]
+    networks: [kbnet]
     # Enable AOF persistence for data durability
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD}"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        "--requirepass",
+        "${REDIS_PASSWORD}",
+      ]
     volumes:
       - redis_data:/data:rw
     healthcheck:
-      test: [ "CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping" ]
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
       interval: 15s
       timeout: 5s
       retries: 5
-    security_opt: [ "no-new-privileges=true" ]
-    cap_drop: [ ALL ]
+    security_opt: ["no-new-privileges=true"]
+    cap_drop: [ALL]
     user: redis
     deploy:
       resources:
@@ -137,7 +154,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.14.0
     restart: unless-stopped
-    networks: [ kbnet ]
+    networks: [kbnet]
     volumes:
       - qdrant_data:/qdrant/storage:rw
     tmpfs:
@@ -145,12 +162,18 @@ services:
       - /var/tmp
       - /qdrant/snapshots:rw
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && timeout 2 cat <&3 | grep -q ready"]
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && timeout 2 cat <&3 | grep -q ready",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
-    security_opt: [ "no-new-privileges=true" ]
-    cap_drop: [ ALL ]
+    security_opt: ["no-new-privileges=true"]
+    cap_drop: [ALL]
     deploy:
       resources:
         limits:
@@ -206,7 +229,7 @@ services:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,people,photo_embed,maintenance,notes,scheduler"
+      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,people,photos,maintenance,notes,scheduler"
 
   ingest-hub:
     <<: *worker-base
@@ -229,10 +252,10 @@ services:
 
   # ------------------------------------------------------------ database backups
   backup:
-    image: postgres:15  # Has pg_dump, wget, curl
+    image: postgres:15 # Has pg_dump, wget, curl
     networks: [kbnet]
     depends_on: [postgres, qdrant]
-    env_file: [ .env ]
+    env_file: [.env]
     environment:
       <<: *worker-env
     secrets: [postgres_password]
@@ -240,7 +263,7 @@ services:
       - ./tools/backup_databases.sh:/backup.sh:ro
     entrypoint: ["/bin/bash"]
     command: ["/backup.sh"]
-    profiles: [backup]  # Only start when explicitly called
+    profiles: [backup] # Only start when explicitly called
     security_opt: ["no-new-privileges=true"]
 
   # ------------------------------------------------------------ watchtower (auto-update)
