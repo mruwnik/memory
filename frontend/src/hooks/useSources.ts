@@ -339,6 +339,8 @@ export interface CalendarEvent {
   calendar_name: string | null
   recurrence_rule: string | null
   calendar_account_id: number | null
+  attendees: string[] | null
+  meeting_link: string | null
 }
 
 export const useSources = () => {

@@ -247,6 +247,28 @@ const Calendar = () => {
                   <span className="detail-value recurring-badge">Recurring event</span>
                 </div>
               )}
+
+              {selectedEvent.meeting_link && (
+                <div className="event-detail">
+                  <span className="detail-label">Meeting</span>
+                  <span className="detail-value">
+                    <a href={selectedEvent.meeting_link} target="_blank" rel="noopener noreferrer" className="meeting-link">
+                      Join Meeting
+                    </a>
+                  </span>
+                </div>
+              )}
+
+              {selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
+                <div className="event-detail">
+                  <span className="detail-label">Attendees</span>
+                  <span className="detail-value attendees-list">
+                    {selectedEvent.attendees.map((email, i) => (
+                      <span key={i} className="attendee">{email}</span>
+                    ))}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -403,6 +403,39 @@
   width: fit-content;
 }
 
+.meeting-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #1a73e8;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.meeting-link:hover {
+  background: #1557b0;
+  color: white;
+}
+
+.attendees-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.attendee {
+  background: #f0f0f0;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: #555;
+}
+
 @media (max-width: 768px) {
   .event-modal {
     max-width: 100%;

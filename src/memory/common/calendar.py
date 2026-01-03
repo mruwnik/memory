@@ -21,6 +21,8 @@ class EventDict(TypedDict):
     calendar_name: str | None
     recurrence_rule: str | None
     calendar_account_id: int | None
+    attendees: list[str] | None
+    meeting_link: str | None
 
 
 def expand_recurring_event(
@@ -68,6 +70,11 @@ def event_to_dict(
     st = start_time or event.start_time
     et = end_time or event.end_time
 
+    # Extract attendees and meeting_link from event_metadata
+    metadata = event.event_metadata or {}
+    attendees = metadata.get("attendees")
+    meeting_link = metadata.get("meeting_link")
+
     return EventDict(
         id=event.id,  # type: ignore
         event_title=event.event_title or "",  # type: ignore
@@ -78,6 +85,8 @@ def event_to_dict(
         calendar_name=event.calendar_name,  # type: ignore
         recurrence_rule=event.recurrence_rule,  # type: ignore
         calendar_account_id=event.calendar_account_id,  # type: ignore
+        attendees=attendees,
+        meeting_link=meeting_link,
     )
 
 
