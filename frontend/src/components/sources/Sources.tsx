@@ -96,8 +96,9 @@ const Sources = () => {
 // === Email Panel ===
 
 const EmailPanel = () => {
-  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount } = useSources()
+  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -107,14 +108,18 @@ const EmailPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listEmailAccounts()
-      setAccounts(data)
+      const [emailData, googleData] = await Promise.all([
+        listEmailAccounts(),
+        listGoogleAccounts()
+      ])
+      setAccounts(emailData)
+      setGoogleAccounts(googleData)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
     }
-  }, [listEmailAccounts])
+  }, [listEmailAccounts, listGoogleAccounts])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
@@ -178,11 +183,18 @@ const EmailPanel = () => {
               onSync={() => handleSync(account.id)}
             >
               <div className="source-details">
-                <span>Server: {account.imap_server}:{account.imap_port}</span>
-                {account.folders.length > 0 && (
+                {account.account_type === 'gmail' ? (
+                  <span>Type: Gmail (OAuth)</span>
+                ) : (
+                  <span>Server: {account.imap_server}:{account.imap_port}</span>
+                )}
+                {account.folders && account.folders.length > 0 && (
                   <span>Folders: {account.folders.join(', ')}</span>
                 )}
               </div>
+              {account.sync_error && (
+                <div className="sync-error-banner">{account.sync_error}</div>
+              )}
             </SourceCard>
           ))}
         </div>
@@ -190,6 +202,7 @@ const EmailPanel = () => {
 
       {showForm && (
         <EmailForm
+          googleAccounts={googleAccounts}
           onSubmit={handleCreate}
           onCancel={() => setShowForm(false)}
         />
@@ -198,6 +211,7 @@ const EmailPanel = () => {
       {editingAccount && (
         <EmailForm
           account={editingAccount}
+          googleAccounts={googleAccounts}
           onSubmit={handleUpdate}
           onCancel={() => setEditingAccount(null)}
         />
@@ -208,19 +222,22 @@ const EmailPanel = () => {
 
 interface EmailFormProps {
   account?: EmailAccount
+  googleAccounts: GoogleAccount[]
   onSubmit: (data: any) => Promise<void>
   onCancel: () => void
 }
 
-const EmailForm = ({ account, onSubmit, onCancel }: EmailFormProps) => {
+const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormProps) => {
   const [formData, setFormData] = useState({
     name: account?.name || '',
     email_address: account?.email_address || '',
+    account_type: account?.account_type || 'imap' as 'imap' | 'gmail',
     imap_server: account?.imap_server || '',
     imap_port: account?.imap_port || 993,
     username: account?.username || '',
     password: '',
     use_ssl: account?.use_ssl ?? true,
+    google_account_id: account?.google_account_id || undefined as number | undefined,
     folders: account?.folders || [],
     tags: account?.tags || [],
   })
@@ -232,10 +249,26 @@ const EmailForm = ({ account, onSubmit, onCancel }: EmailFormProps) => {
     setSubmitting(true)
     setError(null)
     try {
-      const data = { ...formData }
-      if (account && !data.password) {
-        delete (data as any).password
+      const data: any = {
+        name: formData.name,
+        email_address: formData.email_address,
+        account_type: formData.account_type,
+        folders: formData.folders,
+        tags: formData.tags,
       }
+
+      if (formData.account_type === 'imap') {
+        data.imap_server = formData.imap_server
+        data.imap_port = formData.imap_port
+        data.username = formData.username
+        data.use_ssl = formData.use_ssl
+        if (formData.password) {
+          data.password = formData.password
+        }
+      } else {
+        data.google_account_id = formData.google_account_id
+      }
+
       await onSubmit(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save')
@@ -260,68 +293,117 @@ const EmailForm = ({ account, onSubmit, onCancel }: EmailFormProps) => {
         </div>
 
         <div className="form-group">
-          <label>Email Address</label>
-          <input
-            type="email"
-            value={formData.email_address}
-            onChange={e => setFormData({ ...formData, email_address: e.target.value })}
-            required
+          <label>Account Type</label>
+          <select
+            value={formData.account_type}
+            onChange={e => setFormData({ ...formData, account_type: e.target.value as 'imap' | 'gmail' })}
             disabled={!!account}
-          />
+          >
+            <option value="imap">IMAP (Standard Email)</option>
+            <option value="gmail">Gmail (OAuth)</option>
+          </select>
         </div>
 
-        <div className="form-row">
+        {formData.account_type === 'imap' ? (
+          <>
+            <div className="form-group">
+              <label>Email Address</label>
+              <input
+                type="email"
+                value={formData.email_address}
+                onChange={e => setFormData({ ...formData, email_address: e.target.value })}
+                required
+                disabled={!!account}
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>IMAP Server</label>
+                <input
+                  type="text"
+                  value={formData.imap_server}
+                  onChange={e => setFormData({ ...formData, imap_server: e.target.value })}
+                  required
+                  placeholder="imap.example.com"
+                />
+              </div>
+              <div className="form-group">
+                <label>Port</label>
+                <input
+                  type="number"
+                  value={formData.imap_port}
+                  onChange={e => setFormData({ ...formData, imap_port: parseInt(e.target.value) })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Username</label>
+              <input
+                type="text"
+                value={formData.username}
+                onChange={e => setFormData({ ...formData, username: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Password {account && '(leave blank to keep current)'}</label>
+              <input
+                type="password"
+                value={formData.password}
+                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                required={!account}
+              />
+            </div>
+
+            <div className="form-group checkbox">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={formData.use_ssl}
+                  onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })}
+                />
+                Use SSL
+              </label>
+            </div>
+          </>
+        ) : (
           <div className="form-group">
-            <label>IMAP Server</label>
-            <input
-              type="text"
-              value={formData.imap_server}
-              onChange={e => setFormData({ ...formData, imap_server: e.target.value })}
-              required
-              placeholder="imap.gmail.com"
-            />
+            <label>Google Account</label>
+            {googleAccounts.length === 0 ? (
+              <p className="form-hint">
+                No Google accounts connected. Connect a Google account in the Google Drive tab first.
+              </p>
+            ) : (
+              <>
+                <select
+                  value={formData.google_account_id || ''}
+                  onChange={e => {
+                    const googleAccountId = parseInt(e.target.value) || undefined
+                    const googleAccount = googleAccounts.find(ga => ga.id === googleAccountId)
+                    setFormData({
+                      ...formData,
+                      google_account_id: googleAccountId,
+                      email_address: googleAccount?.email || formData.email_address,
+                    })
+                  }}
+                  required
+                >
+                  <option value="">Select a Google account...</option>
+                  {googleAccounts.map(ga => (
+                    <option key={ga.id} value={ga.id}>{ga.email}</option>
+                  ))}
+                </select>
+                <p className="form-hint">
+                  Gmail uses OAuth for secure access. The email address will be set automatically.
+                </p>
+              </>
+            )}
           </div>
-          <div className="form-group">
-            <label>Port</label>
-            <input
-              type="number"
-              value={formData.imap_port}
-              onChange={e => setFormData({ ...formData, imap_port: parseInt(e.target.value) })}
-              required
-            />
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>Username</label>
-          <input
-            type="text"
-            value={formData.username}
-            onChange={e => setFormData({ ...formData, username: e.target.value })}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Password {account && '(leave blank to keep current)'}</label>
-          <input
-            type="password"
-            value={formData.password}
-            onChange={e => setFormData({ ...formData, password: e.target.value })}
-            required={!account}
-          />
-        </div>
-
-        <div className="form-group checkbox">
-          <label>
-            <input
-              type="checkbox"
-              checked={formData.use_ssl}
-              onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })}
-            />
-            Use SSL
-          </label>
-        </div>
+        )}
 
         <div className="form-group">
           <label>Tags</label>
@@ -333,7 +415,7 @@ const EmailForm = ({ account, onSubmit, onCancel }: EmailFormProps) => {
 
         <div className="form-actions">
           <button type="button" className="cancel-btn" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="submit-btn" disabled={submitting}>
+          <button type="submit" className="submit-btn" disabled={submitting || (formData.account_type === 'gmail' && googleAccounts.length === 0)}>
             {submitting ? 'Saving...' : 'Save'}
           </button>
         </div>
@@ -975,7 +1057,7 @@ const GitHubRepoForm = ({ accountId, onSubmit, onCancel }: GitHubRepoFormProps) 
 
 const GoogleDrivePanel = () => {
   const {
-    listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount,
+    listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder,
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
@@ -1053,6 +1135,21 @@ const GoogleDrivePanel = () => {
   const handleDeleteAccount = async (id: number) => {
     await deleteGoogleAccount(id)
     loadData()
+  }
+
+  const handleReauthorize = async (id: number) => {
+    try {
+      const { authorization_url } = await reauthorizeGoogleAccount(id)
+      window.open(authorization_url, '_blank', 'width=600,height=700')
+      // Poll for updated account scopes
+      const interval = setInterval(async () => {
+        const newAccounts = await listGoogleAccounts()
+        setAccounts(newAccounts)
+      }, 2000)
+      setTimeout(() => clearInterval(interval), 60000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to re-authorize account')
+    }
   }
 
   const handleAddFolder = async (accountId: number, data: any) => {
@@ -1186,6 +1283,7 @@ const GoogleDrivePanel = () => {
                 </div>
                 <div className="source-card-actions-inline">
                   <StatusBadge active={account.active} />
+                  <button className="edit-btn" onClick={() => handleReauthorize(account.id)}>Re-authorize</button>
                   <button className="delete-btn" onClick={() => handleDeleteAccount(account.id)}>Disconnect</button>
                 </div>
               </div>

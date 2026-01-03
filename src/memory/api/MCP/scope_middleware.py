@@ -14,7 +14,6 @@ import logging
 from collections.abc import Callable
 
 import mcp.types as mt
-from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool, ToolResult
 
@@ -63,8 +62,7 @@ class ScopeMiddleware(Middleware):
         ]
 
         logger.debug(
-            f"Filtered tools: {len(filtered)}/{len(tools)} "
-            f"(user scopes: {user_scopes})"
+            f"Filtered tools: {len(filtered)}/{len(tools)} (user scopes: {user_scopes})"
         )
         return filtered
 

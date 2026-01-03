@@ -696,3 +696,47 @@ def disconnect_account(
     db.commit()
 
     return {"status": "disconnected"}
+
+
+@router.post("/accounts/{account_id}/reauthorize")
+def reauthorize_account(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Re-authorize a Google account to get updated scopes.
+
+    Use this when you need to add new permissions (e.g., Gmail access)
+    to an existing Google account without disconnecting it.
+    """
+    account = db.get(GoogleAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    oauth_config = get_oauth_config(db)
+
+    from google_auth_oauthlib.flow import Flow
+
+    redirect_uri = (
+        oauth_config.redirect_uris[0]
+        if oauth_config.redirect_uris
+        else settings.GOOGLE_REDIRECT_URI
+    )
+
+    flow = Flow.from_client_config(
+        oauth_config.to_client_config(),
+        scopes=settings.GOOGLE_SCOPES,
+        redirect_uri=redirect_uri,
+    )
+
+    state = GoogleOAuthState.create(user.id)
+
+    authorization_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        state=state,
+        prompt="consent",  # Force consent to get all scopes
+        login_hint=account.email,  # Pre-select the account
+    )
+
+    return {"authorization_url": authorization_url}

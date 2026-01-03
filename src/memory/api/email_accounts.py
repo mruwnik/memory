@@ -1,14 +1,14 @@
 """API endpoints for Email Account management."""
 
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, model_validator
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
-from memory.common.db.models.sources import EmailAccount
+from memory.common.db.models.sources import EmailAccount, GoogleAccount
 from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
@@ -17,56 +17,106 @@ router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
 class EmailAccountCreate(BaseModel):
     name: str
     email_address: EmailStr
-    imap_server: str
+    account_type: Literal["imap", "gmail"] = "imap"
+    # IMAP fields (required for IMAP, not used for Gmail)
+    imap_server: str | None = None
     imap_port: int = 993
-    username: str
-    password: str
+    username: str | None = None
+    password: str | None = None
     use_ssl: bool = True
+    # Gmail fields
+    google_account_id: int | None = None
+    # Common fields
     folders: list[str] = []
     tags: list[str] = []
+
+    @model_validator(mode="after")
+    def validate_account_type_fields(self):
+        if self.account_type == "imap":
+            if not self.imap_server:
+                raise ValueError("imap_server is required for IMAP accounts")
+            if not self.username:
+                raise ValueError("username is required for IMAP accounts")
+            if not self.password:
+                raise ValueError("password is required for IMAP accounts")
+        elif self.account_type == "gmail":
+            if not self.google_account_id:
+                raise ValueError("google_account_id is required for Gmail accounts")
+        return self
 
 
 class EmailAccountUpdate(BaseModel):
     name: str | None = None
+    # IMAP fields
     imap_server: str | None = None
     imap_port: int | None = None
     username: str | None = None
     password: str | None = None
     use_ssl: bool | None = None
+    # Gmail fields
+    google_account_id: int | None = None
+    # Common fields
     folders: list[str] | None = None
     tags: list[str] | None = None
     active: bool | None = None
+
+
+class GoogleAccountInfo(BaseModel):
+    id: int
+    name: str
+    email: str
 
 
 class EmailAccountResponse(BaseModel):
     id: int
     name: str
     email_address: str
-    imap_server: str
-    imap_port: int
-    username: str
-    use_ssl: bool
+    account_type: str
+    # IMAP fields (nullable for Gmail accounts)
+    imap_server: str | None
+    imap_port: int | None
+    username: str | None
+    use_ssl: bool | None
+    # Gmail fields
+    google_account_id: int | None
+    google_account: GoogleAccountInfo | None
+    # Common fields
     folders: list[str]
     tags: list[str]
     last_sync_at: str | None
+    sync_error: str | None
     active: bool
     created_at: str
     updated_at: str
 
 
-def account_to_response(account: EmailAccount) -> EmailAccountResponse:
+def account_to_response(account: EmailAccount, db: Session | None = None) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
+    google_account_info = None
+    if account.google_account_id and db:
+        ga = db.get(GoogleAccount, account.google_account_id)
+        if ga:
+            google_account_info = GoogleAccountInfo(
+                id=cast(int, ga.id),
+                name=cast(str, ga.name),
+                email=cast(str, ga.email),
+            )
+
     return EmailAccountResponse(
         id=cast(int, account.id),
         name=cast(str, account.name),
         email_address=cast(str, account.email_address),
-        imap_server=cast(str, account.imap_server),
-        imap_port=cast(int, account.imap_port),
-        username=cast(str, account.username),
-        use_ssl=cast(bool, account.use_ssl),
+        account_type=cast(str, account.account_type) or "imap",
+        imap_server=account.imap_server,
+        imap_port=account.imap_port,
+        username=account.username,
+        use_ssl=account.use_ssl,
+        google_account_id=account.google_account_id,
+        google_account=google_account_info,
         folders=list(account.folders or []),
         tags=list(account.tags or []),
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
+        sync_error=account.sync_error,
         active=cast(bool, account.active),
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
@@ -80,7 +130,7 @@ def list_accounts(
 ) -> list[EmailAccountResponse]:
     """List all email accounts."""
     accounts = db.query(EmailAccount).all()
-    return [account_to_response(account) for account in accounts]
+    return [account_to_response(account, db) for account in accounts]
 
 
 @router.post("")
@@ -99,14 +149,22 @@ def create_account(
     if existing:
         raise HTTPException(status_code=400, detail="Email account already exists")
 
+    # For Gmail accounts, verify the Google account exists
+    if data.account_type == "gmail" and data.google_account_id:
+        google_account = db.get(GoogleAccount, data.google_account_id)
+        if not google_account:
+            raise HTTPException(status_code=400, detail="Google account not found")
+
     account = EmailAccount(
         name=data.name,
         email_address=data.email_address,
+        account_type=data.account_type,
         imap_server=data.imap_server,
-        imap_port=data.imap_port,
+        imap_port=data.imap_port if data.account_type == "imap" else None,
         username=data.username,
         password=data.password,
-        use_ssl=data.use_ssl,
+        use_ssl=data.use_ssl if data.account_type == "imap" else None,
+        google_account_id=data.google_account_id,
         folders=data.folders,
         tags=data.tags,
     )
@@ -114,7 +172,7 @@ def create_account(
     db.commit()
     db.refresh(account)
 
-    return account_to_response(account)
+    return account_to_response(account, db)
 
 
 @router.get("/{account_id}")
@@ -127,7 +185,7 @@ def get_account(
     account = db.get(EmailAccount, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    return account_to_response(account)
+    return account_to_response(account, db)
 
 
 @router.patch("/{account_id}")
@@ -154,6 +212,8 @@ def update_account(
         account.password = updates.password
     if updates.use_ssl is not None:
         account.use_ssl = updates.use_ssl
+    if updates.google_account_id is not None:
+        account.google_account_id = updates.google_account_id
     if updates.folders is not None:
         account.folders = updates.folders
     if updates.tags is not None:
@@ -164,7 +224,7 @@ def update_account(
     db.commit()
     db.refresh(account)
 
-    return account_to_response(account)
+    return account_to_response(account, db)
 
 
 @router.delete("/{account_id}")

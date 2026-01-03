@@ -6,13 +6,20 @@ export interface EmailAccount {
   id: number
   name: string
   email_address: string
-  imap_server: string
-  imap_port: number
-  username: string
-  use_ssl: boolean
+  account_type: 'imap' | 'gmail'
+  // IMAP fields (nullable for Gmail accounts)
+  imap_server: string | null
+  imap_port: number | null
+  username: string | null
+  use_ssl: boolean | null
+  // Gmail fields
+  google_account_id: number | null
+  google_account?: { id: number; name: string; email: string } | null
+  // Common fields
   folders: string[]
   tags: string[]
   last_sync_at: string | null
+  sync_error: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -21,22 +28,32 @@ export interface EmailAccount {
 export interface EmailAccountCreate {
   name: string
   email_address: string
-  imap_server: string
+  account_type?: 'imap' | 'gmail'
+  // IMAP fields
+  imap_server?: string
   imap_port?: number
-  username: string
-  password: string
+  username?: string
+  password?: string
   use_ssl?: boolean
+  // Gmail fields
+  google_account_id?: number
+  // Common fields
   folders?: string[]
   tags?: string[]
 }
 
 export interface EmailAccountUpdate {
   name?: string
+  account_type?: 'imap' | 'gmail'
+  // IMAP fields
   imap_server?: string
   imap_port?: number
   username?: string
   password?: string
   use_ssl?: boolean
+  // Gmail fields
+  google_account_id?: number
+  // Common fields
   folders?: string[]
   tags?: string[]
   active?: boolean
@@ -545,6 +562,12 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete Google account')
   }, [apiCall])
 
+  const reauthorizeGoogleAccount = useCallback(async (id: number): Promise<{ authorization_url: string }> => {
+    const response = await apiCall(`/google-drive/accounts/${id}/reauthorize`, { method: 'POST' })
+    if (!response.ok) throw new Error('Failed to get reauthorization URL')
+    return response.json()
+  }, [apiCall])
+
   const browseGoogleDrive = useCallback(async (
     accountId: number,
     folderId: string = 'root',
@@ -776,6 +799,7 @@ export const useSources = () => {
     listGoogleAccounts,
     getGoogleAuthUrl,
     deleteGoogleAccount,
+    reauthorizeGoogleAccount,
     browseGoogleDrive,
     addGoogleFolder,
     updateGoogleFolder,

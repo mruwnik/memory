@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 # MIME types we support
 SUPPORTED_GOOGLE_MIMES = {
     "application/vnd.google-apps.document",  # Google Docs
+    "application/vnd.google-apps.spreadsheet",  # Google Sheets
+    "application/vnd.google-apps.presentation",  # Google Slides
+    "application/vnd.google-apps.drawing",  # Google Drawings
 }
 
 SUPPORTED_FILE_MIMES = {
@@ -27,8 +30,12 @@ SUPPORTED_FILE_MIMES = {
 }
 
 # Export mappings for Google native formats
+# These formats can't be downloaded directly - must use export
 EXPORT_MIMES = {
     "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+    "application/vnd.google-apps.presentation": "text/plain",
+    "application/vnd.google-apps.drawing": "application/pdf",
 }
 
 
@@ -263,14 +270,18 @@ class GoogleDriveClient:
         # Download/export content
         content_bytes = self.export_file(file_id, mime_type)
 
-        # Handle encoding
+        # Determine the actual format we got (for Google native types, it's the export format)
+        exported_mime = EXPORT_MIMES.get(mime_type, mime_type)
+
+        # Handle encoding for text formats
         try:
             content = content_bytes.decode("utf-8")
         except UnicodeDecodeError:
             content = content_bytes.decode("latin-1")
 
         # For PDFs and Word docs, we need to extract text
-        if mime_type == "application/pdf":
+        # Check both original and exported MIME types
+        if mime_type == "application/pdf" or exported_mime == "application/pdf":
             content = self._extract_pdf_text(content_bytes)
         elif mime_type in (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

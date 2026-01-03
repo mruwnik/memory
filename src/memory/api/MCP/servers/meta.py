@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_type_hints
+from typing import Annotated, Literal, get_args, get_type_hints, TypedDict, NotRequired
 
 import aiohttp
 from fastmcp import FastMCP

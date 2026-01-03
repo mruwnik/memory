@@ -23,7 +23,6 @@ from memory.common.db.models.users import (
     OAuthRefreshToken,
     OAuthState,
     User,
-    BotUser,
     UserSession,
 )
 from memory.common.db.models.users import (
@@ -110,9 +109,11 @@ def make_token(
     auth_state: TokenBase,
     scopes: list[str],
 ) -> OAuthToken:
+    # Only set oauth_state_id if this is an OAuthState (not a refresh token)
+    oauth_state_id = auth_state.id if isinstance(auth_state, OAuthState) else None
     new_session = UserSession(
         user_id=auth_state.user_id,
-        oauth_state_id=auth_state.id,
+        oauth_state_id=oauth_state_id,
         expires_at=create_expiration(ACCESS_TOKEN_LIFETIME),
     )
 
@@ -160,16 +161,18 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
-                # Sessions created via OAuth have oauth_state
-                # Sessions created via direct login (frontend) don't
-                if user_session.oauth_state:
-                    client_id = user_session.oauth_state.client_id
-                    scopes = user_session.oauth_state.scopes
-                else:
-                    # Fall back to user's configured scopes
-                    client_id = "frontend"
-                    scopes = user_session.user.scopes if user_session.user else ["read"]
+                # User's configured scopes define which MCP tools they can access
+                user_scopes = user_session.user.scopes if user_session.user else []
+                # Also include OAuth scopes (read, write) for FastMCP endpoint auth
+                scopes = list(set(user_scopes or []) | {"read", "write"})
 
+                # Get client_id from oauth_state if available
+                if user_session.oauth_state_id and user_session.oauth_state:
+                    client_id = user_session.oauth_state.client_id
+                else:
+                    client_id = "frontend"
+
+                logger.info(f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}")
                 return FastMCPAccessToken(
                     token=token,
                     client_id=client_id,

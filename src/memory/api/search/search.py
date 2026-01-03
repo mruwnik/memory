@@ -116,14 +116,18 @@ def apply_source_boosts(
     # Single query to fetch all source metadata
     with make_session() as db:
         sources = db.query(SourceItem).filter(SourceItem.id.in_(source_ids)).all()
-        source_map = {
-            s.id: {
-                "title": (getattr(s, "title", None) or "").lower(),
+        source_map = {}
+        for s in sources:
+            try:
+                title = (getattr(s, "title", None) or "").lower()
+            except Exception:
+                # Some subclasses have deferred title columns that may fail to load
+                title = ""
+            source_map[s.id] = {
+                "title": title,
                 "popularity": s.popularity,
                 "inserted_at": s.inserted_at,
             }
-            for s in sources
-        }
 
     for chunk in chunks:
         source_data = source_map.get(chunk.source_id, {})
@@ -363,7 +367,11 @@ def _fetch_chunks_by_title(
         # Filter sources whose titles match any of the recalled titles
         matching_source_ids = []
         for source in sources:
-            title = getattr(source, "title", None)
+            try:
+                title = getattr(source, "title", None)
+            except Exception:
+                # Polymorphic subclass attributes may fail to load with deferred loading
+                title = None
             if title:
                 title_lower = title.lower()
                 for recalled in titles_lower:

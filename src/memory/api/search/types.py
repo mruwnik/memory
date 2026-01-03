@@ -1,6 +1,6 @@
 from datetime import datetime
 import logging
-from typing import Optional, TypedDict, NotRequired, cast
+from typing import Optional, cast, TypedDict, NotRequired
 
 from pydantic import BaseModel
 
@@ -37,17 +37,19 @@ class SearchResult(BaseModel):
     def from_source_item(
         cls, source: SourceItem, chunks: list[Chunk], previews: Optional[bool] = False
     ) -> "SearchResult":
-        metadata = source.display_contents or {}
-        metadata.pop("content", None)
+        try:
+            metadata = source.display_contents or {}
+            metadata.pop("content", None)
+        except Exception:
+            # Polymorphic subclass attributes may fail to load with deferred loading
+            metadata = {"modality": source.modality}
         chunk_size = settings.DEFAULT_CHUNK_TOKENS * 4
 
         # Use max chunk score - we want to find documents with at least one
         # highly relevant section, not penalize long documents with some irrelevant parts.
         # This is better for "half-remembered" searches where users recall one specific detail.
         search_score = (
-            max((chunk.relevance_score for chunk in chunks), default=0)
-            if chunks
-            else 0
+            max((chunk.relevance_score for chunk in chunks), default=0) if chunks else 0
         )
 
         return cls(
