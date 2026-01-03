@@ -72,10 +72,34 @@ class SearchResult(BaseModel):
 
 
 class SearchFilters(TypedDict):
+    # Size filters
     min_size: NotRequired[int]
     max_size: NotRequired[int]
-    min_confidences: NotRequired[dict[str, float]]
+
+    # Date range filters
+    min_created_at: NotRequired[str]
+    max_created_at: NotRequired[str]
+    min_sent_at: NotRequired[str]
+    max_sent_at: NotRequired[str]
+    min_published: NotRequired[str]
+    max_published: NotRequired[str]
+
+    # List filters (match any)
+    tags: NotRequired[list[str]]
+    recipients: NotRequired[list[str]]
+    authors: NotRequired[list[str]]
     observation_types: NotRequired[list[str] | None]
+
+    # String match filters (exact match)
+    folder_path: NotRequired[str]
+    sender: NotRequired[str]
+    domain: NotRequired[str]
+    author: NotRequired[str]
+
+    # Confidence filters
+    min_confidences: NotRequired[dict[str, float]]
+
+    # ID filters
     source_ids: NotRequired[list[int] | None]
 
 

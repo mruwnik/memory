@@ -108,11 +108,17 @@ def merge_filters(
         "min_created_at",
         "max_created_at",
     ]
+    # String match filters - exact match on metadata fields
+    string_filters = ["folder_path", "sender", "domain", "author"]
+
     if key in list_filters:
         filters.append({"key": key, "match": {"any": val}})
 
     elif key in range_filters:
         return merge_range_filter(filters, key, val)
+
+    elif key in string_filters:
+        filters.append({"key": key, "match": {"value": val}})
 
     elif key == "min_confidences":
         confidence_filters = [
@@ -125,7 +131,7 @@ def merge_filters(
         filters.extend(confidence_filters)
 
     elif key == "source_ids":
-        filters.append({"key": "id", "match": {"any": val}})
+        filters.append({"key": "source_id", "match": {"any": val}})
 
     else:
         # Log and ignore unknown filter keys to prevent injection

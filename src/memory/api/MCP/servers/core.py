@@ -21,7 +21,14 @@ from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
 from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentObservation, SourceItem
+from memory.common.db.models import (
+    AgentObservation,
+    BlogPost,
+    EmailAttachment,
+    GoogleDoc,
+    MailMessage,
+    SourceItem,
+)
 from memory.common.formatters import observation
 
 logger = logging.getLogger(__name__)
@@ -116,12 +123,22 @@ async def search_knowledge_base(
         previews: Whether to include the actual content in the results (up to MAX_PREVIEW_LENGTH characters)
         use_scores: Whether to score the results with an LLM before returning - better results but slower
         filters: Optional dictionary with:
-            - tags: a list of tags to filter by
+            - tags: a list of tags to filter by (e.g., ["gdrive"] for Google Drive docs, ["email"] for email attachments)
             - source_ids: a list of source ids to filter by
             - min_size: the minimum size of the content to filter by
             - max_size: the maximum size of the content to filter by
             - min_created_at: the minimum created_at date to filter by
             - max_created_at: the maximum created_at date to filter by
+            - min_sent_at: minimum email sent date (for emails)
+            - max_sent_at: maximum email sent date (for emails)
+            - min_published: minimum publication date (for blogs/forums)
+            - max_published: maximum publication date (for blogs/forums)
+            - folder_path: exact match on Google Drive folder path
+            - sender: exact match on email sender address
+            - domain: exact match on blog/webpage domain
+            - author: exact match on author name
+            - recipients: list of email recipients to match (any)
+            - authors: list of authors to match (any)
 
     Returns: List of search results with id, score, chunks, content, filename
     Higher scores (>0.7) indicate strong matches.
@@ -512,6 +529,18 @@ async def list_items(
             query = query.filter(SourceItem.size <= max_size)
         if source_ids := filters.get("source_ids"):
             query = query.filter(SourceItem.id.in_(source_ids))
+
+        # Metadata filters - require joining specific tables
+        if folder_path := filters.get("folder_path"):
+            query = query.join(GoogleDoc).filter(
+                GoogleDoc.folder_path.ilike(f"%{folder_path}%")
+            )
+        if sender := filters.get("sender"):
+            query = query.join(EmailAttachment).join(
+                MailMessage, EmailAttachment.mail_message_id == MailMessage.id
+            ).filter(MailMessage.sender == sender)
+        if domain := filters.get("domain"):
+            query = query.join(BlogPost).filter(BlogPost.domain == domain)
 
         # Get total count
         total = query.count()

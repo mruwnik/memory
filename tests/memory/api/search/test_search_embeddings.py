@@ -92,10 +92,27 @@ def test_merge_filters_min_confidences():
 
 
 def test_merge_filters_source_ids():
-    """Test source_ids filter maps to id field"""
+    """Test source_ids filter maps to source_id field in payload"""
     filters = []
     result = merge_filters(filters, "source_ids", ["id1", "id2"])
-    expected = [{"key": "id", "match": {"any": ["id1", "id2"]}}]
+    expected = [{"key": "source_id", "match": {"any": ["id1", "id2"]}}]
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "filter_key,filter_value",
+    [
+        ("folder_path", "My Drive/EquiStamp"),
+        ("sender", "user@example.com"),
+        ("domain", "example.com"),
+        ("author", "John Doe"),
+    ],
+)
+def test_merge_filters_string_filters(filter_key, filter_value):
+    """Test string filters create exact match conditions"""
+    filters = []
+    result = merge_filters(filters, filter_key, filter_value)
+    expected = [{"key": filter_key, "match": {"value": filter_value}}]
     assert result == expected
 
 

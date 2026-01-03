@@ -95,6 +95,11 @@ def _create_google_doc(
     """Create a GoogleDoc from parsed file data."""
     folder_tags = cast(list[str], folder.tags) or []
 
+    # Auto-add source and folder tags for filtering
+    auto_tags = ["gdrive"]
+    if folder_name := cast(str | None, folder.folder_name):
+        auto_tags.append(folder_name)
+
     return GoogleDoc(
         modality="doc",
         sha256=create_content_hash(file_data["content"]),
@@ -110,7 +115,7 @@ def _create_google_doc(
         google_modified_at=file_data["modified_at"],
         word_count=file_data["word_count"],
         content_hash=file_data["content_hash"],
-        tags=folder_tags,
+        tags=auto_tags + folder_tags,
         size=file_data["size"],
         mime_type=file_data["mime_type"],
     )
