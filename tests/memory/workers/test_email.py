@@ -16,12 +16,15 @@ from memory.common.db.models import (
 from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     create_mail_message,
+    delete_email_vectors,
     extract_email_uid,
     fetch_email,
     fetch_email_since,
+    get_folder_uids,
     process_attachment,
     process_attachments,
     process_folder,
+    should_delete_email,
     vectorize_email,
 )
 
@@ -439,3 +442,111 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
     assert cast(str, mail_message.embed_status) == "STORED"
     assert cast(str, attachment1.embed_status) == "STORED"
     assert cast(str, attachment2.embed_status) == "STORED"
+
+
+def test_get_folder_uids(email_provider):
+    """Test getting all UIDs from a folder."""
+    # Get UIDs from INBOX
+    uids = get_folder_uids(email_provider, "INBOX")
+
+    # Should return UIDs from mock email provider
+    assert isinstance(uids, set)
+    assert len(uids) == 2
+    assert "101" in uids
+    assert "102" in uids
+
+
+def test_get_folder_uids_empty_folder(email_provider):
+    """Test getting UIDs from an empty folder."""
+    email_provider.search = MagicMock(return_value=("OK", [b""]))
+
+    uids = get_folder_uids(email_provider, "Empty")
+
+    assert uids == set()
+
+
+def test_get_folder_uids_error(email_provider):
+    """Test getting UIDs when folder selection fails."""
+    email_provider.select = MagicMock(return_value=("NO", [b"Error"]))
+
+    uids = get_folder_uids(email_provider, "NonExistent")
+
+    assert uids == set()
+
+
+def test_should_delete_email():
+    """Test the should_delete_email function."""
+    mail_message = MailMessage(
+        id=1,
+        message_id="<test@example.com>",
+        sender="sender@example.com",
+        folder="INBOX",
+    )
+
+    # Currently always returns True
+    assert should_delete_email(mail_message) is True
+
+
+def test_delete_email_vectors(db_session, qdrant, mock_uuid4):
+    """Test deleting vectors for an email."""
+    mail_message = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<test-delete@example.com>",
+        subject="Test Delete",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="This is a test email for deletion",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(mail_message)
+    db_session.flush()
+
+    # First vectorize the email
+    with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
+        vectorize_email(mail_message)
+
+    assert len(mail_message.chunks) == 1
+    chunk_id = mail_message.chunks[0].id
+
+    # Now delete the vectors
+    delete_email_vectors(mail_message)
+
+    # The function should complete without error
+    # (vectors are deleted from qdrant)
+
+
+def test_create_mail_message_with_account(db_session):
+    """Test creating a mail message with account_id and imap_uid."""
+    raw_email = (
+        "From: sender@example.com\n"
+        "To: recipient@example.com\n"
+        "Subject: Test Subject\n"
+        "Date: Sun, 1 Jan 2023 12:00:00 +0000\n"
+        "Message-ID: test-with-account\n"
+        "MIME-Version: 1.0\n"
+        "Content-Type: text/plain\n"
+        "\n"
+        "Test body content\n"
+    )
+    folder = "INBOX"
+    parsed_email = parse_email_message(raw_email, "test-with-account")
+
+    # Create with account_id and imap_uid
+    mail_message = create_mail_message(
+        db_session=db_session,
+        folder=folder,
+        tags=["test"],
+        parsed_email=parsed_email,
+        email_account_id=123,
+        imap_uid="456",
+    )
+    db_session.commit()
+
+    # Verify the new fields
+    assert mail_message.email_account_id == 123
+    assert mail_message.imap_uid == "456"

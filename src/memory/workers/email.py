@@ -93,15 +93,19 @@ def create_mail_message(
     tags: list[str],
     folder: str,
     parsed_email: EmailMessage,
+    email_account_id: int | None = None,
+    imap_uid: str | None = None,
 ) -> MailMessage:
     """
     Create a new mail message record and associated attachments.
 
     Args:
         db_session: Database session
-        source_id: ID of the SourceItem
-        parsed_email: Parsed email data
+        tags: Tags to apply to the message
         folder: IMAP folder name
+        parsed_email: Parsed email data
+        email_account_id: ID of the EmailAccount this message belongs to
+        imap_uid: IMAP UID for deletion tracking
 
     Returns:
         Newly created MailMessage
@@ -121,6 +125,8 @@ def create_mail_message(
         sent_at=parsed_email["sent_at"],
         content=raw_email,
         folder=folder,
+        email_account_id=email_account_id,
+        imap_uid=imap_uid,
     )
 
     db_session.add(mail_message)
@@ -312,3 +318,140 @@ def vectorize_email(email: MailMessage):
         attachment.embed_status = "STORED"
 
     logger.info(f"Stored embedding for message {email.message_id}")
+
+
+def get_folder_uids(conn: imaplib.IMAP4_SSL, folder: str) -> set[str]:
+    """
+    Get all message UIDs in a folder.
+
+    Args:
+        conn: IMAP connection
+        folder: Folder name to get UIDs from
+
+    Returns:
+        Set of UID strings
+    """
+    try:
+        status, _ = conn.select(folder)
+        if status != "OK":
+            logger.error(f"Error selecting folder {folder}")
+            return set()
+
+        status, data = conn.search(None, "ALL")
+        if status != "OK" or not data or not data[0]:
+            return set()
+
+        return {uid.decode() for uid in data[0].split()}
+    except Exception as e:
+        logger.error(f"Error getting UIDs from folder {folder}: {str(e)}")
+        return set()
+
+
+def should_delete_email(email: MailMessage) -> bool:
+    """
+    Determine if an email should be deleted when it's no longer on the server.
+
+    This function can be customized to preserve certain emails based on:
+    - Sender (keep emails from important contacts)
+    - Age (keep emails older than X days)
+    - Attachments (keep emails with attachments)
+    - Tags (keep emails with certain tags)
+    - etc.
+
+    Args:
+        email: The MailMessage to check
+
+    Returns:
+        True if the email should be deleted, False to keep it
+    """
+    # For now, always delete. Customize this function as needed.
+    return True
+
+
+def delete_email_vectors(email: MailMessage) -> None:
+    """
+    Delete vectors for an email and its attachments from Qdrant.
+
+    Args:
+        email: The MailMessage whose vectors should be deleted
+    """
+    qdrant_client = qdrant.get_qdrant_client()
+
+    # Delete email chunks
+    if email.chunks:
+        chunk_ids = [cast(str, c.id) for c in email.chunks]
+        try:
+            qdrant.delete_points(
+                client=qdrant_client,
+                collection_name=cast(str, email.modality),
+                ids=chunk_ids,
+            )
+        except Exception as e:
+            logger.warning(f"Error deleting email vectors: {e}")
+
+    # Delete attachment chunks
+    for attachment in email.attachments:
+        if attachment.chunks:
+            chunk_ids = [cast(str, c.id) for c in attachment.chunks]
+            try:
+                qdrant.delete_points(
+                    client=qdrant_client,
+                    collection_name=cast(str, attachment.modality),
+                    ids=chunk_ids,
+                )
+            except Exception as e:
+                logger.warning(f"Error deleting attachment vectors: {e}")
+
+
+def delete_removed_emails(
+    conn: imaplib.IMAP4_SSL,
+    db_session: Session | scoped_session,
+    account_id: int,
+    folder: str,
+) -> int:
+    """
+    Delete emails from the database that are no longer on the IMAP server.
+
+    Compares UIDs on the server with UIDs in the database for the given
+    account and folder, and deletes any emails that are no longer present
+    on the server.
+
+    Args:
+        conn: IMAP connection
+        db_session: Database session
+        account_id: ID of the EmailAccount
+        folder: IMAP folder to check
+
+    Returns:
+        Number of emails deleted
+    """
+    from memory.common.db.models import MailMessage
+
+    server_uids = get_folder_uids(conn, folder)
+    if not server_uids:
+        return 0
+
+    # Get emails in DB for this account+folder that have imap_uid set
+    db_emails = (
+        db_session.query(MailMessage)
+        .filter(
+            MailMessage.email_account_id == account_id,
+            MailMessage.folder == folder,
+            MailMessage.imap_uid.isnot(None),
+        )
+        .all()
+    )
+
+    deleted_count = 0
+    for email in db_emails:
+        if email.imap_uid not in server_uids:
+            if should_delete_email(email):
+                logger.info(
+                    f"Deleting email {email.message_id} "
+                    f"(UID {email.imap_uid}) - no longer on server"
+                )
+                delete_email_vectors(email)
+                db_session.delete(email)
+                deleted_count += 1
+
+    return deleted_count

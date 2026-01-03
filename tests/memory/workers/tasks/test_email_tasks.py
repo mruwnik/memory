@@ -179,3 +179,22 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
     assert message_count_before == message_count_after, (
         "No new MailMessage should be created"
     )
+
+
+def test_process_message_stores_account_and_uid(db_session, test_email_account, qdrant):
+    """Test that process_message stores account_id and imap_uid."""
+    res = process_message(
+        account_id=test_email_account.id,
+        message_id="12345",  # This is the IMAP UID
+        folder="INBOX",
+        raw_email=SIMPLE_EMAIL_RAW,
+    )
+
+    mail_message_id = res["mail_message_id"]
+    mail_message = (
+        db_session.query(MailMessage).filter(MailMessage.id == mail_message_id).one()
+    )
+
+    # Verify the new sync tracking fields are stored
+    assert mail_message.email_account_id == test_email_account.id
+    assert mail_message.imap_uid == "12345"

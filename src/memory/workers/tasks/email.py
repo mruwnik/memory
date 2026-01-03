@@ -9,6 +9,7 @@ from memory.common.db.models import EmailAccount, MailMessage
 from memory.common.celery_app import app, PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS
 from memory.workers.email import (
     create_mail_message,
+    delete_removed_emails,
     imap_connection,
     process_folder,
     vectorize_email,
@@ -60,7 +61,14 @@ def process_message(
             ):
                 return {"status": "already_exists", "message_id": message_id}
 
-            mail_message = create_mail_message(db, account.tags, folder, parsed_email)
+            mail_message = create_mail_message(
+                db,
+                account.tags,
+                folder,
+                parsed_email,
+                email_account_id=account_id,
+                imap_uid=message_id,
+            )
 
             db.flush()
             vectorize_email(mail_message)
@@ -132,6 +140,8 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 return None
             return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
 
+        deleted_messages = 0
+
         try:
             with imap_connection(account) as conn:
                 for folder in folders_to_process:
@@ -142,6 +152,11 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                     messages_found += folder_stats["messages_found"]
                     new_messages += folder_stats["new_messages"]
                     errors += folder_stats["errors"]
+
+                    # Delete emails that are no longer on the server
+                    deleted_messages += delete_removed_emails(
+                        conn, db, account_id, folder
+                    )
 
                 account.last_sync_at = datetime.now()  # type: ignore
                 db.commit()
@@ -156,6 +171,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
             "folders_processed": len(folders_to_process),
             "messages_found": messages_found,
             "new_messages": new_messages,
+            "deleted_messages": deleted_messages,
             "errors": errors,
         }
 
