@@ -141,8 +141,6 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 return None
             return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
 
-        deleted_messages = 0
-
         try:
             with imap_connection(account) as conn:
                 for folder in folders_to_process:
