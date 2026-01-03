@@ -425,33 +425,31 @@ def delete_removed_emails(
     Returns:
         Number of emails deleted
     """
-    from memory.common.db.models import MailMessage
-
     server_uids = get_folder_uids(conn, folder)
     if not server_uids:
         return 0
 
-    # Get emails in DB for this account+folder that have imap_uid set
+    # Get emails in DB that are no longer on the server
     db_emails = (
         db_session.query(MailMessage)
         .filter(
             MailMessage.email_account_id == account_id,
             MailMessage.folder == folder,
             MailMessage.imap_uid.isnot(None),
+            MailMessage.imap_uid.notin_(server_uids),
         )
         .all()
     )
 
     deleted_count = 0
     for email in db_emails:
-        if email.imap_uid not in server_uids:
-            if should_delete_email(email):
-                logger.info(
-                    f"Deleting email {email.message_id} "
-                    f"(UID {email.imap_uid}) - no longer on server"
-                )
-                delete_email_vectors(email)
-                db_session.delete(email)
-                deleted_count += 1
+        if should_delete_email(email):
+            logger.info(
+                f"Deleting email {email.message_id} "
+                f"(UID {email.imap_uid}) - no longer on server"
+            )
+            delete_email_vectors(email)
+            db_session.delete(email)
+            deleted_count += 1
 
     return deleted_count

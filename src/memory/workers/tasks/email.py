@@ -129,6 +129,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
         messages_found = 0
         new_messages = 0
         errors = 0
+        deleted_messages = 0
 
         def process_message_wrapper(
             account_id: int, message_id: str, folder: str, raw_email: str
