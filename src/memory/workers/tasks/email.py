@@ -1,20 +1,25 @@
 import logging
 from datetime import datetime
-from typing import cast
+from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
+from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
 from memory.common.db.connection import make_session
 from memory.common.db.models import EmailAccount, MailMessage
-from memory.common.celery_app import app, PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS
+from memory.parsers.email import parse_email_message
 from memory.workers.email import (
     create_mail_message,
+    delete_emails,
     delete_removed_emails,
+    fetch_gmail_messages_by_ids,
+    find_removed_emails,
+    get_gmail_message_ids,
     imap_connection,
     process_folder,
     vectorize_email,
 )
-from memory.parsers.email import parse_email_message
 from memory.workers.tasks.content_processing import (
     check_content_exists,
     safe_task_execution,
@@ -97,6 +102,160 @@ def process_message(
         return {"status": "already_exists", "message_id": message_id}
 
 
+def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
+    """Get the cutoff date for syncing emails."""
+    if since_date:
+        return datetime.fromisoformat(since_date)
+    return cast(datetime, account.last_sync_at) or datetime(1970, 1, 1)
+
+
+def process_email_batch(
+    account: EmailAccount,
+    db: Session,
+    messages: Generator[tuple[str, str], None, None],
+    folder: str = "INBOX",
+) -> dict:
+    """
+    Process a batch of emails, queuing them for async processing.
+
+    Args:
+        account: EmailAccount being synced
+        db: Database session
+        messages: Generator yielding (message_id, raw_email) tuples
+        folder: Folder name for the messages
+
+    Returns:
+        Stats dict with messages_found, new_messages, errors
+    """
+    messages_found = 0
+    new_messages = 0
+    errors = 0
+
+    for message_id, raw_email in messages:
+        messages_found += 1
+        try:
+            parsed_email = parse_email_message(raw_email, message_id)
+            if check_content_exists(
+                db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
+            ):
+                continue
+
+            process_message.delay(
+                cast(int, account.id),
+                message_id,
+                folder,
+                raw_email,
+            )
+            new_messages += 1
+        except Exception as e:
+            logger.error(f"Error queuing message {message_id}: {e}")
+            errors += 1
+
+    return {
+        "messages_found": messages_found,
+        "new_messages": new_messages,
+        "errors": errors,
+    }
+
+
+def finalize_sync(
+    account: EmailAccount,
+    db: Session,
+    error: Exception | None = None,
+) -> None:
+    """Update account sync status after sync completes."""
+    if error:
+        account.sync_error = str(error)  # type: ignore
+    else:
+        account.last_sync_at = datetime.now()  # type: ignore
+        account.sync_error = None  # type: ignore
+    db.commit()
+
+
+def sync_imap_messages(
+    account: EmailAccount,
+    db: Session,
+    cutoff_date: datetime,
+) -> dict:
+    """Sync emails from an IMAP account."""
+    folders_to_process: list[str] = cast(list[str], account.folders) or ["INBOX"]
+    messages_found = 0
+    new_messages = 0
+    errors = 0
+    deleted_messages = 0
+
+    def message_processor(
+        account_id: int, message_id: str, folder: str, raw_email: str
+    ) -> int | None:
+        parsed_email = parse_email_message(raw_email, message_id)
+        if check_content_exists(
+            db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
+        ):
+            return None
+        return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
+
+    with imap_connection(account) as conn:
+        for folder in folders_to_process:
+            folder_stats = process_folder(
+                conn, folder, account, cutoff_date, message_processor
+            )
+
+            messages_found += folder_stats["messages_found"]
+            new_messages += folder_stats["new_messages"]
+            errors += folder_stats["errors"]
+
+            deleted_messages += delete_removed_emails(
+                conn, db, cast(int, account.id), folder
+            )
+
+    return {
+        "messages_found": messages_found,
+        "new_messages": new_messages,
+        "deleted_messages": deleted_messages,
+        "errors": errors,
+        "folders_processed": len(folders_to_process),
+    }
+
+
+def sync_gmail_messages(
+    account: EmailAccount,
+    db: Session,
+    cutoff_date: datetime,
+) -> dict:
+    """Sync emails from a Gmail account using the Gmail API."""
+    # Get all message IDs from Gmail (single API call)
+    server_message_ids, service = get_gmail_message_ids(account, db)
+
+    # Find which messages we don't have in the DB yet
+    existing_uids = {
+        uid
+        for (uid,) in db.query(MailMessage.imap_uid)
+        .filter(
+            MailMessage.email_account_id == account.id,
+            MailMessage.imap_uid.in_(server_message_ids),
+        )
+        .all()
+    }
+    new_message_ids = server_message_ids - existing_uids
+
+    # Fetch content only for new messages
+    messages = fetch_gmail_messages_by_ids(service, new_message_ids)
+    stats = process_email_batch(account, db, messages, folder="INBOX")
+
+    # Delete emails that are no longer in Gmail (reuse server_message_ids)
+    emails_to_delete = find_removed_emails(
+        db, cast(int, account.id), server_message_ids
+    )
+    deleted_count = delete_emails(emails_to_delete, db)
+
+    return {
+        "messages_found": len(server_message_ids),
+        "new_messages": stats["new_messages"],
+        "deleted_messages": deleted_count,
+        "errors": stats["errors"],
+    }
+
+
 @app.task(name=SYNC_ACCOUNT)
 @safe_task_execution
 def sync_account(account_id: int, since_date: str | None = None) -> dict:
@@ -118,60 +277,28 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
             logger.warning(f"Account {account_id} not found or inactive")
             return {"status": "error", "error": "Account not found or inactive"}
 
-        folders_to_process: list[str] = cast(list[str], account.folders) or ["INBOX"]
-        if since_date:
-            cutoff_date = datetime.fromisoformat(since_date)
-        else:
-            cutoff_date: datetime = cast(datetime, account.last_sync_at) or datetime(
-                1970, 1, 1
-            )
-
-        messages_found = 0
-        new_messages = 0
-        errors = 0
-        deleted_messages = 0
-
-        def process_message_wrapper(
-            account_id: int, message_id: str, folder: str, raw_email: str
-        ) -> int | None:
-            parsed_email = parse_email_message(raw_email, message_id)
-            if check_content_exists(
-                db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
-            ):
-                return None
-            return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
+        account_type = cast(str, account.account_type) or "imap"
+        cutoff_date = get_cutoff_date(account, since_date)
 
         try:
-            with imap_connection(account) as conn:
-                for folder in folders_to_process:
-                    folder_stats = process_folder(
-                        conn, folder, account, cutoff_date, process_message_wrapper
-                    )
+            if account_type == "gmail":
+                stats = sync_gmail_messages(account, db, cutoff_date)
+            else:
+                stats = sync_imap_messages(account, db, cutoff_date)
 
-                    messages_found += folder_stats["messages_found"]
-                    new_messages += folder_stats["new_messages"]
-                    errors += folder_stats["errors"]
+            finalize_sync(account, db)
 
-                    # Delete emails that are no longer on the server
-                    deleted_messages += delete_removed_emails(
-                        conn, db, account_id, folder
-                    )
-
-                account.last_sync_at = datetime.now()  # type: ignore
-                db.commit()
         except Exception as e:
-            logger.error(f"Error connecting to server {account.imap_server}: {str(e)}")
+            logger.error(f"Error syncing account {account.email_address}: {e}")
+            finalize_sync(account, db, error=e)
             return {"status": "error", "error": str(e)}
 
         return {
             "status": "completed",
+            "account_type": account_type,
             "account": account.email_address,
             "since_date": cutoff_date.isoformat(),
-            "folders_processed": len(folders_to_process),
-            "messages_found": messages_found,
-            "new_messages": new_messages,
-            "deleted_messages": deleted_messages,
-            "errors": errors,
+            **stats,
         }
 
 

@@ -1,13 +1,14 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from memory.common.db.models import (
     EmailAccount,
+    GoogleAccount,
     MailMessage,
     SourceItem,
     EmailAttachment,
 )
 from memory.common import embedding
-from memory.workers.tasks.email import process_message
+from memory.workers.tasks.email import process_message, sync_account
 
 
 # Test email constants
@@ -198,3 +199,156 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
     # Verify the new sync tracking fields are stored
     assert mail_message.email_account_id == test_email_account.id
     assert mail_message.imap_uid == "12345"
+
+
+# -----------------------------------------------------------------------------
+# Gmail sync task tests
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gmail_email_account(db_session):
+    """Create a test Gmail email account with linked GoogleAccount."""
+    google_account = GoogleAccount(
+        name="Test Google Account",
+        email="test@gmail.com",
+        access_token="test_access_token",
+        refresh_token="test_refresh_token",
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        active=True,
+    )
+    db_session.add(google_account)
+    db_session.flush()
+
+    account = EmailAccount(
+        name="Test Gmail Account",
+        email_address="test@gmail.com",
+        account_type="gmail",
+        google_account_id=google_account.id,
+        folders=["INBOX"],
+        tags=["test", "gmail"],
+        active=True,
+    )
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+def test_sync_account_routes_to_gmail(db_session, gmail_email_account, qdrant):
+    """Test that sync_account routes Gmail accounts to sync_gmail_messages."""
+    mock_service = MagicMock()
+
+    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
+        mock_ids.return_value = (set(), mock_service)
+
+        with patch("memory.workers.tasks.email.fetch_gmail_messages_by_ids") as mock_fetch:
+            mock_fetch.return_value = iter([])  # Generator
+
+            with patch("memory.workers.tasks.email.find_removed_emails") as mock_find:
+                mock_find.return_value = []
+
+                result = sync_account(gmail_email_account.id)
+
+    assert result["status"] == "completed"
+    assert result["account_type"] == "gmail"
+    assert result["account"] == "test@gmail.com"
+    mock_ids.assert_called_once()
+
+
+def test_sync_account_routes_to_imap(db_session, test_email_account, qdrant):
+    """Test that sync_account routes IMAP accounts to sync_imap_messages."""
+    with patch("memory.workers.tasks.email.imap_connection") as mock_conn:
+        mock_imap = MagicMock()
+        mock_conn.return_value.__enter__.return_value = mock_imap
+
+        with patch("memory.workers.tasks.email.process_folder") as mock_process:
+            mock_process.return_value = {
+                "messages_found": 0,
+                "new_messages": 0,
+                "errors": 0,
+            }
+
+            with patch(
+                "memory.workers.tasks.email.delete_removed_emails"
+            ) as mock_delete:
+                mock_delete.return_value = 0
+
+                result = sync_account(test_email_account.id)
+
+    assert result["status"] == "completed"
+    assert result["account_type"] == "imap"
+    assert result["account"] == "bob@example.com"
+
+
+def test_sync_account_inactive_account(db_session, gmail_email_account):
+    """Test that sync_account rejects inactive accounts."""
+    gmail_email_account.active = False
+    db_session.commit()
+
+    result = sync_account(gmail_email_account.id)
+
+    assert result["status"] == "error"
+    assert "inactive" in result["error"]
+
+
+def test_sync_account_nonexistent_account(db_session):
+    """Test that sync_account handles nonexistent accounts."""
+    result = sync_account(99999)
+
+    assert result["status"] == "error"
+    assert "not found" in result["error"]
+
+
+def test_sync_gmail_processes_messages(db_session, gmail_email_account, qdrant):
+    """Test that Gmail sync processes new messages."""
+    raw_email = (
+        "From: sender@example.com\n"
+        "To: test@gmail.com\n"
+        "Subject: Test Gmail\n"
+        "Message-ID: <gmail-test@example.com>\n"
+        "Date: Tue, 14 May 2024 10:00:00 +0000\n\n"
+        "Test body"
+    )
+    mock_service = MagicMock()
+
+    def mock_generator(service, ids):
+        for msg_id in ids:
+            yield (msg_id, raw_email)
+
+    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
+        mock_ids.return_value = ({"gmail_msg_1"}, mock_service)
+
+        with patch("memory.workers.tasks.email.fetch_gmail_messages_by_ids") as mock_fetch:
+            mock_fetch.side_effect = mock_generator
+
+            with patch("memory.workers.tasks.email.find_removed_emails") as mock_find:
+                mock_find.return_value = []
+
+                with patch(
+                    "memory.workers.tasks.email.process_message"
+                ) as mock_process:
+                    # Mock the delay method
+                    mock_process.delay = MagicMock()
+
+                    result = sync_account(gmail_email_account.id)
+
+    assert result["status"] == "completed"
+    assert result["account_type"] == "gmail"
+    assert result["messages_found"] == 1
+    assert result["new_messages"] == 1
+    mock_process.delay.assert_called_once()
+
+
+def test_sync_gmail_handles_api_error(db_session, gmail_email_account, qdrant):
+    """Test that Gmail sync handles API errors gracefully."""
+    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
+        mock_ids.side_effect = Exception("Gmail API error")
+
+        result = sync_account(gmail_email_account.id)
+
+    assert result["status"] == "error"
+    assert "Gmail API error" in result["error"]
+
+    # Verify sync_error was recorded
+    db_session.refresh(gmail_email_account)
+    assert gmail_email_account.sync_error == "Gmail API error"

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import imaplib
 import logging
@@ -7,9 +8,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Callable, Generator, Sequence, cast
 
+from googleapiclient.discovery import build
 from sqlalchemy.orm import Session, scoped_session
 
-from memory.common import embedding, qdrant, settings, collections
+from memory.common import collections, embedding, qdrant, settings
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
@@ -20,6 +22,7 @@ from memory.parsers.email import (
     EmailMessage,
     RawEmailResponse,
 )
+from memory.parsers.google_drive import refresh_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -429,20 +432,267 @@ def delete_removed_emails(
     if not server_uids:
         return 0
 
-    # Get emails in DB that are no longer on the server
-    db_emails = (
-        db_session.query(MailMessage)
-        .filter(
-            MailMessage.email_account_id == account_id,
-            MailMessage.folder == folder,
-            MailMessage.imap_uid.isnot(None),
-            MailMessage.imap_uid.notin_(server_uids),
+    emails_to_delete = find_removed_emails(db_session, account_id, server_uids, folder)
+    return delete_emails(emails_to_delete, db_session)
+
+
+# -----------------------------------------------------------------------------
+# Gmail API functions
+# -----------------------------------------------------------------------------
+
+# Standard Gmail labels that match by name
+STANDARD_GMAIL_LABELS = {
+    "INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "IMPORTANT"
+}
+
+
+def get_gmail_service(
+    account: EmailAccount,
+    session: Session | scoped_session,
+):
+    """
+    Get an authenticated Gmail API service for an account.
+
+    Args:
+        account: EmailAccount with linked GoogleAccount
+        session: Database session for credential refresh
+
+    Returns:
+        Gmail API service object
+    """
+    google_account = account.google_account
+    if not google_account:
+        raise ValueError("Gmail account requires linked GoogleAccount")
+
+    credentials = refresh_credentials(google_account, session)
+    return build("gmail", "v1", credentials=credentials)
+
+
+def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
+    """
+    Map folder names to Gmail label IDs.
+
+    Gmail uses label IDs internally. Common mappings:
+    - INBOX -> INBOX
+    - Sent -> SENT
+    - Archive -> (no label, or custom)
+    """
+    requested = {folder.upper() for folder in folder_names}
+
+    # Standard labels that map directly
+    label_ids = requested & STANDARD_GMAIL_LABELS
+
+    # Handle "Sent" folder mapping to "SENT" label
+    if "SENT" in requested or any(f.lower() == "sent" for f in folder_names):
+        label_ids.add("SENT")
+
+    # Custom folders need API lookup
+    custom_folders = {f.lower() for f in folder_names} - {
+        s.lower() for s in STANDARD_GMAIL_LABELS
+    } - {"sent"}
+
+    if not custom_folders:
+        return list(label_ids)
+
+    # Fetch labels from API for custom folders
+    try:
+        labels_response = service.users().labels().list(userId="me").execute()
+        api_labels = {
+            label["name"].lower(): label["id"]
+            for label in labels_response.get("labels", [])
+        }
+        # Add matching custom folder IDs
+        for folder in custom_folders:
+            if folder in api_labels:
+                label_ids.add(api_labels[folder])
+    except Exception as e:
+        logger.warning(f"Error fetching labels: {e}")
+
+    return list(label_ids)
+
+
+def fetch_gmail_message(
+    service, message_id: str, format: str = "raw"
+) -> str | dict | None:
+    """
+    Fetch a single Gmail message.
+
+    Args:
+        service: Gmail API service
+        message_id: Gmail message ID
+        format: Message format - "raw" for RFC 2822, "full" for structured data
+
+    Returns:
+        For format="raw": Raw email content as string, or None on error
+        For format="full": Message dict with payload, or None on error
+    """
+    try:
+        message = (
+            service.users()
+            .messages()
+            .get(userId="me", id=message_id, format=format)
+            .execute()
         )
-        .all()
+        if format == "raw":
+            raw_data = message.get("raw", "")
+            # Gmail returns base64url encoded data
+            decoded = base64.urlsafe_b64decode(raw_data)
+            return decoded.decode("utf-8", errors="replace")
+        return message
+    except Exception as e:
+        logger.error(f"Error fetching Gmail message {message_id}: {e}")
+        return None
+
+
+def iterate_gmail_messages(
+    service,
+    label_ids: list[str] | None = None,
+    query: str | None = None,
+    fetch_content: bool = False,
+) -> Generator[tuple[str, str | None], None, None]:
+    """
+    Iterate over Gmail messages matching the given criteria.
+
+    Args:
+        service: Gmail API service
+        label_ids: Optional list of label IDs to filter by
+        query: Optional Gmail search query (e.g., "after:2024/01/01")
+        fetch_content: If True, fetch raw email content; if False, yield (id, None)
+
+    Yields:
+        Tuples of (message_id, raw_email_content or None)
+    """
+    try:
+        request = service.users().messages().list(
+            userId="me",
+            q=query,
+            labelIds=label_ids if label_ids else None,
+            maxResults=500,
+        )
+
+        while request:
+            response = request.execute()
+
+            for msg_info in response.get("messages", []):
+                msg_id = msg_info["id"]
+                if fetch_content:
+                    try:
+                        raw_email = fetch_gmail_message(service, msg_id, format="raw")
+                        if raw_email:
+                            yield (msg_id, raw_email)
+                    except Exception as e:
+                        logger.error(f"Error fetching Gmail message {msg_id}: {e}")
+                else:
+                    yield (msg_id, None)
+
+            # Handle pagination
+            request = service.users().messages().list_next(request, response)
+
+    except Exception as e:
+        logger.error(f"Error listing Gmail messages: {e}")
+
+
+def fetch_gmail_messages_by_ids(
+    service,
+    message_ids: set[str],
+) -> Generator[tuple[str, str], None, None]:
+    """
+    Fetch email content for specific Gmail message IDs.
+
+    Args:
+        service: Gmail API service
+        message_ids: Set of message IDs to fetch content for
+
+    Yields:
+        Tuples of (gmail_message_id, raw_email_content)
+    """
+    for msg_id in message_ids:
+        raw_email = fetch_gmail_message(service, msg_id, format="raw")
+        if raw_email:
+            yield (msg_id, cast(str, raw_email))
+
+
+def get_gmail_message_ids(
+    account: EmailAccount,
+    session: Session | scoped_session,
+    service=None,
+) -> tuple[set[str], object]:
+    """
+    Get all message IDs currently in Gmail for the configured labels.
+
+    Used for deletion tracking - messages not in this set can be deleted.
+    Returns the service object for reuse to avoid recreating it.
+
+    Args:
+        account: EmailAccount with linked GoogleAccount
+        session: Database session for credential refresh
+        service: Optional existing Gmail API service (to avoid recreating)
+
+    Returns:
+        Tuple of (set of Gmail message IDs, Gmail service object)
+    """
+    if service is None:
+        service = get_gmail_service(account, session)
+
+    folders = cast(list[str], account.folders) or ["INBOX"]
+    label_ids = get_gmail_label_ids(service, folders)
+
+    message_ids = {
+        msg_id
+        for msg_id, _ in iterate_gmail_messages(
+            service, label_ids=label_ids, fetch_content=False
+        )
+    }
+
+    return message_ids, service
+
+
+def find_removed_emails(
+    db_session: Session | scoped_session,
+    account_id: int,
+    server_message_ids: set[str],
+    folder: str | None = None,
+) -> list[MailMessage]:
+    """
+    Find emails in the database that are no longer on the server.
+
+    Args:
+        db_session: Database session
+        account_id: ID of the EmailAccount
+        server_message_ids: Set of message IDs currently on server
+        folder: Optional folder to filter by (for IMAP)
+
+    Returns:
+        List of MailMessage objects that should be deleted
+    """
+    if not server_message_ids:
+        return []
+
+    query = db_session.query(MailMessage).filter(
+        MailMessage.email_account_id == account_id,
+        MailMessage.imap_uid.isnot(None),
+        MailMessage.imap_uid.notin_(server_message_ids),
     )
 
+    if folder:
+        query = query.filter(MailMessage.folder == folder)
+
+    return query.all()
+
+
+def delete_emails(emails: list[MailMessage], db_session: Session | scoped_session) -> int:
+    """
+    Delete emails and their vectors from the database.
+
+    Args:
+        emails: List of MailMessage objects to delete
+        db_session: Database session
+
+    Returns:
+        Number of emails deleted
+    """
     deleted_count = 0
-    for email in db_emails:
+    for email in emails:
         if should_delete_email(email):
             logger.info(
                 f"Deleting email {email.message_id} "

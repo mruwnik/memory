@@ -11,16 +11,23 @@ from memory.common import embedding, settings
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
+    GoogleAccount,
     MailMessage,
 )
 from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     create_mail_message,
     delete_email_vectors,
+    delete_emails,
     extract_email_uid,
     fetch_email,
     fetch_email_since,
+    fetch_gmail_messages_by_ids,
+    fetch_gmail_message,
+    find_removed_emails,
     get_folder_uids,
+    get_gmail_label_ids,
+    get_gmail_message_ids,
     process_attachment,
     process_attachments,
     process_folder,
@@ -550,3 +557,246 @@ def test_create_mail_message_with_account(db_session):
     # Verify the new fields
     assert mail_message.email_account_id == 123
     assert mail_message.imap_uid == "456"
+
+
+# -----------------------------------------------------------------------------
+# Gmail sync tests
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gmail_account(db_session):
+    """Create a test Gmail account with linked GoogleAccount."""
+    google_account = GoogleAccount(
+        name="Test Google Account",
+        email="test@gmail.com",
+        access_token="test_access_token",
+        refresh_token="test_refresh_token",
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        active=True,
+    )
+    db_session.add(google_account)
+    db_session.flush()
+
+    email_account = EmailAccount(
+        name="Test Gmail Account",
+        email_address="test@gmail.com",
+        account_type="gmail",
+        google_account_id=google_account.id,
+        folders=["INBOX"],
+        tags=["test", "gmail"],
+        active=True,
+    )
+    db_session.add(email_account)
+    db_session.commit()
+    return email_account
+
+
+@pytest.fixture
+def mock_gmail_service():
+    """Create a mock Gmail API service."""
+    service = MagicMock()
+    return service
+
+
+def test_get_gmail_label_ids_standard_labels(mock_gmail_service):
+    """Test mapping standard Gmail labels."""
+    labels = get_gmail_label_ids(mock_gmail_service, ["INBOX", "SENT", "TRASH"])
+
+    assert "INBOX" in labels
+    assert "SENT" in labels
+    assert "TRASH" in labels
+
+
+def test_get_gmail_label_ids_sent_folder(mock_gmail_service):
+    """Test that 'Sent' folder maps to 'SENT' label."""
+    labels = get_gmail_label_ids(mock_gmail_service, ["Sent"])
+
+    assert "SENT" in labels
+
+
+def test_get_gmail_label_ids_custom_label(mock_gmail_service):
+    """Test mapping custom labels via API lookup."""
+    # Mock the labels list response
+    mock_gmail_service.users().labels().list().execute.return_value = {
+        "labels": [
+            {"id": "Label_123", "name": "Work"},
+            {"id": "Label_456", "name": "Personal"},
+        ]
+    }
+
+    labels = get_gmail_label_ids(mock_gmail_service, ["Work"])
+
+    assert "Label_123" in labels
+
+
+def test_get_gmail_label_ids_unknown_label(mock_gmail_service):
+    """Test that unknown labels are skipped."""
+    mock_gmail_service.users().labels().list().execute.return_value = {
+        "labels": [{"id": "Label_123", "name": "Other"}]
+    }
+
+    labels = get_gmail_label_ids(mock_gmail_service, ["NonExistent"])
+
+    assert labels == []
+
+
+def test_fetch_gmail_message(mock_gmail_service):
+    """Test fetching a raw Gmail message."""
+    import base64
+
+    raw_email = "From: test@example.com\nSubject: Test\n\nBody"
+    encoded = base64.urlsafe_b64encode(raw_email.encode()).decode()
+
+    mock_gmail_service.users().messages().get().execute.return_value = {
+        "raw": encoded
+    }
+
+    result = fetch_gmail_message(mock_gmail_service, "msg123", format="raw")
+
+    assert result == raw_email
+
+
+def test_fetch_gmail_message_error(mock_gmail_service):
+    """Test error handling when fetching Gmail message."""
+    mock_gmail_service.users().messages().get().execute.side_effect = Exception(
+        "API Error"
+    )
+
+    result = fetch_gmail_message(mock_gmail_service, "msg123", format="raw")
+
+    assert result is None
+
+
+def test_find_and_delete_removed_emails(db_session, gmail_account, qdrant, mock_uuid4):
+    """Test finding and deleting emails that are no longer on the server."""
+    # Create some emails in the database
+    for i in range(3):
+        mail_message = MailMessage(
+            sha256=f"hash_{i}".encode() + bytes(24),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="RAW",
+            message_id=f"<test-{i}@gmail.com>",
+            subject=f"Test {i}",
+            sender="sender@gmail.com",
+            recipients=["recipient@example.com"],
+            content=f"Test email {i}",
+            folder="INBOX",
+            modality="mail",
+            email_account_id=gmail_account.id,
+            imap_uid=f"gmail_id_{i}",
+        )
+        db_session.add(mail_message)
+    db_session.commit()
+
+    # Simulate that only gmail_id_0 and gmail_id_1 are still on server
+    # gmail_id_2 should be deleted
+    server_message_ids = {"gmail_id_0", "gmail_id_1"}
+
+    emails_to_delete = find_removed_emails(
+        db_session, gmail_account.id, server_message_ids
+    )
+    deleted = delete_emails(emails_to_delete, db_session)
+
+    assert deleted == 1
+
+    # Verify only 2 messages remain
+    remaining = db_session.query(MailMessage).filter(
+        MailMessage.email_account_id == gmail_account.id
+    ).all()
+    assert len(remaining) == 2
+    assert all(m.imap_uid in server_message_ids for m in remaining)
+
+
+def test_find_removed_emails_empty_server(db_session, gmail_account):
+    """Test that no emails are found when server_message_ids is empty."""
+    mail_message = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<test@gmail.com>",
+        subject="Test",
+        sender="sender@gmail.com",
+        recipients=["recipient@example.com"],
+        content="Test email",
+        folder="INBOX",
+        modality="mail",
+        email_account_id=gmail_account.id,
+        imap_uid="gmail_id_1",
+    )
+    db_session.add(mail_message)
+    db_session.commit()
+
+    # Empty set - should not find any emails to delete
+    emails_to_delete = find_removed_emails(db_session, gmail_account.id, set())
+
+    assert emails_to_delete == []
+    assert db_session.query(MailMessage).filter(
+        MailMessage.email_account_id == gmail_account.id
+    ).count() == 1
+
+
+def test_fetch_gmail_messages_by_ids(mock_gmail_service):
+    """Test fetching messages by IDs from Gmail API."""
+    import base64
+
+    raw_email = "From: test@example.com\nSubject: Test\n\nBody"
+    encoded = base64.urlsafe_b64encode(raw_email.encode()).decode()
+
+    # Mock message get for raw content
+    mock_gmail_service.users().messages().get().execute.return_value = {
+        "raw": encoded
+    }
+
+    messages = list(fetch_gmail_messages_by_ids(
+        mock_gmail_service, {"msg1", "msg2"}
+    ))
+
+    assert len(messages) == 2
+    assert all(content == raw_email for _, content in messages)
+
+
+def test_get_gmail_message_ids(db_session, gmail_account):
+    """Test getting all message IDs from Gmail."""
+    with patch("memory.workers.email.refresh_credentials") as mock_refresh:
+        mock_refresh.return_value = MagicMock()
+
+        with patch("memory.workers.email.build") as mock_build:
+            mock_service = MagicMock()
+            mock_build.return_value = mock_service
+
+            # Mock message list with pagination
+            mock_service.users().messages().list().execute.return_value = {
+                "messages": [{"id": "msg1"}, {"id": "msg2"}, {"id": "msg3"}]
+            }
+            mock_service.users().messages().list_next.return_value = None
+
+            # Mock labels list
+            mock_service.users().labels().list().execute.return_value = {"labels": []}
+
+            message_ids, service = get_gmail_message_ids(gmail_account, db_session)
+
+    assert message_ids == {"msg1", "msg2", "msg3"}
+    assert service is mock_service
+
+
+def test_get_gmail_message_ids_no_google_account(db_session):
+    """Test that get_gmail_message_ids raises error without GoogleAccount."""
+    email_account = EmailAccount(
+        name="Bad Gmail Account",
+        email_address="bad@gmail.com",
+        account_type="gmail",
+        google_account_id=None,  # No linked GoogleAccount
+        folders=["INBOX"],
+        tags=["test"],
+        active=True,
+    )
+    db_session.add(email_account)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Gmail account requires linked GoogleAccount"):
+        get_gmail_message_ids(email_account, db_session)

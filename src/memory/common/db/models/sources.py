@@ -105,14 +105,27 @@ class EmailAccount(Base):
     id = Column(BigInteger, primary_key=True)
     name = Column(Text, nullable=False)
     email_address = Column(Text, nullable=False, unique=True)
-    imap_server = Column(Text, nullable=False)
-    imap_port = Column(Integer, nullable=False, server_default="993")
-    username = Column(Text, nullable=False)
-    password = Column(Text, nullable=False)
-    use_ssl = Column(Boolean, nullable=False, server_default="true")
+
+    # Account type: 'imap' or 'gmail'
+    account_type = Column(Text, nullable=False, server_default="imap")
+
+    # IMAP fields (nullable for Gmail accounts)
+    imap_server = Column(Text, nullable=True)
+    imap_port = Column(Integer, nullable=True)
+    username = Column(Text, nullable=True)
+    password = Column(Text, nullable=True)
+    use_ssl = Column(Boolean, nullable=True)
+
+    # Gmail fields (nullable for IMAP accounts)
+    google_account_id = Column(
+        BigInteger, ForeignKey("google_accounts.id"), nullable=True
+    )
+
+    # Common fields
     folders = Column(ARRAY(Text), nullable=False, server_default="{}")
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
     last_sync_at = Column(DateTime(timezone=True))
+    sync_error = Column(Text, nullable=True)
     active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -121,11 +134,14 @@ class EmailAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    # Add indexes
+    google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
+
     __table_args__ = (
+        CheckConstraint("account_type IN ('imap', 'gmail')"),
         Index("email_accounts_address_idx", "email_address", unique=True),
         Index("email_accounts_active_idx", "active", "last_sync_at"),
         Index("email_accounts_tags_idx", "tags", postgresql_using="gin"),
+        Index("email_accounts_type_idx", "account_type"),
     )
 
 
