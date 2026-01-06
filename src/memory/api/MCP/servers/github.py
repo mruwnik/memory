@@ -5,16 +5,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastmcp import FastMCP
-from sqlalchemy import Text, case, desc, func
+from sqlalchemy import Text, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.api.search.search import search
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubItem, GithubMilestone
 from memory.common.db.models.sources import GithubRepo
+from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
+from memory.parsers.github import GithubClient, GithubCredentials, serialize_issue_data
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +73,8 @@ def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[st
     return result
 
 
-@github_mcp.tool(tags={"scope:github"})
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubItem))
 async def list_github_issues(
     repo: str | None = None,
     assignee: str | None = None,
@@ -107,7 +111,9 @@ async def list_github_issues(
 
     Returns: List of issues with id, number, title, state, assignees, labels, project_fields, timestamps, url
     """
-    logger.info(f"list_github_issues called: repo={repo}, assignee={assignee}, state={state}")
+    logger.info(
+        f"list_github_issues called: repo={repo}, assignee={assignee}, state={state}"
+    )
 
     limit = min(limit, 200)
 
@@ -163,7 +169,8 @@ async def list_github_issues(
         return [_serialize_issue(item) for item in items]
 
 
-@github_mcp.tool(tags={"scope:github"})
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubMilestone))
 async def list_milestones(
     repo: str | None = None,
     state: str | None = None,
@@ -240,24 +247,27 @@ async def list_milestones(
             total = open_count + closed_count
             progress = round(closed_count / total * 100, 1) if total > 0 else 0
 
-            results.append({
-                "id": ms.id,
-                "repo_path": f"{ms.repo.owner}/{ms.repo.name}",
-                "number": ms.number,
-                "title": ms.title,
-                "description": ms.description,
-                "state": ms.state,
-                "due_on": ms.due_on.isoformat() if ms.due_on else None,
-                "open_issues": open_count,
-                "closed_issues": closed_count,
-                "progress_percent": progress,
-                "url": f"https://github.com/{ms.repo.owner}/{ms.repo.name}/milestone/{ms.number}",
-            })
+            results.append(
+                {
+                    "id": ms.id,
+                    "repo_path": f"{ms.repo.owner}/{ms.repo.name}",
+                    "number": ms.number,
+                    "title": ms.title,
+                    "description": ms.description,
+                    "state": ms.state,
+                    "due_on": ms.due_on.isoformat() if ms.due_on else None,
+                    "open_issues": open_count,
+                    "closed_issues": closed_count,
+                    "progress_percent": progress,
+                    "url": f"https://github.com/{ms.repo.owner}/{ms.repo.name}/milestone/{ms.number}",
+                }
+            )
 
         return results
 
 
-@github_mcp.tool(tags={"scope:github"})
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubItem))
 async def search_github_issues(
     query: str,
     repo: str | None = None,
@@ -315,13 +325,14 @@ async def search_github_issues(
             item = session.get(GithubItem, result.id)
             if item:
                 serialized = _serialize_issue(item)
-                serialized["search_score"] = result.score
+                serialized["search_score"] = result.search_score
                 output.append(serialized)
 
     return output
 
 
-@github_mcp.tool(tags={"scope:github"})
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubItem))
 async def github_issue_details(
     repo: str,
     number: int,
@@ -355,237 +366,353 @@ async def github_issue_details(
         return _serialize_issue(item, include_content=True)
 
 
-@github_mcp.tool(tags={"scope:github"})
-async def github_work_summary(
-    since: str,
-    until: str | None = None,
-    group_by: str = "client",
-    repo: str | None = None,
-) -> dict:
-    """
-    Summarize GitHub work activity for billing and time tracking.
-    Groups issues by client, author, status, or repository.
+def _get_github_client(session: Any, repo_path: str) -> tuple[GithubClient, GithubRepo]:
+    """Get authenticated GithubClient for a repository path.
 
     Args:
-        since: ISO date - start of period (e.g., "2025-12-16")
-        until: ISO date - end of period (default: now)
-        group_by: How to group results: "client", "status", "author", "repo", "task_type"
-        repo: Optional filter by repository path
+        session: Database session
+        repo_path: Repository path in "owner/repo" format
 
-    Returns: Summary with grouped counts and sample issues for each group
+    Returns:
+        Tuple of (GithubClient, GithubRepo)
+
+    Raises:
+        ValueError: If repo not found or credentials unavailable
     """
-    logger.info(f"github_work_summary called: since={since}, group_by={group_by}")
+    parts = repo_path.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid repo path format: {repo_path}")
 
-    since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-    if until:
-        until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+    owner, name = parts
+    repo = (
+        session.query(GithubRepo)
+        .filter(GithubRepo.owner == owner, GithubRepo.name == name)
+        .first()
+    )
+    if not repo:
+        raise ValueError(f"Repository {repo_path} not found in database")
+
+    account = repo.account
+    if not account or not account.active:
+        raise ValueError(f"No active credentials for {repo_path}")
+
+    credentials = GithubCredentials(
+        auth_type=account.auth_type,
+        access_token=account.access_token,
+        app_id=account.app_id,
+        installation_id=account.installation_id,
+        private_key=account.private_key,
+    )
+    return GithubClient(credentials), repo
+
+
+def _handle_project_integration(
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    issue_number: int,
+    issue_node_id: str | None,
+    project_name: str,
+    project_fields: dict[str, str] | None,
+) -> tuple[list[str], str | None]:
+    """Add issue to project and set field values.
+
+    Returns:
+        Tuple of (list of update messages, error message or None)
+    """
+    updates: list[str] = []
+
+    if not issue_node_id:
+        issue_node_id = client.get_issue_node_id(owner, repo_name, issue_number)
+    if not issue_node_id:
+        logger.warning(f"Could not get issue node ID for {owner}/{repo_name}#{issue_number}")
+        return updates, "Could not get issue node ID"
+
+    # Try org project first, then user project
+    project_info = client.find_project_by_name(owner, project_name, is_org=True)
+    if not project_info:
+        project_info = client.find_project_by_name(owner, project_name, is_org=False)
+    if not project_info:
+        return updates, f"Project '{project_name}' not found in org or user '{owner}'"
+
+    project_id = project_info["id"]
+    logger.debug(f"Found project '{project_name}' with ID {project_id}")
+
+    # Add to project if not already there
+    item_id = client.get_project_item_id(owner, repo_name, issue_number, project_id)
+    if not item_id:
+        logger.debug(f"Issue #{issue_number} not in project, adding with content_id={issue_node_id}")
+        item_id = client.add_issue_to_project(project_id, issue_node_id)
+        if item_id:
+            updates.append(f"Added to project '{project_name}'")
+        else:
+            return updates, f"Failed to add to project '{project_name}' (check API logs for details)"
+
+    # Set field values
+    if item_id and project_fields:
+        available_fields = project_info.get("fields", {})
+        for field_name, field_value in project_fields.items():
+            msg = _set_project_field(
+                client, project_id, item_id, field_name, field_value, available_fields
+            )
+            updates.append(msg)
+
+    return updates, None
+
+
+def _set_project_field(
+    client: GithubClient,
+    project_id: str,
+    item_id: str,
+    field_name: str,
+    field_value: str,
+    available_fields: dict[str, Any],
+) -> str:
+    """Set a single project field value. Returns status message."""
+    field_def = available_fields.get(field_name)
+    if not field_def:
+        return f"Field '{field_name}' not found in project"
+
+    field_id = field_def["id"]
+
+    # Single-select field needs option ID resolution
+    if "options" in field_def:
+        option_id = field_def["options"].get(field_value)
+        if not option_id:
+            return f"Option '{field_value}' not found for field '{field_name}'"
+        success = client.update_project_field_value(
+            project_id, item_id, field_id, option_id, "singleSelectOptionId"
+        )
     else:
-        until_dt = datetime.now(timezone.utc)
-
-    group_mappings = {
-        "client": GithubItem.project_fields["EquiStamp.Client"].astext,
-        "status": GithubItem.project_status,
-        "author": GithubItem.author,
-        "repo": GithubItem.repo_path,
-        "task_type": GithubItem.project_fields["EquiStamp.Task Type"].astext,
-    }
-
-    if group_by not in group_mappings:
-        raise ValueError(
-            f"Invalid group_by: {group_by}. Must be one of: {list(group_mappings.keys())}"
+        # Text field
+        success = client.update_project_field_value(
+            project_id, item_id, field_id, field_value, "text"
         )
 
-    group_col = group_mappings[group_by]
+    return f"Set {field_name}={field_value}" if success else f"Failed to set {field_name}"
 
-    with make_session() as session:
-        base_query = session.query(GithubItem).filter(
-            GithubItem.github_updated_at >= since_dt,
-            GithubItem.github_updated_at <= until_dt,
-            GithubItem.kind.in_(["issue", "pr"]),
+
+def _sync_issue_to_database(
+    client: GithubClient,
+    session: Any,
+    repo_obj: GithubRepo,
+    owner: str,
+    repo_name: str,
+    issue_number: int,
+) -> tuple[bool, str | None]:
+    """Fetch issue from GitHub via GraphQL and trigger database sync.
+
+    Returns:
+        Tuple of (success, error message or None)
+    """
+    fetched = client.fetch_issue_graphql(owner, repo_name, issue_number)
+    if fetched is None:
+        return False, "Failed to fetch issue for sync"
+
+    if repo_obj.track_project_fields:
+        fetched["project_fields"] = client.fetch_project_fields(
+            owner, repo_name, issue_number
         )
 
-        if repo:
-            base_query = base_query.filter(GithubItem.repo_path == repo)
-
-        agg_query = (
-            session.query(
-                group_col.label("group_name"),
-                func.count(GithubItem.id).label("total"),
-                func.count(case((GithubItem.kind == "issue", 1))).label("issue_count"),
-                func.count(case((GithubItem.kind == "pr", 1))).label("pr_count"),
-                func.count(
-                    case((GithubItem.state.in_(["closed", "merged"]), 1))
-                ).label("closed_count"),
-            )
+    # Look up milestone_id
+    milestone_id = None
+    if fetched.get("milestone_number"):
+        ms = (
+            session.query(GithubMilestone)
             .filter(
-                GithubItem.github_updated_at >= since_dt,
-                GithubItem.github_updated_at <= until_dt,
-                GithubItem.kind.in_(["issue", "pr"]),
+                GithubMilestone.repo_id == repo_obj.id,
+                GithubMilestone.number == fetched["milestone_number"],
             )
-            .group_by(group_col)
-            .order_by(desc("total"))
+            .first()
         )
+        if ms:
+            milestone_id = ms.id
 
-        if repo:
-            agg_query = agg_query.filter(GithubItem.repo_path == repo)
-
-        groups = agg_query.all()
-
-        summary = []
-        total_issues = 0
-        total_prs = 0
-
-        for group_name, total, issue_count, pr_count, closed_count in groups:
-            if group_name is None:
-                group_name = "(unset)"
-
-            total_issues += issue_count
-            total_prs += pr_count
-
-            sample_query = base_query.filter(group_col == group_name).limit(5)
-            samples = [
-                {
-                    "number": item.number,
-                    "title": item.title,
-                    "repo_path": item.repo_path,
-                    "state": item.state,
-                    "url": _build_github_url(item.repo_path, item.number, item.kind),
-                }
-                for item in sample_query.all()
-            ]
-
-            summary.append(
-                {
-                    "group": group_name,
-                    "total": total,
-                    "issue_count": issue_count,
-                    "pr_count": pr_count,
-                    "closed_count": closed_count,
-                    "issues": samples,
-                }
-            )
-
-        return {
-            "period": {
-                "since": since_dt.isoformat(),
-                "until": until_dt.isoformat(),
-            },
-            "group_by": group_by,
-            "summary": summary,
-            "total_issues": total_issues,
-            "total_prs": total_prs,
-        }
+    serialized = serialize_issue_data(fetched)
+    serialized["milestone_id"] = milestone_id
+    celery_app.send_task(SYNC_GITHUB_ITEM, args=[repo_obj.id, serialized])
+    return True, None
 
 
-@github_mcp.tool(tags={"scope:github"})
-async def github_repo_overview(
+def _resolve_milestone_node_id(
+    client: GithubClient,
+    session: Any,
+    repo_obj: GithubRepo,
+    owner: str,
+    repo_name: str,
+    milestone: str | int,
+) -> str | None:
+    """Resolve milestone title or number to GraphQL node ID."""
+    if isinstance(milestone, int):
+        return client.get_milestone_node_id(owner, repo_name, milestone)
+
+    # Look up by title in database
+    ms = (
+        session.query(GithubMilestone)
+        .filter(
+            GithubMilestone.repo_id == repo_obj.id,
+            GithubMilestone.title == milestone,
+        )
+        .first()
+    )
+    if ms:
+        return client.get_milestone_node_id(owner, repo_name, ms.number)
+
+    logger.warning(f"Milestone '{milestone}' not found in database")
+    return None
+
+
+def _create_issue(
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    title: str,
+    body: str | None,
+    label_ids: list[str] | None,
+    assignee_ids: list[str] | None,
+    milestone_node_id: str | None,
+) -> tuple[dict[str, Any], int]:
+    """Create a new GitHub issue via GraphQL. Returns (issue_data, number)."""
+    repository_id = client.get_repository_id(owner, repo_name)
+    if not repository_id:
+        raise ValueError(f"Could not get repository ID for {owner}/{repo_name}")
+
+    issue_data = client.create_issue_graphql(
+        repository_id=repository_id,
+        title=title,
+        body=body,
+        label_ids=label_ids,
+        assignee_ids=assignee_ids,
+        milestone_id=milestone_node_id,
+    )
+    if not issue_data:
+        raise ValueError("Failed to create issue on GitHub")
+
+    return issue_data, issue_data["number"]
+
+
+def _update_issue(
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    number: int,
+    title: str,
+    body: str | None,
+    state: str | None,
+    label_ids: list[str] | None,
+    assignee_ids: list[str] | None,
+    milestone_node_id: str | None,
+) -> dict[str, Any]:
+    """Update an existing GitHub issue via GraphQL."""
+    issue_node_id = client.get_issue_node_id(owner, repo_name, number)
+    if not issue_node_id:
+        raise ValueError(f"Issue #{number} not found in {owner}/{repo_name}")
+
+    issue_data = client.update_issue_graphql(
+        issue_id=issue_node_id,
+        title=title,
+        body=body,
+        state=state,
+        label_ids=label_ids,
+        assignee_ids=assignee_ids,
+        milestone_id=milestone_node_id,
+    )
+    if not issue_data:
+        raise ValueError(f"Failed to update issue #{number}")
+
+    return issue_data
+
+
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubRepo))
+async def upsert_github_issue(
     repo: str,
+    title: str,
+    body: str | None = None,
+    number: int | None = None,
+    state: str | None = None,
+    labels: list[str] | None = None,
+    assignees: list[str] | None = None,
+    milestone: str | int | None = None,
+    project: str | None = None,
+    project_fields: dict[str, str] | None = None,
 ) -> dict:
     """
-    Get an overview of a GitHub repository's issues and PRs.
-    Shows counts, status breakdown, top assignees, and labels.
+    Create or update a GitHub issue with optional project integration.
 
     Args:
-        repo: Repository path (e.g., "EquiStamp/equistamp" or "owner/name")
+        repo: Repository path (e.g., "owner/name")
+        title: Issue title (required for create, optional for update)
+        body: Issue body/description
+        number: Issue number - if provided, updates existing; if None, creates new
+        state: Issue state: "open" or "closed" (update only)
+        labels: List of label names to apply
+        assignees: List of GitHub usernames to assign
+        milestone: Milestone title (string) or number (int) to assign
+        project: Project name to add issue to (e.g., "My Project Board")
+        project_fields: Dict of project field values (e.g., {"Status": "In Progress", "Priority": "High"})
 
-    Returns: Repository statistics including counts, status breakdown, top assignees, labels
+    Returns:
+        Dict with issue details including number, url, and any project updates made
     """
-    logger.info(f"github_repo_overview called: repo={repo}")
+    logger.info(f"upsert_github_issue: repo={repo}, number={number}, title={title}")
+
+    parts = repo.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
+    owner, repo_name = parts
 
     with make_session() as session:
-        counts_query = session.query(
-            func.count(GithubItem.id).label("total"),
-            func.count(case((GithubItem.kind == "issue", 1))).label("total_issues"),
-            func.count(
-                case(((GithubItem.kind == "issue") & (GithubItem.state == "open"), 1))
-            ).label("open_issues"),
-            func.count(
-                case(((GithubItem.kind == "issue") & (GithubItem.state == "closed"), 1))
-            ).label("closed_issues"),
-            func.count(case((GithubItem.kind == "pr", 1))).label("total_prs"),
-            func.count(
-                case(((GithubItem.kind == "pr") & (GithubItem.state == "open"), 1))
-            ).label("open_prs"),
-            func.count(
-                case(((GithubItem.kind == "pr") & (GithubItem.merged_at.isnot(None)), 1))
-            ).label("merged_prs"),
-            func.max(GithubItem.github_updated_at).label("last_updated"),
-        ).filter(
-            GithubItem.repo_path == repo,
-            GithubItem.kind.in_(["issue", "pr"]),
-        )
+        client, repo_obj = _get_github_client(session, repo)
 
-        counts = counts_query.first()
-
-        status_query = (
-            session.query(
-                GithubItem.project_status.label("status"),
-                func.count(GithubItem.id).label("count"),
+        # Resolve IDs for labels, assignees, milestone
+        milestone_node_id = None
+        if milestone is not None:
+            milestone_node_id = _resolve_milestone_node_id(
+                client, session, repo_obj, owner, repo_name, milestone
             )
-            .filter(
-                GithubItem.repo_path == repo,
-                GithubItem.kind.in_(["issue", "pr"]),
-                GithubItem.project_status.isnot(None),
+        label_ids = client.get_label_ids(owner, repo_name, labels) if labels else None
+        assignee_ids = client.get_user_ids(assignees) if assignees else None
+
+        # Create or update
+        if number is None:
+            issue_data, number = _create_issue(
+                client, owner, repo_name, title, body,
+                label_ids, assignee_ids, milestone_node_id,
             )
-            .group_by(GithubItem.project_status)
-            .order_by(desc("count"))
-        )
-
-        status_breakdown = {row.status: row.count for row in status_query.all()}
-
-        assignee_query = (
-            session.query(
-                func.unnest(GithubItem.assignees).label("assignee"),
-                func.count(GithubItem.id).label("count"),
+            action = "created"
+        else:
+            issue_data = _update_issue(
+                client, owner, repo_name, number, title, body, state,
+                label_ids, assignee_ids, milestone_node_id,
             )
-            .filter(
-                GithubItem.repo_path == repo,
-                GithubItem.kind.in_(["issue", "pr"]),
-                GithubItem.state == "open",
-            )
-            .group_by("assignee")
-            .order_by(desc("count"))
-            .limit(10)
-        )
+            action = "updated"
 
-        top_assignees = [
-            {"username": row.assignee, "open_count": row.count}
-            for row in assignee_query.all()
-        ]
-
-        label_query = (
-            session.query(
-                func.unnest(GithubItem.labels).label("label"),
-                func.count(GithubItem.id).label("count"),
-            )
-            .filter(
-                GithubItem.repo_path == repo,
-                GithubItem.kind.in_(["issue", "pr"]),
-            )
-            .group_by("label")
-            .order_by(desc("count"))
-            .limit(20)
-        )
-
-        labels = {row.label: row.count for row in label_query.all()}
-
-        return {
-            "repo_path": repo,
-            "counts": {
-                "total": counts.total if counts else 0,
-                "total_issues": counts.total_issues if counts else 0,
-                "open_issues": counts.open_issues if counts else 0,
-                "closed_issues": counts.closed_issues if counts else 0,
-                "total_prs": counts.total_prs if counts else 0,
-                "open_prs": counts.open_prs if counts else 0,
-                "merged_prs": counts.merged_prs if counts else 0,
-            },
-            "status_breakdown": status_breakdown,
-            "top_assignees": top_assignees,
-            "labels": labels,
-            "last_updated": (
-                counts.last_updated.isoformat()
-                if counts and counts.last_updated
-                else None
-            ),
+        result: dict[str, Any] = {
+            "action": action,
+            "number": number,
+            "title": issue_data.get("title"),
+            "state": issue_data.get("state"),
+            "url": issue_data.get("url"),
+            "project_updates": [],
         }
+
+        # Handle project integration
+        if project:
+            updates, error = _handle_project_integration(
+                client, owner, repo_name, number, issue_data.get("id"),
+                project, project_fields,
+            )
+            result["project_updates"] = updates
+            if error:
+                result["project_error"] = error
+
+        # Trigger database sync
+        success, error = _sync_issue_to_database(
+            client, session, repo_obj, owner, repo_name, number
+        )
+        result["sync_triggered"] = success
+        if error:
+            result["sync_error"] = error
+
+        return result

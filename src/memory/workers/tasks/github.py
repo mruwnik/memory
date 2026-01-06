@@ -20,6 +20,7 @@ from memory.parsers.github import (
     GithubIssueData,
     GithubMilestoneData,
     GithubPRDataDict,
+    serialize_issue_data,
 )
 from memory.workers.tasks.content_processing import (
     create_content_hash,
@@ -218,8 +219,11 @@ def _update_existing_item(
         except IOError as e:
             logger.error(f"Error deleting chunks: {e}")
 
-    # Delete chunks from database
-    for chunk in existing.chunks:
+    # Delete chunks from database and clear the collection
+    # (must clear before flush to avoid SQLAlchemy referencing deleted objects)
+    chunks_to_delete = list(existing.chunks)
+    existing.chunks.clear()
+    for chunk in chunks_to_delete:
         session.delete(chunk)
 
     # Update the existing item with new data
@@ -274,33 +278,6 @@ def _update_existing_item(
 
     # Re-embed and push to Qdrant
     return process_content_item(existing, session)
-
-
-def _serialize_issue_data(data: GithubIssueData) -> dict[str, Any]:
-    """Serialize GithubIssueData for Celery task passing."""
-    return {
-        **data,
-        "created_at": data["created_at"].isoformat() if data["created_at"] else None,
-        "closed_at": data["closed_at"].isoformat() if data["closed_at"] else None,
-        "merged_at": data["merged_at"].isoformat() if data["merged_at"] else None,
-        "github_updated_at": (
-            data["github_updated_at"].isoformat()
-            if data["github_updated_at"]
-            else None
-        ),
-        "comments": [
-            {
-                "id": c["id"],
-                "author": c["author"],
-                "body": c["body"],
-                "created_at": c["created_at"],
-                "updated_at": c["updated_at"],
-            }
-            for c in data["comments"]
-        ],
-        # pr_data is already JSON-serializable (TypedDict)
-        "pr_data": data.get("pr_data"),
-    }
 
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
@@ -456,7 +433,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                         owner, name, issue_data["number"]
                     )
 
-                serialized = _serialize_issue_data(issue_data)
+                serialized = serialize_issue_data(issue_data)
                 # Look up milestone_id from the map
                 ms_num = issue_data.get("milestone_number")
                 serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None
@@ -473,7 +450,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                         owner, name, pr_data["number"]
                     )
 
-                serialized = _serialize_issue_data(pr_data)
+                serialized = serialize_issue_data(pr_data)
                 # Look up milestone_id from the map
                 ms_num = pr_data.get("milestone_number")
                 serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None

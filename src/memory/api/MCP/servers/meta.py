@@ -10,6 +10,8 @@ import aiohttp
 from fastmcp import FastMCP
 from sqlalchemy import func
 
+from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+
 from memory.common import qdrant
 from memory.common.db.connection import make_session
 from memory.common.db.models import SourceItem
@@ -117,7 +119,8 @@ async def get_all_tags() -> list[str]:
         return sorted({row[0] for row in tags_query if row[0] is not None})
 
 
-@meta_mcp.tool(tags={"scope:observe"})
+@meta_mcp.tool()
+@visible_when(require_scopes("observe"), has_items(AgentObservation))
 async def get_all_subjects() -> list[str]:
     """Get all unique subjects from observations about the user.
 
@@ -129,7 +132,8 @@ async def get_all_subjects() -> list[str]:
         )
 
 
-@meta_mcp.tool(tags={"scope:observe"})
+@meta_mcp.tool()
+@visible_when(require_scopes("observe"), has_items(AgentObservation))
 async def get_all_observation_types() -> list[str]:
     """Get all observation types that have been used.
 

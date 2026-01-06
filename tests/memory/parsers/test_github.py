@@ -2,17 +2,30 @@
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import requests
 
 from memory.parsers.github import (
     GithubCredentials,
     GithubClient,
-    GithubIssueData,
     GithubComment,
     parse_github_date,
     compute_content_hash,
 )
+
+
+# =============================================================================
+# Helper for creating mock GraphQL responses
+# =============================================================================
+
+
+def mock_graphql_response(data=None, errors=None):
+    """Create a mock response for GraphQL requests."""
+    response = Mock()
+    response.json.return_value = {"data": data, "errors": errors} if errors else {"data": data}
+    response.headers = {"X-RateLimit-Remaining": "4999"}
+    response.raise_for_status = Mock()
+    return response
 
 
 # =============================================================================
@@ -147,7 +160,7 @@ def test_fetch_issues_basic():
                         "user": {"login": "testuser"},
                         "labels": [{"name": "bug"}],
                         "assignees": [{"login": "dev1"}],
-                        "milestone": {"title": "v1.0"},
+                        "milestone": {"title": "v1.0", "number": 1},
                         "created_at": "2024-01-01T00:00:00Z",
                         "updated_at": "2024-01-02T00:00:00Z",
                         "closed_at": None,
@@ -190,7 +203,7 @@ def test_fetch_issues_basic():
     assert issue["author"] == "testuser"
     assert issue["labels"] == ["bug"]
     assert issue["assignees"] == ["dev1"]
-    assert issue["milestone"] == "v1.0"
+    assert issue["milestone_number"] == 1
     assert len(issue["comments"]) == 1
 
 
@@ -1176,7 +1189,7 @@ def test_parse_pr_fetches_all_pr_data():
         "user": {"login": "contributor"},
         "labels": [{"name": "enhancement"}],
         "assignees": [{"login": "reviewer"}],
-        "milestone": {"title": "v2.0"},
+        "milestone": {"title": "v2.0", "number": 2},
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-02T00:00:00Z",
         "closed_at": None,
@@ -1312,3 +1325,558 @@ def test_parse_pr_fetches_all_pr_data():
 
     # Verify diff_summary is truncated version of full diff
     assert result["diff_summary"] == pr_data["diff"][:5000]
+
+
+# =============================================================================
+# Tests for helper methods
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "data,keys,default,expected",
+    [
+        ({"a": {"b": {"c": 1}}}, ("a", "b", "c"), None, 1),
+        ({"a": {"b": {"c": 1}}}, ("a", "b"), None, {"c": 1}),
+        ({"a": {"b": {"c": 1}}}, ("a", "x"), None, None),
+        ({"a": {"b": {"c": 1}}}, ("a", "x"), "default", "default"),
+        (None, ("a",), None, None),
+        ({}, ("a",), "fallback", "fallback"),
+        ({"a": None}, ("a", "b"), "default", "default"),
+    ],
+)
+def test_extract_nested(data, keys, default, expected):
+    """Test _extract_nested helper method."""
+    result = GithubClient._extract_nested(data, *keys, default=default)
+    assert result == expected
+
+
+def test_graphql_success():
+    """Test _graphql helper with successful response."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(data={"repository": {"id": "R_123"}})
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        data, errors = client._graphql("query { test }", {"var": "value"})
+
+    assert data == {"repository": {"id": "R_123"}}
+    assert errors is None
+
+
+def test_graphql_with_errors():
+    """Test _graphql helper when GraphQL returns errors."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"repository": None},
+        errors=[{"message": "Not found"}]
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        data, errors = client._graphql("query { test }")
+
+    assert data == {"repository": None}
+    assert errors == [{"message": "Not found"}]
+
+
+def test_graphql_request_exception():
+    """Test _graphql helper handles request exceptions."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.side_effect = requests.RequestException("Network error")
+
+        client = GithubClient(credentials)
+        data, errors = client._graphql("query { test }")
+
+    assert data is None
+    assert errors is None
+
+
+# =============================================================================
+# Tests for GraphQL ID resolution methods
+# =============================================================================
+
+
+def test_get_repository_id():
+    """Test fetching repository GraphQL node ID."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"repository": {"id": "R_kgDOA1234"}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        repo_id = client.get_repository_id("owner", "repo")
+
+    assert repo_id == "R_kgDOA1234"
+
+
+def test_get_repository_id_not_found():
+    """Test get_repository_id returns None when repo not found."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"repository": None},
+        errors=[{"message": "Could not resolve to a Repository"}]
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        repo_id = client.get_repository_id("owner", "nonexistent")
+
+    assert repo_id is None
+
+
+def test_get_issue_node_id():
+    """Test fetching issue GraphQL node ID."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"repository": {"issue": {"id": "I_kwDOA1234"}}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        issue_id = client.get_issue_node_id("owner", "repo", 123)
+
+    assert issue_id == "I_kwDOA1234"
+
+
+def test_get_label_ids():
+    """Test resolving label names to IDs."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "repository": {
+                "labels": {
+                    "nodes": [
+                        {"id": "LA_1", "name": "bug"},
+                        {"id": "LA_2", "name": "enhancement"},
+                        {"id": "LA_3", "name": "docs"},
+                    ]
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        label_ids = client.get_label_ids("owner", "repo", ["bug", "enhancement", "missing"])
+
+    # Should only return IDs for labels that exist
+    assert label_ids == ["LA_1", "LA_2"]
+
+
+def test_get_label_ids_empty_list():
+    """Test get_label_ids with empty input."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        client = GithubClient(credentials)
+        label_ids = client.get_label_ids("owner", "repo", [])
+
+    # Should not make any API calls
+    mock_post.assert_not_called()
+    assert label_ids == []
+
+
+def test_get_user_id():
+    """Test fetching user GraphQL node ID."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"user": {"id": "U_kgDOBXYZ"}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        user_id = client.get_user_id("octocat")
+
+    assert user_id == "U_kgDOBXYZ"
+
+
+def test_get_user_ids():
+    """Test resolving multiple usernames to IDs."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    def mock_post_handler(url, **kwargs):
+        response = Mock()
+        response.headers = {"X-RateLimit-Remaining": "4999"}
+        response.raise_for_status = Mock()
+
+        variables = kwargs.get("json", {}).get("variables", {})
+        login = variables.get("login", "")
+
+        if login == "user1":
+            response.json.return_value = {"data": {"user": {"id": "U_1"}}}
+        elif login == "user2":
+            response.json.return_value = {"data": {"user": {"id": "U_2"}}}
+        else:
+            response.json.return_value = {"data": {"user": None}, "errors": [{"message": "Not found"}]}
+
+        return response
+
+    with patch.object(requests.Session, "post", side_effect=mock_post_handler):
+        client = GithubClient(credentials)
+        user_ids = client.get_user_ids(["user1", "user2", "ghost_user"])
+
+    assert user_ids == ["U_1", "U_2"]
+
+
+def test_get_milestone_node_id():
+    """Test fetching milestone GraphQL node ID."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"repository": {"milestone": {"id": "MI_kwDOA1234"}}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        milestone_id = client.get_milestone_node_id("owner", "repo", 5)
+
+    assert milestone_id == "MI_kwDOA1234"
+
+
+# =============================================================================
+# Tests for GraphQL mutation methods
+# =============================================================================
+
+
+def test_create_issue_graphql():
+    """Test creating an issue via GraphQL."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "createIssue": {
+                "issue": {
+                    "id": "I_kwDONew",
+                    "number": 42,
+                    "url": "https://github.com/owner/repo/issues/42",
+                    "title": "New Issue",
+                    "state": "OPEN",
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        result = client.create_issue_graphql(
+            repository_id="R_123",
+            title="New Issue",
+            body="Issue body",
+            label_ids=["LA_1"],
+            assignee_ids=["U_1"],
+        )
+
+    assert result is not None
+    assert result["number"] == 42
+    assert result["title"] == "New Issue"
+    assert result["state"] == "OPEN"
+
+
+def test_create_issue_graphql_failure():
+    """Test create_issue_graphql handles errors."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"createIssue": None},
+        errors=[{"message": "Repository not found"}]
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        result = client.create_issue_graphql(
+            repository_id="R_invalid",
+            title="New Issue",
+        )
+
+    assert result is None
+
+
+def test_update_issue_graphql():
+    """Test updating an issue via GraphQL."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "updateIssue": {
+                "issue": {
+                    "id": "I_kwDOExisting",
+                    "number": 10,
+                    "url": "https://github.com/owner/repo/issues/10",
+                    "title": "Updated Title",
+                    "state": "CLOSED",
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        result = client.update_issue_graphql(
+            issue_id="I_kwDOExisting",
+            title="Updated Title",
+            state="closed",
+        )
+
+    assert result is not None
+    assert result["title"] == "Updated Title"
+    assert result["state"] == "CLOSED"
+
+    # Verify state was uppercased in the request
+    call_kwargs = mock_post.call_args.kwargs
+    input_data = call_kwargs["json"]["variables"]["input"]
+    assert input_data["state"] == "CLOSED"
+
+
+# =============================================================================
+# Tests for project management methods
+# =============================================================================
+
+
+def test_find_project_by_name_org():
+    """Test finding an organization project by name."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "organization": {
+                "projectsV2": {
+                    "nodes": [
+                        {
+                            "id": "PVT_org_proj",
+                            "title": "Sprint Board",
+                            "fields": {
+                                "nodes": [
+                                    {"id": "PVTF_1", "name": "Title"},
+                                    {
+                                        "id": "PVTF_2",
+                                        "name": "Status",
+                                        "options": [
+                                            {"id": "opt_1", "name": "Todo"},
+                                            {"id": "opt_2", "name": "In Progress"},
+                                            {"id": "opt_3", "name": "Done"},
+                                        ],
+                                    },
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        project = client.find_project_by_name("myorg", "Sprint Board", is_org=True)
+
+    assert project is not None
+    assert project["id"] == "PVT_org_proj"
+    assert "Status" in project["fields"]
+    assert project["fields"]["Status"]["id"] == "PVTF_2"
+    assert project["fields"]["Status"]["options"]["Todo"] == "opt_1"
+
+
+def test_find_project_by_name_user():
+    """Test finding a user project by name."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "user": {
+                "projectsV2": {
+                    "nodes": [
+                        {
+                            "id": "PVT_user_proj",
+                            "title": "Personal Tasks",
+                            "fields": {
+                                "nodes": [
+                                    {"id": "PVTF_1", "name": "Title"},
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        project = client.find_project_by_name("octocat", "Personal Tasks", is_org=False)
+
+    assert project is not None
+    assert project["id"] == "PVT_user_proj"
+
+
+def test_find_project_by_name_not_found():
+    """Test find_project_by_name when project doesn't exist."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"organization": {"projectsV2": {"nodes": []}}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        project = client.find_project_by_name("myorg", "Nonexistent", is_org=True)
+
+    assert project is None
+
+
+def test_add_issue_to_project():
+    """Test adding an issue to a project."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"addProjectV2ItemById": {"item": {"id": "PVTI_item123"}}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        item_id = client.add_issue_to_project(
+            project_id="PVT_proj",
+            content_id="I_issue123",
+        )
+
+    assert item_id == "PVTI_item123"
+
+
+def test_get_project_item_id():
+    """Test getting project item ID for an issue in a project."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "repository": {
+                "issue": {
+                    "projectItems": {
+                        "nodes": [
+                            {"id": "PVTI_item1", "project": {"id": "PVT_other"}},
+                            {"id": "PVTI_item2", "project": {"id": "PVT_target"}},
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        item_id = client.get_project_item_id("owner", "repo", 42, "PVT_target")
+
+    assert item_id == "PVTI_item2"
+
+
+def test_get_project_item_id_not_in_project():
+    """Test get_project_item_id when issue not in target project."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={
+            "repository": {
+                "issue": {
+                    "projectItems": {
+                        "nodes": [
+                            {"id": "PVTI_item1", "project": {"id": "PVT_other"}},
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        item_id = client.get_project_item_id("owner", "repo", 42, "PVT_target")
+
+    assert item_id is None
+
+
+def test_update_project_field_value():
+    """Test updating a project field value."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data={"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_item"}}}
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        success = client.update_project_field_value(
+            project_id="PVT_proj",
+            item_id="PVTI_item",
+            field_id="PVTF_status",
+            value="opt_in_progress",
+            value_type="singleSelectOptionId",
+        )
+
+    assert success is True
+
+
+def test_update_project_field_value_failure():
+    """Test update_project_field_value handles errors."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    mock_response = mock_graphql_response(
+        data=None,
+        errors=[{"message": "Field not found"}]
+    )
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_response
+
+        client = GithubClient(credentials)
+        success = client.update_project_field_value(
+            project_id="PVT_proj",
+            item_id="PVTI_item",
+            field_id="PVTF_invalid",
+            value="some_value",
+        )
+
+    assert success is False

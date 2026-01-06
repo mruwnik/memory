@@ -8,6 +8,7 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.celery_app import SYNC_PERSON, UPDATE_PERSON
 from memory.common.celery_app import app as celery_app
@@ -32,7 +33,8 @@ def _person_to_dict(person: Person) -> dict[str, Any]:
     }
 
 
-@people_mcp.tool(tags={"scope:people"})
+@people_mcp.tool()
+@visible_when(require_scopes("people"))
 async def add_person(
     identifier: str,
     display_name: str,
@@ -92,7 +94,8 @@ async def add_person(
     }
 
 
-@people_mcp.tool(tags={"scope:people"})
+@people_mcp.tool()
+@visible_when(require_scopes("people"))
 async def update_person_info(
     identifier: str,
     display_name: str | None = None,
@@ -160,7 +163,8 @@ async def update_person_info(
     }
 
 
-@people_mcp.tool(tags={"scope:people"})
+@people_mcp.tool()
+@visible_when(require_scopes("people"))
 async def get_person(identifier: str) -> dict | None:
     """
     Get a person by their identifier.
@@ -180,7 +184,8 @@ async def get_person(identifier: str) -> dict | None:
         return _person_to_dict(person)
 
 
-@people_mcp.tool(tags={"scope:people"})
+@people_mcp.tool()
+@visible_when(require_scopes("people"))
 async def list_people(
     tags: list[str] | None = None,
     search: str | None = None,
@@ -221,7 +226,8 @@ async def list_people(
         return [_person_to_dict(p) for p in people]
 
 
-@people_mcp.tool(tags={"scope:people"})
+@people_mcp.tool()
+@visible_when(require_scopes("people"))
 async def delete_person(identifier: str) -> dict:
     """
     Delete a person by their identifier.

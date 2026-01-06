@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from memory.api.MCP.oauth_provider import SimpleOAuthProvider
-from memory.api.MCP.scope_middleware import ScopeMiddleware
+from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.github import github_mcp
@@ -39,25 +39,37 @@ mcp = FastMCP(
 )
 
 
-def _get_user_scopes() -> list[str]:
-    """Get the current user's MCP tool scopes (for middleware)."""
-    # This is defined here to avoid circular import issues
-    # The actual implementation is in get_user_scopes() below
+# List of prefixes used when mounting subservers
+# Used by middleware to strip prefixes when looking up visibility checkers
+SUBSERVER_PREFIXES = ["core", "github", "organizer", "people", "schedule", "books", "meta"]
+
+
+def _get_user_info_for_middleware() -> dict:
+    """Get the current user's info for visibility middleware.
+
+    This is a lightweight version that doesn't do DB lookups - it uses
+    the access token directly. For full user info, use get_current_user().
+    """
     access_token = get_access_token()
-    logger.info(f"_get_user_scopes: access_token={access_token}")
+    logger.debug(f"_get_user_info_for_middleware: access_token={access_token}")
     if not access_token:
-        logger.warning("_get_user_scopes: No access token, returning empty scopes")
-        return []
+        logger.debug("_get_user_info_for_middleware: No access token")
+        return {"authenticated": False, "scopes": []}
 
-    # The access_token already has scopes from verify_token
-    # Use those directly instead of re-querying
     scopes = list(access_token.scopes) if access_token.scopes else ["read"]
-    logger.info(f"_get_user_scopes: returning scopes={scopes}")
-    return scopes
+    return {
+        "authenticated": True,
+        "scopes": scopes,
+        "client_id": access_token.client_id,
+        # Note: user details are fetched lazily by get_current_user() if needed
+        # For visibility checks, scopes are usually sufficient
+    }
 
 
-# Add scope-based tool filtering middleware
-mcp.add_middleware(ScopeMiddleware(_get_user_scopes))
+# Add visibility-based tool filtering middleware
+mcp.add_middleware(
+    VisibilityMiddleware(_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES)
+)
 
 
 @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])

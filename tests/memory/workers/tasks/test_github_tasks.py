@@ -10,10 +10,9 @@ from memory.workers.tasks import github
 from memory.workers.tasks.github import (
     _build_content,
     _needs_reindex,
-    _serialize_issue_data,
     _deserialize_issue_data,
 )
-from memory.parsers.github import GithubIssueData, GithubComment
+from memory.parsers.github import GithubIssueData, GithubComment, serialize_issue_data
 from memory.common.db import connection as db_connection
 
 
@@ -272,7 +271,7 @@ def test_build_content_no_comments():
 
 def test_serialize_deserialize_issue_data(mock_issue_data):
     """Test serialization and deserialization roundtrip."""
-    serialized = _serialize_issue_data(mock_issue_data)
+    serialized = serialize_issue_data(mock_issue_data)
     deserialized = _deserialize_issue_data(serialized)
 
     assert deserialized["kind"] == mock_issue_data["kind"]
@@ -308,7 +307,7 @@ def test_serialize_handles_none_dates():
         project_fields=None,
         content_hash="hash",
     )
-    serialized = _serialize_issue_data(data)
+    serialized = serialize_issue_data(data)
 
     assert serialized["closed_at"] is None
     assert serialized["merged_at"] is None
@@ -490,7 +489,7 @@ def test_needs_reindex_no_changes(github_repo, db_session):
 
 def test_sync_github_item_new_issue(mock_issue_data, github_repo, db_session, qdrant):
     """Test syncing a new GitHub issue."""
-    serialized = _serialize_issue_data(mock_issue_data)
+    serialized = serialize_issue_data(mock_issue_data)
 
     result = github.sync_github_item(github_repo.id, serialized)
 
@@ -514,7 +513,7 @@ def test_sync_github_item_new_issue(mock_issue_data, github_repo, db_session, qd
 
 def test_sync_github_item_new_pr(mock_pr_data, github_repo, db_session, qdrant):
     """Test syncing a new GitHub PR."""
-    serialized = _serialize_issue_data(mock_pr_data)
+    serialized = serialize_issue_data(mock_pr_data)
 
     result = github.sync_github_item(github_repo.id, serialized)
 
@@ -536,7 +535,7 @@ def test_sync_github_item_new_pr(mock_pr_data, github_repo, db_session, qdrant):
 
 def test_sync_github_item_repo_not_found(mock_issue_data, db_session):
     """Test syncing with non-existent repo."""
-    serialized = _serialize_issue_data(mock_issue_data)
+    serialized = serialize_issue_data(mock_issue_data)
 
     result = github.sync_github_item(99999, serialized)
 
@@ -549,7 +548,7 @@ def test_sync_github_item_existing_unchanged(
 ):
     """Test syncing existing item with no changes."""
     # Create existing item
-    serialized = _serialize_issue_data(mock_issue_data)
+    serialized = serialize_issue_data(mock_issue_data)
     github.sync_github_item(github_repo.id, serialized)
 
     # Sync again with same data
@@ -609,7 +608,7 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
         project_fields=None,
         content_hash="updatedhash",  # Different hash triggers reindex
     )
-    serialized = _serialize_issue_data(updated_data)
+    serialized = serialize_issue_data(updated_data)
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "processed"
@@ -1028,7 +1027,7 @@ def test_project_status_extraction(github_repo, db_session, qdrant):
         project_fields={"Status": "Done", "Priority": "Low", "Custom Field": "Value"},
         content_hash="hash",
     )
-    serialized = _serialize_issue_data(data)
+    serialized = serialize_issue_data(data)
     github.sync_github_item(github_repo.id, serialized)
 
     item = db_session.query(GithubItem).filter_by(number=50).first()
@@ -1063,7 +1062,7 @@ def test_project_fields_case_insensitive(github_repo, db_session, qdrant):
         project_fields={"PROJECT STATUS": "In Review", "item priority": "Medium"},
         content_hash="hash",
     )
-    serialized = _serialize_issue_data(data)
+    serialized = serialize_issue_data(data)
     github.sync_github_item(github_repo.id, serialized)
 
     item = db_session.query(GithubItem).filter_by(number=51).first()
@@ -1118,7 +1117,7 @@ def test_tag_merging(repo_tags, issue_labels, expected_tags, github_account, db_
         project_fields=None,
         content_hash="hash",
     )
-    serialized = _serialize_issue_data(data)
+    serialized = serialize_issue_data(data)
     github.sync_github_item(repo.id, serialized)
 
     item = db_session.query(GithubItem).filter_by(number=60).first()
@@ -1358,7 +1357,7 @@ def test_create_pr_data_none_for_issue():
 
 def test_serialize_deserialize_with_pr_data(mock_pr_data_with_extended):
     """Test serialization roundtrip preserves pr_data."""
-    serialized = _serialize_issue_data(mock_pr_data_with_extended)
+    serialized = serialize_issue_data(mock_pr_data_with_extended)
 
     # Verify pr_data is included in serialized form
     assert "pr_data" in serialized
@@ -1383,7 +1382,7 @@ def test_serialize_deserialize_without_pr_data(mock_issue_data):
     issue_with_none = dict(mock_issue_data)
     issue_with_none["pr_data"] = None
 
-    serialized = _serialize_issue_data(issue_with_none)
+    serialized = serialize_issue_data(issue_with_none)
     assert serialized.get("pr_data") is None
 
     deserialized = _deserialize_issue_data(serialized)
@@ -1394,7 +1393,7 @@ def test_sync_github_item_creates_pr_data(
     mock_pr_data_with_extended, github_repo, db_session, qdrant
 ):
     """Test that syncing a PR creates associated GithubPRData."""
-    serialized = _serialize_issue_data(mock_pr_data_with_extended)
+    serialized = serialize_issue_data(mock_pr_data_with_extended)
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "processed"
@@ -1446,7 +1445,7 @@ def test_sync_github_item_pr_without_pr_data(github_repo, db_session, qdrant):
         pr_data=None,  # No extended PR data
     )
 
-    serialized = _serialize_issue_data(data)
+    serialized = serialize_issue_data(data)
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "processed"
@@ -1543,7 +1542,7 @@ def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdra
         },
     )
 
-    serialized = _serialize_issue_data(updated_data)
+    serialized = serialize_issue_data(updated_data)
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "processed"
@@ -1629,7 +1628,7 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
         },
     )
 
-    serialized = _serialize_issue_data(updated_data)
+    serialized = serialize_issue_data(updated_data)
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "processed"

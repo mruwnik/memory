@@ -5,6 +5,8 @@ import logging
 from fastmcp import FastMCP
 from sqlalchemy.orm import joinedload
 
+from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+
 from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection, BookSectionPayload
 
@@ -13,7 +15,8 @@ logger = logging.getLogger(__name__)
 books_mcp = FastMCP("memory-books")
 
 
-@books_mcp.tool(tags={"scope:read"})
+@books_mcp.tool()
+@visible_when(require_scopes("read"), has_items(Book))
 async def all_books(sections: bool = False) -> list[dict]:
     """
     Get all books in the database.
@@ -35,7 +38,8 @@ async def all_books(sections: bool = False) -> list[dict]:
         return [book.as_payload(sections=sections) for book in books]
 
 
-@books_mcp.tool(tags={"scope:read"})
+@books_mcp.tool()
+@visible_when(require_scopes("read"), has_items(Book))
 def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload]:
     """
     Read a book from the database.

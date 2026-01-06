@@ -507,10 +507,11 @@ def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
             label["name"].lower(): label["id"]
             for label in labels_response.get("labels", [])
         }
-        # Add matching custom folder IDs
-        for folder in custom_folders:
-            if folder in api_labels:
-                label_ids.add(api_labels[folder])
+        return list(label_ids) + [
+            label
+            for folder in custom_folders
+            if (label := api_labels.get(folder))
+        ]
     except Exception as e:
         logger.warning(f"Error fetching labels: {e}")
 

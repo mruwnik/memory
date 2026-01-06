@@ -142,6 +142,35 @@ def compute_content_hash(body: str, comments: list[GithubComment]) -> str:
     return hashlib.sha256("\n".join(content_parts).encode()).hexdigest()
 
 
+def serialize_issue_data(data: GithubIssueData) -> dict[str, Any]:
+    """Serialize GithubIssueData for Celery task passing.
+
+    Converts datetime objects to ISO format strings for JSON serialization.
+    """
+    return {
+        **data,
+        "created_at": data["created_at"].isoformat() if data["created_at"] else None,
+        "closed_at": data["closed_at"].isoformat() if data["closed_at"] else None,
+        "merged_at": data["merged_at"].isoformat() if data["merged_at"] else None,
+        "github_updated_at": (
+            data["github_updated_at"].isoformat()
+            if data["github_updated_at"]
+            else None
+        ),
+        "comments": [
+            {
+                "id": c["id"],
+                "author": c["author"],
+                "body": c["body"],
+                "created_at": c["created_at"],
+                "updated_at": c["updated_at"],
+            }
+            for c in data["comments"]
+        ],
+        "pr_data": data.get("pr_data"),
+    }
+
+
 class GithubClient:
     """Client for GitHub REST and GraphQL APIs."""
 
@@ -149,6 +178,77 @@ class GithubClient:
         self.credentials = credentials
         self.session = requests.Session()
         self._setup_auth()
+
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
+    @staticmethod
+    def _extract_nested(data: dict[str, Any] | None, *keys: str, default: Any = None) -> Any:
+        """Safely extract a value from nested dicts.
+
+        Example:
+            _extract_nested(data, "repository", "issue", "id")
+            is equivalent to data.get("repository", {}).get("issue", {}).get("id")
+        """
+        result = data
+        for key in keys:
+            if result is None or not isinstance(result, dict):
+                return default
+            result = result.get(key)
+        return result if result is not None else default
+
+    def _graphql(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        *,
+        operation_name: str | None = None,
+        timeout: int = 30,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+        """Execute a GraphQL query/mutation and return (data, errors).
+
+        Args:
+            query: The GraphQL query or mutation string
+            variables: Variables to pass to the query
+            operation_name: Optional operation name for logging
+            timeout: Request timeout in seconds
+
+        Returns:
+            Tuple of (data, errors) where:
+            - data is the "data" field from response, or None on HTTP error
+            - errors is the "errors" field from response, or None if no errors
+        """
+        payload: dict[str, Any] = {"query": query}
+        if variables:
+            payload["variables"] = variables
+
+        try:
+            response = self.session.post(
+                GITHUB_GRAPHQL_URL,
+                json=payload,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+        except requests.RequestException as e:
+            op = operation_name or "GraphQL request"
+            logger.warning(f"Failed {op}: {e}")
+            return None, None
+
+        result = response.json()
+        data = result.get("data")
+        errors = result.get("errors")
+
+        if errors:
+            op = operation_name or "GraphQL request"
+            if data:
+                # Partial success - some data returned but with errors
+                logger.warning(f"{op} partial success with errors: {errors}")
+            else:
+                logger.warning(f"{op} failed: {errors}")
+
+        return data, errors
 
     def _setup_auth(self) -> None:
         if self.credentials.auth_type == "pat":
@@ -467,91 +567,60 @@ class GithubClient:
             logger.warning(f"Failed to fetch PR diff: {e}")
         return None
 
-    def fetch_project_fields(
-        self,
-        owner: str,
-        repo: str,
-        issue_number: int,
-    ) -> dict[str, Any] | None:
-        """Fetch GitHub Projects v2 field values using GraphQL."""
-        query = """
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            issue(number: $number) {
-              projectItems(first: 10) {
-                nodes {
-                  project { title }
-                  fieldValues(first: 20) {
-                    nodes {
-                      ... on ProjectV2ItemFieldTextValue {
-                        text
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldNumberValue {
-                        number
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldDateValue {
-                        date
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldSingleSelectValue {
-                        name
-                        field { ... on ProjectV2SingleSelectField { name } }
-                      }
-                      ... on ProjectV2ItemFieldIterationValue {
-                        title
-                        field { ... on ProjectV2IterationField { name } }
-                      }
-                    }
-                  }
-                }
-              }
+    # GraphQL fragment for fetching project item field VALUES (actual data)
+    _PROJECT_ITEM_VALUES_FRAGMENT = """
+    fragment ProjectFieldValues on ProjectV2ItemConnection {
+      nodes {
+        project { title }
+        fieldValues(first: 20) {
+          nodes {
+            ... on ProjectV2ItemFieldTextValue {
+              text
+              field { ... on ProjectV2Field { name } }
+            }
+            ... on ProjectV2ItemFieldNumberValue {
+              number
+              field { ... on ProjectV2Field { name } }
+            }
+            ... on ProjectV2ItemFieldDateValue {
+              date
+              field { ... on ProjectV2Field { name } }
+            }
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              name
+              field { ... on ProjectV2SingleSelectField { name } }
+            }
+            ... on ProjectV2ItemFieldIterationValue {
+              title
+              field { ... on ProjectV2IterationField { name } }
             }
           }
         }
+      }
+    }
+    """
+
+    def _parse_project_items(self, items: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Parse project items into a field values dict.
+
+        Args:
+            items: List of project item nodes from GraphQL response
+
+        Returns:
+            Dict mapping "ProjectName.FieldName" to values, or None if empty
         """
-
-        try:
-            response = self.session.post(
-                GITHUB_GRAPHQL_URL,
-                json={
-                    "query": query,
-                    "variables": {"owner": owner, "repo": repo, "number": issue_number},
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.warning(f"Failed to fetch project fields: {e}")
-            return None
-
-        data = response.json()
-        if "errors" in data:
-            logger.warning(f"GraphQL errors: {data['errors']}")
-            return None
-
-        # Parse project fields
-        issue_data = (
-            data.get("data", {}).get("repository", {}).get("issue", {})
-        )
-        if not issue_data:
-            return None
-
-        items = issue_data.get("projectItems", {}).get("nodes", [])
         if not items:
             return None
 
         fields: dict[str, Any] = {}
         for item in items:
-            project_name = item.get("project", {}).get("title", "unknown")
-            for field_value in item.get("fieldValues", {}).get("nodes", []):
-                field_info = field_value.get("field", {})
-                field_name = field_info.get("name") if field_info else None
+            project_name = self._extract_nested(item, "project", "title", default="unknown")
+            for field_value in self._extract_nested(item, "fieldValues", "nodes", default=[]):
+                field_name = self._extract_nested(field_value, "field", "name")
                 if not field_name:
                     continue
 
-                # Extract value based on type
+                # Extract value based on type (order matters for 'or' chain)
                 value = (
                     field_value.get("text")
                     or field_value.get("number")
@@ -565,102 +634,65 @@ class GithubClient:
 
         return fields if fields else None
 
+    def _fetch_item_project_fields(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        kind: str,
+    ) -> dict[str, Any] | None:
+        """Fetch GitHub Projects v2 field values for an issue or PR.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            number: Issue or PR number
+            kind: "issue" or "pullRequest"
+
+        Returns:
+            Dict mapping "ProjectName.FieldName" to values, or None if not found
+        """
+        query = f"""
+        query($owner: String!, $repo: String!, $number: Int!) {{
+          repository(owner: $owner, name: $repo) {{
+            {kind}(number: $number) {{
+              projectItems(first: 10) {{
+                ...ProjectFieldValues
+              }}
+            }}
+          }}
+        }}
+        {self._PROJECT_ITEM_VALUES_FRAGMENT}
+        """
+
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name=f"fetch_{kind}_project_fields",
+        )
+        if errors or data is None:
+            return None
+
+        items = self._extract_nested(data, "repository", kind, "projectItems", "nodes", default=[])
+        return self._parse_project_items(items)
+
+    def fetch_project_fields(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+    ) -> dict[str, Any] | None:
+        """Fetch GitHub Projects v2 field values for an issue."""
+        return self._fetch_item_project_fields(owner, repo, issue_number, "issue")
+
     def fetch_pr_project_fields(
         self,
         owner: str,
         repo: str,
         pr_number: int,
     ) -> dict[str, Any] | None:
-        """Fetch GitHub Projects v2 field values for a PR using GraphQL."""
-        query = """
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              projectItems(first: 10) {
-                nodes {
-                  project { title }
-                  fieldValues(first: 20) {
-                    nodes {
-                      ... on ProjectV2ItemFieldTextValue {
-                        text
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldNumberValue {
-                        number
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldDateValue {
-                        date
-                        field { ... on ProjectV2Field { name } }
-                      }
-                      ... on ProjectV2ItemFieldSingleSelectValue {
-                        name
-                        field { ... on ProjectV2SingleSelectField { name } }
-                      }
-                      ... on ProjectV2ItemFieldIterationValue {
-                        title
-                        field { ... on ProjectV2IterationField { name } }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-
-        try:
-            response = self.session.post(
-                GITHUB_GRAPHQL_URL,
-                json={
-                    "query": query,
-                    "variables": {"owner": owner, "repo": repo, "number": pr_number},
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.warning(f"Failed to fetch PR project fields: {e}")
-            return None
-
-        data = response.json()
-        if "errors" in data:
-            logger.warning(f"GraphQL errors: {data['errors']}")
-            return None
-
-        # Parse project fields
-        pr_data = (
-            data.get("data", {}).get("repository", {}).get("pullRequest", {})
-        )
-        if not pr_data:
-            return None
-
-        items = pr_data.get("projectItems", {}).get("nodes", [])
-        if not items:
-            return None
-
-        fields: dict[str, Any] = {}
-        for item in items:
-            project_name = item.get("project", {}).get("title", "unknown")
-            for field_value in item.get("fieldValues", {}).get("nodes", []):
-                field_info = field_value.get("field", {})
-                field_name = field_info.get("name") if field_info else None
-                if not field_name:
-                    continue
-
-                value = (
-                    field_value.get("text")
-                    or field_value.get("number")
-                    or field_value.get("date")
-                    or field_value.get("name")
-                    or field_value.get("title")
-                )
-
-                if value is not None:
-                    fields[f"{project_name}.{field_name}"] = value
-
-        return fields if fields else None
+        """Fetch GitHub Projects v2 field values for a PR."""
+        return self._fetch_item_project_fields(owner, repo, pr_number, "pullRequest")
 
     def fetch_milestones(
         self,
@@ -797,3 +829,470 @@ class GithubClient:
             content_hash=compute_content_hash(body, comments),
             pr_data=pr_data,
         )
+
+    # =========================================================================
+    # GraphQL Methods for Issue Creation/Update
+    # =========================================================================
+
+    def get_repository_id(self, owner: str, repo: str) -> str | None:
+        """Get the GraphQL node ID for a repository."""
+        query = """
+        query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) { id }
+        }
+        """
+        data, errors = self._graphql(
+            query, {"owner": owner, "repo": repo}, operation_name="get_repository_id"
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "repository", "id")
+
+    def get_issue_node_id(self, owner: str, repo: str, number: int) -> str | None:
+        """Get the GraphQL node ID for an issue (needed for mutations)."""
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) { id }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name="get_issue_node_id",
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "repository", "issue", "id")
+
+    def get_label_ids(self, owner: str, repo: str, label_names: list[str]) -> list[str]:
+        """Resolve label names to GraphQL node IDs."""
+        if not label_names:
+            return []
+
+        query = """
+        query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) {
+            labels(first: 100) {
+              nodes { id, name }
+            }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query, {"owner": owner, "repo": repo}, operation_name="get_label_ids"
+        )
+        if errors or data is None:
+            return []
+
+        labels = self._extract_nested(data, "repository", "labels", "nodes", default=[])
+        label_map = {label["name"]: label["id"] for label in labels}
+        return [label_map[name] for name in label_names if name in label_map]
+
+    def get_user_id(self, username: str) -> str | None:
+        """Get the GraphQL node ID for a user."""
+        query = """
+        query($login: String!) {
+          user(login: $login) { id }
+        }
+        """
+        data, errors = self._graphql(
+            query, {"login": username}, operation_name=f"get_user_id({username})"
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "user", "id")
+
+    def get_user_ids(self, usernames: list[str]) -> list[str]:
+        """Resolve usernames to GraphQL node IDs."""
+        if not usernames:
+            return []
+        return [uid for u in usernames if (uid := self.get_user_id(u))]
+
+    def get_milestone_node_id(
+        self, owner: str, repo: str, milestone_number: int
+    ) -> str | None:
+        """Get the GraphQL node ID for a milestone."""
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            milestone(number: $number) { id }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": milestone_number},
+            operation_name="get_milestone_node_id",
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "repository", "milestone", "id")
+
+    def fetch_issue_graphql(
+        self, owner: str, repo: str, number: int
+    ) -> GithubIssueData | None:
+        """Fetch complete issue data via GraphQL.
+
+        Fetches issue metadata and comments in a single query, returning
+        data in GithubIssueData format ready for database sync.
+        """
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              number
+              title
+              body
+              state
+              author { login }
+              labels(first: 100) { nodes { name } }
+              assignees(first: 50) { nodes { login } }
+              milestone { number }
+              createdAt
+              closedAt
+              updatedAt
+              comments(first: 100) {
+                nodes {
+                  databaseId
+                  author { login }
+                  body
+                  createdAt
+                  updatedAt
+                }
+              }
+            }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name=f"fetch_issue({owner}/{repo}#{number})",
+        )
+        if errors or data is None:
+            return None
+
+        issue = self._extract_nested(data, "repository", "issue")
+        if issue is None:
+            return None
+
+        # Parse comments
+        raw_comments = self._extract_nested(issue, "comments", "nodes", default=[])
+        comments = [
+            GithubComment(
+                id=c.get("databaseId", 0),
+                author=self._extract_nested(c, "author", "login", default="ghost"),
+                body=c.get("body", ""),
+                created_at=c.get("createdAt", ""),
+                updated_at=c.get("updatedAt", ""),
+            )
+            for c in raw_comments
+        ]
+
+        body = issue.get("body") or ""
+        return GithubIssueData(
+            kind="issue",
+            number=issue["number"],
+            title=issue["title"],
+            body=body,
+            state=issue["state"].lower(),  # GraphQL returns OPEN/CLOSED
+            author=self._extract_nested(issue, "author", "login", default="ghost"),
+            labels=[
+                label["name"]
+                for label in self._extract_nested(issue, "labels", "nodes", default=[])
+            ],
+            assignees=[
+                a["login"]
+                for a in self._extract_nested(issue, "assignees", "nodes", default=[])
+            ],
+            milestone_number=self._extract_nested(issue, "milestone", "number"),
+            created_at=parse_github_date(issue["createdAt"]),  # type: ignore
+            closed_at=parse_github_date(issue.get("closedAt")),
+            merged_at=None,  # Issues don't have merged_at
+            github_updated_at=parse_github_date(issue["updatedAt"]),  # type: ignore
+            comment_count=len(comments),
+            comments=comments,
+            diff_summary=None,  # Issues don't have diff
+            project_fields=None,  # Fetched separately if enabled
+            content_hash=compute_content_hash(body, comments),
+            pr_data=None,  # Issues don't have PR data
+        )
+
+    def create_issue_graphql(
+        self,
+        repository_id: str,
+        title: str,
+        body: str | None = None,
+        label_ids: list[str] | None = None,
+        assignee_ids: list[str] | None = None,
+        milestone_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Create a new issue using GraphQL mutation.
+
+        Returns dict with 'id', 'number', 'url' on success, None on failure.
+        """
+        mutation = """
+        mutation CreateIssue($input: CreateIssueInput!) {
+          createIssue(input: $input) {
+            issue { id, number, url, title, state }
+          }
+        }
+        """
+        input_data: dict[str, Any] = {"repositoryId": repository_id, "title": title}
+        if body is not None:
+            input_data["body"] = body
+        if label_ids:
+            input_data["labelIds"] = label_ids
+        if assignee_ids:
+            input_data["assigneeIds"] = assignee_ids
+        if milestone_id:
+            input_data["milestoneId"] = milestone_id
+
+        data, errors = self._graphql(
+            mutation, {"input": input_data}, operation_name="create_issue"
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "createIssue", "issue")
+
+    def update_issue_graphql(
+        self,
+        issue_id: str,
+        title: str | None = None,
+        body: str | None = None,
+        state: str | None = None,
+        label_ids: list[str] | None = None,
+        assignee_ids: list[str] | None = None,
+        milestone_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing issue using GraphQL mutation.
+
+        Args:
+            issue_id: GraphQL node ID of the issue
+            title: New title (optional)
+            body: New body (optional)
+            state: New state - "OPEN" or "CLOSED" (optional)
+            label_ids: New label IDs (replaces existing)
+            assignee_ids: New assignee IDs (replaces existing)
+            milestone_id: New milestone ID (optional)
+
+        Returns dict with 'id', 'number', 'url' on success, None on failure.
+        """
+        mutation = """
+        mutation UpdateIssue($input: UpdateIssueInput!) {
+          updateIssue(input: $input) {
+            issue { id, number, url, title, state }
+          }
+        }
+        """
+        input_data: dict[str, Any] = {"id": issue_id}
+        if title is not None:
+            input_data["title"] = title
+        if body is not None:
+            input_data["body"] = body
+        if state is not None:
+            input_data["state"] = state.upper()
+        if label_ids is not None:
+            input_data["labelIds"] = label_ids
+        if assignee_ids is not None:
+            input_data["assigneeIds"] = assignee_ids
+        if milestone_id is not None:
+            input_data["milestoneId"] = milestone_id
+
+        data, errors = self._graphql(
+            mutation, {"input": input_data}, operation_name="update_issue"
+        )
+        if errors or data is None:
+            return None
+        return self._extract_nested(data, "updateIssue", "issue")
+
+    # =========================================================================
+    # GraphQL Methods for Project Management
+    # =========================================================================
+
+    # GraphQL fragment for fetching project field DEFINITIONS (schema/metadata)
+    _PROJECT_FIELD_DEFS_FRAGMENT = """
+    projectsV2(first: 20, query: $projectName) {
+      nodes {
+        id
+        title
+        fields(first: 30) {
+          nodes {
+            ... on ProjectV2Field { id, name }
+            ... on ProjectV2SingleSelectField {
+              id
+              name
+              options { id, name }
+            }
+            ... on ProjectV2IterationField { id, name }
+          }
+        }
+      }
+    }
+    """
+
+    def _parse_project_fields(self, projects: list[dict[str, Any]], project_name: str) -> dict[str, Any] | None:
+        """Parse project list to find matching project and extract fields."""
+        for project in projects:
+            if project.get("title") == project_name:
+                fields: dict[str, Any] = {}
+                for field in self._extract_nested(project, "fields", "nodes", default=[]):
+                    field_name = field.get("name")
+                    if not field_name:
+                        continue
+                    field_info: dict[str, Any] = {"id": field["id"]}
+                    if "options" in field:
+                        field_info["options"] = {
+                            opt["name"]: opt["id"] for opt in field["options"]
+                        }
+                    fields[field_name] = field_info
+                return {"id": project["id"], "fields": fields}
+        return None
+
+    def find_project_by_name(
+        self, owner: str, project_name: str, is_org: bool = True
+    ) -> dict[str, Any] | None:
+        """Find a project by name and return its ID and field definitions.
+
+        Returns:
+            {
+                "id": "project_node_id",
+                "fields": {
+                    "Status": {"id": "field_id", "options": {"Todo": "option_id", ...}},
+                    "Priority": {"id": "field_id", "options": {...}},
+                    ...
+                }
+            }
+            or None if not found
+        """
+        entity_type = "organization" if is_org else "user"
+        query = f"""
+        query($owner: String!, $projectName: String!) {{
+          {entity_type}(login: $owner) {{
+            {self._PROJECT_FIELD_DEFS_FRAGMENT}
+          }}
+        }}
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "projectName": project_name},
+            operation_name=f"find_project({project_name})",
+        )
+        if errors:
+            logger.warning(f"Error finding project '{project_name}' in {entity_type} '{owner}': {errors}")
+            return None
+        if data is None:
+            return None
+
+        projects = self._extract_nested(data, entity_type, "projectsV2", "nodes", default=[])
+        result = self._parse_project_fields(projects, project_name)
+        if result is None:
+            available = [p.get("title") for p in projects]
+            logger.info(f"Project '{project_name}' not found in {entity_type} '{owner}'. Available: {available}")
+        return result
+
+    def add_issue_to_project(self, project_id: str, content_id: str) -> str | None:
+        """Add an issue to a project.
+
+        Args:
+            project_id: GraphQL node ID of the project
+            content_id: GraphQL node ID of the issue
+
+        Returns:
+            Project item ID on success, None on failure
+        """
+        mutation = """
+        mutation($projectId: ID!, $contentId: ID!) {
+          addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+            item { id }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            mutation,
+            {"projectId": project_id, "contentId": content_id},
+            operation_name="add_issue_to_project",
+        )
+        if errors:
+            logger.warning(f"Failed to add issue to project: {errors}")
+            return None
+        if data is None:
+            return None
+        return self._extract_nested(data, "addProjectV2ItemById", "item", "id")
+
+    def get_project_item_id(
+        self, owner: str, repo: str, number: int, project_id: str
+    ) -> str | None:
+        """Get the project item ID for an issue already in a project."""
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              projectItems(first: 20) {
+                nodes {
+                  id
+                  project { id }
+                }
+              }
+            }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name="get_project_item_id",
+        )
+        if errors or data is None:
+            return None
+
+        items = self._extract_nested(
+            data, "repository", "issue", "projectItems", "nodes", default=[]
+        )
+        for item in items:
+            if self._extract_nested(item, "project", "id") == project_id:
+                return item.get("id")
+        return None
+
+    def update_project_field_value(
+        self,
+        project_id: str,
+        item_id: str,
+        field_id: str,
+        value: str,
+        value_type: str = "singleSelectOptionId",
+    ) -> bool:
+        """Update a field value for a project item.
+
+        Args:
+            project_id: GraphQL node ID of the project
+            item_id: GraphQL node ID of the project item
+            field_id: GraphQL node ID of the field
+            value: The value to set (option ID for single-select, text for text fields)
+            value_type: Type of value - "singleSelectOptionId", "text", "number", "date"
+
+        Returns:
+            True on success, False on failure
+        """
+        mutation = """
+        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
+          updateProjectV2ItemFieldValue(
+            input: {projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value}
+          ) {
+            projectV2Item { id }
+          }
+        }
+        """
+        data, errors = self._graphql(
+            mutation,
+            {
+                "projectId": project_id,
+                "itemId": item_id,
+                "fieldId": field_id,
+                "value": {value_type: value},
+            },
+            operation_name="update_project_field_value",
+        )
+        return data is not None and errors is None

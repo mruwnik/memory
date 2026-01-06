@@ -14,6 +14,7 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.api.search.search import search
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract, settings
@@ -99,7 +100,8 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
     return source_ids
 
 
-@core_mcp.tool(tags={"scope:read"})
+@core_mcp.tool()
+@visible_when(require_scopes("read"))
 async def search_knowledge_base(
     query: str,
     filters: SearchFilters = {},
@@ -173,7 +175,8 @@ class RawObservation(BaseModel):
     tags: list[str] = []
 
 
-@core_mcp.tool(tags={"scope:observe"})
+@core_mcp.tool()
+@visible_when(require_scopes("observe"))
 async def observe(
     observations: list[RawObservation],
     session_id: str | None = None,
@@ -248,7 +251,8 @@ async def observe(
     }
 
 
-@core_mcp.tool(tags={"scope:observe"})
+@core_mcp.tool()
+@visible_when(require_scopes("observe"), has_items(AgentObservation))
 async def search_observations(
     query: str,
     subject: str = "",
@@ -314,7 +318,8 @@ async def search_observations(
     ]
 
 
-@core_mcp.tool(tags={"scope:notes"})
+@core_mcp.tool()
+@visible_when(require_scopes("notes"))
 async def create_note(
     subject: str,
     content: str,
@@ -368,7 +373,8 @@ async def create_note(
     }
 
 
-@core_mcp.tool(tags={"scope:notes"})
+@core_mcp.tool()
+@visible_when(require_scopes("notes"))
 async def note_files(path: str = "/"):
     """
     List note files in the user's note storage.
@@ -392,7 +398,8 @@ async def note_files(path: str = "/"):
     ]
 
 
-@core_mcp.tool(tags={"scope:read"})
+@core_mcp.tool()
+@visible_when(require_scopes("read"))
 def fetch_file(filename: str) -> dict:
     """
     Read file content with automatic type detection.
@@ -438,7 +445,8 @@ def fetch_file(filename: str) -> dict:
 # --- Enumeration tools for systematic investigations ---
 
 
-@core_mcp.tool(tags={"scope:read"})
+@core_mcp.tool()
+@visible_when(require_scopes("read"))
 async def get_source_item(id: int, include_content: bool = True) -> dict:
     """
     Get full details of a source item by ID.
@@ -480,7 +488,8 @@ async def get_source_item(id: int, include_content: bool = True) -> dict:
         return result
 
 
-@core_mcp.tool(tags={"scope:read"})
+@core_mcp.tool()
+@visible_when(require_scopes("read"))
 async def list_items(
     modalities: set[str] = set(),
     filters: SearchFilters = {},
@@ -586,7 +595,8 @@ async def list_items(
         }
 
 
-@core_mcp.tool(tags={"scope:read"})
+@core_mcp.tool()
+@visible_when(require_scopes("read"))
 async def count_items(
     modalities: set[str] = set(),
     filters: SearchFilters = {},
