@@ -214,7 +214,7 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     deploy:
       resources:
         limits:
@@ -229,7 +229,7 @@ services:
     <<: *worker-base
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,people,photos,maintenance,notes,scheduler"
+      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler"
 
   ingest-hub:
     <<: *worker-base
