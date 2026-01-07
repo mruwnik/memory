@@ -70,6 +70,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": False,
     },
+    "meeting": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": False,
+    },
     "photo": {
         "dimension": 1024,
         "distance": "Cosine",

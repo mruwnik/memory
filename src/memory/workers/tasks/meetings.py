@@ -28,18 +28,18 @@ DEFAULT_EXTRACTION_PROMPT = """You are analyzing a meeting transcript. Extract t
 3. Action items - tasks that were assigned or need to be done, with assignee, due date, and priority if mentioned
 
 Return your analysis as JSON with this exact structure:
-{
+{{
     "summary": "Brief summary of the meeting",
     "notes": "- Key point 1\\n- Key point 2\\n- Decision made\\n- etc.",
     "action_items": [
-        {
+        {{
             "description": "Task description",
             "assignee": "Person name or null if not specified",
             "due_date": "YYYY-MM-DD or null if not specified",
             "priority": "low, medium, high, or urgent based on context, or null if unclear"
-        }
+        }}
     ]
-}
+}}
 
 IMPORTANT: Return ONLY valid JSON, no markdown formatting or extra text.
 
