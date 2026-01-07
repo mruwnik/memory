@@ -36,8 +36,3 @@ if __name__ == "__main__":
 
         session.add(user)
         session.commit()
-
-    if args.bot:
-        print(f"Bot user {args.email} created with API key: {user.api_key}")
-    else:
-        print(f"Human user {args.email} created")

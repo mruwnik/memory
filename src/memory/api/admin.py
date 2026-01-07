@@ -32,6 +32,9 @@ from memory.common.db.models import (
     GoogleDoc,
     GoogleFolder,
     GoogleAccount,
+    CalendarEvent,
+    CalendarAccount,
+    Meeting,
 )
 from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
 
@@ -433,6 +436,72 @@ class GoogleAccountAdmin(ModelView, model=GoogleAccount):
     column_sortable_list = ["last_sync_at", "created_at"]
 
 
+class MeetingAdmin(ModelView, model=Meeting):
+    column_list = source_columns(
+        Meeting,
+        "title",
+        "meeting_date",
+        "duration_minutes",
+        "source_tool",
+        "summary",
+        "notes",
+        "extraction_status",
+        "attendee_ids",
+        "task_ids",
+        "calendar_event_id",
+    )
+    column_searchable_list = [
+        "title",
+        "meeting_date",
+        "duration_minutes",
+        "source_tool",
+        "summary",
+        "notes",
+        "extraction_status",
+        "attendee_ids",
+        "task_ids",
+        "calendar_event_id",
+        "id",
+    ]
+    column_sortable_list = ["meeting_date", "duration_minutes", "created_at"]
+
+
+class CalendarEventAdmin(ModelView, model=CalendarEvent):
+    column_list = source_columns(
+        CalendarEvent,
+        "title",
+        "start_time",
+        "end_time",
+        "location",
+        "description",
+        "tags",
+    )
+    column_searchable_list = [
+        "title",
+        "start_time",
+        "end_time",
+        "location",
+        "description",
+        "tags",
+        "id",
+    ]
+    column_sortable_list = ["start_time", "end_time", "created_at"]
+
+
+class CalendarAccountAdmin(ModelView, model=CalendarAccount):
+    column_list = [
+        "id",
+        "name",
+        "email",
+        "active",
+        "last_sync_at",
+        "created_at",
+        "updated_at",
+    ]
+    column_searchable_list = ["name", "email", "id"]
+    column_sortable_list = ["last_sync_at", "created_at"]
+
+
 def setup_admin(admin: Admin):
     """Add all admin views to the admin instance with OAuth protection."""
     admin.add_view(SourceItemAdmin)
@@ -463,3 +532,6 @@ def setup_admin(admin: Admin):
     admin.add_view(GoogleDocAdmin)
     admin.add_view(GoogleFolderAdmin)
     admin.add_view(GoogleAccountAdmin)
+    admin.add_view(MeetingAdmin)
+    admin.add_view(CalendarEventAdmin)
+    admin.add_view(CalendarAccountAdmin)

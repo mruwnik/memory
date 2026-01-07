@@ -36,6 +36,8 @@ from memory.common.db.models.source_items import (
     GoogleDocPayload,
     TaskPayload,
     CalendarEventPayload,
+    MeetingPayload,
+    Meeting,
 )
 from memory.common.db.models.discord import (
     DiscordServer,
@@ -126,6 +128,8 @@ __all__ = [
     "TaskPayload",
     "CalendarEvent",
     "CalendarEventPayload",
+    "Meeting",
+    "MeetingPayload",
     # Observations
     "ObservationContradiction",
     "ReactionPattern",
