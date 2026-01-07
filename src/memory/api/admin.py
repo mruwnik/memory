@@ -469,23 +469,23 @@ class MeetingAdmin(ModelView, model=Meeting):
 class CalendarEventAdmin(ModelView, model=CalendarEvent):
     column_list = source_columns(
         CalendarEvent,
-        "title",
+        "event_title",
         "start_time",
         "end_time",
         "location",
-        "description",
+        "content",
         "tags",
     )
     column_searchable_list = [
-        "title",
+        "event_title",
         "start_time",
         "end_time",
         "location",
-        "description",
+        "content",
         "tags",
         "id",
     ]
-    column_sortable_list = ["start_time", "end_time", "created_at"]
+    column_sortable_list = ["start_time", "end_time", "inserted_at"]
 
 
 class CalendarAccountAdmin(ModelView, model=CalendarAccount):

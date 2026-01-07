@@ -296,6 +296,55 @@ def validate_account(
         return {"status": "error", "message": str(e)}
 
 
+class AvailableRepoResponse(BaseModel):
+    owner: str
+    name: str
+    full_name: str
+    description: str | None
+    private: bool
+    html_url: str | None
+
+
+@router.get("/accounts/{account_id}/available-repos")
+def list_available_repos(
+    account_id: int,
+    limit: int = 200,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[AvailableRepoResponse]:
+    """List repositories available from GitHub for this account.
+
+    Args:
+        account_id: GitHub account ID.
+        limit: Maximum number of repos to return (default 200, max 500).
+    """
+    from memory.parsers.github import GithubClient, GithubCredentials
+
+    account = db.get(GithubAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Cap limit to prevent excessive API calls
+    limit = min(limit, 500)
+
+    try:
+        credentials = GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+        client = GithubClient(credentials)
+
+        repos = []
+        for repo in client.list_repos(max_repos=limit):
+            repos.append(AvailableRepoResponse(**repo))
+        return repos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Repo Endpoints ---
 
 

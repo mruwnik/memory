@@ -183,7 +183,9 @@ class MailMessage(SourceItem):
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = self.parsed_content
-        chunks = extract.extract_text(cast(str, self.body), modality="mail")
+        body = cast(str, self.body)
+
+        chunks = extract.extract_text(body, modality="mail")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
@@ -1321,9 +1323,10 @@ class GoogleDoc(SourceItem):
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = cast(str | None, self.content)
-        if content:
-            return extract.extract_text(content, modality="doc")
-        return []
+        if not content:
+            return []
+
+        return extract.extract_text(content, modality="doc")
 
     @classmethod
     def get_collections(cls) -> list[str]:
@@ -1700,6 +1703,7 @@ class Meeting(SourceItem):
             parts.append(f"Transcript:\n{cast(str, self.content)}")
 
         text = "\n\n".join(parts)
+
         return extract.extract_text(text, modality="meeting")
 
     @classmethod

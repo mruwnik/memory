@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo } from '@/hooks/useSources'
 import { useAuth } from '@/hooks/useAuth'
 import {
   SourceCard,
@@ -16,7 +16,7 @@ import {
   ConfirmDialog,
 } from './shared'
 
-type TabType = 'email' | 'feeds' | 'github' | 'google' | 'calendar' | 'books' | 'forums' | 'photos'
+type TabType = 'email' | 'feeds' | 'github' | 'google-auth' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos'
 
 const Sources = () => {
   const [activeTab, setActiveTab] = useState<TabType>('email')
@@ -48,10 +48,16 @@ const Sources = () => {
           GitHub
         </button>
         <button
-          className={`tab ${activeTab === 'google' ? 'active' : ''}`}
-          onClick={() => setActiveTab('google')}
+          className={`tab ${activeTab === 'google-auth' ? 'active' : ''}`}
+          onClick={() => setActiveTab('google-auth')}
         >
-          Google Drive
+          Google
+        </button>
+        <button
+          className={`tab ${activeTab === 'drive' ? 'active' : ''}`}
+          onClick={() => setActiveTab('drive')}
+        >
+          Drive
         </button>
         <button
           className={`tab ${activeTab === 'calendar' ? 'active' : ''}`}
@@ -83,7 +89,8 @@ const Sources = () => {
         {activeTab === 'email' && <EmailPanel />}
         {activeTab === 'feeds' && <FeedsPanel />}
         {activeTab === 'github' && <GitHubPanel />}
-        {activeTab === 'google' && <GoogleDrivePanel />}
+        {activeTab === 'google-auth' && <GoogleAuthPanel />}
+        {activeTab === 'drive' && <GoogleDrivePanel />}
         {activeTab === 'calendar' && <CalendarPanel />}
         {activeTab === 'books' && <BooksPanel />}
         {activeTab === 'forums' && <ForumsPanel />}
@@ -375,7 +382,7 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
             <label>Google Account</label>
             {googleAccounts.length === 0 ? (
               <p className="form-hint">
-                No Google accounts connected. Connect a Google account in the Google Drive tab first.
+                No Google accounts connected. Connect a Google account in the Google tab first.
               </p>
             ) : (
               <>
@@ -798,13 +805,21 @@ const GitHubPanel = () => {
         />
       )}
 
-      {addingRepoTo && (
-        <GitHubRepoForm
-          accountId={addingRepoTo}
-          onSubmit={(data) => handleAddRepo(addingRepoTo, data)}
-          onCancel={() => setAddingRepoTo(null)}
-        />
-      )}
+      {addingRepoTo && (() => {
+        const account = accounts.find(a => a.id === addingRepoTo)
+        const existingRepos = account?.repos.map(r => r.repo_path) || []
+        const repoIdMap = new Map(account?.repos.map(r => [r.repo_path, r.id]) || [])
+        return (
+          <GitHubRepoForm
+            accountId={addingRepoTo}
+            existingRepos={existingRepos}
+            repoIdMap={repoIdMap}
+            onAdd={(data) => handleAddRepo(addingRepoTo, data)}
+            onRemove={(repoId) => handleDeleteRepo(addingRepoTo, repoId)}
+            onCancel={() => setAddingRepoTo(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -931,16 +946,131 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
   )
 }
 
+// RepoSelector - scrollable checkbox list showing all repos with monitoring status
+interface RepoSelectorProps {
+  accountId: number
+  monitoredRepos: Set<string> // repos currently being monitored (full_name format)
+  onChange: (monitored: Set<string>) => void
+}
+
+const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps) => {
+  const { listAvailableRepos } = useSources()
+  const [repos, setRepos] = useState<AvailableRepo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    const loadRepos = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const available = await listAvailableRepos(accountId)
+        // Sort by full_name
+        available.sort((a, b) => a.full_name.localeCompare(b.full_name))
+        setRepos(available)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load repositories')
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadRepos()
+  }, [accountId, listAvailableRepos])
+
+  const filteredRepos = repos.filter(repo =>
+    repo.full_name.toLowerCase().includes(search.toLowerCase()) ||
+    (repo.description?.toLowerCase().includes(search.toLowerCase()) ?? false)
+  )
+
+  const toggleRepo = (fullName: string) => {
+    const newMonitored = new Set(monitoredRepos)
+    if (newMonitored.has(fullName)) {
+      newMonitored.delete(fullName)
+    } else {
+      newMonitored.add(fullName)
+    }
+    onChange(newMonitored)
+  }
+
+  const selectAll = () => {
+    const newMonitored = new Set(monitoredRepos)
+    filteredRepos.forEach(repo => newMonitored.add(repo.full_name))
+    onChange(newMonitored)
+  }
+
+  const selectNone = () => {
+    const newMonitored = new Set(monitoredRepos)
+    filteredRepos.forEach(repo => newMonitored.delete(repo.full_name))
+    onChange(newMonitored)
+  }
+
+  if (loading) {
+    return <div className="repo-selector-loading">Loading repositories...</div>
+  }
+
+  if (error) {
+    return <div className="repo-selector-error">{error}</div>
+  }
+
+  return (
+    <div className="repo-selector">
+      <input
+        type="text"
+        className="repo-selector-search"
+        placeholder="Filter repositories..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+      <div className="repo-selector-actions">
+        <button type="button" onClick={selectAll}>All</button>
+        <button type="button" onClick={selectNone}>None</button>
+        <span className="repo-selector-count">
+          {monitoredRepos.size} monitored of {repos.length}
+        </span>
+      </div>
+      <div className="repo-selector-list">
+        {filteredRepos.length === 0 ? (
+          <div className="repo-selector-empty">
+            {search ? 'No matching repositories' : 'No repositories available'}
+          </div>
+        ) : (
+          filteredRepos.map(repo => (
+            <label key={repo.full_name} className="repo-selector-item">
+              <input
+                type="checkbox"
+                checked={monitoredRepos.has(repo.full_name)}
+                onChange={() => toggleRepo(repo.full_name)}
+              />
+              <div className="repo-selector-item-content">
+                <div className="repo-selector-item-name">
+                  {repo.full_name}
+                  {repo.private && <span className="repo-private-badge">private</span>}
+                </div>
+                {repo.description && (
+                  <div className="repo-selector-item-desc">{repo.description}</div>
+                )}
+              </div>
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface GitHubRepoFormProps {
   accountId: number
-  onSubmit: (data: any) => Promise<void>
+  existingRepos: string[] // repo_path format like "owner/name"
+  repoIdMap: Map<string, number> // map repo_path to repo id for deletion
+  onAdd: (data: any) => Promise<void>
+  onRemove: (repoId: number) => Promise<void>
   onCancel: () => void
 }
 
-const GitHubRepoForm = ({ accountId, onSubmit, onCancel }: GitHubRepoFormProps) => {
+const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, onCancel }: GitHubRepoFormProps) => {
+  const [monitoredRepos, setMonitoredRepos] = useState<Set<string>>(() => new Set(existingRepos))
   const [formData, setFormData] = useState({
-    owner: '',
-    name: '',
     track_issues: true,
     track_prs: true,
     track_comments: true,
@@ -950,102 +1080,129 @@ const GitHubRepoForm = ({ accountId, onSubmit, onCancel }: GitHubRepoFormProps) 
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<string | null>(null)
+
+  // Calculate what changed
+  const initialSet = new Set(existingRepos)
+  const toAdd = Array.from(monitoredRepos).filter(r => !initialSet.has(r))
+  const toRemove = existingRepos.filter(r => !monitoredRepos.has(r))
+  const hasChanges = toAdd.length > 0 || toRemove.length > 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!hasChanges) {
+      onCancel()
+      return
+    }
+
     setSubmitting(true)
     setError(null)
+
     try {
-      await onSubmit(formData)
+      // Remove unselected repos
+      for (const repoPath of toRemove) {
+        const repoId = repoIdMap.get(repoPath)
+        if (repoId) {
+          setProgress(`Removing ${repoPath}...`)
+          await onRemove(repoId)
+        }
+      }
+
+      // Add newly selected repos
+      for (const repoPath of toAdd) {
+        const [owner, name] = repoPath.split('/')
+        setProgress(`Adding ${repoPath}...`)
+        await onAdd({ ...formData, owner, name })
+      }
+
+      onCancel() // Close modal on success
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save')
+      setError(e instanceof Error ? e.message : 'Failed to update repositories')
     } finally {
       setSubmitting(false)
+      setProgress(null)
     }
   }
 
   return (
-    <Modal title="Add Repository" onClose={onCancel}>
+    <Modal title="Manage Repositories" onClose={onCancel} className="modal-large">
       <form onSubmit={handleSubmit} className="source-form">
         {error && <div className="form-error">{error}</div>}
 
-        <div className="form-row">
-          <div className="form-group">
-            <label>Owner</label>
-            <input
-              type="text"
-              value={formData.owner}
-              onChange={e => setFormData({ ...formData, owner: e.target.value })}
-              required
-              placeholder="organization or username"
-            />
-          </div>
-          <div className="form-group">
-            <label>Repository Name</label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-              required
-              placeholder="repo-name"
-            />
-          </div>
-        </div>
-
-        <div className="form-group checkboxes">
-          <label>Track:</label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={formData.track_issues}
-              onChange={e => setFormData({ ...formData, track_issues: e.target.checked })}
-            />
-            Issues
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={formData.track_prs}
-              onChange={e => setFormData({ ...formData, track_prs: e.target.checked })}
-            />
-            Pull Requests
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={formData.track_comments}
-              onChange={e => setFormData({ ...formData, track_comments: e.target.checked })}
-            />
-            Comments
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={formData.track_project_fields}
-              onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })}
-            />
-            Project Fields
-          </label>
-        </div>
-
-        <IntervalInput
-          value={formData.check_interval}
-          onChange={check_interval => setFormData({ ...formData, check_interval })}
-          label="Check interval"
-        />
-
         <div className="form-group">
-          <label>Tags</label>
-          <TagsInput
-            tags={formData.tags}
-            onChange={tags => setFormData({ ...formData, tags })}
+          <RepoSelector
+            accountId={accountId}
+            monitoredRepos={monitoredRepos}
+            onChange={setMonitoredRepos}
           />
         </div>
 
+        {toAdd.length > 0 && (
+          <>
+            <div className="form-group checkboxes">
+              <label>Track (for new repos):</label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={formData.track_issues}
+                  onChange={e => setFormData({ ...formData, track_issues: e.target.checked })}
+                />
+                Issues
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={formData.track_prs}
+                  onChange={e => setFormData({ ...formData, track_prs: e.target.checked })}
+                />
+                Pull Requests
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={formData.track_comments}
+                  onChange={e => setFormData({ ...formData, track_comments: e.target.checked })}
+                />
+                Comments
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={formData.track_project_fields}
+                  onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })}
+                />
+                Project Fields
+              </label>
+            </div>
+
+            <IntervalInput
+              value={formData.check_interval}
+              onChange={check_interval => setFormData({ ...formData, check_interval })}
+              label="Check interval (new repos)"
+            />
+
+            <div className="form-group">
+              <label>Tags (new repos)</label>
+              <TagsInput
+                tags={formData.tags}
+                onChange={tags => setFormData({ ...formData, tags })}
+              />
+            </div>
+          </>
+        )}
+
         <div className="form-actions">
-          <button type="button" className="cancel-btn" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="submit-btn" disabled={submitting}>
-            {submitting ? 'Adding...' : 'Add Repository'}
+          <button type="button" className="cancel-btn" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button type="submit" className="submit-btn" disabled={submitting || !hasChanges}>
+            {progress
+              ? progress
+              : !hasChanges
+                ? 'No changes'
+                : toAdd.length > 0 && toRemove.length > 0
+                  ? `Add ${toAdd.length}, Remove ${toRemove.length}`
+                  : toAdd.length > 0
+                    ? `Add ${toAdd.length} ${toAdd.length === 1 ? 'Repository' : 'Repositories'}`
+                    : `Remove ${toRemove.length} ${toRemove.length === 1 ? 'Repository' : 'Repositories'}`}
           </button>
         </div>
       </form>
@@ -1053,21 +1210,17 @@ const GitHubRepoForm = ({ accountId, onSubmit, onCancel }: GitHubRepoFormProps) 
   )
 }
 
-// === Google Drive Panel ===
+// === Google Auth Panel ===
 
-const GoogleDrivePanel = () => {
+const GoogleAuthPanel = () => {
   const {
     listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
-    addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder,
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [oauthConfig, setOauthConfig] = useState<GoogleOAuthConfig | null | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
-  const [browsingFoldersFor, setBrowsingFoldersFor] = useState<number | null>(null)
-  const [managingExclusionsFor, setManagingExclusionsFor] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
   const [uploadingConfig, setUploadingConfig] = useState(false)
 
   const loadData = useCallback(async () => {
@@ -1141,7 +1294,7 @@ const GoogleDrivePanel = () => {
     try {
       const { authorization_url } = await reauthorizeGoogleAccount(id)
       window.open(authorization_url, '_blank', 'width=600,height=700')
-      // Poll for updated account scopes
+      // Poll for updated account
       const interval = setInterval(async () => {
         const newAccounts = await listGoogleAccounts()
         setAccounts(newAccounts)
@@ -1152,6 +1305,142 @@ const GoogleDrivePanel = () => {
     }
   }
 
+  if (loading) return <LoadingState />
+  if (error) return <ErrorState message={error} onRetry={loadData} />
+
+  // Show OAuth config upload if not configured
+  if (oauthConfig === null) {
+    return (
+      <div className="source-panel">
+        <div className="panel-header">
+          <h3>Google Authentication</h3>
+        </div>
+        <div className="oauth-config-setup">
+          <h4>OAuth Configuration Required</h4>
+          <p>Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).</p>
+          <p className="form-hint">Get this from the Google Cloud Console under APIs & Services → Credentials.</p>
+          <div className="config-upload">
+            <label className="upload-btn">
+              {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleConfigUpload}
+                disabled={uploadingConfig}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="source-panel">
+      <div className="panel-header">
+        <h3>Google Accounts</h3>
+        <button className="add-btn" onClick={handleConnect}>Connect Account</button>
+      </div>
+
+      <div className="oauth-config-info">
+        <details>
+          <summary>OAuth Configuration</summary>
+          <div className="config-details">
+            <p><strong>Project:</strong> {oauthConfig.project_id}</p>
+            <p><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
+            <p><strong>Redirect URIs:</strong></p>
+            <ul>
+              {oauthConfig.redirect_uris.map((uri, i) => (
+                <li key={i}>{uri}</li>
+              ))}
+            </ul>
+            <div className="config-actions">
+              <label className="upload-btn small">
+                {uploadingConfig ? 'Uploading...' : 'Replace Config'}
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleConfigUpload}
+                  disabled={uploadingConfig}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              <button className="delete-btn small" onClick={handleDeleteConfig}>
+                Delete Config
+              </button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {accounts.length === 0 ? (
+        <EmptyState
+          message="No Google accounts connected"
+          actionLabel="Connect Google Account"
+          onAction={handleConnect}
+        />
+      ) : (
+        <div className="source-list">
+          {accounts.map(account => (
+            <SourceCard key={account.id}>
+              <div className="source-card-header">
+                <div className="source-card-info">
+                  <h4>{account.name}</h4>
+                  <p className="source-subtitle">{account.email}</p>
+                </div>
+                <div className="source-card-actions-inline">
+                  <StatusBadge active={account.active} />
+                  <button className="edit-btn" onClick={() => handleReauthorize(account.id)}>Re-authorize</button>
+                  <button className="delete-btn" onClick={() => handleDeleteAccount(account.id)}>Disconnect</button>
+                </div>
+              </div>
+              {account.sync_error && (
+                <div className="sync-error-banner">{account.sync_error}</div>
+              )}
+              <div className="account-services">
+                <p className="form-hint">
+                  This account can be used for Gmail, Google Calendar, and Google Drive.
+                  Configure each service in its respective tab.
+                </p>
+              </div>
+            </SourceCard>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// === Google Drive Panel ===
+
+const GoogleDrivePanel = () => {
+  const {
+    listGoogleAccounts,
+    addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
+  } = useSources()
+  const [accounts, setAccounts] = useState<GoogleAccount[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
+  const [browsingFoldersFor, setBrowsingFoldersFor] = useState<number | null>(null)
+  const [managingExclusionsFor, setManagingExclusionsFor] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const accountsData = await listGoogleAccounts()
+      setAccounts(accountsData)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load data')
+    } finally {
+      setLoading(false)
+    }
+  }, [listGoogleAccounts])
+
+  useEffect(() => { loadData() }, [loadData])
+
   const handleAddFolder = async (accountId: number, data: any) => {
     await addGoogleFolder(accountId, data)
     setAddingFolderTo(null)
@@ -1159,7 +1448,6 @@ const GoogleDrivePanel = () => {
   }
 
   const handleBrowseSelect = async (accountId: number, items: SelectedItem[]) => {
-    // Add each selected item as a folder/file
     for (const item of items) {
       await addGoogleFolder(accountId, {
         folder_id: item.id,
@@ -1195,175 +1483,113 @@ const GoogleDrivePanel = () => {
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
-  // Show OAuth config upload if not configured
-  if (oauthConfig === null) {
+  // Show message if no accounts connected
+  if (accounts.length === 0) {
     return (
       <div className="source-panel">
         <div className="panel-header">
           <h3>Google Drive</h3>
         </div>
-        <div className="oauth-config-setup">
-          <h4>OAuth Configuration Required</h4>
-          <p>Upload your Google OAuth credentials JSON file to enable Google Drive integration.</p>
-          <p className="form-hint">Get this from the Google Cloud Console under APIs & Services → Credentials.</p>
-          <div className="config-upload">
-            <label className="upload-btn">
-              {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleConfigUpload}
-                disabled={uploadingConfig}
-                style={{ display: 'none' }}
-              />
-            </label>
-          </div>
-        </div>
+        <EmptyState
+          message="No Google accounts connected. Connect an account in the Google tab first."
+        />
       </div>
     )
   }
 
-  // Show OAuth config info section
-  const OAuthConfigSection = () => (
-    <div className="oauth-config-info">
-      <details>
-        <summary>OAuth Configuration</summary>
-        <div className="config-details">
-          <p><strong>Project:</strong> {oauthConfig.project_id}</p>
-          <p><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
-          <p><strong>Redirect URIs:</strong></p>
-          <ul>
-            {oauthConfig.redirect_uris.map((uri, i) => (
-              <li key={i}>{uri}</li>
-            ))}
-          </ul>
-          <div className="config-actions">
-            <label className="upload-btn small">
-              {uploadingConfig ? 'Uploading...' : 'Replace Config'}
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleConfigUpload}
-                disabled={uploadingConfig}
-                style={{ display: 'none' }}
-              />
-            </label>
-            <button className="delete-btn small" onClick={handleDeleteConfig}>
-              Delete Config
-            </button>
-          </div>
-        </div>
-      </details>
-    </div>
-  )
-
   return (
     <div className="source-panel">
       <div className="panel-header">
-        <h3>Google Drive Accounts</h3>
-        <button className="add-btn" onClick={handleConnect}>Connect Account</button>
+        <h3>Google Drive Folders</h3>
       </div>
 
-      <OAuthConfigSection />
-
-      {accounts.length === 0 ? (
-        <EmptyState
-          message="No Google Drive accounts connected"
-          actionLabel="Connect Google Account"
-          onAction={handleConnect}
-        />
-      ) : (
-        <div className="source-list">
-          {accounts.map(account => (
-            <div key={account.id} className="google-account-card">
-              <div className="source-card-header">
-                <div className="source-card-info">
-                  <h4>{account.name}</h4>
-                  <p className="source-subtitle">{account.email}</p>
-                </div>
-                <div className="source-card-actions-inline">
-                  <StatusBadge active={account.active} />
-                  <button className="edit-btn" onClick={() => handleReauthorize(account.id)}>Re-authorize</button>
-                  <button className="delete-btn" onClick={() => handleDeleteAccount(account.id)}>Disconnect</button>
-                </div>
+      <div className="source-list">
+        {accounts.map(account => (
+          <div key={account.id} className="google-account-card">
+            <div className="source-card-header">
+              <div className="source-card-info">
+                <h4>{account.email}</h4>
               </div>
-
-              {account.sync_error && (
-                <div className="sync-error-banner">{account.sync_error}</div>
-              )}
-
-              <div className="folders-section">
-                <div className="folders-header">
-                  <h5>Synced Folders ({account.folders.length})</h5>
-                  <div className="folders-actions">
-                    <button className="add-btn small" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</button>
-                    <button className="add-btn small secondary" onClick={() => setAddingFolderTo(account.id)}>Add by ID</button>
-                  </div>
-                </div>
-
-                {account.folders.length === 0 ? (
-                  <p className="no-folders">No folders configured for sync</p>
-                ) : (
-                  <div className="folders-list">
-                    {account.folders.map(folder => (
-                      <div key={folder.id} className={`folder-card ${folder.active ? '' : 'inactive'}`}>
-                        <div className="folder-info">
-                          <a
-                            className="folder-name"
-                            href={`https://drive.google.com/open?id=${folder.folder_id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {folder.folder_name}
-                          </a>
-                          {folder.folder_path && <span className="folder-path">{folder.folder_path}</span>}
-                          <SyncStatus lastSyncAt={folder.last_sync_at} />
-                        </div>
-                        <div className="folder-settings">
-                          {folder.recursive && <span className="setting-badge">Recursive</span>}
-                          {folder.include_shared && <span className="setting-badge">Shared</span>}
-                          {folder.exclude_folder_ids.length > 0 && (
-                            <span className="setting-badge warning">
-                              {folder.exclude_folder_ids.length} excluded
-                            </span>
-                          )}
-                        </div>
-                        <div className="folder-actions">
-                          <SyncButton
-                            onSync={() => handleSyncFolder(account.id, folder.id)}
-                            disabled={!folder.active || !account.active}
-                            label="Sync"
-                          />
-                          {folder.recursive && (
-                            <button
-                              className="exclusions-btn"
-                              onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}
-                            >
-                              Exclusions
-                            </button>
-                          )}
-                          <button
-                            className="toggle-btn"
-                            onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}
-                          >
-                            {folder.active ? 'Disable' : 'Enable'}
-                          </button>
-                          <button
-                            className="delete-btn small"
-                            onClick={() => handleDeleteFolder(account.id, folder.id)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="source-card-actions-inline">
+                <StatusBadge active={account.active} />
               </div>
             </div>
-          ))}
-        </div>
-      )}
+
+            {account.sync_error && (
+              <div className="sync-error-banner">{account.sync_error}</div>
+            )}
+
+            <div className="folders-section">
+              <div className="folders-header">
+                <h5>Synced Folders ({account.folders.length})</h5>
+                <div className="folders-actions">
+                  <button className="add-btn small" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</button>
+                  <button className="add-btn small secondary" onClick={() => setAddingFolderTo(account.id)}>Add by ID</button>
+                </div>
+              </div>
+
+              {account.folders.length === 0 ? (
+                <p className="no-folders">No folders configured for sync</p>
+              ) : (
+                <div className="folders-list">
+                  {account.folders.map(folder => (
+                    <div key={folder.id} className={`folder-card ${folder.active ? '' : 'inactive'}`}>
+                      <div className="folder-info">
+                        <a
+                          className="folder-name"
+                          href={`https://drive.google.com/open?id=${folder.folder_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {folder.folder_name}
+                        </a>
+                        {folder.folder_path && <span className="folder-path">{folder.folder_path}</span>}
+                        <SyncStatus lastSyncAt={folder.last_sync_at} />
+                      </div>
+                      <div className="folder-settings">
+                        {folder.recursive && <span className="setting-badge">Recursive</span>}
+                        {folder.include_shared && <span className="setting-badge">Shared</span>}
+                        {folder.exclude_folder_ids.length > 0 && (
+                          <span className="setting-badge warning">
+                            {folder.exclude_folder_ids.length} excluded
+                          </span>
+                        )}
+                      </div>
+                      <div className="folder-actions">
+                        <SyncButton
+                          onSync={() => handleSyncFolder(account.id, folder.id)}
+                          disabled={!folder.active || !account.active}
+                          label="Sync"
+                        />
+                        {folder.recursive && (
+                          <button
+                            className="exclusions-btn"
+                            onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}
+                          >
+                            Exclusions
+                          </button>
+                        )}
+                        <button
+                          className="toggle-btn"
+                          onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}
+                        >
+                          {folder.active ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          className="delete-btn small"
+                          onClick={() => handleDeleteFolder(account.id, folder.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
 
       {addingFolderTo && (
         <GoogleFolderForm
@@ -2110,7 +2336,7 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
             <label>Google Account</label>
             {googleAccounts.length === 0 ? (
               <p className="form-hint">
-                No Google accounts connected. Connect a Google account in the Google Drive tab first.
+                No Google accounts connected. Connect a Google account in the Google tab first.
               </p>
             ) : (
               <select

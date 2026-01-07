@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from memory.common.db.models.base import Base
 
@@ -284,7 +284,7 @@ class GithubMilestone(Base):
     )
 
     # Relationships
-    repo = relationship("GithubRepo", backref="milestones")
+    repo = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
     items = relationship("GithubItem", back_populates="milestone_rel")
 
     __table_args__ = (

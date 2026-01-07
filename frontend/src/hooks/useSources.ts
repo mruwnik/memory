@@ -172,6 +172,15 @@ export interface GithubRepoUpdate {
   active?: boolean
 }
 
+export interface AvailableRepo {
+  owner: string
+  name: string
+  full_name: string
+  description: string | null
+  private: boolean
+  html_url: string | null
+}
+
 // Types for Google OAuth Config
 export interface GoogleOAuthConfig {
   id: number
@@ -506,6 +515,12 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  const listAvailableRepos = useCallback(async (accountId: number): Promise<AvailableRepo[]> => {
+    const response = await apiCall(`/github/accounts/${accountId}/available-repos`)
+    if (!response.ok) throw new Error('Failed to fetch available repos')
+    return response.json()
+  }, [apiCall])
+
   // === GitHub Repos ===
 
   const addGithubRepo = useCallback(async (accountId: number, data: GithubRepoCreate): Promise<GithubRepo> => {
@@ -790,6 +805,7 @@ export const useSources = () => {
     updateGithubAccount,
     deleteGithubAccount,
     validateGithubAccount,
+    listAvailableRepos,
     // GitHub Repos
     addGithubRepo,
     updateGithubRepo,

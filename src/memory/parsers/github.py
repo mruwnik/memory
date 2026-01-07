@@ -1296,3 +1296,74 @@ class GithubClient:
             operation_name="update_project_field_value",
         )
         return data is not None and errors is None
+
+    def get_authenticated_user(self) -> dict[str, Any]:
+        """Get authenticated user info for validation."""
+        response = self.session.get(f"{GITHUB_API_URL}/user", timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def list_repos(
+        self,
+        per_page: int = 100,
+        sort: str = "updated",
+        max_repos: int = 500,
+    ) -> Generator[dict[str, Any], None, None]:
+        """List repositories accessible to the authenticated user/app.
+
+        For PAT auth: Lists repos the user has access to.
+        For App auth: Lists repos the app installation has access to.
+
+        Args:
+            per_page: Number of repos per API request (max 100).
+            sort: Sort order for repos (updated, created, pushed, full_name).
+            max_repos: Maximum total repos to return (default 500, prevents runaway pagination).
+
+        Yields:
+            Dict with repo info: owner, name, full_name, description, private, html_url
+        """
+        if self.credentials.auth_type == "app":
+            url = f"{GITHUB_API_URL}/installation/repositories"
+            params: dict[str, Any] = {"per_page": per_page}
+        else:
+            url = f"{GITHUB_API_URL}/user/repos"
+            params = {
+                "per_page": per_page,
+                "sort": sort,
+                "affiliation": "owner,collaborator,organization_member",
+            }
+
+        page = 1
+        repos_yielded = 0
+        max_pages = (max_repos // per_page) + 1  # Upper bound on pages
+
+        while page <= max_pages:
+            params["page"] = page
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            data = response.json()
+            repos = data.get("repositories", data) if isinstance(data, dict) else data
+
+            if not repos:
+                break
+
+            for repo in repos:
+                if repos_yielded >= max_repos:
+                    return
+                yield {
+                    "owner": repo["owner"]["login"],
+                    "name": repo["name"],
+                    "full_name": repo["full_name"],
+                    "description": repo.get("description"),
+                    "private": repo.get("private", False),
+                    "html_url": repo.get("html_url"),
+                }
+                repos_yielded += 1
+
+            # If we got fewer repos than requested, we've reached the end
+            if len(repos) < per_page:
+                break
+
+            page += 1
