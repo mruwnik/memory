@@ -312,6 +312,61 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
     )
 
 
+def _lookup_milestone_id(
+    session: Any,
+    repo: GithubRepo,
+    milestone_number: int | None,
+    client: "GithubClient | None" = None,
+) -> int | None:
+    """Look up milestone ID from the database by number, fetching from GitHub if needed.
+
+    This is more robust than passing milestone_id directly, as it handles
+    cases where the milestone might not have been committed yet or was created
+    after the sync started.
+    """
+    if milestone_number is None:
+        return None
+
+    # Try to find in database first
+    milestone = (
+        session.query(GithubMilestone)
+        .filter(
+            GithubMilestone.repo_id == repo.id,
+            GithubMilestone.number == milestone_number,
+        )
+        .first()
+    )
+    if milestone:
+        return cast(int, milestone.id)
+
+    # Not found locally - try to fetch from GitHub
+    if client is None:
+        logger.warning(
+            f"Milestone #{milestone_number} not found for repo {repo.id} and no client provided"
+        )
+        return None
+
+    logger.info(
+        f"Milestone #{milestone_number} not found locally, fetching from GitHub"
+    )
+    try:
+        owner = cast(str, repo.owner)
+        name = cast(str, repo.name)
+        ms_data = client.fetch_milestone(owner, name, milestone_number)
+        if ms_data:
+            milestone = _sync_milestone(session, repo, ms_data)
+            session.commit()
+            return cast(int, milestone.id)
+        else:
+            logger.warning(
+                f"Milestone #{milestone_number} not found on GitHub for {repo.repo_path}"
+            )
+            return None
+    except Exception as e:
+        logger.error(f"Failed to fetch milestone #{milestone_number} from GitHub: {e}")
+        return None
+
+
 @app.task(name=SYNC_GITHUB_ITEM)
 @safe_task_execution
 def sync_github_item(
@@ -320,14 +375,30 @@ def sync_github_item(
 ) -> dict[str, Any]:
     """Sync a single GitHub issue or PR."""
     issue_data = _deserialize_issue_data(issue_data_serialized)
-    # Extract milestone_id that was added by sync_github_repo
-    milestone_id = issue_data_serialized.get("milestone_id")
     logger.info(f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}")
 
     with make_session() as session:
         repo = session.get(GithubRepo, repo_id)
         if not repo:
             return {"status": "error", "error": "Repo not found"}
+
+        # Create GitHub client for milestone lookup if needed
+        client: GithubClient | None = None
+        account = repo.account
+        if account and cast(bool, account.active):
+            credentials = GithubCredentials(
+                auth_type=cast(str, account.auth_type),
+                access_token=cast(str | None, account.access_token),
+                app_id=cast(int | None, account.app_id),
+                installation_id=cast(int | None, account.installation_id),
+                private_key=cast(str | None, account.private_key),
+            )
+            client = GithubClient(credentials)
+
+        # Look up milestone by number (fetches from GitHub if not in DB)
+        milestone_id = _lookup_milestone_id(
+            session, repo, issue_data.get("milestone_number"), client
+        )
 
         # Check for existing item
         existing = (
@@ -400,13 +471,12 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
         state = cast(str | None, repo.state_filter) or "all"
 
         # Sync milestones first (they're referenced by issues/PRs)
-        milestone_map: dict[int, int] = {}  # GitHub milestone number -> DB milestone id
+        # Must commit milestones before dispatching async tasks that reference them
         milestones_synced = 0
         for ms_data in client.fetch_milestones(owner, name):
-            milestone = _sync_milestone(session, repo, ms_data)
-            milestone_map[ms_data["number"]] = cast(int, milestone.id)
+            _sync_milestone(session, repo, ms_data)
             milestones_synced += 1
-        session.flush()
+        session.commit()  # Commit so async tasks can see milestones
         logger.info(f"Synced {milestones_synced} milestones for {repo.repo_path}")
 
         # For full syncs triggered by full_sync_interval, only sync open issues
@@ -434,9 +504,6 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(issue_data)
-                # Look up milestone_id from the map
-                ms_num = issue_data.get("milestone_number")
-                serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None
                 task_id = sync_github_item.delay(repo.id, serialized)
                 task_ids.append(task_id.id)
                 issues_synced += 1
@@ -451,9 +518,6 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(pr_data)
-                # Look up milestone_id from the map
-                ms_num = pr_data.get("milestone_number")
-                serialized["milestone_id"] = milestone_map.get(ms_num) if ms_num else None
                 task_id = sync_github_item.delay(repo.id, serialized)
                 task_ids.append(task_id.id)
                 prs_synced += 1

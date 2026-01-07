@@ -745,6 +745,48 @@ class GithubClient:
 
             page += 1
 
+    def fetch_milestone(
+        self,
+        owner: str,
+        repo: str,
+        milestone_number: int,
+    ) -> GithubMilestoneData | None:
+        """Fetch a single milestone by number.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            milestone_number: The milestone number
+
+        Returns:
+            GithubMilestoneData or None if not found
+        """
+        try:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/milestones/{milestone_number}",
+                timeout=30,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            ms = response.json()
+            return GithubMilestoneData(
+                github_id=ms["id"],
+                number=ms["number"],
+                title=ms["title"],
+                description=ms.get("description"),
+                state=ms["state"],
+                due_on=parse_github_date(ms.get("due_on")),
+                github_created_at=parse_github_date(ms["created_at"]),  # type: ignore
+                github_updated_at=parse_github_date(ms["updated_at"]),  # type: ignore
+                closed_at=parse_github_date(ms.get("closed_at")),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch milestone #{milestone_number}: {e}")
+            return None
+
     def _parse_issue(
         self, owner: str, repo: str, issue: dict[str, Any]
     ) -> GithubIssueData:
