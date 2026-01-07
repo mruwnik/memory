@@ -230,15 +230,18 @@ def test_discord_server_channel_relationship(db_session):
 
 def test_discord_processor_xml_mcp_servers():
     """Test xml_mcp_servers includes assigned MCP server XML."""
+    from unittest.mock import patch, PropertyMock
+
     server = DiscordServer(id=111, name="Server")
     mcp_stub = SimpleNamespace(
         as_xml=lambda: "<mcp_server><name>Example</name></mcp_server>"
     )
 
-    # Relationship is optional for test purposes; assign directly
-    server.mcp_servers = [mcp_stub]
+    # Mock the mcp_servers property to return our test stub
+    with patch.object(DiscordServer, "mcp_servers", new_callable=PropertyMock) as mock_prop:
+        mock_prop.return_value = [mcp_stub]
+        xml_output = server.xml_mcp_servers()
 
-    xml_output = server.xml_mcp_servers()
     assert "<mcp_server>" in xml_output
     assert "Example" in xml_output
 

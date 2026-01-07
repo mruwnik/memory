@@ -53,6 +53,10 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
         logger.error(f"Error scoring chunk: {e}")
         return chunk
 
+    if not response:
+        chunk.relevance_score = 0.0
+        return chunk
+
     soup = BeautifulSoup(response, "html.parser")
     if not (score := soup.find("score")):
         chunk.relevance_score = 0.0

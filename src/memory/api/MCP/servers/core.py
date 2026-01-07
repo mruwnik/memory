@@ -4,7 +4,6 @@ Core MCP subserver for knowledge base search, observations, and notes.
 
 import base64
 import logging
-import pathlib
 import textwrap
 from datetime import datetime, timezone
 
@@ -18,7 +17,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.api.search.search import search
 from memory.api.search.types import SearchConfig, SearchFilters
-from memory.common import extract, settings
+from memory.common import extract, paths, settings
 from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
 from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
@@ -122,22 +121,6 @@ def _build_search_description() -> str:
 
 
 core_mcp = FastMCP("memory-core")
-
-
-def validate_path_within_directory(
-    base_dir: pathlib.Path, requested_path: str
-) -> pathlib.Path:
-    """Validate that a requested path resolves within the base directory."""
-    resolved = (base_dir / requested_path.lstrip("/")).resolve()
-    base_resolved = base_dir.resolve()
-
-    if (
-        not str(resolved).startswith(str(base_resolved) + "/")
-        and resolved != base_resolved
-    ):
-        raise ValueError(f"Path escapes allowed directory: {requested_path}")
-
-    return resolved
 
 
 def filter_observation_source_ids(
@@ -396,10 +379,14 @@ async def create_note(
     """
     logger.info("MCP: creating note: %s", subject)
     if filename:
-        path = pathlib.Path(filename)
-        if not path.is_absolute():
-            path = pathlib.Path(settings.NOTES_STORAGE_DIR) / path
-        filename = path.relative_to(settings.NOTES_STORAGE_DIR).as_posix()
+        # Validate the path is within the notes directory to prevent path traversal
+        try:
+            validated_path = paths.validate_path_within_directory(
+                settings.NOTES_STORAGE_DIR, filename
+            )
+            filename = validated_path.relative_to(settings.NOTES_STORAGE_DIR).as_posix()
+        except ValueError as e:
+            raise ValueError(f"Invalid filename: {e}")
 
     try:
         task = celery_app.send_task(
@@ -441,7 +428,9 @@ async def note_files(path: str = "/"):
     Returns: List of file paths relative to notes directory
     """
     try:
-        root = validate_path_within_directory(settings.NOTES_STORAGE_DIR, path)
+        root = paths.validate_path_within_directory(
+            settings.NOTES_STORAGE_DIR, path, require_exists=True
+        )
     except ValueError as e:
         raise ValueError(f"Invalid path: {e}")
 
@@ -461,8 +450,8 @@ def fetch_file(filename: str) -> dict:
     Text content as string, binary as base64.
     """
     try:
-        path = validate_path_within_directory(
-            settings.FILE_STORAGE_DIR, filename.strip()
+        path = paths.validate_path_within_directory(
+            settings.FILE_STORAGE_DIR, filename.strip(), require_exists=True
         )
     except ValueError as e:
         raise ValueError(f"Invalid path: {e}")

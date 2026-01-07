@@ -17,7 +17,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqladmin import Admin
 
-from memory.common import extract, settings
+from memory.common import extract, paths, settings
 from memory.common.db.connection import get_engine
 from memory.api.admin import setup_admin
 from memory.api.auth import (
@@ -116,7 +116,7 @@ app.add_middleware(
 def validate_path_within_directory(base_dir: pathlib.Path, requested_path: str) -> pathlib.Path:
     """Validate that a requested path resolves within the base directory.
 
-    Prevents path traversal attacks using ../, symlinks, or similar techniques.
+    Wraps the shared utility and converts ValueError to HTTPException.
 
     Args:
         base_dir: The allowed base directory
@@ -126,30 +126,16 @@ def validate_path_within_directory(base_dir: pathlib.Path, requested_path: str) 
         The resolved absolute path if valid
 
     Raises:
-        HTTPException: If the path would escape the base directory
+        HTTPException: If the path would escape the base directory or doesn't exist
     """
-    # Resolve base directory to absolute path
-    base_resolved = base_dir.resolve(strict=True)
-
-    # Build the target path and resolve it
-    # Use strict=False first to check the path before it exists
-    target = base_dir / requested_path
-
-    # Resolve the path (follows symlinks)
     try:
-        resolved = target.resolve(strict=True)
-    except (OSError, ValueError):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # Use pathlib's is_relative_to for proper path containment check
-    # This is safer than string comparison as it handles edge cases
-    try:
-        resolved.relative_to(base_resolved)
-    except ValueError:
-        # Path is not relative to base - access denied
+        return paths.validate_path_within_directory(
+            base_dir, requested_path, require_exists=True
+        )
+    except ValueError as e:
+        if "does not exist" in str(e):
+            raise HTTPException(status_code=404, detail="File not found")
         raise HTTPException(status_code=403, detail="Access denied")
-
-    return resolved
 
 
 @app.get("/ui{full_path:path}")

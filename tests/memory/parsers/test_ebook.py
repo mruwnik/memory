@@ -170,14 +170,14 @@ def test_extract_sections(mock_doc):
             title="Chapter 2",
             number=2,
             start_page=3,
-            end_page=5,
+            end_page=4,  # page_count - 1, since pages are 0-indexed
             pages=["Content of page 3", "Content of page 4"],
             children=[
                 Section(
                     title="Section 2.1",
                     number=1,
                     start_page=4,
-                    end_page=5,
+                    end_page=4,  # page_count - 1, since pages are 0-indexed
                     pages=["Content of page 4"],
                 ),
             ],
@@ -194,7 +194,7 @@ def test_extract_sections_no_toc(mock_doc):
             title="Content",
             number=1,
             start_page=0,
-            end_page=5,
+            end_page=4,  # page_count - 1, since pages are 0-indexed
             pages=[f"Content of page {i}" for i in range(5)],
             children=[],
         ),

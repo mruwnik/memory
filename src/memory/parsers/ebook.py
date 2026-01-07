@@ -96,12 +96,14 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     level, name, page = item
     next_item = cast(TOCItem | None, toc.peek())
     if not next_item:
+        # Last section extends to the final page (page_count - 1 since 0-indexed)
+        last_page = doc.page_count - 1
         return Section(
             title=name,
-            pages=get_pages(doc, page, doc.page_count),
+            pages=get_pages(doc, page, last_page),
             number=section_num,
             start_page=page,
-            end_page=doc.page_count,
+            end_page=last_page,
         )
 
     children = []
@@ -109,7 +111,8 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
         children.append(extract_section_pages(doc, toc, len(children) + 1))
         next_item = cast(TOCItem | None, toc.peek())
 
-    last_page = next_item[2] - 1 if next_item else doc.page_count
+    # When there's no next item, this section extends to the last page (0-indexed)
+    last_page = next_item[2] - 1 if next_item else doc.page_count - 1
     return Section(
         title=name,
         pages=get_pages(doc, page, last_page),
@@ -124,13 +127,15 @@ def extract_sections(doc) -> list[Section]:
     """Extract all sections from a PyMuPDF document."""
     toc = doc.get_toc()
     if not toc:
+        # No TOC - treat entire book as one section (page indices are 0-indexed)
+        last_page = doc.page_count - 1 if doc.page_count > 0 else 0
         return [
             Section(
                 title="Content",
-                pages=get_pages(doc, 0, doc.page_count),
+                pages=get_pages(doc, 0, last_page),
                 number=1,
                 start_page=0,
-                end_page=doc.page_count,
+                end_page=last_page,
             )
         ]
 

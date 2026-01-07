@@ -102,47 +102,47 @@ SECOND_PAGE = """
 """
 
 CHUNKS: list[str] = [
-    """The Evolution of Programming Languages
-====================================== 
-Programming languages have undergone tremendous evolution since the early days of computing. 
- From the machine code and assembly languages of the 1940s to the high\\-level, expressive languages 
- we use today, each generation has built upon the lessons learned from its predecessors. Languages 
- like FORTRAN and COBOL pioneered the concept of human\\-readable code, while later innovations like 
- object\\-oriented programming in languages such as Smalltalk and C\\+\\+ revolutionized how we structure 
- and organize our programs. 
-![Timeline of programming language evolution](/Users/dan/code/memory/tests/data/lang_timeline.png)
-The rise of functional programming paradigms has brought mathematical rigor and immutability 
- to the forefront of software development. Languages like Haskell, Lisp, and more recently Rust 
- and Elm have demonstrated the power of pure functions and type systems in creating more reliable 
- and maintainable code. These paradigms emphasize the elimination of side effects and the treatment 
- of computation as the evaluation of mathematical functions. 
-Modern development has also seen the emergence of domain\\-specific languages and the resurgence 
- of interest in memory safety. The advent of languages like Python and JavaScript has democratized 
- programming by lowering the barrier to entry, while systems languages like Rust have proven that 
- performance and safety need not be mutually exclusive. The ongoing development of WebAssembly 
- promises to bring high\\-performance computing to web browsers in ways previously unimaginable. 
-![Visual representation of code complexity over time](/Users/dan/code/memory/tests/data/code_complexity.jpg)
-Looking toward the future, we see emerging trends in quantum programming languages, AI\\-assisted 
- code generation, and the continued evolution toward more expressive type systems. The challenge 
- for tomorrow's language designers will be balancing expressiveness with simplicity, performance 
- with safety, and innovation with backward compatibility. As computing continues to permeate every 
- aspect of human life, the languages we use to command these machines will undoubtedly continue 
+    f"""The Evolution of Programming Languages
+======================================
+Programming languages have undergone tremendous evolution since the early days of computing.
+ From the machine code and assembly languages of the 1940s to the high\\-level, expressive languages
+ we use today, each generation has built upon the lessons learned from its predecessors. Languages
+ like FORTRAN and COBOL pioneered the concept of human\\-readable code, while later innovations like
+ object\\-oriented programming in languages such as Smalltalk and C\\+\\+ revolutionized how we structure
+ and organize our programs.
+![Timeline of programming language evolution]({DATA_DIR / "lang_timeline.png"})
+The rise of functional programming paradigms has brought mathematical rigor and immutability
+ to the forefront of software development. Languages like Haskell, Lisp, and more recently Rust
+ and Elm have demonstrated the power of pure functions and type systems in creating more reliable
+ and maintainable code. These paradigms emphasize the elimination of side effects and the treatment
+ of computation as the evaluation of mathematical functions.
+Modern development has also seen the emergence of domain\\-specific languages and the resurgence
+ of interest in memory safety. The advent of languages like Python and JavaScript has democratized
+ programming by lowering the barrier to entry, while systems languages like Rust have proven that
+ performance and safety need not be mutually exclusive. The ongoing development of WebAssembly
+ promises to bring high\\-performance computing to web browsers in ways previously unimaginable.
+![Visual representation of code complexity over time]({DATA_DIR / "code_complexity.jpg"})
+Looking toward the future, we see emerging trends in quantum programming languages, AI\\-assisted
+ code generation, and the continued evolution toward more expressive type systems. The challenge
+ for tomorrow's language designers will be balancing expressiveness with simplicity, performance
+ with safety, and innovation with backward compatibility. As computing continues to permeate every
+ aspect of human life, the languages we use to command these machines will undoubtedly continue
  to evolve and shape the digital landscape.""",
     """
-As computing continues to permeate every 
- aspect of human life, the languages we use to command these machines will undoubtedly continue 
- to evolve and shape the digital landscape. 
-The emergence of cloud computing and distributed systems has also driven new paradigms in 
- language design. Languages like Go and Elixir have been specifically crafted to excel in 
- concurrent and distributed environments, while the rise of microservices has renewed interest 
- in polyglot programming approaches. These developments reflect a broader shift toward languages 
- that are not just powerful tools for individual developers, but robust foundations for building 
- scalable, resilient systems that can handle the demands of modern internet\\-scale applications. 
-Perhaps most intriguingly, the intersection of programming languages with artificial intelligence 
- is opening entirely new frontiers. Differentiable programming languages are enabling new forms of 
- machine learning research, while large language models are beginning to reshape how we think about 
- code generation and developer tooling. As we stand on the brink of an era where AI systems may 
- become active participants in the programming process itself, the very nature of what constitutes 
+As computing continues to permeate every
+ aspect of human life, the languages we use to command these machines will undoubtedly continue
+ to evolve and shape the digital landscape.
+The emergence of cloud computing and distributed systems has also driven new paradigms in
+ language design. Languages like Go and Elixir have been specifically crafted to excel in
+ concurrent and distributed environments, while the rise of microservices has renewed interest
+ in polyglot programming approaches. These developments reflect a broader shift toward languages
+ that are not just powerful tools for individual developers, but robust foundations for building
+ scalable, resilient systems that can handle the demands of modern internet\\-scale applications.
+Perhaps most intriguingly, the intersection of programming languages with artificial intelligence
+ is opening entirely new frontiers. Differentiable programming languages are enabling new forms of
+ machine learning research, while large language models are beginning to reshape how we think about
+ code generation and developer tooling. As we stand on the brink of an era where AI systems may
+ become active participants in the programming process itself, the very nature of what constitutes
  a programming language—and who or what programs in it—may be fundamentally transformed.""",
 ]
 TWO_PAGE_CHUNKS: list[str] = [
@@ -155,7 +155,7 @@ Programming languages have undergone tremendous evolution since the early days o
  like FORTRAN and COBOL pioneered the concept of human\-readable code, while later innovations like 
  object\-oriented programming in languages such as Smalltalk and C\+\+ revolutionized how we structure 
  and organize our programs. 
-![Timeline of programming language evolution](/Users/dan/code/memory/tests/data/lang_timeline.png)
+![Timeline of programming language evolution]({DATA_DIR / "lang_timeline.png"})
 The rise of functional programming paradigms has brought mathematical rigor and immutability 
  to the forefront of software development. Languages like Haskell, Lisp, and more recently Rust 
  and Elm have demonstrated the power of pure functions and type systems in creating more reliable 
@@ -166,7 +166,7 @@ Modern development has also seen the emergence of domain\-specific languages and
  programming by lowering the barrier to entry, while systems languages like Rust have proven that 
  performance and safety need not be mutually exclusive. The ongoing development of WebAssembly 
  promises to bring high\-performance computing to web browsers in ways previously unimaginable. 
-![Visual representation of code complexity over time](/Users/dan/code/memory/tests/data/code_complexity.jpg)
+![Visual representation of code complexity over time]({DATA_DIR / "code_complexity.jpg"})
 Looking toward the future, we see emerging trends in quantum programming languages, AI\-assisted 
  code generation, and the continued evolution toward more expressive type systems. The challenge 
  for tomorrow's language designers will be balancing expressiveness with simplicity, performance 

@@ -275,11 +275,9 @@ def test_sync_book_qdrant_failure(mock_parse, mock_ebook, db_session, tmp_path):
 
 
 def test_sync_book_file_not_found():
-    """Test handling of missing files."""
-    result = ebook.sync_book("/nonexistent/file.epub")
-    assert result["status"] == "error"
-    assert result["error"] == "Book file not found: /nonexistent/file.epub"
-    assert "traceback" in result
+    """Test handling of missing files - should raise FileNotFoundError."""
+    with pytest.raises(FileNotFoundError, match="Book file not found"):
+        ebook.sync_book("/nonexistent/file.epub")
 
 
 def test_embed_sections_uses_correct_chunk_size(db_session, mock_voyage_client):

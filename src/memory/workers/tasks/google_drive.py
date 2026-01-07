@@ -134,7 +134,8 @@ def _update_existing_doc(
     logger.info(f"Content changed for {file_data['title']}, reindexing")
 
     # Delete old chunks from Qdrant
-    chunk_ids = [str(c.id) for c in existing.chunks if c.id]
+    existing_chunks = existing.chunks or []
+    chunk_ids = [str(c.id) for c in existing_chunks if c.id]
     if chunk_ids:
         try:
             client = qdrant.get_qdrant_client()
@@ -143,8 +144,10 @@ def _update_existing_doc(
             logger.error(f"Error deleting chunks: {e}")
 
     # Delete chunks from database
-    for chunk in existing.chunks:
+    for chunk in existing_chunks:
         session.delete(chunk)
+    if existing.chunks is not None:
+        existing.chunks.clear()
 
     # Update the existing item
     existing.content = file_data["content"]

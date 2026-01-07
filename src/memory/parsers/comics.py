@@ -22,7 +22,7 @@ def extract_smbc(url: str) -> ComicInfo:
     Returns:
         ComicInfo with title, image_url, published_date, and comic_url
     """
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -76,7 +76,7 @@ def extract_xkcd(url: str) -> ComicInfo:
     Returns:
         ComicInfo with title, image_url, and comic_url
     """
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 

@@ -152,6 +152,9 @@ def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type
         if filename := part.get_filename():
             try:
                 content = part.get_payload(decode=True)
+                if content is None:
+                    logger.warning(f"Attachment {filename} has no content, skipping")
+                    continue
                 attachments.append(
                     {
                         "filename": filename,

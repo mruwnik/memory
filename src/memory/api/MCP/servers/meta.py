@@ -258,13 +258,16 @@ async def search_markets(term: str, min_volume: int = 1000, binary: bool = False
             resp.raise_for_status()
             markets = await resp.json()
 
-        return await asyncio.gather(
+        results = await asyncio.gather(
             *[
                 format_market(session, market)
                 for market in markets
                 if market.get("volume", 0) >= min_volume
-            ]
+            ],
+            return_exceptions=True,
         )
+        # Filter out any failed market fetches
+        return [r for r in results if isinstance(r, dict)]
 
 
 @meta_mcp.tool()

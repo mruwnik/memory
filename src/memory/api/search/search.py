@@ -652,7 +652,11 @@ async def search(
         config,
     )
     if settings.ENABLE_SEARCH_SCORING and config.useScores and data and data[0].data:
-        chunks = await scorer.rank_chunks(data[0].data[0], chunks, min_score=0.3)
+        query_item = data[0].data[0]
+        if isinstance(query_item, str):
+            chunks = await scorer.rank_chunks(query_item, chunks, min_score=0.3)
+        else:
+            logger.debug(f"Skipping scoring: query is {type(query_item).__name__}, not str")
 
     sources = await search_sources(chunks, config.previews)
     sources.sort(key=lambda x: x.search_score or 0, reverse=True)

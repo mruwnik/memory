@@ -9,6 +9,8 @@ from memory.api.search.query_analysis import (
     QueryAnalysis,
     _build_prompt,
     _get_available_modalities,
+    _get_modality_domains,
+    _is_valid_sql_identifier,
     analyze_query,
     MAX_DOMAINS_TO_LIST,
 )
@@ -373,6 +375,41 @@ class TestAnalyzeQuery:
         assert result.success is False
 
 
+@pytest.mark.parametrize(
+    "identifier,expected",
+    [
+        # Valid identifiers
+        ("blog_post", True),
+        ("MailMessage", True),
+        ("_private", True),
+        ("a", True),
+        ("table123", True),
+        ("UPPERCASE", True),
+        ("mixed_Case_123", True),
+        # Invalid identifiers
+        ("", False),  # Empty
+        ("123start", False),  # Starts with number
+        ("has-hyphen", False),  # Contains hyphen
+        ("has space", False),  # Contains space
+        ("has.dot", False),  # Contains dot
+        ("semi;colon", False),  # SQL injection attempt
+        ("quote'mark", False),  # SQL injection attempt
+        ('quote"mark', False),  # SQL injection attempt
+        ("drop table--", False),  # SQL injection attempt
+        ("x" * 129, False),  # Too long (>128 chars)
+    ],
+)
+def test_is_valid_sql_identifier(identifier, expected):
+    """Validates SQL identifiers correctly."""
+    assert _is_valid_sql_identifier(identifier) == expected
+
+
+def test_is_valid_sql_identifier_max_length_boundary():
+    """Tests boundary condition for max length."""
+    assert _is_valid_sql_identifier("x" * 128) is True
+    assert _is_valid_sql_identifier("x" * 129) is False
+
+
 class TestGetAvailableModalities:
     """Tests for _get_available_modalities function."""
 
@@ -425,3 +462,101 @@ class TestGetAvailableModalities:
             _get_available_modalities()
 
         mock_refresh.assert_called_once()
+
+
+# Tests for _get_modality_domains (SQL injection protection)
+
+
+def test_get_modality_domains_skips_invalid_table_names():
+    """Invalid table names are skipped to prevent SQL injection."""
+    mock_db = Mock()
+
+    # Return a mix of valid and malicious table names
+    with patch(
+        "memory.api.search.query_analysis._get_tables_with_url_column",
+        return_value=["blog_post", "drop table--", "mail_message", "'; DROP TABLE;--"],
+    ):
+        # Mock db.execute to return empty results
+        mock_db.execute.return_value = iter([])
+
+        result = _get_modality_domains(mock_db)
+
+    # Verify that only valid tables were included in the query
+    call_args = mock_db.execute.call_args
+    if call_args:
+        query_text = str(call_args[0][0])
+        assert "blog_post" in query_text
+        assert "mail_message" in query_text
+        assert "drop table" not in query_text
+        assert "DROP TABLE" not in query_text
+
+
+def test_get_modality_domains_empty_tables():
+    """Returns empty dict when no tables have URL columns."""
+    mock_db = Mock()
+
+    with patch(
+        "memory.api.search.query_analysis._get_tables_with_url_column",
+        return_value=[],
+    ):
+        result = _get_modality_domains(mock_db)
+
+    assert result == {}
+    mock_db.execute.assert_not_called()
+
+
+def test_get_modality_domains_all_invalid_tables():
+    """Returns empty dict when all table names are invalid."""
+    mock_db = Mock()
+
+    with patch(
+        "memory.api.search.query_analysis._get_tables_with_url_column",
+        return_value=["'; DROP TABLE;--", "123invalid", "has-hyphen"],
+    ):
+        result = _get_modality_domains(mock_db)
+
+    assert result == {}
+    mock_db.execute.assert_not_called()
+
+
+def test_get_modality_domains_handles_db_error():
+    """Handles database errors gracefully."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    mock_db = Mock()
+    mock_db.execute.side_effect = SQLAlchemyError("Database error")
+
+    with patch(
+        "memory.api.search.query_analysis._get_tables_with_url_column",
+        return_value=["valid_table"],
+    ):
+        result = _get_modality_domains(mock_db)
+
+    assert result == {}
+
+
+def test_get_modality_domains_extracts_domains():
+    """Correctly extracts domains from URLs."""
+    mock_db = Mock()
+
+    # Mock database rows: (modality, url)
+    mock_rows = [
+        ("blog", "https://lesswrong.com/posts/123"),
+        ("blog", "https://lesswrong.com/posts/456"),
+        ("blog", "https://example.com/article"),
+        ("forum", "https://forum.example.org/thread/1"),
+    ]
+    mock_db.execute.return_value = iter(mock_rows)
+
+    with patch(
+        "memory.api.search.query_analysis._get_tables_with_url_column",
+        return_value=["blog_post"],
+    ):
+        result = _get_modality_domains(mock_db)
+
+    # Domains should be deduplicated and sorted by frequency
+    assert "blog" in result
+    assert "lesswrong.com" in result["blog"]
+    assert "example.com" in result["blog"]
+    assert "forum" in result
+    assert "forum.example.org" in result["forum"]

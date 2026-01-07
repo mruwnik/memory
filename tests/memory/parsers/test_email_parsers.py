@@ -192,6 +192,26 @@ def test_extract_attachments_non_multipart():
     assert extract_attachments(msg) == []
 
 
+def test_extract_attachments_with_null_content():
+    """Attachment with None payload should be skipped."""
+    # Create a message with an attachment that has no content
+    msg = email.mime.multipart.MIMEMultipart()
+    msg.attach(email.mime.text.MIMEText("body"))
+
+    # Create an attachment part with None payload
+    attachment_part = email.mime.base.MIMEBase("application", "octet-stream")
+    # Don't set payload - it will return None
+    attachment_part.add_header(
+        "Content-Disposition",
+        "attachment; filename=empty.txt",
+    )
+    msg.attach(attachment_part)
+
+    # Should skip the null-content attachment without error
+    result = extract_attachments(msg)
+    assert result == []
+
+
 @pytest.mark.parametrize(
     "msg_id, subject, sender, body, expected",
     [

@@ -81,14 +81,15 @@ def sync_comic(
         if existing_comic:
             return {"status": "already_exists", "comic_id": existing_comic.id}
 
-    response = requests.get(image_url)
+    response = requests.get(image_url, timeout=30)
     if response.status_code != 200:
         return {
             "status": "failed",
             "error": f"Failed to download image: {response.status_code}",
         }
 
-    file_type = image_url.split(".")[-1]
+    # Strip query string from extension (e.g., "png?v=123" -> "png")
+    file_type = image_url.split(".")[-1].split("?")[0]
     mime_type = f"image/{file_type}"
     filename = (
         settings.COMIC_STORAGE_DIR
@@ -140,7 +141,7 @@ def trigger_comic_sync():
     def prev_smbc_comic(url: str) -> str | None:
         from bs4 import BeautifulSoup
 
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
         soup = BeautifulSoup(response.text, "html.parser")
         if link := soup.find("a", attrs={"class": "cc-prev"}):
             return link.attrs["href"]  # type: ignore

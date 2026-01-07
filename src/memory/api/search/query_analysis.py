@@ -14,6 +14,7 @@ This runs in parallel with HyDE for maximum efficiency.
 import asyncio
 import json
 import logging
+import re
 import textwrap
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,14 @@ logger = logging.getLogger(__name__)
 
 # Threshold for listing specific sources (if fewer than N distinct domains, list them)
 MAX_DOMAINS_TO_LIST = 10
+
+# Valid SQL identifier pattern (prevents SQL injection in dynamic table names)
+_VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _is_valid_sql_identifier(name: str) -> bool:
+    """Check if a name is a valid SQL identifier to prevent SQL injection."""
+    return bool(_VALID_IDENTIFIER.match(name)) and len(name) <= 128
 
 
 
@@ -79,11 +88,16 @@ def _get_modality_domains(db) -> dict[str, list[str]]:
         return {}
 
     # Build a UNION query to get modality + url from all URL-containing tables
+    # Validate table names to prevent SQL injection
     union_parts = []
     for table in tables:
+        if not _is_valid_sql_identifier(table):
+            logger.warning(f"Skipping invalid table name: {table!r}")
+            continue
+        # Double quotes for PostgreSQL identifier quoting (validated above)
         union_parts.append(
-            f"SELECT s.modality, t.url FROM source_item s "
-            f"JOIN {table} t ON s.id = t.id WHERE t.url IS NOT NULL"
+            f'SELECT s.modality, t.url FROM source_item s '
+            f'JOIN "{table}" t ON s.id = t.id WHERE t.url IS NOT NULL'
         )
 
     if not union_parts:
@@ -240,9 +254,18 @@ class QueryAnalysis:
     success: bool = False
 
 
-# Cache for recent analyses
+# Cache for recent analyses (LRU-style: accessed entries move to end)
 _analysis_cache: dict[str, QueryAnalysis] = {}
+_analysis_cache_lock: asyncio.Lock | None = None
 _CACHE_MAX_SIZE = 100
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    """Lazily initialize the cache lock to avoid event loop issues."""
+    global _analysis_cache_lock
+    if _analysis_cache_lock is None:
+        _analysis_cache_lock = asyncio.Lock()
+    return _analysis_cache_lock
 
 
 async def analyze_query(
@@ -263,9 +286,13 @@ async def analyze_query(
     """
     # Check cache first
     cache_key = query.lower().strip()
-    if cache_key in _analysis_cache:
-        logger.debug(f"Query analysis cache hit for: {query[:50]}...")
-        return _analysis_cache[cache_key]
+    async with _get_cache_lock():
+        if cache_key in _analysis_cache:
+            logger.debug(f"Query analysis cache hit for: {query[:50]}...")
+            # Move to end for LRU behavior (Python 3.7+ dicts maintain insertion order)
+            result = _analysis_cache.pop(cache_key)
+            _analysis_cache[cache_key] = result
+            return result
 
     result = QueryAnalysis(cleaned_query=query)
 
@@ -319,12 +346,14 @@ async def analyze_query(
                 logger.warning(f"Failed to parse query analysis JSON: {e}")
                 result.cleaned_query = query
 
-        # Cache the result
-        if len(_analysis_cache) >= _CACHE_MAX_SIZE:
-            keys_to_remove = list(_analysis_cache.keys())[: _CACHE_MAX_SIZE // 2]
-            for key in keys_to_remove:
-                del _analysis_cache[key]
-        _analysis_cache[cache_key] = result
+        # Cache the result (evicts oldest entries first - LRU since we move on access)
+        async with _get_cache_lock():
+            if len(_analysis_cache) >= _CACHE_MAX_SIZE:
+                # Remove oldest half (front of dict = least recently used)
+                keys_to_remove = list(_analysis_cache.keys())[: _CACHE_MAX_SIZE // 2]
+                for key in keys_to_remove:
+                    del _analysis_cache[key]
+            _analysis_cache[cache_key] = result
 
     except asyncio.TimeoutError:
         logger.warning(f"Query analysis timed out for: {query[:50]}...")

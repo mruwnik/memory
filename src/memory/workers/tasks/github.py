@@ -211,7 +211,9 @@ def _update_existing_item(
     )
 
     # Delete old chunks from Qdrant
-    chunk_ids = [str(c.id) for c in existing.chunks if c.id]
+    # Note: chunks relationship can be None if not loaded, vs empty list if loaded but empty
+    existing_chunks = existing.chunks or []
+    chunk_ids = [str(c.id) for c in existing_chunks if c.id]
     if chunk_ids:
         try:
             client = qdrant.get_qdrant_client()
@@ -221,8 +223,9 @@ def _update_existing_item(
 
     # Delete chunks from database and clear the collection
     # (must clear before flush to avoid SQLAlchemy referencing deleted objects)
-    chunks_to_delete = list(existing.chunks)
-    existing.chunks.clear()
+    chunks_to_delete = list(existing_chunks)
+    if existing.chunks is not None:
+        existing.chunks.clear()
     for chunk in chunks_to_delete:
         session.delete(chunk)
 
