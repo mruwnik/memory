@@ -157,3 +157,57 @@ async def test_oauth_callback_discord_validates_query_params():
     assert response.status_code == 400
     body = response.body.decode()
     assert "Missing authorization code" in body
+
+
+def test_authenticate_bot_finds_matching_bot():
+    db = MagicMock()
+    bot = MagicMock()
+    bot.api_key = "bot_test123"
+    db.query.return_value.all.return_value = [bot]
+
+    result = auth.authenticate_bot("bot_test123", db)
+
+    assert result is bot
+
+
+def test_authenticate_bot_returns_none_for_invalid_key():
+    db = MagicMock()
+    bot = MagicMock()
+    bot.api_key = "bot_test123"
+    db.query.return_value.all.return_value = [bot]
+
+    result = auth.authenticate_bot("bot_wrong", db)
+
+    assert result is None
+
+
+def test_get_session_user_uses_api_key_auth_for_bot_tokens():
+    request = SimpleNamespace(
+        headers={"Authorization": "Bearer bot_test123"},
+        cookies={},
+    )
+    db = MagicMock()
+    bot = MagicMock()
+    bot.api_key = "bot_test123"
+    db.query.return_value.all.return_value = [bot]
+
+    result = auth.get_session_user(request, db)
+
+    assert result is bot
+
+
+@patch("memory.api.auth.get_user_session")
+def test_get_session_user_falls_back_to_session_for_non_bot_tokens(mock_get_user_session):
+    request = SimpleNamespace(
+        headers={"Authorization": "Bearer session-uuid"},
+        cookies={},
+    )
+    db = MagicMock()
+    session = MagicMock()
+    session.user = MagicMock()
+    mock_get_user_session.return_value = session
+
+    result = auth.get_session_user(request, db)
+
+    assert result is session.user
+    mock_get_user_session.assert_called_once_with(request, db)

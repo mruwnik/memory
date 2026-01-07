@@ -3,6 +3,7 @@
 import argparse
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import HumanUser, BotUser
+from memory.common import settings
 
 
 if __name__ == "__main__":

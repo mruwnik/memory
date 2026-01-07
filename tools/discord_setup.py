@@ -1,6 +1,8 @@
 import click
 import requests
 
+from memory.common import settings
+
 
 def make_invite(client_id: str | int) -> str:
     permissions = 2048 + 16 + 1024  # = 3088

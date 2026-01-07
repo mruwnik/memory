@@ -88,8 +88,36 @@ def get_user_session(
     return session
 
 
+def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | None:
+    """Authenticate a bot by API key.
+
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    # Get all bot users and compare with constant-time function
+    # This prevents timing attacks on API key discovery
+    bots = db.query(BotUser).all()
+    for bot in bots:
+        if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
+            return bot
+    return None
+
+
 def get_session_user(request: Request, db: DBSession | scoped_session) -> User | None:
-    """Get user from session ID if session is valid"""
+    """Get user from session ID or API key if valid.
+
+    Supports two authentication methods:
+    - Session tokens (UUIDs from UserSession table)
+    - API keys (prefixed with 'bot_' for BotUser accounts)
+    """
+    token = get_token(request)
+    if not token:
+        return None
+
+    # Check if this is an API key (for bot users)
+    if token.startswith("bot_"):
+        return authenticate_bot(token, db)
+
+    # Otherwise treat as session token
     if session := get_user_session(request, db):
         return session.user
     return None
@@ -137,20 +165,6 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
         from memory.common.db.models.users import verify_password
         verify_password(password, "$2b$12$dummy.hash.for.timing.attack.prevention")
 
-    return None
-
-
-def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
-    """Authenticate a bot by API key.
-
-    Uses constant-time comparison to prevent timing attacks.
-    """
-    # Get all bot users and compare with constant-time function
-    # This prevents timing attacks on API key discovery
-    bots = db.query(BotUser).all()
-    for bot in bots:
-        if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
-            return bot
     return None
 
 

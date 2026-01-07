@@ -73,7 +73,7 @@ class MailMessage(SourceItem):
 
     # Sync tracking for deletion detection
     email_account_id = Column(
-        BigInteger, ForeignKey("email_accounts.id", ondelete="SET NULL"), nullable=True
+        BigInteger, ForeignKey("email_accounts.id", ondelete="CASCADE"), nullable=True
     )
     imap_uid = Column(Text, nullable=True)
 
@@ -88,7 +88,7 @@ class MailMessage(SourceItem):
         foreign_keys="EmailAttachment.mail_message_id",
         cascade="all, delete-orphan",
     )
-    email_account = relationship("EmailAccount", foreign_keys=[email_account_id])
+    email_account = relationship("EmailAccount", back_populates="messages", foreign_keys=[email_account_id])
 
     __mapper_args__ = {
         "polymorphic_identity": "mail_message",

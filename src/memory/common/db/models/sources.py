@@ -135,6 +135,12 @@ class EmailAccount(Base):
     )
 
     google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
+    messages = relationship(
+        "MailMessage",
+        back_populates="email_account",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         CheckConstraint("account_type IN ('imap', 'gmail')"),

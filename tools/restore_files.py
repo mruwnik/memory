@@ -24,6 +24,8 @@ from pathlib import Path
 import boto3
 from cryptography.fernet import Fernet
 
+from memory.common import settings
+
 
 def get_cipher(password: str) -> Fernet:
     """Create Fernet cipher from password (same derivation as backup.py)."""
@@ -70,9 +72,7 @@ def download_from_s3(
         return None
 
 
-def decrypt_and_extract(
-    encrypted_data: bytes, password: str, output_dir: Path
-) -> bool:
+def decrypt_and_extract(encrypted_data: bytes, password: str, output_dir: Path) -> bool:
     """Decrypt Fernet-encrypted tarball and extract contents."""
     cipher = get_cipher(password)
 
@@ -115,7 +115,9 @@ def main():
         default=Path("./restored_files"),
         help="Output directory for restored files",
     )
-    parser.add_argument("--list", "-l", action="store_true", help="List available backups")
+    parser.add_argument(
+        "--list", "-l", action="store_true", help="List available backups"
+    )
     parser.add_argument(
         "--bucket",
         default=os.getenv("S3_BACKUP_BUCKET", "equistamp-memory-backup"),
@@ -137,7 +139,9 @@ def main():
     # Get encryption key
     password = os.getenv("BACKUP_ENCRYPTION_KEY")
     if not password and not args.list:
-        print("Error: BACKUP_ENCRYPTION_KEY environment variable not set", file=sys.stderr)
+        print(
+            "Error: BACKUP_ENCRYPTION_KEY environment variable not set", file=sys.stderr
+        )
         sys.exit(1)
 
     # List mode
