@@ -1190,13 +1190,14 @@ class GithubClient:
         title
         fields(first: 30) {
           nodes {
-            ... on ProjectV2Field { id, name }
+            ... on ProjectV2Field { id, name, dataType }
             ... on ProjectV2SingleSelectField {
               id
               name
+              dataType
               options { id, name }
             }
-            ... on ProjectV2IterationField { id, name }
+            ... on ProjectV2IterationField { id, name, dataType }
           }
         }
       }
@@ -1213,6 +1214,8 @@ class GithubClient:
                     if not field_name:
                         continue
                     field_info: dict[str, Any] = {"id": field["id"]}
+                    if "dataType" in field:
+                        field_info["data_type"] = field["dataType"]
                     if "options" in field:
                         field_info["options"] = {
                             opt["name"]: opt["id"] for opt in field["options"]

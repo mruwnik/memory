@@ -413,17 +413,31 @@ def _set_project_field(
         return f"Field '{field_name}' not found in project"
 
     field_id = field_def["id"]
+    data_type = field_def.get("data_type", "TEXT")
 
     # Single-select field needs option ID resolution
-    if "options" in field_def:
+    if "options" in field_def and field_def["options"]:
         option_id = field_def["options"].get(field_value)
         if not option_id:
             return f"Option '{field_value}' not found for field '{field_name}'"
         success = client.update_project_field_value(
             project_id, item_id, field_id, option_id, "singleSelectOptionId"
         )
+    elif data_type == "NUMBER":
+        try:
+            num_value = float(field_value)
+            success = client.update_project_field_value(
+                project_id, item_id, field_id, num_value, "number"
+            )
+        except ValueError:
+            return f"Invalid number '{field_value}' for field '{field_name}'"
+    elif data_type == "DATE":
+        # GitHub expects ISO 8601 date format (YYYY-MM-DD)
+        success = client.update_project_field_value(
+            project_id, item_id, field_id, field_value, "date"
+        )
     else:
-        # Text field
+        # Text field (default)
         success = client.update_project_field_value(
             project_id, item_id, field_id, field_value, "text"
         )
@@ -704,7 +718,7 @@ async def list_github_projects(
         query = session.query(GithubProject)
 
         if owner:
-            query = query.filter(GithubProject.owner_login == owner)
+            query = query.filter(GithubProject.owner_login.ilike(owner))
         if not include_closed:
             query = query.filter(GithubProject.closed == False)  # noqa: E712
 
@@ -736,7 +750,7 @@ async def github_project_details(
         project = (
             session.query(GithubProject)
             .filter(
-                GithubProject.owner_login == owner,
+                GithubProject.owner_login.ilike(owner),
                 GithubProject.number == project_number,
             )
             .first()

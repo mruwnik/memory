@@ -1100,3 +1100,67 @@ def test_parse_due_date_invalid_formats(date_str):
     """Test due date parsing returns None for invalid formats."""
     result = meetings.parse_due_date(date_str)
     assert result is None
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_process_meeting_prepends_attendees_to_transcript(
+    mock_extraction, mock_make_session, qdrant
+):
+    """Test that attendee names are prepended to the transcript content."""
+    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+
+    transcript = "Let's discuss the roadmap."
+    result = meetings.process_meeting(
+        transcript=transcript,
+        attendee_names=["Alice", "Bob", "Charlie"],
+        external_id="attendee-test-123",
+    )
+
+    assert result["status"] == "success"
+
+    meeting = mock_make_session.query(Meeting).first()
+    assert meeting is not None
+    assert meeting.content.startswith("Attendees: Alice, Bob, Charlie\n\n")
+    assert transcript in meeting.content
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_process_meeting_no_attendees_no_prefix(
+    mock_extraction, mock_make_session, qdrant
+):
+    """Test that transcript is unchanged when no attendees provided."""
+    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+
+    transcript = "Let's discuss the roadmap."
+    result = meetings.process_meeting(
+        transcript=transcript,
+        attendee_names=None,
+        external_id="no-attendee-test-123",
+    )
+
+    assert result["status"] == "success"
+
+    meeting = mock_make_session.query(Meeting).first()
+    assert meeting is not None
+    assert meeting.content == transcript
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_process_meeting_empty_attendees_no_prefix(
+    mock_extraction, mock_make_session, qdrant
+):
+    """Test that transcript is unchanged when attendees list is empty."""
+    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+
+    transcript = "Let's discuss the roadmap."
+    result = meetings.process_meeting(
+        transcript=transcript,
+        attendee_names=[],
+        external_id="empty-attendee-test-123",
+    )
+
+    assert result["status"] == "success"
+
+    meeting = mock_make_session.query(Meeting).first()
+    assert meeting is not None
+    assert meeting.content == transcript

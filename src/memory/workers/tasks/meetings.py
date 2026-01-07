@@ -15,6 +15,7 @@ from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.people import Person
 from memory.common.celery_app import app, PROCESS_MEETING
 from memory.workers.tasks.content_processing import (
+    create_content_hash,
     process_content_item,
     safe_task_execution,
 )
@@ -185,7 +186,16 @@ def _find_or_create_person(session, name: str) -> tuple[Person, bool]:
     if existing:
         return existing, False
 
-    person = Person(identifier=identifier, display_name=name, aliases=[name])
+    sha256 = create_content_hash(f"person:{identifier}")
+    person = Person(
+        identifier=identifier,
+        display_name=name,
+        aliases=[name],
+        modality="person",
+        mime_type="text/plain",
+        sha256=sha256,
+        size=0,
+    )
     session.add(person)
     session.flush()
     return person, True
@@ -330,15 +340,22 @@ def process_meeting(
         if meeting_date:
             parsed_date = parse_due_date(meeting_date)
 
+        # Prepend attendees to transcript if provided
+        full_transcript = transcript
+        if attendee_names:
+            attendee_list = ", ".join(name for name in attendee_names if name)
+            if attendee_list:
+                full_transcript = f"Attendees: {attendee_list}\n\n{transcript}"
+
         # Create the Meeting record
-        content_hash = hashlib.sha256(transcript.encode()).digest()
+        content_hash = hashlib.sha256(full_transcript.encode()).digest()
         meeting = Meeting(
             title=title,
             meeting_date=parsed_date,
             duration_minutes=duration_minutes,
             source_tool=source_tool,
             external_id=external_id,
-            content=transcript,
+            content=full_transcript,
             sha256=content_hash,
             tags=["meeting"] + (tags or []),
             extraction_status="processing",
