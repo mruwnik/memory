@@ -1,11 +1,20 @@
 #!/bin/bash
 set -e
 
-REMOTE_HOST="memory"
-REMOTE_DIR="/home/ec2-user/memory"
-DEFAULT_BRANCH="master"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Load .env if it exists
+if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a
+    source "$PROJECT_DIR/.env"
+    set +a
+fi
+
+# Configuration (can be overridden in .env)
+REMOTE_HOST="${DEPLOY_HOST:-memory}"
+REMOTE_DIR="${DEPLOY_DIR:-/home/ec2-user/memory}"
+DEFAULT_BRANCH="${DEPLOY_BRANCH:-master}"
 
 # Colors for output
 RED='\033[0;31m'

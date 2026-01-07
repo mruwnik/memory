@@ -425,7 +425,9 @@ def _handle_project_integration(
     if not issue_node_id:
         issue_node_id = client.get_issue_node_id(owner, repo_name, issue_number)
     if not issue_node_id:
-        logger.warning(f"Could not get issue node ID for {owner}/{repo_name}#{issue_number}")
+        logger.warning(
+            f"Could not get issue node ID for {owner}/{repo_name}#{issue_number}"
+        )
         return updates, "Could not get issue node ID"
 
     # Try org project first, then user project
@@ -441,12 +443,17 @@ def _handle_project_integration(
     # Add to project if not already there
     item_id = client.get_project_item_id(owner, repo_name, issue_number, project_id)
     if not item_id:
-        logger.debug(f"Issue #{issue_number} not in project, adding with content_id={issue_node_id}")
+        logger.debug(
+            f"Issue #{issue_number} not in project, adding with content_id={issue_node_id}"
+        )
         item_id = client.add_issue_to_project(project_id, issue_node_id)
         if item_id:
             updates.append(f"Added to project '{project_name}'")
         else:
-            return updates, f"Failed to add to project '{project_name}' (check API logs for details)"
+            return (
+                updates,
+                f"Failed to add to project '{project_name}' (check API logs for details)",
+            )
 
     # Set field values
     if item_id and project_fields:
@@ -489,7 +496,9 @@ def _set_project_field(
             project_id, item_id, field_id, field_value, "text"
         )
 
-    return f"Set {field_name}={field_value}" if success else f"Failed to set {field_name}"
+    return (
+        f"Set {field_name}={field_value}" if success else f"Failed to set {field_name}"
+    )
 
 
 def _sync_issue_to_database(
@@ -624,7 +633,7 @@ def _update_issue(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubRepo))
+@visible_when(require_scopes("github"))
 async def upsert_github_issue(
     repo: str,
     title: str,
@@ -677,14 +686,28 @@ async def upsert_github_issue(
         # Create or update
         if number is None:
             issue_data, number = _create_issue(
-                client, owner, repo_name, title, body,
-                label_ids, assignee_ids, milestone_node_id,
+                client,
+                owner,
+                repo_name,
+                title,
+                body,
+                label_ids,
+                assignee_ids,
+                milestone_node_id,
             )
             action = "created"
         else:
             issue_data = _update_issue(
-                client, owner, repo_name, number, title, body, state,
-                label_ids, assignee_ids, milestone_node_id,
+                client,
+                owner,
+                repo_name,
+                number,
+                title,
+                body,
+                state,
+                label_ids,
+                assignee_ids,
+                milestone_node_id,
             )
             action = "updated"
 
@@ -700,8 +723,13 @@ async def upsert_github_issue(
         # Handle project integration
         if project:
             updates, error = _handle_project_integration(
-                client, owner, repo_name, number, issue_data.get("id"),
-                project, project_fields,
+                client,
+                owner,
+                repo_name,
+                number,
+                issue_data.get("id"),
+                project,
+                project_fields,
             )
             result["project_updates"] = updates
             if error:

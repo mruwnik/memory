@@ -18,6 +18,7 @@ from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.schedule import schedule_mcp
 from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
+from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.common.db.models import OAuthState, UserSession
 from memory.common.db.models.users import HumanUser
@@ -34,7 +35,7 @@ templates = Jinja2Templates(directory=template_dir)
 oauth_provider = SimpleOAuthProvider()
 
 mcp = FastMCP(
-    "memory",
+    settings.APP_NAME,
     auth=oauth_provider,
 )
 

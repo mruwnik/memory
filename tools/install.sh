@@ -105,6 +105,25 @@ echo "           Memory Knowledge Base - Installation Setup          "
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
+# ─────────────────────────────────────────────────────────────────────
+# Application Name
+# ─────────────────────────────────────────────────────────────────────
+
+if [ -n "$(get_env_value 'APP_NAME')" ]; then
+    success "APP_NAME already configured: $(get_env_value 'APP_NAME')"
+else
+    echo ""
+    info "The app name is used for MCP server name, Celery queues, Discord channels, etc."
+    read -r -p "Application name [memory]: " app_name
+    if [ -n "$app_name" ]; then
+        set_env_value "APP_NAME" "$app_name"
+        success "APP_NAME set to $app_name"
+    else
+        set_env_value "APP_NAME" "memory"
+        info "APP_NAME using default (memory)"
+    fi
+fi
+
 # Create directories
 info "Creating directories..."
 mkdir -p "$SECRETS_DIR"
@@ -213,6 +232,43 @@ else
 fi
 
 success "Service defaults configured"
+
+# ─────────────────────────────────────────────────────────────────────
+# Deployment Settings (optional)
+# ─────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "─────────────────────────────────────────────────────────────────"
+echo "                  Deployment Settings (Optional)                 "
+echo "─────────────────────────────────────────────────────────────────"
+echo ""
+
+info "These settings are used by tools/deploy.sh and tools/diagnose.sh"
+echo ""
+
+if [ -n "$(get_env_value 'DEPLOY_HOST')" ]; then
+    success "DEPLOY_HOST already configured: $(get_env_value 'DEPLOY_HOST')"
+else
+    read -r -p "SSH host for deployment (e.g., 'myserver' or 'user@host') [skip]: " deploy_host
+    if [ -n "$deploy_host" ]; then
+        set_env_value "DEPLOY_HOST" "$deploy_host"
+        success "DEPLOY_HOST set to $deploy_host"
+    else
+        info "DEPLOY_HOST skipped"
+    fi
+fi
+
+if [ -n "$(get_env_value 'DEPLOY_DIR')" ]; then
+    success "DEPLOY_DIR already configured: $(get_env_value 'DEPLOY_DIR')"
+else
+    read -r -p "Remote directory path [skip]: " deploy_dir
+    if [ -n "$deploy_dir" ]; then
+        set_env_value "DEPLOY_DIR" "$deploy_dir"
+        success "DEPLOY_DIR set to $deploy_dir"
+    else
+        info "DEPLOY_DIR skipped"
+    fi
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # SSH keys for git operations (optional)

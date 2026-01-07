@@ -23,6 +23,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    Table,
     Text,
     func,
 )
@@ -1550,3 +1551,157 @@ class CalendarEvent(SourceItem):
     @property
     def title(self) -> str | None:
         return cast(str | None, self.event_title)
+
+
+# Association table for Meeting <-> Person many-to-many relationship
+meeting_attendees = Table(
+    "meeting_attendees",
+    Base.metadata,
+    Column(
+        "meeting_id",
+        BigInteger,
+        ForeignKey("meeting.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        BigInteger,
+        ForeignKey("people.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class MeetingPayload(SourceItemPayload):
+    title: Annotated[str | None, "Title of the meeting"]
+    meeting_date: Annotated[str | None, "Date/time when the meeting occurred (ISO format)"]
+    duration_minutes: Annotated[int | None, "Duration of the meeting in minutes"]
+    source_tool: Annotated[str | None, "Tool that generated the transcript (fireflies, granola, etc.)"]
+    summary: Annotated[str | None, "LLM-generated summary of the meeting"]
+    notes: Annotated[str | None, "LLM-extracted key points and decisions"]
+    extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, failed"]
+    attendee_ids: Annotated[list[int], "IDs of Person records who attended"]
+    task_ids: Annotated[list[int], "IDs of Task records extracted from this meeting"]
+    calendar_event_id: Annotated[int | None, "ID of linked CalendarEvent if available"]
+
+
+class Meeting(SourceItem):
+    """A meeting transcript with extracted summary, notes, tasks, and attendee links."""
+
+    __tablename__ = "meeting"
+
+    id = Column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # Core metadata
+    title = Column(Text, nullable=True)
+    meeting_date = Column(DateTime(timezone=True), nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
+    source_tool = Column(Text, nullable=True)  # "fireflies", "granola", etc.
+    external_id = Column(Text, nullable=True)  # Dedup key from source (unique via partial index)
+    calendar_event_id = Column(
+        BigInteger, ForeignKey("calendar_event.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # LLM-extracted fields
+    summary = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    extraction_status = Column(Text, nullable=False, server_default="pending")
+
+    # Relationships
+    attendees = relationship(
+        "Person",
+        secondary=meeting_attendees,
+        backref="meetings",
+        lazy="selectin",
+    )
+    calendar_event = relationship(
+        "CalendarEvent",
+        foreign_keys=[calendar_event_id],
+        backref="meetings",
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "meeting",
+    }
+
+    __table_args__ = (
+        Index("meeting_date_idx", "meeting_date"),
+        Index("meeting_source_tool_idx", "source_tool"),
+        # Partial unique index: allows multiple NULLs, enforces uniqueness on non-NULL values
+        Index(
+            "meeting_external_id_idx",
+            "external_id",
+            unique=True,
+            postgresql_where=external_id.isnot(None),
+        ),
+        Index("meeting_extraction_status_idx", "extraction_status"),
+        Index("meeting_calendar_event_idx", "calendar_event_id"),
+    )
+
+    def __init__(self, **kwargs):
+        if not kwargs.get("modality"):
+            kwargs["modality"] = "meeting"
+        super().__init__(**kwargs)
+
+    def as_payload(self) -> MeetingPayload:
+        return MeetingPayload(
+            **super().as_payload(),
+            title=cast(str | None, self.title),
+            meeting_date=(self.meeting_date and self.meeting_date.isoformat() or None),
+            duration_minutes=cast(int | None, self.duration_minutes),
+            source_tool=cast(str | None, self.source_tool),
+            summary=cast(str | None, self.summary),
+            notes=cast(str | None, self.notes),
+            extraction_status=cast(str, self.extraction_status),
+            attendee_ids=[p.id for p in self.attendees],
+            task_ids=[t.id for t in self.spawned_tasks],
+            calendar_event_id=cast(int | None, self.calendar_event_id),
+        )
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "title": self.title,
+            "meeting_date": self.meeting_date and self.meeting_date.isoformat(),
+            "duration_minutes": self.duration_minutes,
+            "source_tool": self.source_tool,
+            "summary": self.summary,
+            "notes": self.notes,
+            "extraction_status": self.extraction_status,
+            "attendees": [p.display_name for p in self.attendees],
+            "task_count": len(self.spawned_tasks),
+            "tags": self.tags,
+            "calendar_event_id": self.calendar_event_id,
+        }
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        parts = []
+
+        if self.title:
+            parts.append(f"Meeting: {self.title}")
+
+        if self.meeting_date:
+            parts.append(f"Date: {self.meeting_date.strftime('%Y-%m-%d')}")
+
+        if self.attendees:
+            attendee_names = [p.display_name for p in self.attendees]
+            parts.append(f"Attendees: {', '.join(attendee_names)}")
+
+        if self.summary:
+            parts.append(f"Summary: {self.summary}")
+
+        if self.notes:
+            parts.append(f"Notes:\n{self.notes}")
+
+        # Include full transcript for search
+        if self.content:
+            parts.append(f"Transcript:\n{cast(str, self.content)}")
+
+        text = "\n\n".join(parts)
+        return extract.extract_text(text, modality="meeting")
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["meeting"]

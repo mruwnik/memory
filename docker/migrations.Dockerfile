@@ -12,17 +12,8 @@ RUN pip install -e ".[common]"
 COPY src/ ./src/
 RUN pip install -e ".[common]"
 
-# Run as non-root user
-RUN useradd -m appuser
 RUN mkdir -p /app/memory_files
 ENV PYTHONPATH="/app"
 
-# Create user and set permissions
-RUN useradd -m kb
-RUN mkdir -p /var/cache/fontconfig /home/kb/.cache/fontconfig && \
-    chown -R kb:kb /var/cache/fontconfig /home/kb/.cache/fontconfig /app
-
-USER kb
-
-# Run the migrations
+# Run the migrations (as root - this is a one-shot container)
 CMD ["alembic", "-c", "/app/db/migrations/alembic.ini", "upgrade", "head"] 

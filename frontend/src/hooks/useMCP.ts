@@ -155,8 +155,10 @@ export const useMCP = () => {
     return await mcpCall('core_search_knowledge_base', {
       query,
       filters,
-      config,
       modalities,
+      limit: config.limit ?? 20,
+      previews: config.previews ?? false,
+      use_scores: config.useScores ?? false,
     })
   }, [mcpCall])
 

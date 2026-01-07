@@ -20,6 +20,7 @@ PEOPLE_ROOT = "memory.workers.tasks.people"
 PROACTIVE_ROOT = "memory.workers.tasks.proactive"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
+MEETINGS_ROOT = "memory.workers.tasks.meetings"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -90,6 +91,9 @@ SYNC_CALENDAR_ACCOUNT = f"{CALENDAR_ROOT}.sync_calendar_account"
 SYNC_CALENDAR_EVENT = f"{CALENDAR_ROOT}.sync_calendar_event"
 SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 
+# Meeting tasks
+PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
+
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
@@ -108,7 +112,7 @@ def get_broker_url() -> str:
 
 
 app = Celery(
-    "memory",
+    settings.APP_NAME,
     broker=get_broker_url(),
     backend=settings.CELERY_RESULT_BACKEND,
 )
@@ -150,6 +154,7 @@ app.conf.update(
         f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
+        f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
     },
 )
 

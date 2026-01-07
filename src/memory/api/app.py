@@ -29,6 +29,7 @@ from memory.api.article_feeds import router as article_feeds_router
 from memory.api.github_sources import router as github_sources_router
 from memory.api.calendar_accounts import router as calendar_accounts_router
 from memory.api.tasks import router as tasks_router
+from memory.api.meetings import router as meetings_router
 from memory.api.content_sources import router as content_sources_router
 from memory.api.MCP.base import mcp
 
@@ -169,6 +170,7 @@ app.include_router(article_feeds_router)
 app.include_router(github_sources_router)
 app.include_router(calendar_accounts_router)
 app.include_router(tasks_router)
+app.include_router(meetings_router)
 app.include_router(content_sources_router)
 
 

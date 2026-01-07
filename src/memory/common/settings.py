@@ -7,6 +7,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Application name - used for MCP server, queues, Discord channels, etc.
+APP_NAME = os.getenv("APP_NAME", "memory")
+
 
 def boolean_env(key: str, default: bool = False) -> bool:
     if key not in os.environ:
@@ -45,7 +48,7 @@ else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
 # Broker settings
-CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", "memory")
+CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", APP_NAME)
 CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "redis").lower()
 CELERY_BROKER_USER = os.getenv("CELERY_BROKER_USER", "")
 CELERY_BROKER_PASSWORD = os.getenv("CELERY_BROKER_PASSWORD", REDIS_PASSWORD)
@@ -97,6 +100,7 @@ storage_dirs = [
     NOTES_STORAGE_DIR,
     DISCORD_STORAGE_DIR,
 ]
+
 for dir in storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,10 +224,10 @@ STATIC_DIR = pathlib.Path(
 
 # Discord notification settings
 DISCORD_BOT_ID = int(os.getenv("DISCORD_BOT_ID", "0"))
-DISCORD_ERROR_CHANNEL = os.getenv("DISCORD_ERROR_CHANNEL", "memory-errors")
-DISCORD_ACTIVITY_CHANNEL = os.getenv("DISCORD_ACTIVITY_CHANNEL", "memory-activity")
-DISCORD_DISCOVERY_CHANNEL = os.getenv("DISCORD_DISCOVERY_CHANNEL", "memory-discoveries")
-DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", "memory-chat")
+DISCORD_ERROR_CHANNEL = os.getenv("DISCORD_ERROR_CHANNEL", f"{APP_NAME}-errors")
+DISCORD_ACTIVITY_CHANNEL = os.getenv("DISCORD_ACTIVITY_CHANNEL", f"{APP_NAME}-activity")
+DISCORD_DISCOVERY_CHANNEL = os.getenv("DISCORD_DISCOVERY_CHANNEL", f"{APP_NAME}-discoveries")
+DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", f"{APP_NAME}-chat")
 
 
 # Enable Discord notifications if bot token is set
