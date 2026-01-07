@@ -10,11 +10,8 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.api.search.search import search
-from memory.api.search.types import SearchConfig, SearchFilters
-from memory.common import extract
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubMilestone
+from memory.common.db.models import GithubItem, GithubMilestone, GithubProject
 from memory.common.db.models.sources import GithubRepo
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
 from memory.parsers.github import GithubClient, GithubCredentials, serialize_issue_data
@@ -264,71 +261,6 @@ async def list_milestones(
             )
 
         return results
-
-
-@github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubItem))
-async def search_github_issues(
-    query: str,
-    repo: str | None = None,
-    state: str | None = None,
-    kind: str | None = None,
-    limit: int = 20,
-) -> list[dict]:
-    """
-    Search GitHub issues using natural language.
-    Searches across issue titles, bodies, and comments.
-
-    Args:
-        query: Natural language search query (e.g., "authentication bug", "database migration")
-        repo: Optional filter by repository path
-        state: Optional filter: "open", "closed", "merged"
-        kind: Optional filter: "issue" or "pr"
-        limit: Maximum results (default 20, max 100)
-
-    Returns: List of matching issues with search score
-    """
-    logger.info(f"search_github_issues called: query={query}, repo={repo}")
-
-    limit = min(limit, 100)
-
-    source_ids = None
-    if repo or state or kind:
-        with make_session() as session:
-            q = session.query(GithubItem.id)
-            if repo:
-                q = q.filter(GithubItem.repo_path == repo)
-            if state:
-                q = q.filter(GithubItem.state == state)
-            if kind:
-                q = q.filter(GithubItem.kind == kind)
-            else:
-                q = q.filter(GithubItem.kind.in_(["issue", "pr"]))
-            source_ids = [item.id for item in q.all()]
-
-    data = extract.extract_text(query, skip_summary=True)
-    config = SearchConfig(limit=limit, previews=True)
-    filters = SearchFilters()
-    if source_ids is not None:
-        filters["source_ids"] = source_ids
-
-    results = await search(
-        data,
-        modalities={"github"},
-        filters=filters,
-        config=config,
-    )
-
-    output = []
-    with make_session() as session:
-        for result in results:
-            item = session.get(GithubItem, result.id)
-            if item:
-                serialized = _serialize_issue(item)
-                serialized["search_score"] = result.search_score
-                output.append(serialized)
-
-    return output
 
 
 @github_mcp.tool()
@@ -744,3 +676,75 @@ async def upsert_github_issue(
             result["sync_error"] = error
 
         return result
+
+
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubProject))
+async def list_github_projects(
+    owner: str | None = None,
+    include_closed: bool = False,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    List GitHub Projects (v2) that have been synced to the database.
+    Projects are org/user-level boards that can span multiple repos.
+
+    Args:
+        owner: Filter by owner login (org or user name)
+        include_closed: Include closed projects (default: False)
+        limit: Maximum results (default 50, max 200)
+
+    Returns: List of projects with id, number, title, description, fields, item counts, etc.
+    """
+    logger.info(f"list_github_projects called: owner={owner}, include_closed={include_closed}")
+
+    limit = min(limit, 200)
+
+    with make_session() as session:
+        query = session.query(GithubProject)
+
+        if owner:
+            query = query.filter(GithubProject.owner_login == owner)
+        if not include_closed:
+            query = query.filter(GithubProject.closed == False)  # noqa: E712
+
+        query = query.order_by(GithubProject.title).limit(limit)
+        projects = query.all()
+
+        return [project.as_payload() for project in projects]
+
+
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_items(GithubProject))
+async def github_project_details(
+    owner: str,
+    project_number: int,
+) -> dict:
+    """
+    Get full details of a specific GitHub Project including field definitions.
+
+    Args:
+        owner: Organization or user login that owns the project
+        project_number: The project number (visible in URL)
+
+    Returns: Full project details including fields with their options,
+             item counts, readme, and timestamps.
+    """
+    logger.info(f"github_project_details called: owner={owner}, project_number={project_number}")
+
+    with make_session() as session:
+        project = (
+            session.query(GithubProject)
+            .filter(
+                GithubProject.owner_login == owner,
+                GithubProject.number == project_number,
+            )
+            .first()
+        )
+
+        if not project:
+            raise ValueError(f"Project #{project_number} not found for {owner}")
+
+        return project.as_payload()
+
+

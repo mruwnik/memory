@@ -181,6 +181,32 @@ export interface AvailableRepo {
   html_url: string | null
 }
 
+export interface GithubProject {
+  id: number
+  account_id: number
+  node_id: string
+  number: number
+  owner_type: string
+  owner_login: string
+  title: string
+  short_description: string | null
+  readme: string | null
+  url: string
+  public: boolean
+  closed: boolean
+  fields: Array<{
+    id: string
+    name: string
+    data_type: string
+    options: Record<string, string> | null
+  }>
+  items_total_count: number
+  github_created_at: string | null
+  github_updated_at: string | null
+  last_sync_at: string | null
+  created_at: string
+}
+
 // Types for Google OAuth Config
 export interface GoogleOAuthConfig {
   id: number
@@ -558,6 +584,37 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  // === GitHub Projects ===
+
+  const listGithubProjects = useCallback(async (owner?: string, includeClosed = false): Promise<GithubProject[]> => {
+    const params = new URLSearchParams()
+    if (owner) params.append('owner', owner)
+    if (includeClosed) params.append('include_closed', 'true')
+    const url = params.toString() ? `/github/projects?${params}` : '/github/projects'
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch GitHub projects')
+    return response.json()
+  }, [apiCall])
+
+  const syncGithubProjects = useCallback(async (owner: string, isOrg = true, includeClosed = false): Promise<CeleryTaskResponse> => {
+    const params = new URLSearchParams({
+      owner,
+      is_org: isOrg.toString(),
+      include_closed: includeClosed.toString(),
+    })
+    const response = await apiCall(`/github/projects/sync?${params}`, { method: 'POST' })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to sync GitHub projects')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const deleteGithubProject = useCallback(async (projectId: number): Promise<void> => {
+    const response = await apiCall(`/github/projects/${projectId}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Failed to delete GitHub project')
+  }, [apiCall])
+
   // === Google Drive ===
 
   const listGoogleAccounts = useCallback(async (): Promise<GoogleAccount[]> => {
@@ -811,6 +868,10 @@ export const useSources = () => {
     updateGithubRepo,
     deleteGithubRepo,
     syncGithubRepo,
+    // GitHub Projects
+    listGithubProjects,
+    syncGithubProjects,
+    deleteGithubProject,
     // Google Drive
     listGoogleAccounts,
     getGoogleAuthUrl,

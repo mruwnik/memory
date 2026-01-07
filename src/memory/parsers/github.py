@@ -101,6 +101,34 @@ class GithubMilestoneData(TypedDict):
     closed_at: datetime | None
 
 
+class GithubProjectFieldDef(TypedDict):
+    """Definition of a field in a GitHub Project."""
+
+    id: str
+    name: str
+    data_type: str  # TEXT, SINGLE_SELECT, NUMBER, DATE, ITERATION
+    options: dict[str, str] | None  # option_name -> option_id (for SINGLE_SELECT)
+
+
+class GithubProjectData(TypedDict):
+    """GitHub Project (v2) data for storage."""
+
+    node_id: str  # GraphQL node ID
+    number: int  # Project number
+    title: str
+    short_description: str | None
+    readme: str | None
+    public: bool
+    closed: bool
+    owner_type: str  # 'organization' or 'user'
+    owner_login: str  # org or user name
+    url: str
+    fields: list[GithubProjectFieldDef]
+    github_created_at: datetime | None
+    github_updated_at: datetime | None
+    items_total_count: int  # Number of items in the project
+
+
 class GithubIssueData(TypedDict):
     """Parsed issue/PR data ready for storage."""
 
@@ -1344,6 +1372,240 @@ class GithubClient:
         response = self.session.get(f"{GITHUB_API_URL}/user", timeout=30)
         response.raise_for_status()
         return response.json()
+
+    def fetch_project(
+        self,
+        owner: str,
+        project_number: int,
+        is_org: bool = True,
+    ) -> GithubProjectData | None:
+        """Fetch a GitHub Project (v2) by owner and project number.
+
+        Args:
+            owner: Organization or user login that owns the project
+            project_number: The project number (visible in URL)
+            is_org: True if owner is an organization, False if user
+
+        Returns:
+            GithubProjectData with project details, or None if not found
+        """
+        entity_type = "organization" if is_org else "user"
+        query = f"""
+        query($owner: String!, $number: Int!) {{
+          {entity_type}(login: $owner) {{
+            projectV2(number: $number) {{
+              id
+              number
+              title
+              shortDescription
+              readme
+              public
+              closed
+              url
+              createdAt
+              updatedAt
+              items(first: 0) {{
+                totalCount
+              }}
+              fields(first: 50) {{
+                nodes {{
+                  ... on ProjectV2Field {{
+                    id
+                    name
+                    dataType
+                  }}
+                  ... on ProjectV2SingleSelectField {{
+                    id
+                    name
+                    dataType
+                    options {{
+                      id
+                      name
+                    }}
+                  }}
+                  ... on ProjectV2IterationField {{
+                    id
+                    name
+                    dataType
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "number": project_number},
+            operation_name=f"fetch_project({owner}/{project_number})",
+        )
+        if errors or data is None:
+            return None
+
+        project = self._extract_nested(data, entity_type, "projectV2")
+        if project is None:
+            return None
+
+        # Parse fields
+        fields: list[GithubProjectFieldDef] = []
+        for field_node in self._extract_nested(project, "fields", "nodes", default=[]):
+            field_def = GithubProjectFieldDef(
+                id=field_node.get("id", ""),
+                name=field_node.get("name", ""),
+                data_type=field_node.get("dataType", "TEXT"),
+                options=None,
+            )
+            # Parse options for single-select fields
+            if "options" in field_node:
+                field_def["options"] = {
+                    opt["name"]: opt["id"] for opt in field_node["options"]
+                }
+            fields.append(field_def)
+
+        return GithubProjectData(
+            node_id=project.get("id", ""),
+            number=project.get("number", project_number),
+            title=project.get("title", ""),
+            short_description=project.get("shortDescription"),
+            readme=project.get("readme"),
+            public=project.get("public", False),
+            closed=project.get("closed", False),
+            owner_type=entity_type,
+            owner_login=owner,
+            url=project.get("url", ""),
+            fields=fields,
+            github_created_at=parse_github_date(project.get("createdAt")),
+            github_updated_at=parse_github_date(project.get("updatedAt")),
+            items_total_count=self._extract_nested(
+                project, "items", "totalCount", default=0
+            ),
+        )
+
+    def list_projects(
+        self,
+        owner: str,
+        is_org: bool = True,
+        include_closed: bool = False,
+    ) -> Generator[GithubProjectData, None, None]:
+        """List all GitHub Projects (v2) for an owner.
+
+        Args:
+            owner: Organization or user login
+            is_org: True if owner is an organization, False if user
+            include_closed: Whether to include closed projects
+
+        Yields:
+            GithubProjectData for each project
+        """
+        entity_type = "organization" if is_org else "user"
+        query = f"""
+        query($owner: String!, $cursor: String) {{
+          {entity_type}(login: $owner) {{
+            projectsV2(first: 20, after: $cursor) {{
+              pageInfo {{
+                hasNextPage
+                endCursor
+              }}
+              nodes {{
+                id
+                number
+                title
+                shortDescription
+                readme
+                public
+                closed
+                url
+                createdAt
+                updatedAt
+                items(first: 0) {{
+                  totalCount
+                }}
+                fields(first: 50) {{
+                  nodes {{
+                    ... on ProjectV2Field {{
+                      id
+                      name
+                      dataType
+                    }}
+                    ... on ProjectV2SingleSelectField {{
+                      id
+                      name
+                      dataType
+                      options {{
+                        id
+                        name
+                      }}
+                    }}
+                    ... on ProjectV2IterationField {{
+                      id
+                      name
+                      dataType
+                    }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+        """
+        cursor = None
+        while True:
+            data, errors = self._graphql(
+                query,
+                {"owner": owner, "cursor": cursor},
+                operation_name=f"list_projects({owner})",
+            )
+            if errors or data is None:
+                return
+
+            projects_data = self._extract_nested(data, entity_type, "projectsV2")
+            if projects_data is None:
+                return
+
+            for project in self._extract_nested(projects_data, "nodes", default=[]):
+                if not include_closed and project.get("closed", False):
+                    continue
+
+                # Parse fields
+                fields: list[GithubProjectFieldDef] = []
+                for field_node in self._extract_nested(
+                    project, "fields", "nodes", default=[]
+                ):
+                    field_def = GithubProjectFieldDef(
+                        id=field_node.get("id", ""),
+                        name=field_node.get("name", ""),
+                        data_type=field_node.get("dataType", "TEXT"),
+                        options=None,
+                    )
+                    if "options" in field_node:
+                        field_def["options"] = {
+                            opt["name"]: opt["id"] for opt in field_node["options"]
+                        }
+                    fields.append(field_def)
+
+                yield GithubProjectData(
+                    node_id=project.get("id", ""),
+                    number=project.get("number", 0),
+                    title=project.get("title", ""),
+                    short_description=project.get("shortDescription"),
+                    readme=project.get("readme"),
+                    public=project.get("public", False),
+                    closed=project.get("closed", False),
+                    owner_type=entity_type,
+                    owner_login=owner,
+                    url=project.get("url", ""),
+                    fields=fields,
+                    github_created_at=parse_github_date(project.get("createdAt")),
+                    github_updated_at=parse_github_date(project.get("updatedAt")),
+                    items_total_count=self._extract_nested(
+                        project, "items", "totalCount", default=0
+                    ),
+                )
+
+            page_info = self._extract_nested(projects_data, "pageInfo", default={})
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
 
     def list_repos(
         self,

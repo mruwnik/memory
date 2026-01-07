@@ -22,7 +22,7 @@ class MeetingCreate(BaseModel):
     attendees: list[str] | None = None
     source_tool: str | None = None
     external_id: str | None = None
-    tags: list[str] = []
+    tags: list[str] | None = None
 
 
 class MeetingQueued(BaseModel):
@@ -64,12 +64,14 @@ def create_meeting(
         kwargs={
             "transcript": data.transcript,
             "title": data.title,
-            "meeting_date": data.meeting_date.isoformat() if data.meeting_date else None,
+            "meeting_date": data.meeting_date.isoformat()
+            if data.meeting_date
+            else None,
             "duration_minutes": data.duration_minutes,
             "attendee_names": data.attendees or [],
             "source_tool": data.source_tool,
             "external_id": data.external_id,
-            "tags": data.tags,
+            "tags": data.tags or [],
         },
     )
 

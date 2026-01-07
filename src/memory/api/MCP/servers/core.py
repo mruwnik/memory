@@ -5,6 +5,7 @@ Core MCP subserver for knowledge base search, observations, and notes.
 import base64
 import logging
 import pathlib
+import textwrap
 from datetime import datetime, timezone
 
 from fastmcp import FastMCP
@@ -33,6 +34,92 @@ from memory.common.db.models import (
 from memory.common.formatters import observation
 
 logger = logging.getLogger(__name__)
+
+# Filter definitions: (name, description, applicable_modalities)
+# applicable_modalities is None for "all modalities"
+SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
+    ("tags", "list of tags to filter by", None),
+    ("source_ids", "list of source ids to filter by", None),
+    ("min_size", "minimum content size in bytes", None),
+    ("max_size", "maximum content size in bytes", None),
+    ("min_created_at", "minimum created date, ISO format", None),
+    ("max_created_at", "maximum created date, ISO format", None),
+    ("min_sent_at", "minimum email sent date, ISO format", "mail"),
+    ("max_sent_at", "maximum email sent date, ISO format", "mail"),
+    ("min_published", "minimum publication date, ISO format", "blog, forum"),
+    ("max_published", "maximum publication date, ISO format", "blog, forum"),
+    ("folder_path", "Google Drive folder path filter", "doc"),
+    ("sender", "exact match on email sender address", "mail"),
+    ("domain", "exact match on website domain", "blog"),
+    ("author", "exact match on author name", None),
+    ("recipients", "list of email recipients to match", "mail"),
+    ("authors", "list of authors to match", None),
+]
+
+
+def _get_available_modalities() -> list[str]:
+    """Query database to find which modalities have indexed items."""
+    searchable = set(ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
+    try:
+        with make_session() as session:
+            from sqlalchemy import func as sql_func
+
+            result = (
+                session.query(SourceItem.modality)
+                .filter(
+                    SourceItem.embed_status == "STORED",
+                    SourceItem.modality.in_(searchable),
+                )
+                .group_by(SourceItem.modality)
+                .having(sql_func.count(SourceItem.id) > 0)
+                .all()
+            )
+            return sorted([row[0] for row in result])
+    except Exception as e:
+        logger.warning(f"Failed to query available modalities: {e}")
+        return sorted(searchable)
+
+
+def _build_filters_section() -> str:
+    """Build the filters documentation section.
+
+    Uses 8 spaces for bullet indent because .format() substitution
+    happens after textwrap.dedent processes the template.
+    """
+    bullet_indent = " " * 8
+    lines = ["filters: Optional dictionary with:"]
+    for name, desc, modalities in SEARCH_FILTERS:
+        scope = f"({modalities} only)" if modalities else "(all modalities)"
+        lines.append(f"{bullet_indent}- {name}: {desc} {scope}")
+    return "\n".join(lines)
+
+
+def _build_search_description() -> str:
+    """Build dynamic description for search_knowledge_base tool."""
+    modalities = _get_available_modalities()
+    modalities_str = ", ".join(modalities) if modalities else "(none available)"
+
+    return textwrap.dedent("""
+        Search user's stored content including emails, documents, articles, books.
+        Use to find specific information the user has saved or received.
+        Combine with search_observations for complete user context.
+        Use the `get_metadata_schemas` tool to get the metadata schema for each collection.
+
+        If you know what kind of data you're looking for, filter by modality for better results.
+
+        Args:
+            query: Natural language search query - be descriptive about what you're looking for
+            modalities: Filter by type: {modalities_str} (empty = all)
+            limit: Maximum number of results to return (default 20, max 100)
+            previews: Whether to include content in results (up to MAX_PREVIEW_LENGTH characters)
+            use_scores: Whether to score results with an LLM before returning - better but slower
+            {filters_section}
+
+        Returns: List of search results with id, score, chunks, content, filename
+        Higher scores (>0.7) indicate strong matches.""").format(
+        filters_section=_build_filters_section(), modalities_str=modalities_str
+    )
+
 
 core_mcp = FastMCP("memory-core")
 
@@ -100,7 +187,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
     return source_ids
 
 
-@core_mcp.tool()
+@core_mcp.tool(description=_build_search_description())
 @visible_when(require_scopes("read"))
 async def search_knowledge_base(
     query: str,
@@ -110,43 +197,10 @@ async def search_knowledge_base(
     previews: bool = False,
     use_scores: bool = False,
 ) -> list[dict]:
-    """
-    Search user's stored content including emails, documents, articles, books.
-    Use to find specific information the user has saved or received.
-    Combine with search_observations for complete user context.
-    Use the `get_metadata_schemas` tool to get the metadata schema for each collection, from which you can infer the keys for the filters dictionary.
-
-    If you know what kind of data you're looking for, it's worth explicitly filtering by that modality, as this gives better results.
-
-    Args:
-        query: Natural language search query - be descriptive about what you're looking for
-        modalities: Filter by type: email, blog, book, forum, photo, comic, webpage (empty = all)
-        limit: Maximum number of results to return (default 20, max 100). Use higher limits for vague queries.
-        previews: Whether to include the actual content in the results (up to MAX_PREVIEW_LENGTH characters)
-        use_scores: Whether to score the results with an LLM before returning - better results but slower
-        filters: Optional dictionary with:
-            - tags: a list of tags to filter by (e.g., ["gdrive"] for Google Drive docs, ["email"] for email attachments)
-            - source_ids: a list of source ids to filter by
-            - min_size: the minimum size of the content to filter by
-            - max_size: the maximum size of the content to filter by
-            - min_created_at: the minimum created_at date to filter by
-            - max_created_at: the maximum created_at date to filter by
-            - min_sent_at: minimum email sent date (for emails)
-            - max_sent_at: maximum email sent date (for emails)
-            - min_published: minimum publication date (for blogs/forums)
-            - max_published: maximum publication date (for blogs/forums)
-            - folder_path: exact match on Google Drive folder path
-            - sender: exact match on email sender address
-            - domain: exact match on blog/webpage domain
-            - author: exact match on author name
-            - recipients: list of email recipients to match (any)
-            - authors: list of authors to match (any)
-
-    Returns: List of search results with id, score, chunks, content, filename
-    Higher scores (>0.7) indicate strong matches.
-    """
     logger.info(f"MCP search for: {query}")
-    config = SearchConfig(limit=min(limit, 100), previews=previews, useScores=use_scores)
+    config = SearchConfig(
+        limit=min(limit, 100), previews=previews, useScores=use_scores
+    )
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
@@ -529,9 +583,7 @@ async def list_items(
 
         # Apply filters
         if tags := filters.get("tags"):
-            query = query.filter(
-                SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
-            )
+            query = query.filter(SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))))
         if min_size := filters.get("min_size"):
             query = query.filter(SourceItem.size >= min_size)
         if max_size := filters.get("max_size"):
@@ -545,9 +597,11 @@ async def list_items(
                 GoogleDoc.folder_path.ilike(f"%{folder_path}%")
             )
         if sender := filters.get("sender"):
-            query = query.join(EmailAttachment).join(
-                MailMessage, EmailAttachment.mail_message_id == MailMessage.id
-            ).filter(MailMessage.sender == sender)
+            query = (
+                query.join(EmailAttachment)
+                .join(MailMessage, EmailAttachment.mail_message_id == MailMessage.id)
+                .filter(MailMessage.sender == sender)
+            )
         if domain := filters.get("domain"):
             query = query.join(BlogPost).filter(BlogPost.domain == domain)
 
@@ -567,7 +621,11 @@ async def list_items(
         for item in query.all():
             preview = None
             if item.content:
-                preview = item.content[:200] + "..." if len(item.content) > 200 else item.content
+                preview = (
+                    item.content[:200] + "..."
+                    if len(item.content) > 200
+                    else item.content
+                )
 
             item_dict = {
                 "id": item.id,
@@ -577,7 +635,9 @@ async def list_items(
                 "filename": item.filename,
                 "size": item.size,
                 "tags": item.tags,
-                "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
+                "inserted_at": item.inserted_at.isoformat()
+                if item.inserted_at
+                else None,
                 "preview": preview,
             }
 
@@ -636,12 +696,9 @@ async def count_items(
         total = base_query.count()
 
         # Get counts by modality
-        by_modality_query = (
-            base_query.with_entities(
-                SourceItem.modality, sql_func.count(SourceItem.id)
-            )
-            .group_by(SourceItem.modality)
-        )
+        by_modality_query = base_query.with_entities(
+            SourceItem.modality, sql_func.count(SourceItem.id)
+        ).group_by(SourceItem.modality)
 
         by_modality = {row[0]: row[1] for row in by_modality_query.all()}
 

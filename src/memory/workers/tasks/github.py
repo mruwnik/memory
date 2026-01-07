@@ -10,15 +10,17 @@ from memory.common.celery_app import (
     SYNC_GITHUB_REPO,
     SYNC_ALL_GITHUB_REPOS,
     SYNC_GITHUB_ITEM,
+    SYNC_GITHUB_PROJECTS,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubPRData, GithubMilestone
+from memory.common.db.models import GithubItem, GithubPRData, GithubMilestone, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.parsers.github import (
     GithubClient,
     GithubCredentials,
     GithubIssueData,
     GithubMilestoneData,
+    GithubProjectData,
     GithubPRDataDict,
     serialize_issue_data,
 )
@@ -88,9 +90,7 @@ def _build_content(issue_data: GithubIssueData) -> str:
     if pr_data and pr_data.get("review_comments"):
         content_parts.append("\n---\n## Code Review Comments\n")
         for rc in pr_data["review_comments"]:
-            content_parts.append(
-                f"**{rc['user']}** on `{rc['path']}`: {rc['body']}"
-            )
+            content_parts.append(f"**{rc['user']}** on `{rc['path']}`: {rc['body']}")
 
     return "\n\n".join(content_parts)
 
@@ -265,7 +265,9 @@ def _update_existing_item(
                 # Update existing pr_data
                 existing.pr_data.additions = pr_data_dict.get("additions")
                 existing.pr_data.deletions = pr_data_dict.get("deletions")
-                existing.pr_data.changed_files_count = pr_data_dict.get("changed_files_count")
+                existing.pr_data.changed_files_count = pr_data_dict.get(
+                    "changed_files_count"
+                )
                 existing.pr_data.files = pr_data_dict.get("files")
                 existing.pr_data.reviews = pr_data_dict.get("reviews")
                 existing.pr_data.review_comments = pr_data_dict.get("review_comments")
@@ -375,7 +377,9 @@ def sync_github_item(
 ) -> dict[str, Any]:
     """Sync a single GitHub issue or PR."""
     issue_data = _deserialize_issue_data(issue_data_serialized)
-    logger.info(f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}")
+    logger.info(
+        f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}"
+    )
 
     with make_session() as session:
         repo = session.get(GithubRepo, repo_id)
@@ -412,7 +416,9 @@ def sync_github_item(
         )
 
         if existing:
-            return _update_existing_item(session, existing, repo, issue_data, milestone_id)
+            return _update_existing_item(
+                session, existing, repo, issue_data, milestone_id
+            )
 
         # Create new item
         github_item = _create_github_item(repo, issue_data, milestone_id)
@@ -470,14 +476,19 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
         labels = cast(list[str], repo.labels_filter) or None
         state = cast(str | None, repo.state_filter) or "all"
 
-        # Sync milestones first (they're referenced by issues/PRs)
-        # Must commit milestones before dispatching async tasks that reference them
         milestones_synced = 0
-        for ms_data in client.fetch_milestones(owner, name):
-            _sync_milestone(session, repo, ms_data)
-            milestones_synced += 1
-        session.commit()  # Commit so async tasks can see milestones
-        logger.info(f"Synced {milestones_synced} milestones for {repo.repo_path}")
+        try:
+            for ms_data in client.fetch_milestones(owner, name):
+                _sync_milestone(session, repo, ms_data)
+                milestones_synced += 1
+            session.commit()
+            logger.info(f"Synced {milestones_synced} milestones for {repo.repo_path}")
+        except Exception as e:
+            logger.warning(
+                f"Failed to sync milestones for {repo.repo_path}: "
+                f"{type(e).__name__}: {e}"
+            )
+            session.rollback()
 
         # For full syncs triggered by full_sync_interval, only sync open issues
         # (closed issues rarely have project field changes that matter)
@@ -566,3 +577,114 @@ def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
             f"Scheduled {'full' if force_full else 'incremental'} sync for {len(results)} active GitHub repos"
         )
         return results
+
+
+def _sync_project(
+    session: Any,
+    account: GithubAccount,
+    project_data: GithubProjectData,
+) -> GithubProject:
+    """Sync a GitHub project, creating or updating as needed."""
+    existing = (
+        session.query(GithubProject)
+        .filter(
+            GithubProject.account_id == account.id,
+            GithubProject.owner_login == project_data["owner_login"],
+            GithubProject.number == project_data["number"],
+        )
+        .first()
+    )
+
+    if existing:
+        # Update existing project
+        existing.node_id = project_data["node_id"]
+        existing.title = project_data["title"]
+        existing.short_description = project_data["short_description"]
+        existing.readme = project_data["readme"]
+        existing.url = project_data["url"]
+        existing.public = project_data["public"]
+        existing.closed = project_data["closed"]
+        existing.fields = project_data["fields"]
+        existing.items_total_count = project_data["items_total_count"]
+        existing.github_updated_at = project_data["github_updated_at"]
+        existing.last_sync_at = datetime.now(timezone.utc)
+        return existing
+
+    # Create new project
+    project = GithubProject(
+        account_id=account.id,
+        node_id=project_data["node_id"],
+        number=project_data["number"],
+        owner_type=project_data["owner_type"],
+        owner_login=project_data["owner_login"],
+        title=project_data["title"],
+        short_description=project_data["short_description"],
+        readme=project_data["readme"],
+        url=project_data["url"],
+        public=project_data["public"],
+        closed=project_data["closed"],
+        fields=project_data["fields"],
+        items_total_count=project_data["items_total_count"],
+        github_created_at=project_data["github_created_at"],
+        github_updated_at=project_data["github_updated_at"],
+        last_sync_at=datetime.now(timezone.utc),
+    )
+    session.add(project)
+    session.flush()
+    return project
+
+
+@app.task(name=SYNC_GITHUB_PROJECTS)
+@safe_task_execution
+def sync_github_projects(
+    account_id: int,
+    owner: str,
+    is_org: bool = True,
+    include_closed: bool = False,
+) -> dict[str, Any]:
+    """Sync all GitHub Projects for an owner (org or user).
+
+    Args:
+        account_id: ID of the GithubAccount to use for authentication
+        owner: Organization or user login that owns the projects
+        is_org: True if owner is an organization, False if user
+        include_closed: Whether to include closed projects
+
+    Returns:
+        Dict with sync results including projects synced count
+    """
+    logger.info(f"Syncing GitHub projects for {owner} (is_org={is_org})")
+
+    with make_session() as session:
+        account = session.get(GithubAccount, account_id)
+        if not account or not cast(bool, account.active):
+            return {"status": "error", "error": "Account not found or inactive"}
+
+        # Create GitHub client
+        credentials = GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+        client = GithubClient(credentials)
+
+        projects_synced = 0
+        project_ids = []
+
+        for project_data in client.list_projects(owner, is_org, include_closed):
+            project = _sync_project(session, account, project_data)
+            projects_synced += 1
+            project_ids.append(cast(int, project.id))
+            logger.info(f"Synced project: {project_data['title']} (#{project_data['number']})")
+
+        session.commit()
+
+        return {
+            "status": "completed",
+            "owner": owner,
+            "is_org": is_org,
+            "projects_synced": projects_synced,
+            "project_ids": project_ids,
+        }

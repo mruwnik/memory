@@ -3,7 +3,7 @@ MCP server with composed subservers.
 
 Subservers are mounted with prefixes:
 - core: search_knowledge_base, observe, search_observations, create_note, note_files, fetch_file
-- github: list_github_issues, search_github_issues, github_issue_details, github_work_summary, github_repo_overview
+- github: list_github_issues, github_issue_details, upsert_github_issue, list_milestones, list_github_projects, github_project_details
 - people: add_person, update_person_info, get_person, list_people, delete_person
 - schedule: schedule_message, list_scheduled_llm_calls, cancel_scheduled_llm_call
 - books: all_books, read_book

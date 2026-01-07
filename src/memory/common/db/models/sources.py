@@ -294,6 +294,98 @@ class GithubMilestone(Base):
     )
 
 
+class GithubProject(Base):
+    """GitHub Project (v2) for tracking work across repos."""
+
+    __tablename__ = "github_projects"
+
+    id = Column(BigInteger, primary_key=True)
+    account_id = Column(
+        BigInteger, ForeignKey("github_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # GitHub identifiers
+    node_id = Column(Text, nullable=False)  # GraphQL node ID
+    number = Column(Integer, nullable=False)  # Project number (shown in URL)
+
+    # Owner info
+    owner_type = Column(Text, nullable=False)  # 'organization' or 'user'
+    owner_login = Column(Text, nullable=False)  # org or user name
+
+    # Project data
+    title = Column(Text, nullable=False)
+    short_description = Column(Text, nullable=True)
+    readme = Column(Text, nullable=True)
+    url = Column(Text, nullable=False)
+
+    # Status
+    public = Column(Boolean, nullable=False, server_default="false")
+    closed = Column(Boolean, nullable=False, server_default="false")
+
+    # Field definitions stored as JSONB
+    # Format: [{"id": "...", "name": "Status", "data_type": "SINGLE_SELECT", "options": {...}}]
+    fields = Column(JSONB, nullable=False, server_default="[]")
+
+    # Stats
+    items_total_count = Column(Integer, nullable=False, server_default="0")
+
+    # Timestamps from GitHub
+    github_created_at = Column(DateTime(timezone=True), nullable=True)
+    github_updated_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Local timestamps
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Relationships
+    account = relationship("GithubAccount", backref=backref("projects", passive_deletes=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "owner_login", "number", name="unique_project_per_account"
+        ),
+        Index("github_projects_owner_idx", "owner_login", "number"),
+        Index("github_projects_title_idx", "title"),
+    )
+
+    @property
+    def project_path(self) -> str:
+        """Return the project path in the format 'owner/number'."""
+        return f"{self.owner_login}/{self.number}"
+
+    def as_payload(self) -> dict:
+        """Serialize for API response."""
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "node_id": self.node_id,
+            "number": self.number,
+            "owner_type": self.owner_type,
+            "owner_login": self.owner_login,
+            "title": self.title,
+            "short_description": self.short_description,
+            "readme": self.readme,
+            "url": self.url,
+            "public": self.public,
+            "closed": self.closed,
+            "fields": self.fields,
+            "items_total_count": self.items_total_count,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "github_created_at": (
+                self.github_created_at.isoformat() if self.github_created_at else None
+            ),
+            "github_updated_at": (
+                self.github_updated_at.isoformat() if self.github_updated_at else None
+            ),
+            "last_sync_at": self.last_sync_at.isoformat() if self.last_sync_at else None,
+        }
+
+
 class GoogleOAuthConfig(Base):
     """OAuth client configuration for Google APIs (from credentials JSON)."""
 

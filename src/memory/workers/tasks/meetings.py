@@ -165,16 +165,68 @@ def call_extraction_llm(
     return parse_extraction_response(response)
 
 
-def link_attendees(session, meeting: Meeting, attendee_names: list[str]) -> int:
-    """Link attendee names to Person records. Returns count of linked attendees."""
-    linked = 0
+def _make_identifier(name: str) -> str:
+    """Create a person identifier from a name (e.g. 'John Smith' -> 'john_smith')."""
+    import re
+
+    # Normalize whitespace: collapse multiple spaces to single, then replace with underscore
+    identifier = re.sub(r"\s+", "_", name.lower().strip())
+    return "".join(c for c in identifier if c.isalnum() or c == "_")
+
+
+def _find_or_create_person(session, name: str) -> tuple[Person, bool]:
+    """Find existing person or create new one. Returns (person, was_created)."""
+    person = find_person_by_name(session, name)
+    if person:
+        return person, False
+
+    identifier = _make_identifier(name)
+    existing = session.query(Person).filter(Person.identifier == identifier).first()
+    if existing:
+        return existing, False
+
+    person = Person(identifier=identifier, display_name=name, aliases=[name])
+    session.add(person)
+    session.flush()
+    return person, True
+
+
+def link_attendees(
+    session, meeting: Meeting, attendee_names: list[str], create_missing: bool = True
+) -> dict:
+    """Link attendee names to Person records, optionally creating new ones."""
+    logger.info(f"Processing {len(attendee_names)} attendees: {attendee_names}")
+
+    linked, created, skipped = 0, 0, []
+
     for name in attendee_names:
-        person = find_person_by_name(session, name)
-        if person and person not in meeting.attendees:
-            meeting.attendees.append(person)
-            logger.info(f"Linked attendee {name} to person {person.identifier}")
+        name = (name or "").strip()
+        if not name:
+            continue
+
+        if not create_missing:
+            person = find_person_by_name(session, name)
+            if not person:
+                logger.warning(f"Could not find person for attendee '{name}'")
+                skipped.append(name)
+                continue
+            was_created = False
+        else:
+            person, was_created = _find_or_create_person(session, name)
+
+        if person in meeting.attendees:
+            continue
+
+        meeting.attendees.append(person)
+        if was_created:
+            logger.info(f"Created person '{person.identifier}' for attendee '{name}'")
+            created += 1
+        else:
+            logger.info(f"Linked attendee '{name}' to person '{person.identifier}'")
             linked += 1
-    return linked
+
+    logger.info(f"Attendees: {linked} linked, {created} created, {len(skipped)} skipped")
+    return {"linked": linked, "created": created, "skipped": skipped}
 
 
 def create_action_item_tasks(
@@ -305,8 +357,9 @@ def process_meeting(
             meeting.notes = extracted.get("notes", "")
             meeting.extraction_status = "complete"
 
+            attendee_result = {"linked": 0, "created": 0, "skipped": []}
             if attendee_names:
-                link_attendees(session, meeting, attendee_names)
+                attendee_result = link_attendees(session, meeting, attendee_names)
 
             created_tasks = create_action_item_tasks(
                 session, meeting, extracted.get("action_items", [])
@@ -325,7 +378,9 @@ def process_meeting(
                 "summary_length": len(meeting.summary or ""),
                 "notes_length": len(meeting.notes or ""),
                 "tasks_created": len(created_tasks),
-                "attendees_linked": len(meeting.attendees),
+                "attendees_linked": attendee_result["linked"],
+                "attendees_created": attendee_result["created"],
+                "attendees_skipped": attendee_result["skipped"],
                 "embedding_result": result,
             }
 

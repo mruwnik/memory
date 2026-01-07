@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.api.auth import get_current_user
 
@@ -500,3 +500,137 @@ def trigger_repo_sync(
     )
 
     return {"task_id": task.id, "status": "scheduled"}
+
+
+# --- Project Models ---
+
+
+class GithubProjectResponse(BaseModel):
+    id: int
+    account_id: int
+    node_id: str
+    number: int
+    owner_type: str
+    owner_login: str
+    title: str
+    short_description: str | None
+    readme: str | None
+    url: str
+    public: bool
+    closed: bool
+    fields: list[dict]
+    items_total_count: int
+    github_created_at: str | None
+    github_updated_at: str | None
+    last_sync_at: str | None
+    created_at: str
+
+
+def project_to_response(project: GithubProject) -> GithubProjectResponse:
+    """Convert a GithubProject model to a response model."""
+    return GithubProjectResponse(
+        id=cast(int, project.id),
+        account_id=cast(int, project.account_id),
+        node_id=cast(str, project.node_id),
+        number=cast(int, project.number),
+        owner_type=cast(str, project.owner_type),
+        owner_login=cast(str, project.owner_login),
+        title=cast(str, project.title),
+        short_description=cast(str | None, project.short_description),
+        readme=cast(str | None, project.readme),
+        url=cast(str, project.url),
+        public=cast(bool, project.public),
+        closed=cast(bool, project.closed),
+        fields=list(project.fields or []),
+        items_total_count=cast(int, project.items_total_count),
+        github_created_at=project.github_created_at.isoformat()
+        if project.github_created_at
+        else None,
+        github_updated_at=project.github_updated_at.isoformat()
+        if project.github_updated_at
+        else None,
+        last_sync_at=project.last_sync_at.isoformat() if project.last_sync_at else None,
+        created_at=project.created_at.isoformat() if project.created_at else "",
+    )
+
+
+# --- Project Endpoints ---
+
+
+@router.get("/projects")
+def list_projects(
+    owner: str | None = None,
+    include_closed: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[GithubProjectResponse]:
+    """List all synced GitHub projects."""
+    query = db.query(GithubProject)
+
+    if owner:
+        query = query.filter(GithubProject.owner_login == owner)
+    if not include_closed:
+        query = query.filter(GithubProject.closed == False)  # noqa: E712
+
+    query = query.order_by(GithubProject.title)
+    projects = query.all()
+
+    return [project_to_response(project) for project in projects]
+
+
+@router.get("/projects/{project_id}")
+def get_project(
+    project_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> GithubProjectResponse:
+    """Get a single GitHub project."""
+    project = db.get(GithubProject, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project_to_response(project)
+
+
+@router.post("/projects/sync")
+def trigger_projects_sync(
+    owner: str,
+    is_org: bool = True,
+    include_closed: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Trigger a sync of all GitHub Projects for an owner."""
+    from memory.common.celery_app import app, SYNC_GITHUB_PROJECTS
+
+    # Find an active account
+    account = (
+        db.query(GithubAccount)
+        .filter(GithubAccount.active == True)  # noqa: E712
+        .first()
+    )
+    if not account:
+        raise HTTPException(status_code=400, detail="No active GitHub account found")
+
+    task = app.send_task(
+        SYNC_GITHUB_PROJECTS,
+        args=[account.id, owner, is_org, include_closed],
+    )
+
+    return {"task_id": task.id, "status": "scheduled", "owner": owner}
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(
+    project_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Delete a synced GitHub project."""
+    project = db.get(GithubProject, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    db.delete(project)
+    db.commit()
+
+    return {"status": "deleted"}

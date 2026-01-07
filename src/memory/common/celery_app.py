@@ -72,6 +72,7 @@ BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 SYNC_GITHUB_REPO = f"{GITHUB_ROOT}.sync_github_repo"
 SYNC_ALL_GITHUB_REPOS = f"{GITHUB_ROOT}.sync_all_github_repos"
 SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
+SYNC_GITHUB_PROJECTS = f"{GITHUB_ROOT}.sync_github_projects"
 
 # People tasks
 SYNC_PERSON = f"{PEOPLE_ROOT}.sync_person"

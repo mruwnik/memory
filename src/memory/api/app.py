@@ -10,6 +10,7 @@ import pathlib
 from fastapi import FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -59,6 +60,43 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
             "retry_after": exc.retry_after,
         },
         headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else {},
+    )
+
+
+# Validation error handler with detailed logging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Log detailed validation error info
+    logger.warning(
+        "Validation error on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+    )
+
+    # Log query parameters if present
+    if request.query_params:
+        logger.warning("Query params: %s", dict(request.query_params))
+
+    # Try to log the request body for debugging (may fail for large bodies)
+    try:
+        body = await request.body()
+        if body:
+            # Truncate large bodies
+            body_preview = body[:2000].decode("utf-8", errors="replace")
+            if len(body) > 2000:
+                body_preview += f"... ({len(body)} bytes total)"
+            logger.warning("Request body: %s", body_preview)
+    except Exception as e:
+        logger.warning("Could not read request body: %s", e)
+
+    # Return detailed error response
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": exc.body if hasattr(exc, "body") else None,
+        },
     )
 
 # Add rate limiting middleware

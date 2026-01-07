@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GithubProject, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo } from '@/hooks/useSources'
 import { useAuth } from '@/hooks/useAuth'
 import {
   SourceCard,
@@ -637,77 +637,95 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
 const GitHubPanel = () => {
   const {
     listGithubAccounts, createGithubAccount, updateGithubAccount, deleteGithubAccount,
-    addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo
+    addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo,
+    listGithubProjects, syncGithubProjects, deleteGithubProject
   } = useSources()
   const [accounts, setAccounts] = useState<GithubAccount[]>([])
+  const [projects, setProjects] = useState<GithubProject[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showAccountForm, setShowAccountForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<GithubAccount | null>(null)
   const [addingRepoTo, setAddingRepoTo] = useState<number | null>(null)
+  const [showSyncProjectsForm, setShowSyncProjectsForm] = useState(false)
 
-  const loadAccounts = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listGithubAccounts()
-      setAccounts(data)
+      const [accountsData, projectsData] = await Promise.all([
+        listGithubAccounts(),
+        listGithubProjects()
+      ])
+      setAccounts(accountsData)
+      setProjects(projectsData)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load accounts')
+      setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
     }
-  }, [listGithubAccounts])
+  }, [listGithubAccounts, listGithubProjects])
 
-  useEffect(() => { loadAccounts() }, [loadAccounts])
+  useEffect(() => { loadData() }, [loadData])
 
   const handleCreateAccount = async (data: any) => {
     await createGithubAccount(data)
     setShowAccountForm(false)
-    loadAccounts()
+    loadData()
   }
 
   const handleUpdateAccount = async (data: any) => {
     if (editingAccount) {
       await updateGithubAccount(editingAccount.id, data)
       setEditingAccount(null)
-      loadAccounts()
+      loadData()
     }
   }
 
   const handleDeleteAccount = async (id: number) => {
     await deleteGithubAccount(id)
-    loadAccounts()
+    loadData()
   }
 
   const handleToggleActive = async (account: GithubAccount) => {
     await updateGithubAccount(account.id, { active: !account.active })
-    loadAccounts()
+    loadData()
   }
 
   const handleAddRepo = async (accountId: number, data: any) => {
     await addGithubRepo(accountId, data)
     setAddingRepoTo(null)
-    loadAccounts()
+    loadData()
   }
 
   const handleDeleteRepo = async (accountId: number, repoId: number) => {
     await deleteGithubRepo(accountId, repoId)
-    loadAccounts()
+    loadData()
   }
 
   const handleToggleRepoActive = async (accountId: number, repoId: number, active: boolean) => {
     await updateGithubRepo(accountId, repoId, { active: !active })
-    loadAccounts()
+    loadData()
   }
 
   const handleSyncRepo = async (accountId: number, repoId: number) => {
     await syncGithubRepo(accountId, repoId)
-    loadAccounts()
+    loadData()
+  }
+
+  const handleSyncProjects = async (owner: string, isOrg: boolean) => {
+    await syncGithubProjects(owner, isOrg)
+    setShowSyncProjectsForm(false)
+    loadData()
+  }
+
+  const handleDeleteProject = async (projectId: number) => {
+    await deleteGithubProject(projectId)
+    loadData()
   }
 
   if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={loadAccounts} />
+  if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
     <div className="source-panel">
@@ -820,7 +838,149 @@ const GitHubPanel = () => {
           />
         )
       })()}
+
+      {/* GitHub Projects Section */}
+      <div className="panel-header" style={{ marginTop: '2rem' }}>
+        <h3>GitHub Projects</h3>
+        <button className="add-btn" onClick={() => setShowSyncProjectsForm(true)}>Sync Projects</button>
+      </div>
+
+      {projects.length === 0 ? (
+        <EmptyState
+          message="No GitHub projects synced"
+          actionLabel="Sync Projects"
+          onAction={() => setShowSyncProjectsForm(true)}
+        />
+      ) : (
+        <div className="source-list">
+          {projects.map(project => (
+            <div key={project.id} className="source-card">
+              <div className="source-card-header">
+                <div className="source-card-info">
+                  <h4>
+                    <a href={project.url} target="_blank" rel="noopener noreferrer">
+                      {project.title}
+                    </a>
+                  </h4>
+                  <p className="source-subtitle">
+                    {project.owner_login} • #{project.number} • {project.items_total_count} items
+                  </p>
+                  {project.short_description && (
+                    <p className="source-description">{project.short_description}</p>
+                  )}
+                </div>
+                <div className="source-card-actions-inline">
+                  <SyncStatus lastSyncAt={project.last_sync_at} />
+                  <button
+                    className="delete-btn"
+                    onClick={() => handleDeleteProject(project.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+              {project.fields.length > 0 && (
+                <div className="project-fields">
+                  <span className="field-label">Fields:</span>
+                  {project.fields.slice(0, 5).map(field => (
+                    <span key={field.id} className="tracking-badge">{field.name}</span>
+                  ))}
+                  {project.fields.length > 5 && (
+                    <span className="tracking-badge">+{project.fields.length - 5} more</span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showSyncProjectsForm && (
+        <GitHubProjectSyncForm
+          onSubmit={handleSyncProjects}
+          onCancel={() => setShowSyncProjectsForm(false)}
+        />
+      )}
     </div>
+  )
+}
+
+interface GitHubProjectSyncFormProps {
+  onSubmit: (owner: string, isOrg: boolean) => Promise<void>
+  onCancel: () => void
+}
+
+const GitHubProjectSyncForm = ({ onSubmit, onCancel }: GitHubProjectSyncFormProps) => {
+  const [owner, setOwner] = useState('')
+  const [isOrg, setIsOrg] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!owner.trim()) {
+      setError('Owner is required')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      await onSubmit(owner.trim(), isOrg)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to sync')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal title="Sync GitHub Projects" onClose={onCancel}>
+      <form onSubmit={handleSubmit} className="source-form">
+        {error && <div className="form-error">{error}</div>}
+
+        <div className="form-group">
+          <label>Owner (org or username)</label>
+          <input
+            type="text"
+            value={owner}
+            onChange={e => setOwner(e.target.value)}
+            placeholder="e.g., my-organization"
+            required
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Owner Type</label>
+          <div className="radio-group">
+            <label>
+              <input
+                type="radio"
+                name="ownerType"
+                checked={isOrg}
+                onChange={() => setIsOrg(true)}
+              />
+              Organization
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="ownerType"
+                checked={!isOrg}
+                onChange={() => setIsOrg(false)}
+              />
+              User
+            </label>
+          </div>
+        </div>
+
+        <div className="form-actions">
+          <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button type="submit" className="primary" disabled={submitting}>
+            {submitting ? 'Syncing...' : 'Sync Projects'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
