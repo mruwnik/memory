@@ -103,6 +103,7 @@ class EmailAccount(Base):
     __tablename__ = "email_accounts"
 
     id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(Text, nullable=False)
     email_address = Column(Text, nullable=False, unique=True)
 
@@ -134,6 +135,7 @@ class EmailAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    user = relationship("User", foreign_keys=[user_id], backref="email_accounts")
     google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
     messages = relationship(
         "MailMessage",
@@ -148,6 +150,7 @@ class EmailAccount(Base):
         Index("email_accounts_active_idx", "active", "last_sync_at"),
         Index("email_accounts_tags_idx", "tags", postgresql_using="gin"),
         Index("email_accounts_type_idx", "account_type"),
+        Index("email_accounts_user_idx", "user_id"),
     )
 
 
@@ -157,6 +160,7 @@ class GithubAccount(Base):
     __tablename__ = "github_accounts"
 
     id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(Text, nullable=False)  # Display name
 
     # Authentication - support both PAT and GitHub App
@@ -180,7 +184,8 @@ class GithubAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    # Relationship to repos
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], backref="github_accounts")
     repos = relationship(
         "GithubRepo", back_populates="account", cascade="all, delete-orphan"
     )
@@ -188,6 +193,7 @@ class GithubAccount(Base):
     __table_args__ = (
         CheckConstraint("auth_type IN ('pat', 'app')"),
         Index("github_accounts_active_idx", "active", "last_sync_at"),
+        Index("github_accounts_user_idx", "user_id"),
     )
 
 
@@ -386,6 +392,91 @@ class GithubProject(Base):
         }
 
 
+class GithubTeam(Base):
+    """GitHub Team within an organization."""
+
+    __tablename__ = "github_teams"
+
+    id = Column(BigInteger, primary_key=True)
+    account_id = Column(
+        BigInteger, ForeignKey("github_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # GitHub identifiers
+    node_id = Column(Text, nullable=False)  # GraphQL node ID
+    slug = Column(Text, nullable=False)  # URL-safe team name
+    github_id = Column(BigInteger, nullable=False)  # REST API ID
+
+    # Team info
+    name = Column(Text, nullable=False)  # Display name
+    description = Column(Text, nullable=True)
+    privacy = Column(Text, nullable=False)  # 'closed' or 'secret'
+    permission = Column(Text, nullable=True)  # 'pull', 'push', 'admin', 'maintain', 'triage'
+
+    # Organization info
+    org_login = Column(Text, nullable=False)
+
+    # Parent team (for nested teams)
+    parent_team_id = Column(BigInteger, ForeignKey("github_teams.id"), nullable=True)
+
+    # Member count (cached)
+    members_count = Column(Integer, nullable=False, server_default="0")
+
+    # Timestamps
+    github_created_at = Column(DateTime(timezone=True), nullable=True)
+    github_updated_at = Column(DateTime(timezone=True), nullable=True)
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Relationships
+    account = relationship("GithubAccount", backref=backref("teams", passive_deletes=True))
+    parent_team = relationship("GithubTeam", remote_side=[id], backref="child_teams")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "org_login", "slug", name="unique_team_per_account"
+        ),
+        Index("github_teams_org_idx", "org_login"),
+        Index("github_teams_slug_idx", "slug"),
+    )
+
+    @property
+    def team_path(self) -> str:
+        """Return the team path in the format 'org/slug'."""
+        return f"{self.org_login}/{self.slug}"
+
+    def as_payload(self) -> dict:
+        """Serialize for API response."""
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "node_id": self.node_id,
+            "github_id": self.github_id,
+            "slug": self.slug,
+            "name": self.name,
+            "description": self.description,
+            "privacy": self.privacy,
+            "permission": self.permission,
+            "org_login": self.org_login,
+            "parent_team_id": self.parent_team_id,
+            "members_count": self.members_count,
+            "url": f"https://github.com/orgs/{self.org_login}/teams/{self.slug}",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "github_created_at": (
+                self.github_created_at.isoformat() if self.github_created_at else None
+            ),
+            "github_updated_at": (
+                self.github_updated_at.isoformat() if self.github_updated_at else None
+            ),
+            "last_sync_at": self.last_sync_at.isoformat() if self.last_sync_at else None,
+        }
+
+
 class GoogleOAuthConfig(Base):
     """OAuth client configuration for Google APIs (from credentials JSON)."""
 
@@ -450,6 +541,7 @@ class GoogleAccount(Base):
     __tablename__ = "google_accounts"
 
     id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(Text, nullable=False)  # Display name
     email = Column(Text, nullable=False, unique=True)  # Google account email
 
@@ -473,7 +565,8 @@ class GoogleAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    # Relationship to folders
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], backref="google_accounts")
     folders = relationship(
         "GoogleFolder", back_populates="account", cascade="all, delete-orphan"
     )
@@ -481,6 +574,7 @@ class GoogleAccount(Base):
     __table_args__ = (
         Index("google_accounts_active_idx", "active", "last_sync_at"),
         Index("google_accounts_email_idx", "email"),
+        Index("google_accounts_user_idx", "user_id"),
     )
 
 

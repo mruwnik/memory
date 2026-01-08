@@ -21,7 +21,7 @@ from memory.common.db.models.sources import (
     GoogleFolder,
     GoogleOAuthConfig,
 )
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, get_user_account
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
@@ -332,6 +332,7 @@ def google_callback(
 
         if not account:
             account = GoogleAccount(
+                user_id=user_id,
                 name=user_info.get("name", user_info["email"]),
                 email=user_info["email"],
             )
@@ -365,8 +366,7 @@ def list_accounts(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AccountResponse]:
-    """List all connected Google accounts with their folders."""
-    accounts = db.query(GoogleAccount).all()
+    """List Google accounts for the current user."""
     return [
         AccountResponse(
             id=cast(int, account.id),
@@ -396,7 +396,7 @@ def list_accounts(
                 for folder in account.folders
             ],
         )
-        for account in accounts
+        for account in user.google_accounts
     ]
 
 
@@ -419,9 +419,7 @@ def browse_folder(
 
     from memory.parsers.google_drive import refresh_credentials
 
-    account = db.get(GoogleAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GoogleAccount, account_id, user)
 
     if not account.active:
         raise HTTPException(status_code=400, detail="Account is not active")
@@ -525,9 +523,7 @@ def add_folder(
     db: Session = Depends(get_session),
 ) -> FolderResponse:
     """Add a folder to sync for a Google account."""
-    account = db.get(GoogleAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
 
     # Check for duplicate
     existing = (
@@ -578,6 +574,7 @@ def update_folder(
     db: Session = Depends(get_session),
 ) -> FolderResponse:
     """Update a folder's configuration."""
+    get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
     folder = (
         db.query(GoogleFolder)
         .filter(
@@ -631,6 +628,7 @@ def remove_folder(
     db: Session = Depends(get_session),
 ):
     """Remove a folder from sync."""
+    get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
     folder = (
         db.query(GoogleFolder)
         .filter(
@@ -660,6 +658,7 @@ def trigger_sync(
     """Manually trigger a sync for a folder."""
     from memory.common.celery_app import app, SYNC_GOOGLE_FOLDER
 
+    get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
     folder = (
         db.query(GoogleFolder)
         .filter(
@@ -688,9 +687,7 @@ def disconnect_account(
     db: Session = Depends(get_session),
 ):
     """Disconnect a Google account (removes account and all folders)."""
-    account = db.get(GoogleAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GoogleAccount, account_id, user)
 
     db.delete(account)
     db.commit()
@@ -709,9 +706,7 @@ def reauthorize_account(
     Use this when you need to add new permissions (e.g., Gmail access)
     to an existing Google account without disconnecting it.
     """
-    account = db.get(GoogleAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GoogleAccount, account_id, user)
 
     oauth_config = get_oauth_config(db)
 

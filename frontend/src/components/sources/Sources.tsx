@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GithubProject, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GithubProject, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo, AvailableProject } from '@/hooks/useSources'
 import { useAuth } from '@/hooks/useAuth'
 import {
   SourceCard,
@@ -16,10 +16,10 @@ import {
   ConfirmDialog,
 } from './shared'
 
-type TabType = 'email' | 'feeds' | 'github' | 'google-auth' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos'
+type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos'
 
 const Sources = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('email')
+  const [activeTab, setActiveTab] = useState<TabType>('accounts')
 
   return (
     <div className="sources-view">
@@ -29,6 +29,12 @@ const Sources = () => {
       </div>
 
       <div className="sources-tabs">
+        <button
+          className={`tab ${activeTab === 'accounts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('accounts')}
+        >
+          Accounts
+        </button>
         <button
           className={`tab ${activeTab === 'email' ? 'active' : ''}`}
           onClick={() => setActiveTab('email')}
@@ -46,12 +52,6 @@ const Sources = () => {
           onClick={() => setActiveTab('github')}
         >
           GitHub
-        </button>
-        <button
-          className={`tab ${activeTab === 'google-auth' ? 'active' : ''}`}
-          onClick={() => setActiveTab('google-auth')}
-        >
-          Google
         </button>
         <button
           className={`tab ${activeTab === 'drive' ? 'active' : ''}`}
@@ -86,16 +86,320 @@ const Sources = () => {
       </div>
 
       <div className="sources-content">
+        {activeTab === 'accounts' && <AccountsPanel />}
         {activeTab === 'email' && <EmailPanel />}
         {activeTab === 'feeds' && <FeedsPanel />}
         {activeTab === 'github' && <GitHubPanel />}
-        {activeTab === 'google-auth' && <GoogleAuthPanel />}
         {activeTab === 'drive' && <GoogleDrivePanel />}
         {activeTab === 'calendar' && <CalendarPanel />}
         {activeTab === 'books' && <BooksPanel />}
         {activeTab === 'forums' && <ForumsPanel />}
         {activeTab === 'photos' && <PhotosPanel />}
       </div>
+    </div>
+  )
+}
+
+// === Accounts Panel (GitHub + Google) ===
+
+const AccountsPanel = () => {
+  const {
+    listGithubAccounts, createGithubAccount, updateGithubAccount, deleteGithubAccount, validateGithubAccount,
+    listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
+    getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
+  } = useSources()
+
+  const [githubAccounts, setGithubAccounts] = useState<GithubAccount[]>([])
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
+  const [oauthConfig, setOauthConfig] = useState<GoogleOAuthConfig | null | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showGithubForm, setShowGithubForm] = useState(false)
+  const [editingGithubAccount, setEditingGithubAccount] = useState<GithubAccount | null>(null)
+  const [uploadingConfig, setUploadingConfig] = useState(false)
+
+  // Track polling intervals for cleanup
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cleanup intervals on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
+    }
+  }, [])
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [githubData, googleData, configData] = await Promise.all([
+        listGithubAccounts(),
+        listGoogleAccounts(),
+        getGoogleOAuthConfig()
+      ])
+      setGithubAccounts(githubData)
+      setGoogleAccounts(googleData)
+      setOauthConfig(configData)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load accounts')
+    } finally {
+      setLoading(false)
+    }
+  }, [listGithubAccounts, listGoogleAccounts, getGoogleOAuthConfig])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  // GitHub handlers
+  const handleCreateGithubAccount = async (data: any) => {
+    await createGithubAccount(data)
+    setShowGithubForm(false)
+    loadData()
+  }
+
+  const handleUpdateGithubAccount = async (data: any) => {
+    if (editingGithubAccount) {
+      await updateGithubAccount(editingGithubAccount.id, data)
+      setEditingGithubAccount(null)
+      loadData()
+    }
+  }
+
+  const handleDeleteGithubAccount = async (id: number) => {
+    await deleteGithubAccount(id)
+    loadData()
+  }
+
+  const handleToggleGithubActive = async (account: GithubAccount) => {
+    await updateGithubAccount(account.id, { active: !account.active })
+    loadData()
+  }
+
+  const handleValidateGithubAccount = async (id: number) => {
+    try {
+      const result = await validateGithubAccount(id)
+      alert(result.message)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Validation failed')
+    }
+  }
+
+  // Google handlers
+  const handleConfigUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploadingConfig(true)
+    setError(null)
+    try {
+      const config = await uploadGoogleOAuthConfig(file)
+      setOauthConfig(config)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to upload config')
+    } finally {
+      setUploadingConfig(false)
+    }
+  }
+
+  const handleDeleteConfig = async () => {
+    try {
+      await deleteGoogleOAuthConfig()
+      setOauthConfig(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete config')
+    }
+  }
+
+  const handleConnectGoogle = async () => {
+    try {
+      const { authorization_url } = await getGoogleAuthUrl()
+      window.open(authorization_url, '_blank', 'width=600,height=700')
+      // Clear any existing polling
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
+      // Poll for new accounts
+      pollingIntervalRef.current = setInterval(async () => {
+        const newAccounts = await listGoogleAccounts()
+        if (newAccounts.length > googleAccounts.length) {
+          setGoogleAccounts(newAccounts)
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+          pollingIntervalRef.current = null
+        }
+      }, 2000)
+      pollingTimeoutRef.current = setTimeout(() => {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }, 60000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to get Google auth URL')
+    }
+  }
+
+  const handleDeleteGoogleAccount = async (id: number) => {
+    await deleteGoogleAccount(id)
+    loadData()
+  }
+
+  const handleReauthorizeGoogle = async (id: number) => {
+    try {
+      const { authorization_url } = await reauthorizeGoogleAccount(id)
+      window.open(authorization_url, '_blank', 'width=600,height=700')
+      // Clear any existing polling
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
+      // Poll for updated accounts
+      pollingIntervalRef.current = setInterval(async () => {
+        const newAccounts = await listGoogleAccounts()
+        setGoogleAccounts(newAccounts)
+      }, 2000)
+      pollingTimeoutRef.current = setTimeout(() => {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }, 60000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to re-authorize account')
+    }
+  }
+
+  if (loading) return <LoadingState />
+  if (error) return <ErrorState message={error} onRetry={loadData} />
+
+  return (
+    <div className="source-panel">
+      {/* GitHub Accounts Section */}
+      <div className="panel-header">
+        <h3>GitHub Accounts</h3>
+        <button className="add-btn" onClick={() => setShowGithubForm(true)}>Add Account</button>
+      </div>
+
+      {githubAccounts.length === 0 ? (
+        <EmptyState
+          message="No GitHub accounts configured. Add an account to track repositories."
+          actionLabel="Add GitHub Account"
+          onAction={() => setShowGithubForm(true)}
+        />
+      ) : (
+        <div className="source-list">
+          {githubAccounts.map(account => (
+            <SourceCard key={account.id}>
+              <div className="source-card-header">
+                <div className="source-card-info">
+                  <h4>{account.name}</h4>
+                  <p className="source-subtitle">
+                    {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
+                    {account.repos.length > 0 && ` • ${account.repos.length} repos tracked`}
+                  </p>
+                </div>
+                <div className="source-card-actions-inline">
+                  <StatusBadge active={account.active} onClick={() => handleToggleGithubActive(account)} />
+                  <button className="edit-btn" onClick={() => handleValidateGithubAccount(account.id)}>Validate</button>
+                  <button className="edit-btn" onClick={() => setEditingGithubAccount(account)}>Edit</button>
+                  <button className="delete-btn" onClick={() => handleDeleteGithubAccount(account.id)}>Delete</button>
+                </div>
+              </div>
+            </SourceCard>
+          ))}
+        </div>
+      )}
+
+      {showGithubForm && (
+        <GitHubAccountForm
+          onSubmit={handleCreateGithubAccount}
+          onCancel={() => setShowGithubForm(false)}
+        />
+      )}
+
+      {editingGithubAccount && (
+        <GitHubAccountForm
+          account={editingGithubAccount}
+          onSubmit={handleUpdateGithubAccount}
+          onCancel={() => setEditingGithubAccount(null)}
+        />
+      )}
+
+      {/* Google Accounts Section */}
+      <div className="panel-header" style={{ marginTop: '2rem' }}>
+        <h3>Google Accounts</h3>
+        {oauthConfig && <button className="add-btn" onClick={handleConnectGoogle}>Connect Account</button>}
+      </div>
+
+      {/* OAuth Config required first */}
+      {oauthConfig === null ? (
+        <div className="oauth-config-setup">
+          <h4>OAuth Configuration Required</h4>
+          <p>Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).</p>
+          <p className="form-hint">Get this from the Google Cloud Console under APIs & Services → Credentials.</p>
+          <div className="config-upload">
+            <label className="upload-btn">
+              {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleConfigUpload}
+                disabled={uploadingConfig}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="oauth-config-info">
+            <details>
+              <summary>OAuth Configuration</summary>
+              <div className="config-details">
+                <p><strong>Project:</strong> {oauthConfig.project_id}</p>
+                <p><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
+                <div className="config-actions">
+                  <label className="upload-btn small">
+                    {uploadingConfig ? 'Uploading...' : 'Replace Config'}
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleConfigUpload}
+                      disabled={uploadingConfig}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  <button className="delete-btn small" onClick={handleDeleteConfig}>
+                    Delete Config
+                  </button>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          {googleAccounts.length === 0 ? (
+            <EmptyState
+              message="No Google accounts connected. Connect an account to use Gmail, Calendar, or Drive."
+              actionLabel="Connect Google Account"
+              onAction={handleConnectGoogle}
+            />
+          ) : (
+            <div className="source-list">
+              {googleAccounts.map(account => (
+                <SourceCard key={account.id}>
+                  <div className="source-card-header">
+                    <div className="source-card-info">
+                      <h4>{account.name}</h4>
+                      <p className="source-subtitle">{account.email}</p>
+                    </div>
+                    <div className="source-card-actions-inline">
+                      <StatusBadge active={account.active} />
+                      <button className="edit-btn" onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</button>
+                      <button className="delete-btn" onClick={() => handleDeleteGoogleAccount(account.id)}>Disconnect</button>
+                    </div>
+                  </div>
+                  {account.sync_error && (
+                    <div className="sync-error-banner">{account.sync_error}</div>
+                  )}
+                </SourceCard>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -382,7 +686,7 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
             <label>Google Account</label>
             {googleAccounts.length === 0 ? (
               <p className="form-hint">
-                No Google accounts connected. Connect a Google account in the Google tab first.
+                No Google accounts connected. Add a Google account in the Accounts tab first.
               </p>
             ) : (
               <>
@@ -636,61 +940,44 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
 
 const GitHubPanel = () => {
   const {
-    listGithubAccounts, createGithubAccount, updateGithubAccount, deleteGithubAccount,
+    listGithubAccounts,
     addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo,
-    listGithubProjects, syncGithubProjects, deleteGithubProject
+    listAccountProjects, addGithubProject, deleteGithubProject
   } = useSources()
   const [accounts, setAccounts] = useState<GithubAccount[]>([])
-  const [projects, setProjects] = useState<GithubProject[]>([])
+  const [accountProjects, setAccountProjects] = useState<Record<number, GithubProject[]>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [showAccountForm, setShowAccountForm] = useState(false)
-  const [editingAccount, setEditingAccount] = useState<GithubAccount | null>(null)
   const [addingRepoTo, setAddingRepoTo] = useState<number | null>(null)
-  const [showSyncProjectsForm, setShowSyncProjectsForm] = useState(false)
+  const [addingProjectTo, setAddingProjectTo] = useState<number | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [accountsData, projectsData] = await Promise.all([
-        listGithubAccounts(),
-        listGithubProjects()
-      ])
+      const accountsData = await listGithubAccounts()
       setAccounts(accountsData)
-      setProjects(projectsData)
+
+      // Load projects for each account
+      const projectsMap: Record<number, GithubProject[]> = {}
+      await Promise.all(
+        accountsData.map(async (account) => {
+          try {
+            projectsMap[account.id] = await listAccountProjects(account.id)
+          } catch {
+            projectsMap[account.id] = []
+          }
+        })
+      )
+      setAccountProjects(projectsMap)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
     }
-  }, [listGithubAccounts, listGithubProjects])
+  }, [listGithubAccounts, listAccountProjects])
 
   useEffect(() => { loadData() }, [loadData])
-
-  const handleCreateAccount = async (data: any) => {
-    await createGithubAccount(data)
-    setShowAccountForm(false)
-    loadData()
-  }
-
-  const handleUpdateAccount = async (data: any) => {
-    if (editingAccount) {
-      await updateGithubAccount(editingAccount.id, data)
-      setEditingAccount(null)
-      loadData()
-    }
-  }
-
-  const handleDeleteAccount = async (id: number) => {
-    await deleteGithubAccount(id)
-    loadData()
-  }
-
-  const handleToggleActive = async (account: GithubAccount) => {
-    await updateGithubAccount(account.id, { active: !account.active })
-    loadData()
-  }
 
   const handleAddRepo = async (accountId: number, data: any) => {
     await addGithubRepo(accountId, data)
@@ -713,9 +1000,9 @@ const GitHubPanel = () => {
     loadData()
   }
 
-  const handleSyncProjects = async (owner: string, isOrg: boolean) => {
-    await syncGithubProjects(owner, isOrg)
-    setShowSyncProjectsForm(false)
+  const handleAddProject = async (accountId: number, data: { owner: string; project_number: number; is_org: boolean }) => {
+    await addGithubProject(accountId, data)
+    setAddingProjectTo(null)
     loadData()
   }
 
@@ -727,41 +1014,55 @@ const GitHubPanel = () => {
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
+  // Require accounts to be set up first
+  if (accounts.length === 0) {
+    return (
+      <div className="source-panel">
+        <div className="panel-header">
+          <h3>GitHub</h3>
+        </div>
+        <EmptyState
+          message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first."
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="source-panel">
       <div className="panel-header">
-        <h3>GitHub Accounts</h3>
-        <button className="add-btn" onClick={() => setShowAccountForm(true)}>Add Account</button>
+        <h3>GitHub</h3>
       </div>
 
-      {accounts.length === 0 ? (
-        <EmptyState
-          message="No GitHub accounts configured"
-          actionLabel="Add GitHub Account"
-          onAction={() => setShowAccountForm(true)}
-        />
-      ) : (
-        <div className="source-list">
-          {accounts.map(account => (
+      <div className="source-list">
+        {accounts.map(account => {
+          const projects = accountProjects[account.id] || []
+          return (
             <div key={account.id} className="github-account-card">
               <div className="source-card-header">
                 <div className="source-card-info">
                   <h4>{account.name}</h4>
                   <p className="source-subtitle">
                     {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
+                    {!account.active && ' (disabled)'}
                   </p>
                 </div>
                 <div className="source-card-actions-inline">
-                  <StatusBadge active={account.active} onClick={() => handleToggleActive(account)} />
-                  <button className="edit-btn" onClick={() => setEditingAccount(account)}>Edit</button>
-                  <button className="delete-btn" onClick={() => handleDeleteAccount(account.id)}>Delete</button>
+                  <StatusBadge active={account.active} />
                 </div>
               </div>
 
+              {/* Repositories Section */}
               <div className="repos-section">
                 <div className="repos-header">
-                  <h5>Tracked Repositories ({account.repos.length})</h5>
-                  <button className="add-btn small" onClick={() => setAddingRepoTo(account.id)}>Add Repo</button>
+                  <h5>Repositories ({account.repos.length})</h5>
+                  <button
+                    className="add-btn small"
+                    onClick={() => setAddingRepoTo(account.id)}
+                    disabled={!account.active}
+                  >
+                    Add Repo
+                  </button>
                 </div>
 
                 {account.repos.length === 0 ? (
@@ -803,25 +1104,60 @@ const GitHubPanel = () => {
                   </div>
                 )}
               </div>
+
+              {/* Projects Section */}
+              <div className="repos-section" style={{ marginTop: '1rem' }}>
+                <div className="repos-header">
+                  <h5>Projects ({projects.length})</h5>
+                  <button
+                    className="add-btn small"
+                    onClick={() => setAddingProjectTo(account.id)}
+                    disabled={!account.active}
+                  >
+                    Add Project
+                  </button>
+                </div>
+
+                {projects.length === 0 ? (
+                  <p className="no-repos">No projects tracked</p>
+                ) : (
+                  <div className="repos-list">
+                    {projects.map(project => (
+                      <div key={project.id} className="repo-card">
+                        <div className="repo-info">
+                          <span className="repo-path">
+                            <a href={project.url} target="_blank" rel="noopener noreferrer">
+                              {project.owner_login}/#{project.number} - {project.title}
+                            </a>
+                          </span>
+                          <SyncStatus lastSyncAt={project.last_sync_at} />
+                        </div>
+                        <div className="repo-tracking">
+                          <span className="tracking-badge">{project.items_total_count} items</span>
+                          {project.fields.slice(0, 3).map(field => (
+                            <span key={field.id} className="tracking-badge">{field.name}</span>
+                          ))}
+                          {project.fields.length > 3 && (
+                            <span className="tracking-badge">+{project.fields.length - 3}</span>
+                          )}
+                        </div>
+                        <div className="repo-actions">
+                          <button
+                            className="delete-btn small"
+                            onClick={() => handleDeleteProject(project.id)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      {showAccountForm && (
-        <GitHubAccountForm
-          onSubmit={handleCreateAccount}
-          onCancel={() => setShowAccountForm(false)}
-        />
-      )}
-
-      {editingAccount && (
-        <GitHubAccountForm
-          account={editingAccount}
-          onSubmit={handleUpdateAccount}
-          onCancel={() => setEditingAccount(null)}
-        />
-      )}
+          )
+        })}
+      </div>
 
       {addingRepoTo && (() => {
         const account = accounts.find(a => a.id === addingRepoTo)
@@ -839,66 +1175,12 @@ const GitHubPanel = () => {
         )
       })()}
 
-      {/* GitHub Projects Section */}
-      <div className="panel-header" style={{ marginTop: '2rem' }}>
-        <h3>GitHub Projects</h3>
-        <button className="add-btn" onClick={() => setShowSyncProjectsForm(true)}>Sync Projects</button>
-      </div>
-
-      {projects.length === 0 ? (
-        <EmptyState
-          message="No GitHub projects synced"
-          actionLabel="Sync Projects"
-          onAction={() => setShowSyncProjectsForm(true)}
-        />
-      ) : (
-        <div className="source-list">
-          {projects.map(project => (
-            <div key={project.id} className="source-card">
-              <div className="source-card-header">
-                <div className="source-card-info">
-                  <h4>
-                    <a href={project.url} target="_blank" rel="noopener noreferrer">
-                      {project.title}
-                    </a>
-                  </h4>
-                  <p className="source-subtitle">
-                    {project.owner_login} • #{project.number} • {project.items_total_count} items
-                  </p>
-                  {project.short_description && (
-                    <p className="source-description">{project.short_description}</p>
-                  )}
-                </div>
-                <div className="source-card-actions-inline">
-                  <SyncStatus lastSyncAt={project.last_sync_at} />
-                  <button
-                    className="delete-btn"
-                    onClick={() => handleDeleteProject(project.id)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-              {project.fields.length > 0 && (
-                <div className="project-fields">
-                  <span className="field-label">Fields:</span>
-                  {project.fields.slice(0, 5).map(field => (
-                    <span key={field.id} className="tracking-badge">{field.name}</span>
-                  ))}
-                  {project.fields.length > 5 && (
-                    <span className="tracking-badge">+{project.fields.length - 5} more</span>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showSyncProjectsForm && (
-        <GitHubProjectSyncForm
-          onSubmit={handleSyncProjects}
-          onCancel={() => setShowSyncProjectsForm(false)}
+      {addingProjectTo && (
+        <GitHubProjectForm
+          accountId={addingProjectTo}
+          existingProjects={accountProjects[addingProjectTo] || []}
+          onAdd={(data) => handleAddProject(addingProjectTo, data)}
+          onCancel={() => setAddingProjectTo(null)}
         />
       )}
     </div>
@@ -981,6 +1263,236 @@ const GitHubProjectSyncForm = ({ onSubmit, onCancel }: GitHubProjectSyncFormProp
         </div>
       </form>
     </Modal>
+  )
+}
+
+interface GitHubProjectFormProps {
+  accountId: number
+  existingProjects: GithubProject[]
+  onAdd: (data: { owner: string; project_number: number; is_org: boolean }) => Promise<void>
+  onCancel: () => void
+}
+
+const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: GitHubProjectFormProps) => {
+  const [owner, setOwner] = useState('')
+  const [isOrg, setIsOrg] = useState(true)
+  const [selectedProject, setSelectedProject] = useState<number | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Track which projects are already added
+  const existingProjectKeys = new Set(
+    existingProjects.map(p => `${p.owner_login}:${p.number}`)
+  )
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!owner.trim() || selectedProject === null) {
+      setError('Please enter an owner and select a project')
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+
+    try {
+      await onAdd({
+        owner: owner.trim(),
+        project_number: selectedProject,
+        is_org: isOrg,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add project')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal title="Add GitHub Project" onClose={onCancel} className="modal-large">
+      <form onSubmit={handleSubmit} className="source-form">
+        {error && <div className="form-error">{error}</div>}
+
+        <div className="form-group">
+          <label>Owner (org or username)</label>
+          <input
+            type="text"
+            value={owner}
+            onChange={e => {
+              setOwner(e.target.value)
+              setSelectedProject(null) // Reset selection when owner changes
+            }}
+            placeholder="e.g., my-organization"
+            required
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Owner Type</label>
+          <div className="radio-group">
+            <label>
+              <input
+                type="radio"
+                name="ownerType"
+                checked={isOrg}
+                onChange={() => {
+                  setIsOrg(true)
+                  setSelectedProject(null)
+                }}
+              />
+              Organization
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="ownerType"
+                checked={!isOrg}
+                onChange={() => {
+                  setIsOrg(false)
+                  setSelectedProject(null)
+                }}
+              />
+              User
+            </label>
+          </div>
+        </div>
+
+        {owner.trim() && (
+          <div className="form-group">
+            <label>Select Project</label>
+            <ProjectSelector
+              accountId={accountId}
+              owner={owner.trim()}
+              isOrg={isOrg}
+              existingProjectKeys={existingProjectKeys}
+              selectedProject={selectedProject}
+              onSelect={setSelectedProject}
+            />
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button
+            type="submit"
+            className="primary"
+            disabled={submitting || selectedProject === null}
+          >
+            {submitting ? 'Adding...' : 'Add Project'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+interface ProjectSelectorProps {
+  accountId: number
+  owner: string
+  isOrg: boolean
+  existingProjectKeys: Set<string>
+  selectedProject: number | null
+  onSelect: (projectNumber: number | null) => void
+}
+
+const ProjectSelector = ({
+  accountId,
+  owner,
+  isOrg,
+  existingProjectKeys,
+  selectedProject,
+  onSelect,
+}: ProjectSelectorProps) => {
+  const { listAvailableProjects } = useSources()
+  const [projects, setProjects] = useState<AvailableProject[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    const loadProjects = async () => {
+      setLoading(true)
+      setError(null)
+      onSelect(null) // Reset selection when loading new projects
+      try {
+        const available = await listAvailableProjects(accountId, owner, isOrg, false)
+        // Sort by title
+        available.sort((a, b) => a.title.localeCompare(b.title))
+        setProjects(available)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load projects')
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadProjects()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onSelect is stable in behavior
+    // but defined inline by parent; including it would cause infinite re-fetches
+  }, [accountId, owner, isOrg, listAvailableProjects])
+
+  const filteredProjects = projects.filter(project =>
+    project.title.toLowerCase().includes(search.toLowerCase()) ||
+    (project.short_description?.toLowerCase().includes(search.toLowerCase()) ?? false)
+  )
+
+  if (loading) {
+    return <div className="repo-selector-loading">Loading projects...</div>
+  }
+
+  if (error) {
+    return <div className="repo-selector-error">{error}</div>
+  }
+
+  if (projects.length === 0) {
+    return <div className="repo-selector-empty">No projects found for {owner}</div>
+  }
+
+  return (
+    <div className="repo-selector">
+      <input
+        type="text"
+        className="repo-selector-search"
+        placeholder="Filter projects..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+      <div className="repo-selector-list">
+        {filteredProjects.length === 0 ? (
+          <div className="repo-selector-empty">
+            {search ? 'No matching projects' : 'No projects available'}
+          </div>
+        ) : (
+          filteredProjects.map(project => {
+            const projectKey = `${owner}:${project.number}`
+            const alreadyAdded = existingProjectKeys.has(projectKey)
+            return (
+              <label
+                key={project.number}
+                className={`repo-selector-item ${alreadyAdded ? 'disabled' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="project-select"
+                  checked={selectedProject === project.number}
+                  onChange={() => onSelect(project.number)}
+                  disabled={alreadyAdded}
+                />
+                <div className="repo-selector-item-content">
+                  <div className="repo-selector-item-name">
+                    #{project.number} - {project.title}
+                    {alreadyAdded && <span className="repo-private-badge">already added</span>}
+                    {project.closed && <span className="repo-private-badge">closed</span>}
+                  </div>
+                  <div className="repo-selector-item-desc">
+                    {project.items_total_count} items
+                    {project.short_description && ` • ${project.short_description}`}
+                  </div>
+                </div>
+              </label>
+            )
+          })
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -1370,208 +1882,6 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
   )
 }
 
-// === Google Auth Panel ===
-
-const GoogleAuthPanel = () => {
-  const {
-    listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
-    getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
-  } = useSources()
-  const [accounts, setAccounts] = useState<GoogleAccount[]>([])
-  const [oauthConfig, setOauthConfig] = useState<GoogleOAuthConfig | null | undefined>(undefined)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [uploadingConfig, setUploadingConfig] = useState(false)
-
-  const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [accountsData, configData] = await Promise.all([
-        listGoogleAccounts(),
-        getGoogleOAuthConfig()
-      ])
-      setAccounts(accountsData)
-      setOauthConfig(configData)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load data')
-    } finally {
-      setLoading(false)
-    }
-  }, [listGoogleAccounts, getGoogleOAuthConfig])
-
-  useEffect(() => { loadData() }, [loadData])
-
-  const handleConfigUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    setUploadingConfig(true)
-    setError(null)
-    try {
-      const config = await uploadGoogleOAuthConfig(file)
-      setOauthConfig(config)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to upload config')
-    } finally {
-      setUploadingConfig(false)
-    }
-  }
-
-  const handleDeleteConfig = async () => {
-    try {
-      await deleteGoogleOAuthConfig()
-      setOauthConfig(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete config')
-    }
-  }
-
-  const handleConnect = async () => {
-    try {
-      const { authorization_url } = await getGoogleAuthUrl()
-      window.open(authorization_url, '_blank', 'width=600,height=700')
-      // Poll for new accounts
-      const interval = setInterval(async () => {
-        const newAccounts = await listGoogleAccounts()
-        if (newAccounts.length > accounts.length) {
-          setAccounts(newAccounts)
-          clearInterval(interval)
-        }
-      }, 2000)
-      setTimeout(() => clearInterval(interval), 60000)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to get Google auth URL')
-    }
-  }
-
-  const handleDeleteAccount = async (id: number) => {
-    await deleteGoogleAccount(id)
-    loadData()
-  }
-
-  const handleReauthorize = async (id: number) => {
-    try {
-      const { authorization_url } = await reauthorizeGoogleAccount(id)
-      window.open(authorization_url, '_blank', 'width=600,height=700')
-      // Poll for updated account
-      const interval = setInterval(async () => {
-        const newAccounts = await listGoogleAccounts()
-        setAccounts(newAccounts)
-      }, 2000)
-      setTimeout(() => clearInterval(interval), 60000)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to re-authorize account')
-    }
-  }
-
-  if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={loadData} />
-
-  // Show OAuth config upload if not configured
-  if (oauthConfig === null) {
-    return (
-      <div className="source-panel">
-        <div className="panel-header">
-          <h3>Google Authentication</h3>
-        </div>
-        <div className="oauth-config-setup">
-          <h4>OAuth Configuration Required</h4>
-          <p>Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).</p>
-          <p className="form-hint">Get this from the Google Cloud Console under APIs & Services → Credentials.</p>
-          <div className="config-upload">
-            <label className="upload-btn">
-              {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleConfigUpload}
-                disabled={uploadingConfig}
-                style={{ display: 'none' }}
-              />
-            </label>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="source-panel">
-      <div className="panel-header">
-        <h3>Google Accounts</h3>
-        <button className="add-btn" onClick={handleConnect}>Connect Account</button>
-      </div>
-
-      <div className="oauth-config-info">
-        <details>
-          <summary>OAuth Configuration</summary>
-          <div className="config-details">
-            <p><strong>Project:</strong> {oauthConfig.project_id}</p>
-            <p><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
-            <p><strong>Redirect URIs:</strong></p>
-            <ul>
-              {oauthConfig.redirect_uris.map((uri, i) => (
-                <li key={i}>{uri}</li>
-              ))}
-            </ul>
-            <div className="config-actions">
-              <label className="upload-btn small">
-                {uploadingConfig ? 'Uploading...' : 'Replace Config'}
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleConfigUpload}
-                  disabled={uploadingConfig}
-                  style={{ display: 'none' }}
-                />
-              </label>
-              <button className="delete-btn small" onClick={handleDeleteConfig}>
-                Delete Config
-              </button>
-            </div>
-          </div>
-        </details>
-      </div>
-
-      {accounts.length === 0 ? (
-        <EmptyState
-          message="No Google accounts connected"
-          actionLabel="Connect Google Account"
-          onAction={handleConnect}
-        />
-      ) : (
-        <div className="source-list">
-          {accounts.map(account => (
-            <SourceCard key={account.id}>
-              <div className="source-card-header">
-                <div className="source-card-info">
-                  <h4>{account.name}</h4>
-                  <p className="source-subtitle">{account.email}</p>
-                </div>
-                <div className="source-card-actions-inline">
-                  <StatusBadge active={account.active} />
-                  <button className="edit-btn" onClick={() => handleReauthorize(account.id)}>Re-authorize</button>
-                  <button className="delete-btn" onClick={() => handleDeleteAccount(account.id)}>Disconnect</button>
-                </div>
-              </div>
-              {account.sync_error && (
-                <div className="sync-error-banner">{account.sync_error}</div>
-              )}
-              <div className="account-services">
-                <p className="form-hint">
-                  This account can be used for Gmail, Google Calendar, and Google Drive.
-                  Configure each service in its respective tab.
-                </p>
-              </div>
-            </SourceCard>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // === Google Drive Panel ===
 
 const GoogleDrivePanel = () => {
@@ -1651,7 +1961,7 @@ const GoogleDrivePanel = () => {
           <h3>Google Drive</h3>
         </div>
         <EmptyState
-          message="No Google accounts connected. Connect an account in the Google tab first."
+          message="No Google accounts connected. Add a Google account in the Accounts tab first."
         />
       </div>
     )
@@ -2496,7 +2806,7 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
             <label>Google Account</label>
             {googleAccounts.length === 0 ? (
               <p className="form-hint">
-                No Google accounts connected. Connect a Google account in the Google tab first.
+                No Google accounts connected. Add a Google account in the Accounts tab first.
               </p>
             ) : (
               <select

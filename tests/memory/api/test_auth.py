@@ -211,3 +211,50 @@ def test_get_session_user_falls_back_to_session_for_non_bot_tokens(mock_get_user
 
     assert result is session.user
     mock_get_user_session.assert_called_once_with(request, db)
+
+
+def test_get_user_account_returns_account_when_user_owns_it():
+    db = MagicMock()
+    user = MagicMock()
+    user.id = 42
+    account = MagicMock()
+    account.user_id = 42
+    db.get.return_value = account
+
+    result = auth.get_user_account(db, MagicMock, 1, user)
+
+    assert result is account
+    db.get.assert_called_once()
+
+
+def test_get_user_account_raises_404_when_account_not_found():
+    from fastapi import HTTPException
+
+    db = MagicMock()
+    user = MagicMock()
+    user.id = 42
+    db.get.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth.get_user_account(db, MagicMock, 999, user)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Account not found"
+
+
+def test_get_user_account_raises_404_when_user_does_not_own_account():
+    from fastapi import HTTPException
+
+    db = MagicMock()
+    user = MagicMock()
+    user.id = 42
+    account = MagicMock()
+    account.user_id = 99  # Different user
+    db.get.return_value = account
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth.get_user_account(db, MagicMock, 1, user)
+
+    # Returns same error to avoid leaking info about account existence
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Account not found"

@@ -129,6 +129,33 @@ class GithubProjectData(TypedDict):
     items_total_count: int  # Number of items in the project
 
 
+class GithubTeamMember(TypedDict):
+    """A member of a GitHub team."""
+
+    login: str
+    id: int
+    node_id: str
+    role: str  # 'member' or 'maintainer'
+
+
+class GithubTeamData(TypedDict):
+    """GitHub Team data for storage."""
+
+    node_id: str  # GraphQL node ID
+    github_id: int  # REST API ID
+    slug: str  # URL-safe team name
+    name: str  # Display name
+    description: str | None
+    privacy: str  # 'closed' or 'secret'
+    permission: str | None  # 'pull', 'push', 'admin', 'maintain', 'triage'
+    org_login: str
+    parent_team_slug: str | None
+    members_count: int
+    repos_count: int
+    github_created_at: datetime | None
+    github_updated_at: datetime | None
+
+
 class GithubIssueData(TypedDict):
     """Parsed issue/PR data ready for storage."""
 
@@ -1674,3 +1701,378 @@ class GithubClient:
                 break
 
             page += 1
+
+    # =========================================================================
+    # Team Management Methods
+    # =========================================================================
+
+    def list_teams(
+        self,
+        org: str,
+        per_page: int = 100,
+    ) -> Generator[GithubTeamData, None, None]:
+        """List all teams in an organization.
+
+        Args:
+            org: Organization login name
+            per_page: Number of teams per API request (max 100)
+
+        Yields:
+            GithubTeamData for each team
+        """
+        page = 1
+        while True:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/orgs/{org}/teams",
+                params={"page": page, "per_page": per_page},
+                timeout=30,
+            )
+            if response.status_code == 404:
+                logger.warning(f"Organization '{org}' not found")
+                return
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            teams = response.json()
+            if not teams:
+                break
+
+            for team in teams:
+                yield GithubTeamData(
+                    node_id=team.get("node_id", ""),
+                    github_id=team["id"],
+                    slug=team["slug"],
+                    name=team["name"],
+                    description=team.get("description"),
+                    privacy=team.get("privacy", "closed"),
+                    permission=team.get("permission"),
+                    org_login=org,
+                    parent_team_slug=(
+                        team["parent"]["slug"] if team.get("parent") else None
+                    ),
+                    members_count=team.get("members_count", 0),
+                    repos_count=team.get("repos_count", 0),
+                    github_created_at=parse_github_date(team.get("created_at")),
+                    github_updated_at=parse_github_date(team.get("updated_at")),
+                )
+
+            page += 1
+
+    def fetch_team(
+        self,
+        org: str,
+        team_slug: str,
+    ) -> GithubTeamData | None:
+        """Fetch a single team by org and slug.
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug (URL-safe name)
+
+        Returns:
+            GithubTeamData or None if not found
+        """
+        try:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}",
+                timeout=30,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            team = response.json()
+            return GithubTeamData(
+                node_id=team.get("node_id", ""),
+                github_id=team["id"],
+                slug=team["slug"],
+                name=team["name"],
+                description=team.get("description"),
+                privacy=team.get("privacy", "closed"),
+                permission=team.get("permission"),
+                org_login=org,
+                parent_team_slug=(
+                    team["parent"]["slug"] if team.get("parent") else None
+                ),
+                members_count=team.get("members_count", 0),
+                repos_count=team.get("repos_count", 0),
+                github_created_at=parse_github_date(team.get("created_at")),
+                github_updated_at=parse_github_date(team.get("updated_at")),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch team {org}/{team_slug}: {e}")
+            return None
+
+    def _fetch_team_members_by_role(
+        self,
+        org: str,
+        team_slug: str,
+        role: str,
+    ) -> list[GithubTeamMember]:
+        """Fetch team members with a specific role.
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug
+            role: Role filter: 'member' or 'maintainer'
+
+        Returns:
+            List of team members with the specified role
+        """
+        members: list[GithubTeamMember] = []
+        page = 1
+
+        while True:
+            params: dict[str, Any] = {"page": page, "per_page": 100, "role": role}
+
+            response = self.session.get(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}/members",
+                params=params,
+                timeout=30,
+            )
+            if response.status_code == 404:
+                logger.warning(f"Team {org}/{team_slug} not found")
+                return []
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            page_members = response.json()
+            if not page_members:
+                break
+
+            for m in page_members:
+                members.append(
+                    GithubTeamMember(
+                        login=m["login"],
+                        id=m["id"],
+                        node_id=m.get("node_id", ""),
+                        role=role,
+                    )
+                )
+
+            page += 1
+
+        return members
+
+    def get_team_members(
+        self,
+        org: str,
+        team_slug: str,
+        role: str = "all",
+    ) -> list[GithubTeamMember]:
+        """Get members of a team.
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug
+            role: Filter by role: 'member', 'maintainer', or 'all'
+
+        Returns:
+            List of team members
+        """
+        if role == "all":
+            # Fetch both roles separately to avoid N+1 API calls
+            # This uses 2 API calls instead of N+1 where N is the team size
+            maintainers = self._fetch_team_members_by_role(org, team_slug, "maintainer")
+            members = self._fetch_team_members_by_role(org, team_slug, "member")
+            return maintainers + members
+        else:
+            return self._fetch_team_members_by_role(org, team_slug, role)
+
+    def check_org_membership(self, org: str, username: str) -> str | None:
+        """Check if a user is a member of an organization.
+
+        Args:
+            org: Organization login name
+            username: GitHub username to check
+
+        Returns:
+            Membership state: 'active', 'pending', or None if not a member
+        """
+        try:
+            response = self.session.get(
+                f"{GITHUB_API_URL}/orgs/{org}/memberships/{username}",
+                timeout=30,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json().get("state")
+        except Exception as e:
+            logger.warning(f"Failed to check org membership for {username} in {org}: {e}")
+            return None
+
+    def invite_to_org(
+        self,
+        org: str,
+        username: str,
+        role: str = "direct_member",
+        team_ids: list[int] | None = None,
+    ) -> dict[str, Any] | None:
+        """Invite a user to an organization.
+
+        Args:
+            org: Organization login name
+            username: GitHub username to invite
+            role: Role in org: 'admin', 'direct_member', 'billing_manager'
+            team_ids: Optional list of team IDs to add user to upon acceptance
+
+        Returns:
+            Invitation data on success, None on failure
+        """
+        # First get the user's ID
+        user_response = self.session.get(
+            f"{GITHUB_API_URL}/users/{username}",
+            timeout=30,
+        )
+        if user_response.status_code == 404:
+            logger.warning(f"User '{username}' not found")
+            return None
+        user_response.raise_for_status()
+        invitee_id = user_response.json()["id"]
+
+        # Create invitation
+        payload: dict[str, Any] = {
+            "invitee_id": invitee_id,
+            "role": role,
+        }
+        if team_ids:
+            payload["team_ids"] = team_ids
+
+        try:
+            response = self.session.post(
+                f"{GITHUB_API_URL}/orgs/{org}/invitations",
+                json=payload,
+                timeout=30,
+            )
+            if response.status_code == 422:
+                # User may already be a member or have pending invite
+                error_data = response.json()
+                logger.info(f"Invitation issue for {username} to {org}: {error_data}")
+                return {"status": "already_invited_or_member", "details": error_data}
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+            return response.json()
+        except Exception as e:
+            logger.warning(f"Failed to invite {username} to {org}: {e}")
+            return None
+
+    def add_team_member(
+        self,
+        org: str,
+        team_slug: str,
+        username: str,
+        role: str = "member",
+    ) -> dict[str, Any]:
+        """Add a user to a team.
+
+        If the user is not in the organization, they will be invited first.
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug
+            username: GitHub username to add
+            role: Team role: 'member' or 'maintainer'
+
+        Returns:
+            Dict with 'success', 'action' ('added', 'invited', 'already_member'),
+            and optional 'invitation' data
+        """
+        # Check current org membership
+        membership_state = self.check_org_membership(org, username)
+
+        result: dict[str, Any] = {
+            "success": False,
+            "action": None,
+            "org_membership": membership_state,
+        }
+
+        # If not in org, invite them (with this team)
+        if membership_state is None:
+            # Get team ID for the invitation
+            team = self.fetch_team(org, team_slug)
+            if not team:
+                result["error"] = f"Team {org}/{team_slug} not found"
+                return result
+
+            invitation = self.invite_to_org(
+                org, username, role="direct_member", team_ids=[team["github_id"]]
+            )
+            if invitation:
+                result["success"] = True
+                result["action"] = "invited"
+                result["invitation"] = invitation
+                return result
+            else:
+                result["error"] = "Failed to send org invitation"
+                return result
+
+        # If pending invitation, we can still try to add to team
+        # (they'll be added when they accept)
+        if membership_state == "pending":
+            result["note"] = "User has pending org invitation"
+
+        # Add to team
+        try:
+            response = self.session.put(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}/memberships/{username}",
+                json={"role": role},
+                timeout=30,
+            )
+            if response.status_code == 404:
+                result["error"] = f"Team {org}/{team_slug} not found"
+                return result
+
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            membership_data = response.json()
+            state = membership_data.get("state", "unknown")
+
+            if state == "active":
+                result["success"] = True
+                result["action"] = "added"
+            elif state == "pending":
+                result["success"] = True
+                result["action"] = "pending"
+                result["note"] = "User must accept team invitation"
+
+            result["membership"] = membership_data
+            return result
+
+        except Exception as e:
+            result["error"] = f"Failed to add to team: {e}"
+            return result
+
+    def remove_team_member(
+        self,
+        org: str,
+        team_slug: str,
+        username: str,
+    ) -> bool:
+        """Remove a user from a team.
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug
+            username: GitHub username to remove
+
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        try:
+            response = self.session.delete(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}/memberships/{username}",
+                timeout=30,
+            )
+            if response.status_code == 204:
+                return True
+            if response.status_code == 404:
+                logger.info(f"{username} not in team {org}/{team_slug}")
+                return True  # Not in team is success for removal
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to remove {username} from {org}/{team_slug}: {e}")
+            return False

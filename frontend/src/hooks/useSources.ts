@@ -181,6 +181,22 @@ export interface AvailableRepo {
   html_url: string | null
 }
 
+export interface AvailableProject {
+  number: number
+  title: string
+  short_description: string | null
+  url: string
+  public: boolean
+  closed: boolean
+  items_total_count: number
+}
+
+export interface GithubProjectCreate {
+  owner: string
+  project_number: number
+  is_org?: boolean
+}
+
 export interface GithubProject {
   id: number
   account_id: number
@@ -596,6 +612,48 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  const listAccountProjects = useCallback(async (accountId: number, includeClosed = false): Promise<GithubProject[]> => {
+    const params = new URLSearchParams()
+    if (includeClosed) params.append('include_closed', 'true')
+    const url = params.toString()
+      ? `/github/accounts/${accountId}/projects?${params}`
+      : `/github/accounts/${accountId}/projects`
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch account projects')
+    return response.json()
+  }, [apiCall])
+
+  const listAvailableProjects = useCallback(async (
+    accountId: number,
+    owner: string,
+    isOrg = true,
+    includeClosed = false
+  ): Promise<AvailableProject[]> => {
+    const params = new URLSearchParams({
+      owner,
+      is_org: isOrg.toString(),
+      include_closed: includeClosed.toString(),
+    })
+    const response = await apiCall(`/github/accounts/${accountId}/available-projects?${params}`)
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to fetch available projects')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const addGithubProject = useCallback(async (accountId: number, data: GithubProjectCreate): Promise<GithubProject> => {
+    const response = await apiCall(`/github/accounts/${accountId}/projects`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to add GitHub project')
+    }
+    return response.json()
+  }, [apiCall])
+
   const syncGithubProjects = useCallback(async (owner: string, isOrg = true, includeClosed = false): Promise<CeleryTaskResponse> => {
     const params = new URLSearchParams({
       owner,
@@ -870,6 +928,9 @@ export const useSources = () => {
     syncGithubRepo,
     // GitHub Projects
     listGithubProjects,
+    listAccountProjects,
+    listAvailableProjects,
+    addGithubProject,
     syncGithubProjects,
     deleteGithubProject,
     // Google Drive

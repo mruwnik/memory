@@ -132,6 +132,38 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
+from typing import TypeVar
+from memory.common.db.models.base import Base
+
+T = TypeVar("T", bound=Base)
+
+
+def get_user_account(db: DBSession, model: type[T], account_id: int, user: User) -> T:
+    """Get an account by ID, ensuring it belongs to the user.
+
+    Generic helper for verifying ownership of user-scoped resources.
+    Returns 404 for both "not found" and "not yours" to avoid leaking info.
+
+    Args:
+        db: Database session
+        model: SQLAlchemy model class (must have user_id column)
+        account_id: ID of the account to retrieve
+        user: Current authenticated user
+
+    Returns:
+        The account if found and owned by user
+
+    Raises:
+        HTTPException: 404 if account not found or not owned by user
+    """
+    account = db.get(model, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.user_id != user.id:  # type: ignore[attr-defined]
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
 def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
     """Create a new human user"""
     # Check if user already exists

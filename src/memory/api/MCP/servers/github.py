@@ -1,79 +1,59 @@
 """MCP subserver for GitHub issue tracking and management."""
 
 import logging
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import FastMCP
-from sqlalchemy import Text, desc, func
-from sqlalchemy import cast as sql_cast
-from sqlalchemy.dialects.postgresql import ARRAY
+from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubMilestone, GithubProject
-from memory.common.db.models.sources import GithubRepo
-from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
-from memory.parsers.github import GithubClient, GithubCredentials, serialize_issue_data
+from memory.common.db.models import UserSession
+
+from memory.api.MCP.servers.github_helpers import (
+    list_issues,
+    list_milestones,
+    list_projects,
+    list_teams,
+    fetch_issue,
+    fetch_milestone,
+    fetch_project,
+    fetch_team,
+    get_github_client,
+    get_github_client_for_org,
+    handle_project_integration,
+    sync_issue_to_database,
+    resolve_milestone_node_id,
+    create_issue,
+    update_issue,
+)
 
 logger = logging.getLogger(__name__)
 
 github_mcp = FastMCP("memory-github")
 
 
-def _build_github_url(repo_path: str, number: int | None, kind: str) -> str:
-    """Build GitHub URL from repo path and issue/PR number."""
-    if number is None:
-        return f"https://github.com/{repo_path}"
-    url_type = "pull" if kind == "pr" else "issues"
-    return f"https://github.com/{repo_path}/{url_type}/{number}"
+def _get_current_user_id() -> int:
+    """Get the current user ID from the MCP access token."""
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated - no access token")
 
+    with make_session() as session:
+        user_session = session.get(UserSession, access_token.token)
+        if not user_session or not user_session.user:
+            raise ValueError("Not authenticated - invalid session")
+        return user_session.user.id
 
-def _serialize_issue(item: GithubItem, include_content: bool = False) -> dict[str, Any]:
-    """Serialize a GithubItem to a dict for API response."""
-    result = {
-        "id": item.id,
-        "number": item.number,
-        "kind": item.kind,
-        "repo_path": item.repo_path,
-        "title": item.title,
-        "state": item.state,
-        "author": item.author,
-        "assignees": item.assignees or [],
-        "labels": item.labels or [],
-        "milestone": item.milestone_rel.title if item.milestone_rel else None,
-        "milestone_id": item.milestone_id,
-        "project_status": item.project_status,
-        "project_priority": item.project_priority,
-        "project_fields": item.project_fields,
-        "comment_count": item.comment_count,
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "closed_at": item.closed_at.isoformat() if item.closed_at else None,
-        "merged_at": item.merged_at.isoformat() if item.merged_at else None,
-        "github_updated_at": (
-            item.github_updated_at.isoformat() if item.github_updated_at else None
-        ),
-        "url": _build_github_url(item.repo_path, item.number, item.kind),
-    }
-    if include_content:
-        result["content"] = item.content
-        if item.kind == "pr" and item.pr_data:
-            result["pr_data"] = {
-                "additions": item.pr_data.additions,
-                "deletions": item.pr_data.deletions,
-                "changed_files_count": item.pr_data.changed_files_count,
-                "files": item.pr_data.files,
-                "reviews": item.pr_data.reviews,
-                "review_comments": item.pr_data.review_comments,
-                "diff": item.pr_data.diff,
-            }
-    return result
+GithubEntityType = Literal["issue", "milestone", "project", "team"]
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubItem))
-async def list_github_issues(
+@visible_when(require_scopes("github"))
+async def github_list(
+    type: GithubEntityType,
     repo: str | None = None,
+    owner: str | None = None,
     assignee: str | None = None,
     author: str | None = None,
     state: str | None = None,
@@ -84,498 +64,143 @@ async def list_github_issues(
     project_field: dict[str, str] | None = None,
     updated_since: str | None = None,
     updated_before: str | None = None,
+    has_due_date: bool | None = None,
+    include_closed: bool = False,
     limit: int = 50,
     order_by: str = "updated",
 ) -> list[dict]:
     """
-    List GitHub issues and PRs with flexible filtering.
-    Use for daily triage, finding assigned issues, tracking stale issues, etc.
+    List GitHub entities (issues, milestones, projects, or teams).
 
     Args:
-        repo: Filter by repository path (e.g., "owner/name")
-        assignee: Filter by assignee username
-        author: Filter by author username
-        state: Filter by state: "open", "closed", "merged" (default: all)
-        kind: Filter by type: "issue" or "pr" (default: both)
-        labels: Filter by GitHub labels (matches ANY label in list)
-        milestone: Filter by milestone title (string) or milestone ID (int)
-        project_status: Filter by project status (e.g., "In Progress", "Backlog")
-        project_field: Filter by project field values (e.g., {"EquiStamp.Client": "Redwood"})
-        updated_since: ISO date - only issues updated after this time
-        updated_before: ISO date - only issues updated before this (for finding stale issues)
-        limit: Maximum results (default 50, max 200)
-        order_by: Sort order: "updated", "created", or "number" (default: "updated" descending)
+        type: Entity type to list: "issue", "milestone", "project", or "team"
 
-    Returns: List of issues with id, number, title, state, assignees, labels, project_fields, timestamps, url
+        Common params:
+            repo: Filter by repository path (e.g., "owner/name") - for issues/milestones
+            owner: Filter by owner/org login - for projects/teams
+            state: Filter by state (open/closed for issues/milestones)
+            limit: Maximum results (default 50, max 200)
+
+        Issue-specific params:
+            assignee: Filter by assignee username
+            author: Filter by author username
+            kind: Filter by type: "issue" or "pr" (default: both)
+            labels: Filter by GitHub labels (matches ANY label in list)
+            milestone: Filter by milestone title (string) or milestone ID (int)
+            project_status: Filter by project status (e.g., "In Progress", "Backlog")
+            project_field: Filter by project field values (e.g., {"Client": "Acme"})
+            updated_since: ISO date - only issues updated after this time
+            updated_before: ISO date - only issues updated before this
+            order_by: Sort order: "updated", "created", or "number"
+
+        Milestone-specific params:
+            has_due_date: If True, only milestones with due dates; if False, only without
+
+        Project-specific params:
+            include_closed: Include closed projects (default: False)
+
+        Team-specific params:
+            owner: Organization login (required for teams)
+
+    Returns: List of matching entities with relevant fields
     """
-    logger.info(
-        f"list_github_issues called: repo={repo}, assignee={assignee}, state={state}"
-    )
+    logger.info(f"github_list called: type={type}, repo={repo}, owner={owner}")
 
-    limit = min(limit, 200)
-
-    with make_session() as session:
-        query = session.query(GithubItem)
-
-        if repo:
-            query = query.filter(GithubItem.repo_path == repo)
-        if assignee:
-            query = query.filter(GithubItem.assignees.any(assignee))
-        if author:
-            query = query.filter(GithubItem.author == author)
-        if state:
-            query = query.filter(GithubItem.state == state)
-        if kind:
-            query = query.filter(GithubItem.kind == kind)
-        else:
-            query = query.filter(GithubItem.kind.in_(["issue", "pr"]))
-        if labels:
-            query = query.filter(
-                GithubItem.labels.op("&&")(sql_cast(labels, ARRAY(Text)))
-            )
-        if milestone is not None:
-            if isinstance(milestone, int):
-                query = query.filter(GithubItem.milestone_id == milestone)
-            else:
-                # Filter by milestone title via join
-                query = query.join(GithubMilestone).filter(
-                    GithubMilestone.title == milestone
-                )
-        if project_status:
-            query = query.filter(GithubItem.project_status == project_status)
-        if project_field:
-            for key, value in project_field.items():
-                query = query.filter(GithubItem.project_fields[key].astext == value)
-        if updated_since:
-            since_dt = datetime.fromisoformat(updated_since.replace("Z", "+00:00"))
-            query = query.filter(GithubItem.github_updated_at >= since_dt)
-        if updated_before:
-            before_dt = datetime.fromisoformat(updated_before.replace("Z", "+00:00"))
-            query = query.filter(GithubItem.github_updated_at <= before_dt)
-
-        if order_by == "created":
-            query = query.order_by(desc(GithubItem.created_at))
-        elif order_by == "number":
-            query = query.order_by(desc(GithubItem.number))
-        else:
-            query = query.order_by(desc(GithubItem.github_updated_at))
-
-        query = query.limit(limit)
-        items = query.all()
-
-        return [_serialize_issue(item) for item in items]
-
-
-@github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubMilestone))
-async def list_milestones(
-    repo: str | None = None,
-    state: str | None = None,
-    has_due_date: bool | None = None,
-    limit: int = 50,
-) -> list[dict]:
-    """
-    List GitHub milestones with filtering options.
-    Use to track project progress, find upcoming deadlines, or review milestone status.
-
-    Args:
-        repo: Filter by repository path (e.g., "owner/name")
-        state: Filter by state: "open" or "closed" (default: all)
-        has_due_date: If True, only milestones with due dates; if False, only without
-        limit: Maximum results (default 50, max 200)
-
-    Returns: List of milestones with id, number, title, description, state, due_on,
-             open_issues, closed_issues (computed), progress percentage, url
-    """
-    logger.info(f"list_milestones called: repo={repo}, state={state}")
-
-    limit = min(limit, 200)
-
-    with make_session() as session:
-        query = session.query(GithubMilestone).join(GithubRepo)
-
-        if repo:
-            parts = repo.split("/")
-            if len(parts) == 2:
-                owner, name = parts
-                query = query.filter(
-                    GithubRepo.owner == owner,
-                    GithubRepo.name == name,
-                )
-
-        if state:
-            query = query.filter(GithubMilestone.state == state)
-
-        if has_due_date is True:
-            query = query.filter(GithubMilestone.due_on.isnot(None))
-        elif has_due_date is False:
-            query = query.filter(GithubMilestone.due_on.is_(None))
-
-        # Order: due dates first (soonest), then by updated
-        query = query.order_by(
-            desc(GithubMilestone.due_on.isnot(None)),
-            GithubMilestone.due_on,
-            desc(GithubMilestone.github_updated_at),
-        ).limit(limit)
-
-        milestones = query.all()
-
-        results = []
-        for ms in milestones:
-            # Count open and closed issues for this milestone
-            open_count = (
-                session.query(func.count(GithubItem.id))
-                .filter(
-                    GithubItem.milestone_id == ms.id,
-                    GithubItem.state == "open",
-                )
-                .scalar()
-                or 0
-            )
-            closed_count = (
-                session.query(func.count(GithubItem.id))
-                .filter(
-                    GithubItem.milestone_id == ms.id,
-                    GithubItem.state.in_(["closed", "merged"]),
-                )
-                .scalar()
-                or 0
-            )
-            total = open_count + closed_count
-            progress = round(closed_count / total * 100, 1) if total > 0 else 0
-
-            results.append(
-                {
-                    "id": ms.id,
-                    "repo_path": f"{ms.repo.owner}/{ms.repo.name}",
-                    "number": ms.number,
-                    "title": ms.title,
-                    "description": ms.description,
-                    "state": ms.state,
-                    "due_on": ms.due_on.isoformat() if ms.due_on else None,
-                    "open_issues": open_count,
-                    "closed_issues": closed_count,
-                    "progress_percent": progress,
-                    "url": f"https://github.com/{ms.repo.owner}/{ms.repo.name}/milestone/{ms.number}",
-                }
-            )
-
-        return results
-
-
-@github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubItem))
-async def github_issue_details(
-    repo: str,
-    number: int,
-) -> dict:
-    """
-    Get full details of a specific GitHub issue or PR including all comments.
-
-    Args:
-        repo: Repository path (e.g., "owner/name")
-        number: Issue or PR number
-
-    Returns: Full issue details including content (body + comments), project fields, timestamps.
-             For PRs, also includes pr_data with: diff (full), files changed, reviews, review comments.
-    """
-    logger.info(f"github_issue_details called: repo={repo}, number={number}")
-
-    with make_session() as session:
-        item = (
-            session.query(GithubItem)
-            .filter(
-                GithubItem.repo_path == repo,
-                GithubItem.number == number,
-                GithubItem.kind.in_(["issue", "pr"]),
-            )
-            .first()
+    if type == "issue":
+        return list_issues(
+            repo=repo,
+            assignee=assignee,
+            author=author,
+            state=state,
+            kind=kind,
+            labels=labels,
+            milestone=milestone,
+            project_status=project_status,
+            project_field=project_field,
+            updated_since=updated_since,
+            updated_before=updated_before,
+            limit=limit,
+            order_by=order_by,
         )
-
-        if not item:
-            raise ValueError(f"Issue #{number} not found in {repo}")
-
-        return _serialize_issue(item, include_content=True)
-
-
-def _get_github_client(session: Any, repo_path: str) -> tuple[GithubClient, GithubRepo]:
-    """Get authenticated GithubClient for a repository path.
-
-    Args:
-        session: Database session
-        repo_path: Repository path in "owner/repo" format
-
-    Returns:
-        Tuple of (GithubClient, GithubRepo)
-
-    Raises:
-        ValueError: If repo not found or credentials unavailable
-    """
-    parts = repo_path.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"Invalid repo path format: {repo_path}")
-
-    owner, name = parts
-    repo = (
-        session.query(GithubRepo)
-        .filter(GithubRepo.owner == owner, GithubRepo.name == name)
-        .first()
-    )
-    if not repo:
-        raise ValueError(f"Repository {repo_path} not found in database")
-
-    account = repo.account
-    if not account or not account.active:
-        raise ValueError(f"No active credentials for {repo_path}")
-
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    return GithubClient(credentials), repo
-
-
-def _handle_project_integration(
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    issue_number: int,
-    issue_node_id: str | None,
-    project_name: str,
-    project_fields: dict[str, str] | None,
-) -> tuple[list[str], str | None]:
-    """Add issue to project and set field values.
-
-    Returns:
-        Tuple of (list of update messages, error message or None)
-    """
-    updates: list[str] = []
-
-    if not issue_node_id:
-        issue_node_id = client.get_issue_node_id(owner, repo_name, issue_number)
-    if not issue_node_id:
-        logger.warning(
-            f"Could not get issue node ID for {owner}/{repo_name}#{issue_number}"
+    elif type == "milestone":
+        return list_milestones(
+            repo=repo,
+            state=state,
+            has_due_date=has_due_date,
+            limit=limit,
         )
-        return updates, "Could not get issue node ID"
-
-    # Try org project first, then user project
-    project_info = client.find_project_by_name(owner, project_name, is_org=True)
-    if not project_info:
-        project_info = client.find_project_by_name(owner, project_name, is_org=False)
-    if not project_info:
-        return updates, f"Project '{project_name}' not found in org or user '{owner}'"
-
-    project_id = project_info["id"]
-    logger.debug(f"Found project '{project_name}' with ID {project_id}")
-
-    # Add to project if not already there
-    item_id = client.get_project_item_id(owner, repo_name, issue_number, project_id)
-    if not item_id:
-        logger.debug(
-            f"Issue #{issue_number} not in project, adding with content_id={issue_node_id}"
+    elif type == "project":
+        return list_projects(
+            owner=owner,
+            include_closed=include_closed,
+            limit=limit,
         )
-        item_id = client.add_issue_to_project(project_id, issue_node_id)
-        if item_id:
-            updates.append(f"Added to project '{project_name}'")
-        else:
-            return (
-                updates,
-                f"Failed to add to project '{project_name}' (check API logs for details)",
-            )
-
-    # Set field values
-    if item_id and project_fields:
-        available_fields = project_info.get("fields", {})
-        for field_name, field_value in project_fields.items():
-            msg = _set_project_field(
-                client, project_id, item_id, field_name, field_value, available_fields
-            )
-            updates.append(msg)
-
-    return updates, None
-
-
-def _set_project_field(
-    client: GithubClient,
-    project_id: str,
-    item_id: str,
-    field_name: str,
-    field_value: str,
-    available_fields: dict[str, Any],
-) -> str:
-    """Set a single project field value. Returns status message."""
-    field_def = available_fields.get(field_name)
-    if not field_def:
-        return f"Field '{field_name}' not found in project"
-
-    field_id = field_def["id"]
-    data_type = field_def.get("data_type", "TEXT")
-
-    # Single-select field needs option ID resolution
-    if "options" in field_def and field_def["options"]:
-        option_id = field_def["options"].get(field_value)
-        if not option_id:
-            return f"Option '{field_value}' not found for field '{field_name}'"
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, option_id, "singleSelectOptionId"
-        )
-    elif data_type == "NUMBER":
-        try:
-            num_value = float(field_value)
-            success = client.update_project_field_value(
-                project_id, item_id, field_id, num_value, "number"
-            )
-        except ValueError:
-            return f"Invalid number '{field_value}' for field '{field_name}'"
-    elif data_type == "DATE":
-        # GitHub expects ISO 8601 date format (YYYY-MM-DD)
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, field_value, "date"
+    elif type == "team":
+        user_id = _get_current_user_id()
+        return list_teams(
+            org=owner,
+            user_id=user_id,
+            limit=limit,
         )
     else:
-        # Text field (default)
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, field_value, "text"
-        )
-
-    return (
-        f"Set {field_name}={field_value}" if success else f"Failed to set {field_name}"
-    )
+        raise ValueError(f"Unknown type: {type}")
 
 
-def _sync_issue_to_database(
-    client: GithubClient,
-    session: Any,
-    repo_obj: GithubRepo,
-    owner: str,
-    repo_name: str,
-    issue_number: int,
-) -> tuple[bool, str | None]:
-    """Fetch issue from GitHub via GraphQL and trigger database sync.
+@github_mcp.tool()
+@visible_when(require_scopes("github"))
+async def github_fetch(
+    type: GithubEntityType,
+    repo: str | None = None,
+    owner: str | None = None,
+    number: int | None = None,
+    slug: str | None = None,
+) -> dict:
+    """
+    Get full details of a specific GitHub entity.
+
+    Args:
+        type: Entity type: "issue", "milestone", "project", or "team"
+        repo: Repository path (e.g., "owner/name") - required for issue/milestone
+        owner: Owner/org login - required for project/team
+        number: Entity number (issue/PR number, milestone number, or project number)
+        slug: Team slug (URL-safe name) - required for team
 
     Returns:
-        Tuple of (success, error message or None)
+        For issues: Full details including content, comments, project fields.
+                   PRs also include diff, files changed, reviews.
+        For milestones: Details including description, due date, progress, and list of issues.
+        For projects: Full project details including fields with options.
+        For teams: Team details including member list.
     """
-    fetched = client.fetch_issue_graphql(owner, repo_name, issue_number)
-    if fetched is None:
-        return False, "Failed to fetch issue for sync"
+    logger.info(f"github_fetch called: type={type}, repo={repo}, owner={owner}, number={number}, slug={slug}")
 
-    if repo_obj.track_project_fields:
-        fetched["project_fields"] = client.fetch_project_fields(
-            owner, repo_name, issue_number
-        )
-
-    # Look up milestone_id
-    milestone_id = None
-    if fetched.get("milestone_number"):
-        ms = (
-            session.query(GithubMilestone)
-            .filter(
-                GithubMilestone.repo_id == repo_obj.id,
-                GithubMilestone.number == fetched["milestone_number"],
-            )
-            .first()
-        )
-        if ms:
-            milestone_id = ms.id
-
-    serialized = serialize_issue_data(fetched)
-    serialized["milestone_id"] = milestone_id
-    celery_app.send_task(SYNC_GITHUB_ITEM, args=[repo_obj.id, serialized])
-    return True, None
-
-
-def _resolve_milestone_node_id(
-    client: GithubClient,
-    session: Any,
-    repo_obj: GithubRepo,
-    owner: str,
-    repo_name: str,
-    milestone: str | int,
-) -> str | None:
-    """Resolve milestone title or number to GraphQL node ID."""
-    if isinstance(milestone, int):
-        return client.get_milestone_node_id(owner, repo_name, milestone)
-
-    # Look up by title in database
-    ms = (
-        session.query(GithubMilestone)
-        .filter(
-            GithubMilestone.repo_id == repo_obj.id,
-            GithubMilestone.title == milestone,
-        )
-        .first()
-    )
-    if ms:
-        return client.get_milestone_node_id(owner, repo_name, ms.number)
-
-    logger.warning(f"Milestone '{milestone}' not found in database")
-    return None
-
-
-def _create_issue(
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    title: str,
-    body: str | None,
-    label_ids: list[str] | None,
-    assignee_ids: list[str] | None,
-    milestone_node_id: str | None,
-) -> tuple[dict[str, Any], int]:
-    """Create a new GitHub issue via GraphQL. Returns (issue_data, number)."""
-    repository_id = client.get_repository_id(owner, repo_name)
-    if not repository_id:
-        raise ValueError(f"Could not get repository ID for {owner}/{repo_name}")
-
-    issue_data = client.create_issue_graphql(
-        repository_id=repository_id,
-        title=title,
-        body=body,
-        label_ids=label_ids,
-        assignee_ids=assignee_ids,
-        milestone_id=milestone_node_id,
-    )
-    if not issue_data:
-        raise ValueError("Failed to create issue on GitHub")
-
-    return issue_data, issue_data["number"]
-
-
-def _update_issue(
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    number: int,
-    title: str,
-    body: str | None,
-    state: str | None,
-    label_ids: list[str] | None,
-    assignee_ids: list[str] | None,
-    milestone_node_id: str | None,
-) -> dict[str, Any]:
-    """Update an existing GitHub issue via GraphQL."""
-    issue_node_id = client.get_issue_node_id(owner, repo_name, number)
-    if not issue_node_id:
-        raise ValueError(f"Issue #{number} not found in {owner}/{repo_name}")
-
-    issue_data = client.update_issue_graphql(
-        issue_id=issue_node_id,
-        title=title,
-        body=body,
-        state=state,
-        label_ids=label_ids,
-        assignee_ids=assignee_ids,
-        milestone_id=milestone_node_id,
-    )
-    if not issue_data:
-        raise ValueError(f"Failed to update issue #{number}")
-
-    return issue_data
+    if type == "issue":
+        if not repo:
+            raise ValueError("repo is required for fetching issues")
+        if number is None:
+            raise ValueError("number is required for fetching issues")
+        return fetch_issue(repo, number)
+    elif type == "milestone":
+        if not repo:
+            raise ValueError("repo is required for fetching milestones")
+        if number is None:
+            raise ValueError("number is required for fetching milestones")
+        return fetch_milestone(repo, number)
+    elif type == "project":
+        if not owner:
+            raise ValueError("owner is required for fetching projects")
+        if number is None:
+            raise ValueError("number is required for fetching projects")
+        return fetch_project(owner, number)
+    elif type == "team":
+        if not owner:
+            raise ValueError("owner (org) is required for fetching teams")
+        if not slug:
+            raise ValueError("slug is required for fetching teams")
+        user_id = _get_current_user_id()
+        return fetch_team(owner, slug, user_id=user_id)
+    else:
+        raise ValueError(f"Unknown type: {type}")
 
 
 @github_mcp.tool()
@@ -617,13 +242,23 @@ async def upsert_github_issue(
         raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
     owner, repo_name = parts
 
+    # Get user from MCP access token
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated - no access token")
+
     with make_session() as session:
-        client, repo_obj = _get_github_client(session, repo)
+        user_session = session.get(UserSession, access_token.token)
+        if not user_session or not user_session.user:
+            raise ValueError("Not authenticated - invalid session")
+        user_id = user_session.user.id
+
+        client, repo_obj = get_github_client(session, repo, user_id)
 
         # Resolve IDs for labels, assignees, milestone
         milestone_node_id = None
         if milestone is not None:
-            milestone_node_id = _resolve_milestone_node_id(
+            milestone_node_id = resolve_milestone_node_id(
                 client, session, repo_obj, owner, repo_name, milestone
             )
         label_ids = client.get_label_ids(owner, repo_name, labels) if labels else None
@@ -631,7 +266,7 @@ async def upsert_github_issue(
 
         # Create or update
         if number is None:
-            issue_data, number = _create_issue(
+            issue_data, number = create_issue(
                 client,
                 owner,
                 repo_name,
@@ -643,7 +278,7 @@ async def upsert_github_issue(
             )
             action = "created"
         else:
-            issue_data = _update_issue(
+            issue_data = update_issue(
                 client,
                 owner,
                 repo_name,
@@ -668,7 +303,7 @@ async def upsert_github_issue(
 
         # Handle project integration
         if project:
-            updates, error = _handle_project_integration(
+            updates, error = handle_project_integration(
                 client,
                 owner,
                 repo_name,
@@ -681,84 +316,111 @@ async def upsert_github_issue(
             if error:
                 result["project_error"] = error
 
-        # Trigger database sync
-        success, error = _sync_issue_to_database(
-            client, session, repo_obj, owner, repo_name, number
-        )
-        result["sync_triggered"] = success
-        if error:
-            result["sync_error"] = error
+        # Trigger database sync (only if repo is tracked)
+        if repo_obj is not None:
+            success, error = sync_issue_to_database(
+                client, session, repo_obj, owner, repo_name, number
+            )
+            result["sync_triggered"] = success
+            if error:
+                result["sync_error"] = error
+        else:
+            result["sync_triggered"] = False
+            result["sync_note"] = "Repository not tracked - issue created/updated but not synced to database"
 
         return result
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubProject))
-async def list_github_projects(
-    owner: str | None = None,
-    include_closed: bool = False,
-    limit: int = 50,
-) -> list[dict]:
+@visible_when(require_scopes("github"))
+async def github_add_team_member(
+    org: str,
+    team_slug: str,
+    username: str,
+    role: str = "member",
+) -> dict:
     """
-    List GitHub Projects (v2) that have been synced to the database.
-    Projects are org/user-level boards that can span multiple repos.
+    Add a user to a GitHub team.
+
+    If the user is not a member of the organization, they will be invited first.
+    The invitation will include the team, so they'll be added automatically upon acceptance.
 
     Args:
-        owner: Filter by owner login (org or user name)
-        include_closed: Include closed projects (default: False)
-        limit: Maximum results (default 50, max 200)
+        org: Organization login name
+        team_slug: Team slug (URL-safe team name, e.g., "engineering" not "Engineering Team")
+        username: GitHub username to add
+        role: Team role: "member" or "maintainer" (default: "member")
 
-    Returns: List of projects with id, number, title, description, fields, item counts, etc.
+    Returns:
+        Dict with:
+            - success: Whether the operation succeeded
+            - action: What happened - "added", "invited", or "pending"
+            - org_membership: User's org membership state before operation
+            - note: Additional context (e.g., "User must accept team invitation")
+            - error: Error message if failed
     """
-    logger.info(f"list_github_projects called: owner={owner}, include_closed={include_closed}")
+    logger.info(f"github_add_team_member called: org={org}, team={team_slug}, user={username}")
 
-    limit = min(limit, 200)
+    # Get user from MCP access token
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated - no access token")
 
     with make_session() as session:
-        query = session.query(GithubProject)
+        user_session = session.get(UserSession, access_token.token)
+        if not user_session or not user_session.user:
+            raise ValueError("Not authenticated - invalid session")
+        user_id = user_session.user.id
 
-        if owner:
-            query = query.filter(GithubProject.owner_login.ilike(owner))
-        if not include_closed:
-            query = query.filter(GithubProject.closed == False)  # noqa: E712
+        client = get_github_client_for_org(session, org, user_id)
+        if not client:
+            raise ValueError(f"No GitHub account configured with access to {org}")
 
-        query = query.order_by(GithubProject.title).limit(limit)
-        projects = query.all()
-
-        return [project.as_payload() for project in projects]
+        result = client.add_team_member(org, team_slug, username, role)
+        return result
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_items(GithubProject))
-async def github_project_details(
-    owner: str,
-    project_number: int,
+@visible_when(require_scopes("github"))
+async def github_remove_team_member(
+    org: str,
+    team_slug: str,
+    username: str,
 ) -> dict:
     """
-    Get full details of a specific GitHub Project including field definitions.
+    Remove a user from a GitHub team.
+
+    Note: This only removes from the team, not from the organization.
 
     Args:
-        owner: Organization or user login that owns the project
-        project_number: The project number (visible in URL)
+        org: Organization login name
+        team_slug: Team slug (URL-safe team name)
+        username: GitHub username to remove
 
-    Returns: Full project details including fields with their options,
-             item counts, readme, and timestamps.
+    Returns:
+        Dict with success status and any error message
     """
-    logger.info(f"github_project_details called: owner={owner}, project_number={project_number}")
+    logger.info(f"github_remove_team_member called: org={org}, team={team_slug}, user={username}")
+
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated - no access token")
 
     with make_session() as session:
-        project = (
-            session.query(GithubProject)
-            .filter(
-                GithubProject.owner_login.ilike(owner),
-                GithubProject.number == project_number,
-            )
-            .first()
-        )
+        user_session = session.get(UserSession, access_token.token)
+        if not user_session or not user_session.user:
+            raise ValueError("Not authenticated - invalid session")
+        user_id = user_session.user.id
 
-        if not project:
-            raise ValueError(f"Project #{project_number} not found for {owner}")
+        client = get_github_client_for_org(session, org, user_id)
+        if not client:
+            raise ValueError(f"No GitHub account configured with access to {org}")
 
-        return project.as_payload()
-
-
+        success = client.remove_team_member(org, team_slug, username)
+        return {
+            "success": success,
+            "action": "removed" if success else "failed",
+            "org": org,
+            "team": team_slug,
+            "username": username,
+        }

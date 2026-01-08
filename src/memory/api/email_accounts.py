@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, get_user_account
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
 
@@ -128,8 +128,8 @@ def list_accounts(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[EmailAccountResponse]:
-    """List all email accounts."""
-    accounts = db.query(EmailAccount).all()
+    """List email accounts for the current user."""
+    accounts = db.query(EmailAccount).filter(EmailAccount.user_id == user.id).all()
     return [account_to_response(account, db) for account in accounts]
 
 
@@ -156,6 +156,7 @@ def create_account(
             raise HTTPException(status_code=400, detail="Google account not found")
 
     account = EmailAccount(
+        user_id=user.id,
         name=data.name,
         email_address=data.email_address,
         account_type=data.account_type,
@@ -182,9 +183,7 @@ def get_account(
     db: Session = Depends(get_session),
 ) -> EmailAccountResponse:
     """Get a single email account."""
-    account = db.get(EmailAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, EmailAccount, account_id, user)
     return account_to_response(account, db)
 
 
@@ -196,9 +195,7 @@ def update_account(
     db: Session = Depends(get_session),
 ) -> EmailAccountResponse:
     """Update an email account."""
-    account = db.get(EmailAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, EmailAccount, account_id, user)
 
     if updates.name is not None:
         account.name = updates.name
@@ -234,9 +231,7 @@ def delete_account(
     db: Session = Depends(get_session),
 ):
     """Delete an email account."""
-    account = db.get(EmailAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, EmailAccount, account_id, user)
 
     db.delete(account)
     db.commit()
@@ -254,9 +249,7 @@ def trigger_sync(
     """Manually trigger a sync for an email account."""
     from memory.common.celery_app import app, SYNC_ACCOUNT
 
-    account = db.get(EmailAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    get_user_account(db, EmailAccount, account_id, user)  # Verify ownership
 
     task = app.send_task(
         SYNC_ACCOUNT,
@@ -276,9 +269,7 @@ def test_connection(
     """Test IMAP connection for an email account."""
     from memory.workers.email import imap_connection
 
-    account = db.get(EmailAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, EmailAccount, account_id, user)
 
     try:
         with imap_connection(account) as conn:

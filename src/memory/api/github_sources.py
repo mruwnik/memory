@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from memory.api.auth import get_current_user, get_user_account
+from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
-from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -158,8 +159,8 @@ def list_accounts(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[GithubAccountResponse]:
-    """List all GitHub accounts with their repos."""
-    accounts = db.query(GithubAccount).all()
+    """List GitHub accounts for the current user."""
+    accounts = db.query(GithubAccount).filter(GithubAccount.user_id == user.id).all()
     return [account_to_response(account) for account in accounts]
 
 
@@ -185,6 +186,7 @@ def create_account(
             )
 
     account = GithubAccount(
+        user_id=user.id,
         name=data.name,
         auth_type=data.auth_type,
         access_token=data.access_token,
@@ -206,9 +208,7 @@ def get_account(
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Get a single GitHub account."""
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
     return account_to_response(account)
 
 
@@ -220,9 +220,7 @@ def update_account(
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Update a GitHub account."""
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
 
     if updates.name is not None:
         account.name = updates.name
@@ -250,9 +248,7 @@ def delete_account(
     db: Session = Depends(get_session),
 ):
     """Delete a GitHub account and all its repos."""
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
 
     db.delete(account)
     db.commit()
@@ -269,9 +265,7 @@ def validate_account(
     """Validate GitHub API access for an account."""
     from memory.parsers.github import GithubClient, GithubCredentials
 
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
 
     try:
         credentials = GithubCredentials(
@@ -305,6 +299,16 @@ class AvailableRepoResponse(BaseModel):
     html_url: str | None
 
 
+class AvailableProjectResponse(BaseModel):
+    number: int
+    title: str
+    short_description: str | None
+    url: str
+    public: bool
+    closed: bool
+    items_total_count: int
+
+
 @router.get("/accounts/{account_id}/available-repos")
 def list_available_repos(
     account_id: int,
@@ -320,9 +324,7 @@ def list_available_repos(
     """
     from memory.parsers.github import GithubClient, GithubCredentials
 
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
 
     # Cap limit to prevent excessive API calls
     limit = min(limit, 500)
@@ -345,6 +347,55 @@ def list_available_repos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/accounts/{account_id}/available-projects")
+def list_available_projects(
+    account_id: int,
+    owner: str,
+    is_org: bool = True,
+    include_closed: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[AvailableProjectResponse]:
+    """List projects available from GitHub for this account.
+
+    Args:
+        account_id: GitHub account ID.
+        owner: Organization or user login that owns the projects.
+        is_org: True if owner is an organization, False if user.
+        include_closed: Whether to include closed projects.
+    """
+    from memory.parsers.github import GithubClient, GithubCredentials
+
+    account = get_user_account(db, GithubAccount, account_id, user)
+
+    try:
+        credentials = GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+        client = GithubClient(credentials)
+
+        projects = []
+        for project in client.list_projects(owner, is_org, include_closed):
+            projects.append(
+                AvailableProjectResponse(
+                    number=project["number"],
+                    title=project["title"],
+                    short_description=project["short_description"],
+                    url=project["url"],
+                    public=project["public"],
+                    closed=project["closed"],
+                    items_total_count=project["items_total_count"],
+                )
+            )
+        return projects
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Repo Endpoints ---
 
 
@@ -355,9 +406,7 @@ def list_repos(
     db: Session = Depends(get_session),
 ) -> list[GithubRepoResponse]:
     """List all repos for a GitHub account."""
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, GithubAccount, account_id, user)
 
     return [repo_to_response(repo) for repo in account.repos]
 
@@ -370,9 +419,7 @@ def add_repo(
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Add a repo to track for a GitHub account."""
-    account = db.get(GithubAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
 
     # Check for duplicate
     existing = (
@@ -417,6 +464,7 @@ def update_repo(
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Update a repo's tracking configuration."""
+    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
     repo = (
         db.query(GithubRepo)
         .filter(GithubRepo.account_id == account_id, GithubRepo.id == repo_id)
@@ -460,6 +508,7 @@ def remove_repo(
     db: Session = Depends(get_session),
 ):
     """Remove a repo from tracking."""
+    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
     repo = (
         db.query(GithubRepo)
         .filter(GithubRepo.account_id == account_id, GithubRepo.id == repo_id)
@@ -483,8 +532,7 @@ def trigger_repo_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a repo."""
-    from memory.common.celery_app import app, SYNC_GITHUB_REPO
-
+    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
     repo = (
         db.query(GithubRepo)
         .filter(GithubRepo.account_id == account_id, GithubRepo.id == repo_id)
@@ -493,7 +541,7 @@ def trigger_repo_sync(
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_GITHUB_REPO,
         args=[repo_id],
         kwargs={"force_full": force_full},
@@ -526,6 +574,12 @@ class GithubProjectResponse(BaseModel):
     created_at: str
 
 
+class GithubProjectCreate(BaseModel):
+    owner: str
+    project_number: int
+    is_org: bool = True
+
+
 def project_to_response(project: GithubProject) -> GithubProjectResponse:
     """Convert a GithubProject model to a response model."""
     return GithubProjectResponse(
@@ -554,7 +608,109 @@ def project_to_response(project: GithubProject) -> GithubProjectResponse:
     )
 
 
-# --- Project Endpoints ---
+# --- Project Endpoints (Account-scoped) ---
+
+
+@router.get("/accounts/{account_id}/projects")
+def list_account_projects(
+    account_id: int,
+    include_closed: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[GithubProjectResponse]:
+    """List all synced GitHub projects for a specific account."""
+    account = get_user_account(db, GithubAccount, account_id, user)
+
+    query = db.query(GithubProject).filter(GithubProject.account_id == account.id)
+    if not include_closed:
+        query = query.filter(GithubProject.closed == False)  # noqa: E712
+
+    query = query.order_by(GithubProject.title)
+    projects = query.all()
+
+    return [project_to_response(project) for project in projects]
+
+
+@router.post("/accounts/{account_id}/projects")
+def add_project(
+    account_id: int,
+    data: GithubProjectCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> GithubProjectResponse:
+    """Add a single GitHub project to track for an account.
+
+    Fetches the project from GitHub and stores it locally.
+    """
+    from datetime import datetime, timezone
+
+    from memory.parsers.github import GithubClient, GithubCredentials
+
+    account = get_user_account(db, GithubAccount, account_id, user)
+
+    # Check for duplicate
+    existing = (
+        db.query(GithubProject)
+        .filter(
+            GithubProject.account_id == account_id,
+            GithubProject.owner_login == data.owner,
+            GithubProject.number == data.project_number,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Project already tracked")
+
+    # Fetch project from GitHub
+    try:
+        credentials = GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+        client = GithubClient(credentials)
+
+        # Fetch the specific project directly via GraphQL
+        project_data = client.fetch_project(data.owner, data.project_number, data.is_org)
+        if not project_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project #{data.project_number} not found for {data.owner}",
+            )
+
+        # Create the project record
+        project = GithubProject(
+            account_id=account_id,
+            node_id=project_data["node_id"],
+            number=project_data["number"],
+            owner_type=project_data["owner_type"],
+            owner_login=project_data["owner_login"],
+            title=project_data["title"],
+            short_description=project_data["short_description"],
+            readme=project_data["readme"],
+            url=project_data["url"],
+            public=project_data["public"],
+            closed=project_data["closed"],
+            fields=project_data["fields"],
+            items_total_count=project_data["items_total_count"],
+            github_created_at=project_data["github_created_at"],
+            github_updated_at=project_data["github_updated_at"],
+            last_sync_at=datetime.now(timezone.utc),
+        )
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+
+        return project_to_response(project)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Project Endpoints (Global) ---
 
 
 @router.get("/projects")
@@ -600,18 +756,19 @@ def trigger_projects_sync(
     db: Session = Depends(get_session),
 ):
     """Trigger a sync of all GitHub Projects for an owner."""
-    from memory.common.celery_app import app, SYNC_GITHUB_PROJECTS
-
-    # Find an active account
+    # Find an active account for the current user
     account = (
         db.query(GithubAccount)
-        .filter(GithubAccount.active == True)  # noqa: E712
+        .filter(
+            GithubAccount.user_id == user.id,
+            GithubAccount.active == True,  # noqa: E712
+        )
         .first()
     )
     if not account:
         raise HTTPException(status_code=400, detail="No active GitHub account found")
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_GITHUB_PROJECTS,
         args=[account.id, owner, is_org, include_closed],
     )

@@ -2,6 +2,7 @@
 MCP subserver for organizational tools: calendar, todos, reminders.
 """
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Literal
@@ -118,7 +119,15 @@ async def create_task(
         except ValueError:
             raise ValueError(f"Invalid due_date format: {due_date}")
 
+    # Hash based on title - same title means same task
+    task_sha256 = hashlib.sha256(f"task:{title}".encode()).digest()
+
     with make_session() as session:
+        # Check if task with this title already exists
+        existing = session.query(Task).filter(Task.sha256 == task_sha256).first()
+        if existing:
+            return task_to_dict(existing)
+
         task = Task(
             task_title=title,
             due_date=parsed_due_date,
@@ -126,7 +135,7 @@ async def create_task(
             status="pending",
             recurrence=recurrence,
             tags=tags or [],
-            sha256=b"task:" + title.encode()[:24],
+            sha256=task_sha256,
         )
         session.add(task)
         session.commit()
