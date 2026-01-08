@@ -220,6 +220,7 @@ interface SourceCardProps {
   onEdit?: () => void
   onDelete?: () => void
   onSync?: () => Promise<void>
+  additionalActions?: React.ReactNode
   children?: React.ReactNode
 }
 
@@ -233,6 +234,7 @@ export const SourceCard = ({
   onEdit,
   onDelete,
   onSync,
+  additionalActions,
   children,
 }: SourceCardProps) => {
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -253,6 +255,7 @@ export const SourceCard = ({
 
       <div className="source-card-actions">
         {onSync && <SyncButton onSync={onSync} disabled={!active} />}
+        {additionalActions}
         {onEdit && <button className="edit-btn" onClick={onEdit}>Edit</button>}
         {onDelete && (
           <button className="delete-btn" onClick={() => setConfirmDelete(true)}>Delete</button>

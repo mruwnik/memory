@@ -24,11 +24,15 @@ class EmailAccountCreate(BaseModel):
     username: str | None = None
     password: str | None = None
     use_ssl: bool = True
+    # SMTP fields (optional - inferred from IMAP if not set)
+    smtp_server: str | None = None
+    smtp_port: int | None = None
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
     folders: list[str] = []
     tags: list[str] = []
+    send_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_account_type_fields(self):
@@ -53,12 +57,16 @@ class EmailAccountUpdate(BaseModel):
     username: str | None = None
     password: str | None = None
     use_ssl: bool | None = None
+    # SMTP fields (optional - inferred from IMAP if not set)
+    smtp_server: str | None = None
+    smtp_port: int | None = None
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
     folders: list[str] | None = None
     tags: list[str] | None = None
-    active: bool | None = None
+    active: bool | None = None  # sync enabled
+    send_enabled: bool | None = None
 
 
 class GoogleAccountInfo(BaseModel):
@@ -77,6 +85,9 @@ class EmailAccountResponse(BaseModel):
     imap_port: int | None
     username: str | None
     use_ssl: bool | None
+    # SMTP fields (optional - inferred from IMAP if not set)
+    smtp_server: str | None
+    smtp_port: int | None
     # Gmail fields
     google_account_id: int | None
     google_account: GoogleAccountInfo | None
@@ -85,7 +96,8 @@ class EmailAccountResponse(BaseModel):
     tags: list[str]
     last_sync_at: str | None
     sync_error: str | None
-    active: bool
+    active: bool  # sync enabled
+    send_enabled: bool
     created_at: str
     updated_at: str
 
@@ -111,6 +123,8 @@ def account_to_response(account: EmailAccount, db: Session | None = None) -> Ema
         imap_port=account.imap_port,
         username=account.username,
         use_ssl=account.use_ssl,
+        smtp_server=account.smtp_server,
+        smtp_port=account.smtp_port,
         google_account_id=account.google_account_id,
         google_account=google_account_info,
         folders=list(account.folders or []),
@@ -118,6 +132,7 @@ def account_to_response(account: EmailAccount, db: Session | None = None) -> Ema
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         sync_error=account.sync_error,
         active=cast(bool, account.active),
+        send_enabled=cast(bool, account.send_enabled) if account.send_enabled is not None else True,
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
     )
@@ -165,9 +180,12 @@ def create_account(
         username=data.username,
         password=data.password,
         use_ssl=data.use_ssl if data.account_type == "imap" else None,
+        smtp_server=data.smtp_server if data.account_type == "imap" else None,
+        smtp_port=data.smtp_port if data.account_type == "imap" else None,
         google_account_id=data.google_account_id,
         folders=data.folders,
         tags=data.tags,
+        send_enabled=data.send_enabled,
     )
     db.add(account)
     db.commit()
@@ -209,6 +227,10 @@ def update_account(
         account.password = updates.password
     if updates.use_ssl is not None:
         account.use_ssl = updates.use_ssl
+    if updates.smtp_server is not None:
+        account.smtp_server = updates.smtp_server
+    if updates.smtp_port is not None:
+        account.smtp_port = updates.smtp_port
     if updates.google_account_id is not None:
         account.google_account_id = updates.google_account_id
     if updates.folders is not None:
@@ -217,6 +239,8 @@ def update_account(
         account.tags = updates.tags
     if updates.active is not None:
         account.active = updates.active
+    if updates.send_enabled is not None:
+        account.send_enabled = updates.send_enabled
 
     db.commit()
     db.refresh(account)

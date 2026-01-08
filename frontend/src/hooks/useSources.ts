@@ -12,6 +12,9 @@ export interface EmailAccount {
   imap_port: number | null
   username: string | null
   use_ssl: boolean | null
+  // SMTP fields (optional - inferred from IMAP if not set)
+  smtp_server: string | null
+  smtp_port: number | null
   // Gmail fields
   google_account_id: number | null
   google_account?: { id: number; name: string; email: string } | null
@@ -20,7 +23,8 @@ export interface EmailAccount {
   tags: string[]
   last_sync_at: string | null
   sync_error: string | null
-  active: boolean
+  active: boolean  // sync enabled
+  send_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -35,11 +39,15 @@ export interface EmailAccountCreate {
   username?: string
   password?: string
   use_ssl?: boolean
+  // SMTP fields (optional - inferred from IMAP if not set)
+  smtp_server?: string
+  smtp_port?: number
   // Gmail fields
   google_account_id?: number
   // Common fields
   folders?: string[]
   tags?: string[]
+  send_enabled?: boolean
 }
 
 export interface EmailAccountUpdate {
@@ -51,12 +59,16 @@ export interface EmailAccountUpdate {
   username?: string
   password?: string
   use_ssl?: boolean
+  // SMTP fields (optional - inferred from IMAP if not set)
+  smtp_server?: string
+  smtp_port?: number
   // Gmail fields
   google_account_id?: number
   // Common fields
   folders?: string[]
   tags?: string[]
-  active?: boolean
+  active?: boolean  // sync enabled
+  send_enabled?: boolean
 }
 
 // Types for Article Feeds
@@ -276,6 +288,15 @@ export interface GoogleFolderUpdate {
   active?: boolean
   exclude_folder_ids?: string[]
 }
+
+// Types for Google OAuth scopes
+export interface GoogleScopeInfo {
+  scope: string
+  label: string
+  description: string
+}
+
+export type GoogleAvailableScopes = Record<string, GoogleScopeInfo>
 
 // Types for Google Drive browsing
 export interface DriveItem {
@@ -681,8 +702,18 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
-  const getGoogleAuthUrl = useCallback(async (): Promise<{ authorization_url: string }> => {
-    const response = await apiCall('/google-drive/authorize')
+  const getGoogleAvailableScopes = useCallback(async (): Promise<GoogleAvailableScopes> => {
+    const response = await apiCall('/google-drive/available-scopes')
+    if (!response.ok) throw new Error('Failed to fetch available scopes')
+    const data = await response.json()
+    return data.scopes
+  }, [apiCall])
+
+  const getGoogleAuthUrl = useCallback(async (scopes?: string[]): Promise<{ authorization_url: string }> => {
+    const params = scopes && scopes.length > 0
+      ? '?' + scopes.map(s => `scopes=${encodeURIComponent(s)}`).join('&')
+      : ''
+    const response = await apiCall(`/google-drive/authorize${params}`)
     if (!response.ok) throw new Error('Failed to get Google auth URL')
     return response.json()
   }, [apiCall])
@@ -692,8 +723,12 @@ export const useSources = () => {
     if (!response.ok) throw new Error('Failed to delete Google account')
   }, [apiCall])
 
-  const reauthorizeGoogleAccount = useCallback(async (id: number): Promise<{ authorization_url: string }> => {
-    const response = await apiCall(`/google-drive/accounts/${id}/reauthorize`, { method: 'POST' })
+  const reauthorizeGoogleAccount = useCallback(async (id: number, scopes?: string[]): Promise<{ authorization_url: string }> => {
+    const response = await apiCall(`/google-drive/accounts/${id}/reauthorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scopes }),
+    })
     if (!response.ok) throw new Error('Failed to get reauthorization URL')
     return response.json()
   }, [apiCall])
@@ -935,6 +970,7 @@ export const useSources = () => {
     deleteGithubProject,
     // Google Drive
     listGoogleAccounts,
+    getGoogleAvailableScopes,
     getGoogleAuthUrl,
     deleteGoogleAccount,
     reauthorizeGoogleAccount,

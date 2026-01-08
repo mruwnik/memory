@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, EmailAccount, ArticleFeed, GithubAccount, GithubProject, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo, AvailableProject } from '@/hooks/useSources'
+import { useSources, EmailAccount, ArticleFeed, GithubAccount, GithubProject, GoogleAccount, GoogleFolder, GoogleOAuthConfig, DriveItem, BrowseResponse, GoogleFolderCreate, CalendarAccount, AvailableRepo, AvailableProject, GoogleAvailableScopes } from '@/hooks/useSources'
 import { useAuth } from '@/hooks/useAuth'
 import {
   SourceCard,
@@ -105,7 +105,7 @@ const Sources = () => {
 const AccountsPanel = () => {
   const {
     listGithubAccounts, createGithubAccount, updateGithubAccount, deleteGithubAccount, validateGithubAccount,
-    listGoogleAccounts, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
+    listGoogleAccounts, getGoogleAvailableScopes, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
 
@@ -117,6 +117,11 @@ const AccountsPanel = () => {
   const [showGithubForm, setShowGithubForm] = useState(false)
   const [editingGithubAccount, setEditingGithubAccount] = useState<GithubAccount | null>(null)
   const [uploadingConfig, setUploadingConfig] = useState(false)
+  // Google scope selection
+  const [showScopeModal, setShowScopeModal] = useState(false)
+  const [availableScopes, setAvailableScopes] = useState<GoogleAvailableScopes | null>(null)
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(['drive', 'calendar', 'gmail_read', 'gmail_send'])
+  const [reauthorizingAccountId, setReauthorizingAccountId] = useState<number | null>(null)
 
   // Track polling intervals for cleanup
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -212,16 +217,33 @@ const AccountsPanel = () => {
   }
 
   const handleConnectGoogle = async () => {
+    // Load available scopes and show modal
     try {
-      const { authorization_url } = await getGoogleAuthUrl()
+      if (!availableScopes) {
+        const scopes = await getGoogleAvailableScopes()
+        setAvailableScopes(scopes)
+      }
+      setReauthorizingAccountId(null)
+      setShowScopeModal(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load available scopes')
+    }
+  }
+
+  const handleScopeSelectionConfirm = async () => {
+    setShowScopeModal(false)
+    try {
+      const { authorization_url } = reauthorizingAccountId !== null
+        ? await reauthorizeGoogleAccount(reauthorizingAccountId, selectedScopes)
+        : await getGoogleAuthUrl(selectedScopes)
       window.open(authorization_url, '_blank', 'width=600,height=700')
       // Clear any existing polling
       if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
       if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
-      // Poll for new accounts
+      // Poll for new/updated accounts
       pollingIntervalRef.current = setInterval(async () => {
         const newAccounts = await listGoogleAccounts()
-        if (newAccounts.length > googleAccounts.length) {
+        if (newAccounts.length > googleAccounts.length || reauthorizingAccountId !== null) {
           setGoogleAccounts(newAccounts)
           if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
           pollingIntervalRef.current = null
@@ -236,29 +258,30 @@ const AccountsPanel = () => {
     }
   }
 
+  const toggleScope = (scopeKey: string) => {
+    setSelectedScopes(prev =>
+      prev.includes(scopeKey)
+        ? prev.filter(s => s !== scopeKey)
+        : [...prev, scopeKey]
+    )
+  }
+
   const handleDeleteGoogleAccount = async (id: number) => {
     await deleteGoogleAccount(id)
     loadData()
   }
 
   const handleReauthorizeGoogle = async (id: number) => {
+    // Load available scopes and show modal for reauthorization
     try {
-      const { authorization_url } = await reauthorizeGoogleAccount(id)
-      window.open(authorization_url, '_blank', 'width=600,height=700')
-      // Clear any existing polling
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
-      // Poll for updated accounts
-      pollingIntervalRef.current = setInterval(async () => {
-        const newAccounts = await listGoogleAccounts()
-        setGoogleAccounts(newAccounts)
-      }, 2000)
-      pollingTimeoutRef.current = setTimeout(() => {
-        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-        pollingIntervalRef.current = null
-      }, 60000)
+      if (!availableScopes) {
+        const scopes = await getGoogleAvailableScopes()
+        setAvailableScopes(scopes)
+      }
+      setReauthorizingAccountId(id)
+      setShowScopeModal(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to re-authorize account')
+      setError(e instanceof Error ? e.message : 'Failed to load available scopes')
     }
   }
 
@@ -282,23 +305,19 @@ const AccountsPanel = () => {
       ) : (
         <div className="source-list">
           {githubAccounts.map(account => (
-            <SourceCard key={account.id}>
-              <div className="source-card-header">
-                <div className="source-card-info">
-                  <h4>{account.name}</h4>
-                  <p className="source-subtitle">
-                    {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
-                    {account.repos.length > 0 && ` • ${account.repos.length} repos tracked`}
-                  </p>
-                </div>
-                <div className="source-card-actions-inline">
-                  <StatusBadge active={account.active} onClick={() => handleToggleGithubActive(account)} />
-                  <button className="edit-btn" onClick={() => handleValidateGithubAccount(account.id)}>Validate</button>
-                  <button className="edit-btn" onClick={() => setEditingGithubAccount(account)}>Edit</button>
-                  <button className="delete-btn" onClick={() => handleDeleteGithubAccount(account.id)}>Delete</button>
-                </div>
-              </div>
-            </SourceCard>
+            <SourceCard
+              key={account.id}
+              title={account.name}
+              subtitle={`${account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}${account.repos.length > 0 ? ` • ${account.repos.length} repos tracked` : ''}`}
+              active={account.active}
+              lastSyncAt={account.last_sync_at}
+              onToggleActive={() => handleToggleGithubActive(account)}
+              onEdit={() => setEditingGithubAccount(account)}
+              onDelete={() => handleDeleteGithubAccount(account.id)}
+              additionalActions={
+                <button className="edit-btn" onClick={() => handleValidateGithubAccount(account.id)}>Validate</button>
+              }
+            />
           ))}
         </div>
       )}
@@ -379,9 +398,10 @@ const AccountsPanel = () => {
           ) : (
             <div className="source-list">
               {googleAccounts.map(account => (
-                <SourceCard key={account.id}>
+                <div key={account.id} className={`source-card ${account.active ? '' : 'inactive'}`}>
                   <div className="source-card-header">
                     <div className="source-card-info">
+                      <SyncStatus lastSyncAt={account.last_sync_at} />
                       <h4>{account.name}</h4>
                       <p className="source-subtitle">{account.email}</p>
                     </div>
@@ -394,11 +414,50 @@ const AccountsPanel = () => {
                   {account.sync_error && (
                     <div className="sync-error-banner">{account.sync_error}</div>
                   )}
-                </SourceCard>
+                </div>
               ))}
             </div>
           )}
         </>
+      )}
+
+      {/* Google Scope Selection Modal */}
+      {showScopeModal && availableScopes && (
+        <Modal
+          title={reauthorizingAccountId ? "Update Google Permissions" : "Connect Google Account"}
+          onClose={() => setShowScopeModal(false)}
+        >
+          <div className="scope-selection">
+            <p className="modal-description">
+              Select which permissions to grant. You can always update these later by re-authorizing.
+            </p>
+            <div className="scope-checkboxes">
+              {Object.entries(availableScopes).map(([key, info]) => (
+                <label key={key} className="scope-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedScopes.includes(key)}
+                    onChange={() => toggleScope(key)}
+                  />
+                  <div className="scope-info">
+                    <span className="scope-label">{info.label}</span>
+                    <span className="scope-description">{info.description}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button className="cancel-btn" onClick={() => setShowScopeModal(false)}>Cancel</button>
+              <button
+                className="submit-btn"
+                onClick={handleScopeSelectionConfirm}
+                disabled={selectedScopes.length === 0}
+              >
+                {reauthorizingAccountId ? "Update Permissions" : "Connect"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -548,9 +607,12 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
     username: account?.username || '',
     password: '',
     use_ssl: account?.use_ssl ?? true,
+    smtp_server: account?.smtp_server || '',
+    smtp_port: account?.smtp_port || 587,
     google_account_id: account?.google_account_id || undefined as number | undefined,
     folders: account?.folders || [],
     tags: account?.tags || [],
+    send_enabled: account?.send_enabled ?? true,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -566,6 +628,7 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
         account_type: formData.account_type,
         folders: formData.folders,
         tags: formData.tags,
+        send_enabled: formData.send_enabled,
       }
 
       if (formData.account_type === 'imap') {
@@ -575,6 +638,13 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
         data.use_ssl = formData.use_ssl
         if (formData.password) {
           data.password = formData.password
+        }
+        // SMTP fields (optional - only include if set)
+        if (formData.smtp_server) {
+          data.smtp_server = formData.smtp_server
+        }
+        if (formData.smtp_port && formData.smtp_port !== 587) {
+          data.smtp_port = formData.smtp_port
         }
       } else {
         data.google_account_id = formData.google_account_id
@@ -680,6 +750,27 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
                 Use SSL
               </label>
             </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>SMTP Server <span className="form-hint-inline">(optional)</span></label>
+                <input
+                  type="text"
+                  value={formData.smtp_server}
+                  onChange={e => setFormData({ ...formData, smtp_server: e.target.value })}
+                  placeholder="smtp.example.com"
+                />
+              </div>
+              <div className="form-group">
+                <label>SMTP Port</label>
+                <input
+                  type="number"
+                  value={formData.smtp_port}
+                  onChange={e => setFormData({ ...formData, smtp_port: parseInt(e.target.value) || 587 })}
+                />
+              </div>
+            </div>
+            <p className="form-hint">SMTP settings for sending email. If not set, will be inferred from IMAP server.</p>
           </>
         ) : (
           <div className="form-group">
@@ -722,6 +813,17 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
+        </div>
+
+        <div className="form-group checkbox">
+          <label>
+            <input
+              type="checkbox"
+              checked={formData.send_enabled}
+              onChange={e => setFormData({ ...formData, send_enabled: e.target.checked })}
+            />
+            Enable sending emails from this account
+          </label>
         </div>
 
         <div className="form-actions">

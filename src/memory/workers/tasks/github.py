@@ -15,7 +15,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubItem, GithubPRData, GithubMilestone, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
-from memory.parsers.github import (
+from memory.common.github import (
     GithubClient,
     GithubCredentials,
     GithubIssueData,
@@ -287,7 +287,7 @@ def _update_existing_item(
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
     """Deserialize issue data from Celery task."""
-    from memory.parsers.github import parse_github_date
+    from memory.common.github import parse_github_date
 
     # Reconstruct pr_data if present
     pr_data: GithubPRDataDict | None = None

@@ -21,7 +21,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
-from memory.parsers.github import GithubClient, GithubCredentials, serialize_issue_data
+from memory.common.github import GithubClient, GithubCredentials, serialize_issue_data
 
 logger = logging.getLogger(__name__)
 
@@ -281,19 +281,21 @@ def list_teams(
 
         teams = []
         for team_data in client.list_teams(org):
-            teams.append({
-                "node_id": team_data["node_id"],
-                "github_id": team_data["github_id"],
-                "slug": team_data["slug"],
-                "name": team_data["name"],
-                "description": team_data["description"],
-                "privacy": team_data["privacy"],
-                "permission": team_data["permission"],
-                "org_login": team_data["org_login"],
-                "parent_team_slug": team_data["parent_team_slug"],
-                "members_count": team_data["members_count"],
-                "repos_count": team_data["repos_count"],
-            })
+            teams.append(
+                {
+                    "node_id": team_data["node_id"],
+                    "github_id": team_data["github_id"],
+                    "slug": team_data["slug"],
+                    "name": team_data["name"],
+                    "description": team_data["description"],
+                    "privacy": team_data["privacy"],
+                    "permission": team_data["permission"],
+                    "org_login": team_data["org_login"],
+                    "parent_team_slug": team_data["parent_team_slug"],
+                    "members_count": team_data["members_count"],
+                    "repos_count": team_data["repos_count"],
+                }
+            )
             if len(teams) >= limit:
                 break
 
@@ -441,9 +443,7 @@ def fetch_team(org: str, team_slug: str, user_id: int | None = None) -> dict:
 
         # Fetch members
         members = client.get_team_members(org, team_slug)
-        result["members"] = [
-            {"login": m["login"], "role": m["role"]} for m in members
-        ]
+        result["members"] = [{"login": m["login"], "role": m["role"]} for m in members]
 
         return result
 
@@ -718,7 +718,10 @@ def sync_issue_to_database(
             f"Skipping database sync for {owner}/{repo_name}#{issue_number} - "
             "repo not tracked"
         )
-        return False, "Repository not tracked - issue created but not synced to database"
+        return (
+            False,
+            "Repository not tracked - issue created but not synced to database",
+        )
 
     fetched = client.fetch_issue_graphql(owner, repo_name, issue_number)
     if fetched is None:
@@ -751,42 +754,42 @@ def sync_issue_to_database(
 
 def resolve_milestone_node_id(
     client: GithubClient,
-    session: Any,
-    repo_obj: GithubRepo | None,
     owner: str,
     repo_name: str,
     milestone: str | int,
 ) -> str | None:
     """Resolve milestone title or number to GraphQL node ID.
 
-    Args:
-        repo_obj: Can be None if repo isn't tracked - in that case,
-                  only int milestones can be resolved.
+    Always queries GitHub directly for reliable resolution.
     """
+    # Handle int directly, or string that looks like a number
     if isinstance(milestone, int):
-        return client.get_milestone_node_id(owner, repo_name, milestone)
+        node_id = client.get_milestone_node_id(owner, repo_name, milestone)
+        if node_id:
+            logger.debug(f"Resolved milestone #{milestone} to node ID {node_id}")
+        else:
+            logger.warning(f"Milestone #{milestone} not found in {owner}/{repo_name}")
+        return node_id
 
-    # Need repo_obj to look up by title
-    if repo_obj is None:
-        logger.warning(
-            f"Cannot resolve milestone by title '{milestone}' - repo not tracked"
-        )
-        return None
+    # String - could be a number as string, or a title
+    if isinstance(milestone, str) and milestone.isdigit():
+        milestone_num = int(milestone)
+        node_id = client.get_milestone_node_id(owner, repo_name, milestone_num)
+        if node_id:
+            logger.debug(f"Resolved milestone #{milestone_num} to node ID {node_id}")
+        else:
+            logger.warning(
+                f"Milestone #{milestone_num} not found in {owner}/{repo_name}"
+            )
+        return node_id
 
-    # Look up by title in database
-    ms = (
-        session.query(GithubMilestone)
-        .filter(
-            GithubMilestone.repo_id == repo_obj.id,
-            GithubMilestone.title == milestone,
-        )
-        .first()
-    )
-    if ms:
-        return client.get_milestone_node_id(owner, repo_name, ms.number)
-
-    logger.warning(f"Milestone '{milestone}' not found in database")
-    return None
+    # Look up by title via GitHub API
+    node_id = client.find_milestone_by_title(owner, repo_name, milestone)
+    if node_id:
+        logger.debug(f"Resolved milestone '{milestone}' to node ID {node_id}")
+    else:
+        logger.warning(f"Milestone '{milestone}' not found in {owner}/{repo_name}")
+    return node_id
 
 
 def create_issue(
@@ -848,3 +851,40 @@ def update_issue(
         raise ValueError(f"Failed to update issue #{number}")
 
     return issue_data
+
+
+def add_issue_comment(
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    number: int,
+    body: str,
+) -> dict[str, Any]:
+    """Add a comment to a GitHub issue via GraphQL.
+
+    Args:
+        client: Authenticated GitHub client
+        owner: Repository owner
+        repo_name: Repository name
+        number: Issue number
+        body: Comment body (markdown supported)
+
+    Returns:
+        Dict with comment data including id, url, body, author, created_at
+    """
+    issue_node_id = client.get_issue_node_id(owner, repo_name, number)
+    if not issue_node_id:
+        raise ValueError(f"Issue #{number} not found in {owner}/{repo_name}")
+
+    comment_data = client.add_issue_comment(issue_node_id, body)
+    if not comment_data:
+        raise ValueError(f"Failed to add comment to issue #{number}")
+
+    return {
+        "id": comment_data.get("databaseId"),
+        "node_id": comment_data.get("id"),
+        "url": comment_data.get("url"),
+        "body": comment_data.get("body"),
+        "author": comment_data.get("author", {}).get("login"),
+        "created_at": comment_data.get("createdAt"),
+    }

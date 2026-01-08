@@ -770,35 +770,6 @@ async def test_search_github_issues_uses_github_modality(db_session, sample_issu
     assert call_kwargs["modalities"] == {"github"}
 
 
-# =============================================================================
-# Tests for helper functions
-# =============================================================================
-
-
-def test_build_github_url_issue():
-    """Test URL construction for issues."""
-    from memory.api.MCP.servers.github import _build_github_url
-
-    url = _build_github_url("owner/repo", 123, "issue")
-    assert url == "https://github.com/owner/repo/issues/123"
-
-
-def test_build_github_url_pr():
-    """Test URL construction for PRs."""
-    from memory.api.MCP.servers.github import _build_github_url
-
-    url = _build_github_url("owner/repo", 456, "pr")
-    assert url == "https://github.com/owner/repo/pull/456"
-
-
-def test_build_github_url_no_number():
-    """Test URL construction without number."""
-    from memory.api.MCP.servers.github import _build_github_url
-
-    url = _build_github_url("owner/repo", None, "issue")
-    assert url == "https://github.com/owner/repo"
-
-
 def test_serialize_issue_basic(db_session, sample_issues):
     """Test issue serialization."""
     from memory.api.MCP.servers.github import _serialize_issue

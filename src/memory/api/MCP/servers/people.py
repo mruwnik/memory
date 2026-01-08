@@ -35,7 +35,7 @@ def _person_to_dict(person: Person) -> dict[str, Any]:
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def add_person(
+async def add(
     identifier: str,
     display_name: str,
     aliases: list[str] | None = None,
@@ -96,7 +96,7 @@ async def add_person(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def update_person_info(
+async def update(
     identifier: str,
     display_name: str | None = None,
     aliases: list[str] | None = None,
@@ -129,7 +129,7 @@ async def update_person_info(
 
     Example:
         # Add new contact info without losing existing data
-        update_person_info(
+        update(
             identifier="alice_chen",
             contact_info={"phone": "555-1234"},  # Added to existing
             notes="Enjoys rock climbing"  # Appended to existing notes
@@ -165,7 +165,7 @@ async def update_person_info(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def get_person(identifier: str) -> dict | None:
+async def get(identifier: str) -> dict | None:
     """
     Get a person by their identifier.
 
@@ -228,7 +228,7 @@ async def list_people(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def delete_person(identifier: str) -> dict:
+async def delete(identifier: str) -> dict:
     """
     Delete a person by their identifier.
 

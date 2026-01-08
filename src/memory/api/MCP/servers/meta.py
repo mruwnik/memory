@@ -4,38 +4,59 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Annotated, Literal, get_args, get_type_hints, TypedDict, NotRequired
+from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_type_hints
 
 import aiohttp
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-
 from memory.common import qdrant
 from memory.common.db.connection import make_session
-from memory.common.db.models import SourceItem
+from memory.common.db.models import EmailAccount, SourceItem, UserSession
 from memory.common.db.models.source_items import AgentObservation
 
 logger = logging.getLogger(__name__)
 
 meta_mcp = FastMCP("memory-meta")
 
-# Auth provider will be injected at mount time
-_get_current_user = None
 
+def _get_current_user(session: Session) -> dict:
+    """Get the current authenticated user from the access token."""
+    access_token = get_access_token()
+    if not access_token:
+        return {"authenticated": False}
 
-def set_auth_provider(get_current_user_func):
-    """Set the authentication provider function."""
-    global _get_current_user
-    _get_current_user = get_current_user_func
+    user_session = session.get(UserSession, access_token.token)
+    if not user_session or not user_session.user:
+        return {"authenticated": False, "error": "User not found"}
 
+    user_info = user_session.user.serialize()
 
-def get_current_user() -> dict:
-    """Get the current authenticated user."""
-    if _get_current_user is None:
-        return {"authenticated": False, "error": "Auth provider not configured"}
-    return _get_current_user()
+    # Add email accounts
+    email_accounts = (
+        session.query(EmailAccount)
+        .filter(EmailAccount.user_id == user_session.user.id, EmailAccount.active.is_(True))
+        .all()
+    )
+    user_info["email_accounts"] = [
+        {
+            "email_address": a.email_address,
+            "name": a.name,
+            "account_type": a.account_type,
+        }
+        for a in email_accounts
+    ]
+
+    return {
+        "authenticated": True,
+        "token_type": "Bearer",
+        "scopes": access_token.scopes,
+        "client_id": access_token.client_id,
+        "user": user_info,
+    }
 
 
 # --- Metadata tools ---
@@ -162,7 +183,8 @@ async def get_current_time() -> dict:
 @meta_mcp.tool()
 async def get_authenticated_user() -> dict:
     """Get information about the authenticated user."""
-    return get_current_user()
+    with make_session() as session:
+        return _get_current_user(session)
 
 
 # --- Forecasting tools ---

@@ -1,14 +1,17 @@
 """MCP subserver for GitHub issue tracking and management."""
 
+import asyncio
 import logging
 from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from sqlalchemy.orm import Session
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import make_session
 from memory.common.db.models import UserSession
+from memory.common.db.models.sources import GithubAccount
 
 from memory.api.MCP.servers.github_helpers import (
     list_issues,
@@ -26,11 +29,35 @@ from memory.api.MCP.servers.github_helpers import (
     resolve_milestone_node_id,
     create_issue,
     update_issue,
+    add_issue_comment,
 )
 
 logger = logging.getLogger(__name__)
 
 github_mcp = FastMCP("memory-github")
+
+
+async def has_github_account(user_info: dict, session: Session) -> bool:
+    """Visibility checker: only show GitHub write tools if user has an active account."""
+    token = user_info.get("token")
+    if not token:
+        return False
+
+    def _check(session: Session) -> bool:
+        user_session = session.get(UserSession, token)
+        if not user_session or not user_session.user:
+            return False
+        return (
+            session.query(GithubAccount)
+            .filter(
+                GithubAccount.user_id == user_session.user.id,
+                GithubAccount.active == True,  # noqa: E712
+            )
+            .first()
+            is not None
+        )
+
+    return await asyncio.to_thread(_check, session)
 
 
 def _get_current_user_id() -> int:
@@ -45,12 +72,13 @@ def _get_current_user_id() -> int:
             raise ValueError("Not authenticated - invalid session")
         return user_session.user.id
 
+
 GithubEntityType = Literal["issue", "milestone", "project", "team"]
 
 
 @github_mcp.tool()
 @visible_when(require_scopes("github"))
-async def github_list(
+async def list_entities(
     type: GithubEntityType,
     repo: str | None = None,
     owner: str | None = None,
@@ -148,7 +176,7 @@ async def github_list(
 
 @github_mcp.tool()
 @visible_when(require_scopes("github"))
-async def github_fetch(
+async def fetch(
     type: GithubEntityType,
     repo: str | None = None,
     owner: str | None = None,
@@ -172,7 +200,9 @@ async def github_fetch(
         For projects: Full project details including fields with options.
         For teams: Team details including member list.
     """
-    logger.info(f"github_fetch called: type={type}, repo={repo}, owner={owner}, number={number}, slug={slug}")
+    logger.info(
+        f"github_fetch called: type={type}, repo={repo}, owner={owner}, number={number}, slug={slug}"
+    )
 
     if type == "issue":
         if not repo:
@@ -204,8 +234,8 @@ async def github_fetch(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"))
-async def upsert_github_issue(
+@visible_when(require_scopes("github"), has_github_account)
+async def upsert_issue(
     repo: str,
     title: str,
     body: str | None = None,
@@ -259,7 +289,7 @@ async def upsert_github_issue(
         milestone_node_id = None
         if milestone is not None:
             milestone_node_id = resolve_milestone_node_id(
-                client, session, repo_obj, owner, repo_name, milestone
+                client, owner, repo_name, milestone
             )
         label_ids = client.get_label_ids(owner, repo_name, labels) if labels else None
         assignee_ids = client.get_user_ids(assignees) if assignees else None
@@ -299,6 +329,10 @@ async def upsert_github_issue(
             "state": issue_data.get("state"),
             "url": issue_data.get("url"),
             "project_updates": [],
+            "milestone_id": milestone_node_id,
+            "label_ids": label_ids,
+            "assignee_ids": assignee_ids,
+            "project_fields": project_fields,
         }
 
         # Handle project integration
@@ -326,14 +360,16 @@ async def upsert_github_issue(
                 result["sync_error"] = error
         else:
             result["sync_triggered"] = False
-            result["sync_note"] = "Repository not tracked - issue created/updated but not synced to database"
+            result["sync_note"] = (
+                "Repository not tracked - issue created/updated but not synced to database"
+            )
 
         return result
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"))
-async def github_add_team_member(
+@visible_when(require_scopes("github"), has_github_account)
+async def add_team_member(
     org: str,
     team_slug: str,
     username: str,
@@ -359,7 +395,9 @@ async def github_add_team_member(
             - note: Additional context (e.g., "User must accept team invitation")
             - error: Error message if failed
     """
-    logger.info(f"github_add_team_member called: org={org}, team={team_slug}, user={username}")
+    logger.info(
+        f"github_add_team_member called: org={org}, team={team_slug}, user={username}"
+    )
 
     # Get user from MCP access token
     access_token = get_access_token()
@@ -381,8 +419,8 @@ async def github_add_team_member(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"))
-async def github_remove_team_member(
+@visible_when(require_scopes("github"), has_github_account)
+async def remove_team_member(
     org: str,
     team_slug: str,
     username: str,
@@ -400,7 +438,9 @@ async def github_remove_team_member(
     Returns:
         Dict with success status and any error message
     """
-    logger.info(f"github_remove_team_member called: org={org}, team={team_slug}, user={username}")
+    logger.info(
+        f"github_remove_team_member called: org={org}, team={team_slug}, user={username}"
+    )
 
     access_token = get_access_token()
     if not access_token:
@@ -424,3 +464,64 @@ async def github_remove_team_member(
             "team": team_slug,
             "username": username,
         }
+
+
+@github_mcp.tool()
+@visible_when(require_scopes("github"), has_github_account)
+async def comment_on_issue(
+    repo: str,
+    number: int,
+    body: str,
+) -> dict:
+    """
+    Add a comment to a GitHub issue or pull request.
+
+    Args:
+        repo: Repository path (e.g., "owner/name")
+        number: Issue or PR number
+        body: Comment body (markdown supported)
+
+    Returns:
+        Dict with comment details including id, url, body, author, created_at
+    """
+    logger.info(f"github_comment_on_issue: repo={repo}, number={number}")
+
+    parts = repo.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
+    owner, repo_name = parts
+
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated - no access token")
+
+    with make_session() as session:
+        user_session = session.get(UserSession, access_token.token)
+        if not user_session or not user_session.user:
+            raise ValueError("Not authenticated - invalid session")
+        user_id = user_session.user.id
+
+        client, repo_obj = get_github_client(session, repo, user_id)
+
+        comment_data = add_issue_comment(client, owner, repo_name, number, body)
+
+        result: dict[str, Any] = {
+            "success": True,
+            "repo": repo,
+            "issue_number": number,
+            "comment": comment_data,
+        }
+
+        # Trigger database sync to ingest the new comment
+        if repo_obj is not None:
+            success, error = sync_issue_to_database(
+                client, session, repo_obj, owner, repo_name, number
+            )
+            result["sync_triggered"] = success
+            if error:
+                result["sync_error"] = error
+        else:
+            result["sync_triggered"] = False
+            result["sync_note"] = "Repository not tracked - comment added but not synced"
+
+        return result

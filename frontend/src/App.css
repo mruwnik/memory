@@ -2652,3 +2652,65 @@ a.folder-item-name:hover {
     position: static;
   }
 }
+
+/* ============================================
+   Google Scope Selection Modal
+   ============================================ */
+
+.scope-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.scope-selection .modal-description {
+  color: #4a5568;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.scope-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.scope-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.scope-checkbox:hover {
+  border-color: #667eea;
+  background: #f7fafc;
+}
+
+.scope-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+
+.scope-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.scope-label {
+  font-weight: 500;
+  color: #2d3748;
+}
+
+.scope-description {
+  font-size: 0.85rem;
+  color: #718096;
+}

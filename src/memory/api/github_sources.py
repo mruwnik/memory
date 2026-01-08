@@ -1,5 +1,6 @@
 """API endpoints for GitHub Account and Repo management."""
 
+from datetime import datetime, timezone
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,7 @@ from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_G
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.github import GithubClient, GithubCredentials
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -263,8 +265,6 @@ def validate_account(
     db: Session = Depends(get_session),
 ):
     """Validate GitHub API access for an account."""
-    from memory.parsers.github import GithubClient, GithubCredentials
-
     account = get_user_account(db, GithubAccount, account_id, user)
 
     try:
@@ -322,8 +322,6 @@ def list_available_repos(
         account_id: GitHub account ID.
         limit: Maximum number of repos to return (default 200, max 500).
     """
-    from memory.parsers.github import GithubClient, GithubCredentials
-
     account = get_user_account(db, GithubAccount, account_id, user)
 
     # Cap limit to prevent excessive API calls
@@ -364,8 +362,6 @@ def list_available_projects(
         is_org: True if owner is an organization, False if user.
         include_closed: Whether to include closed projects.
     """
-    from memory.parsers.github import GithubClient, GithubCredentials
-
     account = get_user_account(db, GithubAccount, account_id, user)
 
     try:
@@ -642,10 +638,6 @@ def add_project(
 
     Fetches the project from GitHub and stores it locally.
     """
-    from datetime import datetime, timezone
-
-    from memory.parsers.github import GithubClient, GithubCredentials
-
     account = get_user_account(db, GithubAccount, account_id, user)
 
     # Check for duplicate

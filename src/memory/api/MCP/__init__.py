@@ -1,13 +1,14 @@
 """
 MCP server with composed subservers.
 
-Subservers are mounted with prefixes:
-- core: search_knowledge_base, observe, search_observations, create_note, note_files, fetch_file
-- github: list_github_issues, github_issue_details, upsert_github_issue, list_milestones, list_github_projects, github_project_details
-- people: add_person, update_person_info, get_person, list_people, delete_person
-- schedule: schedule_message, list_scheduled_llm_calls, cancel_scheduled_llm_call
-- books: all_books, read_book
-- meta: get_metadata_schemas, get_all_tags, get_all_subjects, get_all_observation_types, get_current_time, get_authenticated_user, get_forecasts
+Subservers are mounted with prefixes. Tool names after mounting:
+- core: core_search_knowledge_base, core_observe, core_search_observations, core_create_note, core_note_files, core_fetch_file, core_get_source_item, core_list_items, core_count_items
+- github: github_list, github_fetch, github_upsert_issue, github_add_team_member, github_remove_team_member
+- people: people_add, people_update, people_get, people_list_people, people_delete
+- organizer: organizer_get_upcoming_events, organizer_list_tasks, organizer_create_task, organizer_update_task, organizer_complete_task_by_id
+- schedule: schedule_schedule_message, schedule_list_scheduled_llm_calls, schedule_cancel_scheduled_llm_call
+- books: books_list_books, books_read_book
+- meta: meta_get_metadata_schemas, meta_get_all_tags, meta_get_all_subjects, meta_get_all_observation_types, meta_get_current_time, meta_get_authenticated_user, meta_get_forecasts
 """
 
 # Import base to trigger subserver mounting

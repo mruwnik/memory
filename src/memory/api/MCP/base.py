@@ -11,9 +11,9 @@ from memory.api.MCP.oauth_provider import SimpleOAuthProvider
 from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
+from memory.api.MCP.servers.email import email_mcp
 from memory.api.MCP.servers.github import github_mcp
 from memory.api.MCP.servers.meta import meta_mcp
-from memory.api.MCP.servers.meta import set_auth_provider as set_meta_auth
 from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.schedule import schedule_mcp
@@ -42,7 +42,7 @@ mcp = FastMCP(
 
 # List of prefixes used when mounting subservers
 # Used by middleware to strip prefixes when looking up visibility checkers
-SUBSERVER_PREFIXES = ["core", "github", "organizer", "people", "schedule", "books", "meta"]
+SUBSERVER_PREFIXES = ["core", "email", "github", "organizer", "people", "schedule", "books", "meta"]
 
 
 def _get_user_info_for_middleware() -> dict:
@@ -62,8 +62,10 @@ def _get_user_info_for_middleware() -> dict:
         "authenticated": True,
         "scopes": scopes,
         "client_id": access_token.client_id,
+        "token": access_token.token,
         # Note: user details are fetched lazily by get_current_user() if needed
         # For visibility checks, scopes are usually sufficient
+        # Checkers needing user_id can look up UserSession via token
     }
 
 
@@ -200,11 +202,11 @@ async def health_check(request: Request):
 
 # Inject auth provider into subservers that need it
 set_schedule_auth(get_current_user)
-set_meta_auth(get_current_user)
 
 # Mount all subservers onto the main MCP server
 # Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
 mcp.mount(core_mcp, prefix="core")
+mcp.mount(email_mcp, prefix="email")
 mcp.mount(github_mcp, prefix="github")
 mcp.mount(organizer_mcp, prefix="organizer")
 mcp.mount(people_mcp, prefix="people")

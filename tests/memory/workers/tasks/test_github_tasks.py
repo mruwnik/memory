@@ -12,7 +12,7 @@ from memory.workers.tasks.github import (
     _needs_reindex,
     _deserialize_issue_data,
 )
-from memory.parsers.github import GithubIssueData, GithubComment, serialize_issue_data
+from memory.common.github import GithubIssueData, GithubComment, serialize_issue_data
 from memory.common.db import connection as db_connection
 
 
@@ -1132,7 +1132,7 @@ def test_tag_merging(repo_tags, issue_labels, expected_tags, github_account, db_
 @pytest.fixture
 def mock_pr_data_with_extended() -> GithubIssueData:
     """Mock PR data with full pr_data dict."""
-    from memory.parsers.github import GithubPRDataDict
+    from memory.common.github import GithubPRDataDict
 
     pr_data: GithubPRDataDict = {
         "diff": "diff --git a/file.py\n+new line\n-old line",

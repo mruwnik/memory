@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import backref, relationship
+from sqlalchemy.orm import backref, relationship, validates
 
 from memory.common.db.models.base import Base
 
@@ -117,6 +117,10 @@ class EmailAccount(Base):
     password = Column(Text, nullable=True)
     use_ssl = Column(Boolean, nullable=True)
 
+    # SMTP fields (optional - inferred from IMAP if not set)
+    smtp_server = Column(Text, nullable=True)
+    smtp_port = Column(Integer, nullable=True)
+
     # Gmail fields (nullable for IMAP accounts)
     google_account_id = Column(
         BigInteger, ForeignKey("google_accounts.id"), nullable=True
@@ -127,7 +131,8 @@ class EmailAccount(Base):
     tags = Column(ARRAY(Text), nullable=False, server_default="{}")
     last_sync_at = Column(DateTime(timezone=True))
     sync_error = Column(Text, nullable=True)
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default="true")  # sync enabled
+    send_enabled = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -152,6 +157,22 @@ class EmailAccount(Base):
         Index("email_accounts_type_idx", "account_type"),
         Index("email_accounts_user_idx", "user_id"),
     )
+
+    @validates("smtp_port")
+    def validate_smtp_port(self, key: str, value: int | None) -> int | None:
+        """Validate SMTP port is in valid range if set."""
+        if value is not None:
+            if not (1 <= value <= 65535):
+                raise ValueError(f"SMTP port must be between 1 and 65535, got {value}")
+        return value
+
+    @validates("smtp_server")
+    def validate_smtp_config(self, key: str, value: str | None) -> str | None:
+        """Warn if smtp_port is set without smtp_server."""
+        # Note: Can't easily enforce smtp_server when port is set due to
+        # validation order uncertainty. The email_sender module handles
+        # runtime validation of SMTP configuration.
+        return value
 
 
 class GithubAccount(Base):

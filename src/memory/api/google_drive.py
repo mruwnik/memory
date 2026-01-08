@@ -236,12 +236,57 @@ def delete_config(
     return {"status": "deleted"}
 
 
+# Available Google OAuth scopes that users can select
+AVAILABLE_GOOGLE_SCOPES = {
+    "drive": {
+        "scope": "https://www.googleapis.com/auth/drive.readonly",
+        "label": "Google Drive (read)",
+        "description": "Read files from Google Drive",
+    },
+    "calendar": {
+        "scope": "https://www.googleapis.com/auth/calendar.readonly",
+        "label": "Calendar (read)",
+        "description": "Read your calendar events",
+    },
+    "gmail_read": {
+        "scope": "https://www.googleapis.com/auth/gmail.readonly",
+        "label": "Gmail (read)",
+        "description": "Read your emails",
+    },
+    "gmail_send": {
+        "scope": "https://www.googleapis.com/auth/gmail.send",
+        "label": "Gmail (send)",
+        "description": "Send emails on your behalf",
+    },
+}
+
+# Base scopes always requested (for user identification)
+BASE_GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
+
+@router.get("/available-scopes")
+def get_available_scopes(
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Get the list of available Google OAuth scopes users can select."""
+    return {"scopes": AVAILABLE_GOOGLE_SCOPES}
+
+
 @router.get("/authorize")
 def google_authorize(
+    scopes: list[str] | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
-    """Initiate Google OAuth2 flow. Returns the authorization URL."""
+    """Initiate Google OAuth2 flow. Returns the authorization URL.
+
+    Args:
+        scopes: Optional list of scope keys to request (e.g., ["drive", "gmail_send"]).
+                If not provided, uses all available scopes for backwards compatibility.
+    """
     oauth_config = get_oauth_config(db)
 
     from google_auth_oauthlib.flow import Flow
@@ -253,9 +298,21 @@ def google_authorize(
         else settings.GOOGLE_REDIRECT_URI
     )
 
+    # Build scope list from user selection
+    if scopes:
+        requested_scopes = BASE_GOOGLE_SCOPES.copy()
+        for scope_key in scopes:
+            if scope_key in AVAILABLE_GOOGLE_SCOPES:
+                requested_scopes.append(AVAILABLE_GOOGLE_SCOPES[scope_key]["scope"])
+    else:
+        # Default to all available scopes
+        requested_scopes = BASE_GOOGLE_SCOPES + [
+            s["scope"] for s in AVAILABLE_GOOGLE_SCOPES.values()
+        ]
+
     flow = Flow.from_client_config(
         oauth_config.to_client_config(),
-        scopes=settings.GOOGLE_SCOPES,
+        scopes=requested_scopes,
         redirect_uri=redirect_uri,
     )
 
@@ -278,6 +335,7 @@ def google_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
+    scope: str | None = None,
 ):
     """Handle Google OAuth2 callback."""
     if error:
@@ -311,13 +369,18 @@ def google_callback(
             else settings.GOOGLE_REDIRECT_URI
         )
 
+        # Scopes passed to Flow don't matter for token exchange.
+        # The actual granted scopes come from the 'scope' URL parameter.
         flow = Flow.from_client_config(
             oauth_config.to_client_config(),
-            scopes=settings.GOOGLE_SCOPES,
+            scopes=BASE_GOOGLE_SCOPES,
             redirect_uri=redirect_uri,
         )
         flow.fetch_token(code=code)
         credentials = flow.credentials
+
+        # Parse granted scopes from callback URL (space-separated)
+        granted_scopes = scope.split() if scope else []
 
         # Get user info from Google
         service = build("oauth2", "v2", credentials=credentials)
@@ -341,7 +404,7 @@ def google_callback(
         account.access_token = credentials.token
         account.refresh_token = credentials.refresh_token
         account.token_expires_at = credentials.expiry
-        account.scopes = list(credentials.scopes or [])
+        account.scopes = granted_scopes
         account.active = True
         account.sync_error = None
 
@@ -695,9 +758,14 @@ def disconnect_account(
     return {"status": "disconnected"}
 
 
+class ReauthorizeRequest(BaseModel):
+    scopes: list[str] | None = None
+
+
 @router.post("/accounts/{account_id}/reauthorize")
 def reauthorize_account(
     account_id: int,
+    request: ReauthorizeRequest | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
@@ -705,6 +773,10 @@ def reauthorize_account(
 
     Use this when you need to add new permissions (e.g., Gmail access)
     to an existing Google account without disconnecting it.
+
+    Args:
+        request: Optional request body with scopes to request.
+                 If not provided, uses all available scopes.
     """
     account = get_user_account(db, GoogleAccount, account_id, user)
 
@@ -718,9 +790,22 @@ def reauthorize_account(
         else settings.GOOGLE_REDIRECT_URI
     )
 
+    # Build scope list from user selection
+    scopes = request.scopes if request else None
+    if scopes:
+        requested_scopes = BASE_GOOGLE_SCOPES.copy()
+        for scope_key in scopes:
+            if scope_key in AVAILABLE_GOOGLE_SCOPES:
+                requested_scopes.append(AVAILABLE_GOOGLE_SCOPES[scope_key]["scope"])
+    else:
+        # Default to all available scopes
+        requested_scopes = BASE_GOOGLE_SCOPES + [
+            s["scope"] for s in AVAILABLE_GOOGLE_SCOPES.values()
+        ]
+
     flow = Flow.from_client_config(
         oauth_config.to_client_config(),
-        scopes=settings.GOOGLE_SCOPES,
+        scopes=requested_scopes,
         redirect_uri=redirect_uri,
     )
 
