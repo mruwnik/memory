@@ -25,6 +25,14 @@ from memory.common.metrics import record_gauge
 
 logger = logging.getLogger(__name__)
 
+# Prime psutil CPU measurement - first call always returns 0 since there's no baseline
+# This establishes the baseline so subsequent calls return accurate values
+psutil.cpu_percent()
+try:
+    psutil.Process().cpu_percent()
+except Exception:
+    pass
+
 
 def collect_open_files(process) -> int | None:
     """Attempt to get open file count, returning None if access denied."""
@@ -51,8 +59,9 @@ def collect_system_metrics() -> dict:
         # Process-level metrics
         process = psutil.Process()
 
-        # CPU percent (requires interval for accurate reading)
-        cpu_percent = process.cpu_percent(interval=0.1)
+        # CPU percent - uses time since last call as measurement window
+        # Module-level priming ensures baseline exists
+        cpu_percent = process.cpu_percent()
         record_gauge("process.cpu_percent", cpu_percent)
         metrics_collected += 1
 
@@ -76,8 +85,8 @@ def collect_system_metrics() -> dict:
         logger.error(f"Error collecting process metrics: {e}")
 
     try:
-        # System-wide metrics
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+        # System-wide metrics - uses time since last call as measurement window
+        cpu_percent = psutil.cpu_percent()
         record_gauge("system.cpu_percent", cpu_percent)
         metrics_collected += 1
 

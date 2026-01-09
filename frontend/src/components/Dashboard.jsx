@@ -40,6 +40,11 @@ const Dashboard = ({ onLogout }) => {
                         <p>Manage your todos and tasks</p>
                     </Link>
 
+                    <Link to="/ui/metrics" className="feature-card">
+                        <h3>Metrics</h3>
+                        <p>System health, task performance, and API usage</p>
+                    </Link>
+
                     <div className="feature-card" onClick={async () => console.log(await listNotes())}>
                         <h3>Notes</h3>
                         <p>Create and manage your notes</p>
