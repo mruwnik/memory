@@ -83,17 +83,19 @@ PROFILES_FOLDER = os.getenv("PROFILES_FOLDER", "profiles")
 DISCORD_STORAGE_DIR = pathlib.Path(
     os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
 )
+# Directories requiring encryption during backup (contain sensitive user data).
+# CHUNK_STORAGE_DIR is intentionally excluded: chunks are derived data that can be
+# regenerated, and not backed up at all (see storage_dirs below).
 PRIVATE_DIRS = [
     EMAIL_STORAGE_DIR,
     NOTES_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
-    CHUNK_STORAGE_DIR,
 ]
 
+# Directories to backup - chunks excluded (derived data, can be regenerated)
 storage_dirs = [
     EBOOK_STORAGE_DIR,
     EMAIL_STORAGE_DIR,
-    CHUNK_STORAGE_DIR,
     COMIC_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
     WEBPAGE_STORAGE_DIR,
@@ -101,7 +103,10 @@ storage_dirs = [
     DISCORD_STORAGE_DIR,
 ]
 
-for dir in storage_dirs:
+# All storage directories (including non-backed-up ones)
+all_storage_dirs = storage_dirs + [CHUNK_STORAGE_DIR]
+
+for dir in all_storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)
 
 # Warn if using default /tmp storage - data will be lost on reboot
@@ -142,6 +147,11 @@ GOOGLE_DRIVE_SYNC_INTERVAL = int(
     os.getenv("GOOGLE_DRIVE_SYNC_INTERVAL", 60 * 60)
 )  # 1 hour
 CALENDAR_SYNC_INTERVAL = int(os.getenv("CALENDAR_SYNC_INTERVAL", 60 * 60))  # 1 hour
+
+# Metrics collection settings
+METRICS_COLLECTION_INTERVAL = int(os.getenv("METRICS_COLLECTION_INTERVAL", 60))  # 60 seconds
+METRICS_CLEANUP_HOUR = int(os.getenv("METRICS_CLEANUP_HOUR", 3))  # 3 AM
+METRICS_SUMMARY_REFRESH_MINUTE = int(os.getenv("METRICS_SUMMARY_REFRESH_MINUTE", 0))  # :00
 
 CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 * 24))
 

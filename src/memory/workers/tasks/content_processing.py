@@ -8,6 +8,8 @@ vector storage, and result tracking.
 
 from collections import defaultdict
 import hashlib
+import inspect
+import time
 import traceback
 import logging
 from typing import Any, Callable, Sequence, cast
@@ -16,8 +18,23 @@ from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
+from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
+
+
+# Configuration for which task parameters to log in metrics
+# Keys are function names, values are lists of parameter names to capture
+TASK_LOGGED_PARAMS: dict[str, list[str]] = {
+    "sync_account": ["account_id"],
+    "process_message": ["account_id", "message_id"],
+    "execute_scheduled_call": ["scheduled_call_id"],
+    "sync_lesswrong": ["since_date"],
+    "sync_github_repo": ["repo_id"],
+    "sync_google_account": ["account_id"],
+    "sync_calendar_account": ["account_id"],
+    # Add more tasks as needed
+}
 
 
 def check_content_exists(
@@ -255,19 +272,47 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
 
+def extract_task_params(
+    func: Callable, args: tuple, kwargs: dict
+) -> dict[str, Any]:
+    """Extract parameters to log based on TASK_LOGGED_PARAMS config."""
+    param_names = TASK_LOGGED_PARAMS.get(func.__name__, [])
+    if not param_names:
+        return {}
+
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        all_params = dict(bound.arguments)
+    except Exception:
+        return {}
+
+    return {k: v for k, v in all_params.items() if k in param_names}
+
+
 def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
     """
-    Decorator for safe task execution with comprehensive error handling.
+    Decorator for safe task execution with comprehensive error handling and metrics.
 
-    Wraps task functions to log exceptions and notify on failures while
-    still allowing Celery to handle retries. Exceptions are re-raised after
-    logging to allow Celery's retry mechanism to work.
+    Wraps task functions to:
+    - Record execution timing and status to metrics
+    - Log exceptions and notify on failures
+    - Allow Celery to handle retries
+
+    Note: This decorator has its own metric recording rather than using the @profile
+    decorator from memory.common.metrics because Celery tasks require:
+    - Extraction of Celery-specific context (queue name, retry count from task.request)
+    - Integration with task failure notifications (notify_task_failure)
+    - Handling of bound tasks (first arg is self with request attribute)
+    The @profile decorator is designed for general functions and doesn't have access
+    to Celery's runtime context.
 
     Args:
         func: Task function to wrap
 
     Returns:
-        Wrapped function that logs exceptions and re-raises for retry
+        Wrapped function that records metrics, logs exceptions, and re-raises for retry
 
     Example:
         @app.task(bind=True)
@@ -280,9 +325,13 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
 
     @wraps(func)
     def wrapper(*args, **kwargs) -> dict:
+        start_time = time.perf_counter()
+        status = "success"
+
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            status = "failure"
             logger.error(f"Task {func.__name__} failed: {e}")
             traceback_str = traceback.format_exc()
             logger.error(traceback_str)
@@ -307,5 +356,31 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
 
             # Re-raise to allow Celery retries
             raise
+        finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            labels = extract_task_params(func, args, kwargs)
+
+            # Try to get queue name from Celery task
+            task_self = args[0] if args and hasattr(args[0], "request") else None
+            if task_self and hasattr(task_self, "request"):
+                request = task_self.request
+                if hasattr(request, "delivery_info"):
+                    queue = request.delivery_info.get("routing_key")
+                    if queue:
+                        labels["queue"] = queue
+                if hasattr(request, "retries"):
+                    labels["retry_count"] = request.retries
+
+            # Wrap metric recording to avoid masking original exceptions
+            try:
+                record_metric(
+                    metric_type="task",
+                    name=func.__name__,
+                    duration_ms=duration_ms,
+                    status=status,
+                    labels=labels,
+                )
+            except Exception as metric_err:
+                logger.warning(f"Failed to record metric for {func.__name__}: {metric_err}")
 
     return wrapper

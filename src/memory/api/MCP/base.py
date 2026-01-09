@@ -9,6 +9,7 @@ from starlette.templating import Jinja2Templates
 
 from memory.api.MCP.oauth_provider import SimpleOAuthProvider
 from memory.api.MCP.visibility_middleware import VisibilityMiddleware
+from memory.api.MCP.metrics_middleware import MetricsMiddleware
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.email import email_mcp
@@ -72,6 +73,11 @@ def _get_user_info_for_middleware() -> dict:
 # Add visibility-based tool filtering middleware
 mcp.add_middleware(
     VisibilityMiddleware(_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES)
+)
+
+# Add metrics middleware to record tool call timing
+mcp.add_middleware(
+    MetricsMiddleware(get_user_info=_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES)
 )
 
 

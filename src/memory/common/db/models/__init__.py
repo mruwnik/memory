@@ -86,6 +86,9 @@ from memory.common.db.models.users import (
 from memory.common.db.models.scheduled_calls import (
     ScheduledLLMCall,
 )
+from memory.common.db.models.metrics import (
+    MetricEvent,
+)
 
 Payload = (
     SourceItemPayload
@@ -176,6 +179,8 @@ __all__ = [
     "OAuthRefreshToken",
     # Scheduled Calls
     "ScheduledLLMCall",
+    # Metrics
+    "MetricEvent",
     # Payloads
     "Payload",
 ]

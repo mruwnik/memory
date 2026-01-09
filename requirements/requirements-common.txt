@@ -13,3 +13,4 @@ celery[redis,sqs]==5.3.6
 croniter==2.0.1
 cryptography==43.0.0
 bcrypt==4.1.2
+psutil==5.9.8

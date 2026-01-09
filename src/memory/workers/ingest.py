@@ -1,10 +1,15 @@
 import logging
 
 from memory.common import settings
+from celery.schedules import crontab
+
 from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
+    CLEANUP_OLD_METRICS,
+    COLLECT_SYSTEM_METRICS,
     REINGEST_MISSING_CHUNKS,
+    REFRESH_METRIC_SUMMARIES,
     SYNC_ALL_COMICS,
     SYNC_ALL_ARTICLE_FEEDS,
     TRACK_GIT_CHANGES,
@@ -20,7 +25,19 @@ from memory.common.celery_app import (
 logger = logging.getLogger(__name__)
 
 
-app.conf.beat_schedule = {
+app.conf.beat_schedule.update({
+    "collect-system-metrics": {
+        "task": COLLECT_SYSTEM_METRICS,
+        "schedule": settings.METRICS_COLLECTION_INTERVAL,
+    },
+    "cleanup-old-metrics": {
+        "task": CLEANUP_OLD_METRICS,
+        "schedule": crontab(hour=settings.METRICS_CLEANUP_HOUR, minute=0),
+    },
+    "refresh-metric-summaries": {
+        "task": REFRESH_METRIC_SUMMARIES,
+        "schedule": crontab(minute=settings.METRICS_SUMMARY_REFRESH_MINUTE),
+    },
     "clean-all-collections": {
         "task": CLEAN_ALL_COLLECTIONS,
         "schedule": settings.CLEAN_COLLECTION_INTERVAL,
@@ -69,7 +86,7 @@ app.conf.beat_schedule = {
         "task": SYNC_ALL_CALENDARS,
         "schedule": settings.CALENDAR_SYNC_INTERVAL,
     },
-}
+})
 
 if settings.LESSWRONG_SYNC_INTERVAL > 0:
     app.conf.beat_schedule["sync-lesswrong"] = {

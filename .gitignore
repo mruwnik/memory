@@ -24,3 +24,8 @@ __pycache__/
 docker-compose.override.yml
 docker/pgadmin
 tester.py
+
+# Secret/credential files - never commit
+*-secret.json
+google-secret.json
+local-secret.json

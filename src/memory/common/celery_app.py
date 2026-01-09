@@ -1,5 +1,4 @@
 from celery import Celery
-from celery.schedules import crontab
 from kombu.utils.url import safequote
 from memory.common import settings
 
@@ -21,6 +20,7 @@ PROACTIVE_ROOT = "memory.workers.tasks.proactive"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
 MEETINGS_ROOT = "memory.workers.tasks.meetings"
+METRICS_ROOT = "memory.workers.tasks.metrics"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -95,6 +95,11 @@ SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 # Meeting tasks
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
 
+# Metrics tasks
+COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
+CLEANUP_OLD_METRICS = f"{METRICS_ROOT}.cleanup_old_metrics"
+REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
+
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
@@ -156,6 +161,7 @@ app.conf.update(
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
+        f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
     },
 )
 
