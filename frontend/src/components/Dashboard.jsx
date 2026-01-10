@@ -50,6 +50,11 @@ const Dashboard = ({ onLogout }) => {
                         <p>View background job status and retry failed jobs</p>
                     </Link>
 
+                    <Link to="/ui/polls" className="feature-card">
+                        <h3>Polls</h3>
+                        <p>Schedule meetings with availability polls</p>
+                    </Link>
+
                     <div className="feature-card" onClick={async () => console.log(await listNotes())}>
                         <h3>Notes</h3>
                         <p>Create and manage your notes</p>

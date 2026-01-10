@@ -5,6 +5,7 @@ import './App.css'
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, Metrics, Jobs } from '@/components'
+import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
@@ -41,7 +42,12 @@ const AuthWrapper = () => {
         }
       } else {
         // If not authenticated and on protected route, redirect to login
-        if (location.pathname !== '/ui/login') {
+        // Allow public poll routes without auth
+        const isPublicRoute =
+          location.pathname === '/ui/login' ||
+          location.pathname.startsWith('/ui/polls/respond/') ||
+          location.pathname.startsWith('/ui/polls/results/')
+        if (!isPublicRoute) {
           navigate('/ui/login', { replace: true })
         }
       }
@@ -133,6 +139,33 @@ const AuthWrapper = () => {
           <Navigate to="/ui/login" replace />
         )
       } />
+
+      {/* Poll routes - authenticated */}
+      <Route path="/ui/polls" element={
+        isAuthenticated ? (
+          <PollList />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+      <Route path="/ui/polls/new" element={
+        isAuthenticated ? (
+          <PollCreate />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+      <Route path="/ui/polls/edit/:slug" element={
+        isAuthenticated ? (
+          <PollEdit />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      {/* Poll routes - public (no auth required) */}
+      <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
+      <Route path="/ui/polls/results/:slug" element={<PollResults />} />
 
       {/* Default redirect */}
       <Route path="/" element={

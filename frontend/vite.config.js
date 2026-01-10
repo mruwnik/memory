@@ -29,6 +29,8 @@ export default defineConfig({
       "/books": "http://localhost:8000",
       "/forum-posts": "http://localhost:8000",
       "/jobs": "http://localhost:8000",
+      "/polls": "http://localhost:8000",
+      "/mcp": "http://localhost:8000",
     },
   },
 })

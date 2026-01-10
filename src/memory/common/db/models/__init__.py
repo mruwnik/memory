@@ -95,6 +95,18 @@ from memory.common.db.models.jobs import (
     JobStatus,
     JobType,
 )
+from memory.common.db.models.polls import (
+    AvailabilityPoll,
+    AvailabilityPollPayload,
+    AvailabilityPollDetailPayload,
+    PollResponse,
+    PollResponsePayload,
+    PollAvailability,
+    PollAvailabilityPayload,
+    PollStatus,
+    AvailabilityLevel,
+    SlotAggregation,
+)
 
 Payload = (
     SourceItemPayload
@@ -192,6 +204,17 @@ __all__ = [
     "PendingJobPayload",
     "JobStatus",
     "JobType",
+    # Polls
+    "AvailabilityPoll",
+    "AvailabilityPollPayload",
+    "AvailabilityPollDetailPayload",
+    "PollResponse",
+    "PollResponsePayload",
+    "PollAvailability",
+    "PollAvailabilityPayload",
+    "PollStatus",
+    "AvailabilityLevel",
+    "SlotAggregation",
     # Payloads
     "Payload",
 ]
