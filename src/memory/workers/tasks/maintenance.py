@@ -3,14 +3,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Sequence, Any
 
-from memory.common import extract
-from memory.workers.tasks.content_processing import process_content_item
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
 
-from memory.common import collections, embedding, qdrant, settings
-from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, SourceItem
+from memory.common import collections, embedding, extract, qdrant, settings
 from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
@@ -24,6 +20,12 @@ from memory.common.celery_app import (
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
+)
+from memory.common.db.connection import make_session
+from memory.common.db.models import Chunk, SourceItem
+from memory.workers.tasks.content_processing import (
+    clear_item_chunks,
+    process_content_item,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,17 +124,7 @@ def reingest_item(item_id: str, item_type: str):
         if not item:
             return {"status": "error", "error": f"Item {item_id} not found"}
 
-        chunk_ids = [str(c.id) for c in item.chunks if c.id]
-        if chunk_ids:
-            client = qdrant.get_qdrant_client()
-            try:
-                qdrant.delete_points(client, item.modality, chunk_ids)
-            except IOError as e:
-                logger.error(f"Error deleting chunks for {item_id}: {e}")
-
-        for chunk in item.chunks:
-            session.delete(chunk)
-
+        clear_item_chunks(item, session)
         return process_content_item(item, session)
 
 

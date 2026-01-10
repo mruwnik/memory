@@ -89,6 +89,12 @@ from memory.common.db.models.scheduled_calls import (
 from memory.common.db.models.metrics import (
     MetricEvent,
 )
+from memory.common.db.models.jobs import (
+    PendingJob,
+    PendingJobPayload,
+    JobStatus,
+    JobType,
+)
 
 Payload = (
     SourceItemPayload
@@ -181,6 +187,11 @@ __all__ = [
     "ScheduledLLMCall",
     # Metrics
     "MetricEvent",
+    # Jobs
+    "PendingJob",
+    "PendingJobPayload",
+    "JobStatus",
+    "JobType",
     # Payloads
     "Payload",
 ]

@@ -23,6 +23,40 @@ from memory.common.metrics import record_metric
 logger = logging.getLogger(__name__)
 
 
+def clear_item_chunks(item: SourceItem, session) -> int:
+    """
+    Delete all chunks for a source item from both Qdrant and PostgreSQL.
+
+    Args:
+        item: The source item whose chunks should be deleted
+        session: Database session
+
+    Returns:
+        Number of chunks deleted
+    """
+    if not item.chunks:
+        return 0
+
+    chunk_ids = [str(c.id) for c in item.chunks if c.id]
+    count = len(chunk_ids)
+
+    # Delete from Qdrant
+    if chunk_ids:
+        client = qdrant.get_qdrant_client()
+        try:
+            qdrant.delete_points(client, item.modality, chunk_ids)
+        except IOError as e:
+            logger.error(f"Error deleting chunks from Qdrant for item {item.id}: {e}")
+
+    # Delete from PostgreSQL
+    for chunk in item.chunks:
+        session.delete(chunk)
+
+    session.flush()
+    logger.info(f"Deleted {count} chunks for {item.__class__.__name__} {item.id}")
+    return count
+
+
 # Configuration for which task parameters to log in metrics
 # Keys are function names, values are lists of parameter names to capture
 TASK_LOGGED_PARAMS: dict[str, list[str]] = {

@@ -33,6 +33,8 @@ from memory.api.tasks import router as tasks_router
 from memory.api.meetings import router as meetings_router
 from memory.api.content_sources import router as content_sources_router
 from memory.api.metrics import router as metrics_router
+from memory.api.jobs import router as jobs_router
+from memory.api.source_items import router as source_items_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
@@ -198,6 +200,8 @@ app.include_router(tasks_router)
 app.include_router(meetings_router)
 app.include_router(content_sources_router)
 app.include_router(metrics_router)
+app.include_router(jobs_router)
+app.include_router(source_items_router)
 
 
 # Add health check to MCP server instead of main app

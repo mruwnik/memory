@@ -94,12 +94,12 @@ SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 
 # Meeting tasks
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
+REPROCESS_MEETING = f"{MEETINGS_ROOT}.reprocess_meeting"
 
 # Metrics tasks
 COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
 CLEANUP_OLD_METRICS = f"{METRICS_ROOT}.cleanup_old_metrics"
 REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
-
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
