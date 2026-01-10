@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import Text, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
@@ -302,8 +303,35 @@ def list_teams(
         return teams
 
 
-def fetch_issue(repo: str, number: int) -> dict:
-    """Get full details of a specific GitHub issue or PR."""
+def extract_status_priority(
+    project_fields: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Extract status and priority from project fields dict.
+
+    Returns (status, priority) tuple. Values are None if not found.
+    Only extracts string/numeric values, ignoring None and complex types.
+    """
+    status: str | None = None
+    priority: str | None = None
+    for key, value in project_fields.items():
+        # Skip None and complex types
+        if value is None or not isinstance(value, (str, int, float)):
+            continue
+        key_lower = key.lower()
+        if "status" in key_lower and status is None:
+            status = str(value)
+        elif "priority" in key_lower and priority is None:
+            priority = str(value)
+    return status, priority
+
+
+def fetch_issue(repo: str, number: int) -> dict[str, Any]:
+    """Get full details of a specific GitHub issue or PR.
+
+    Fetches project fields from GitHub if not cached in the database.
+    Caches the result (including empty dict for issues not in projects)
+    to avoid repeated API calls.
+    """
     with make_session() as session:
         item = (
             session.query(GithubItem)
@@ -318,7 +346,92 @@ def fetch_issue(repo: str, number: int) -> dict:
         if not item:
             raise ValueError(f"Issue #{number} not found in {repo}")
 
-        return serialize_issue(item, include_content=True)
+        result = serialize_issue(item, include_content=True)
+
+        # Fetch project fields from GitHub if not cached locally
+        # None means "never checked", {} means "checked but not in any project"
+        if result.get("project_fields") is None:
+            project_fields = fetch_project_fields_for_item(
+                session, repo, number, item.kind
+            )
+            # Cache the result (even if empty) to avoid repeated API calls
+            if project_fields is not None:
+                result["project_fields"] = project_fields
+                project_status, project_priority = extract_status_priority(
+                    project_fields
+                )
+
+                if project_status:
+                    result["project_status"] = project_status
+                if project_priority:
+                    result["project_priority"] = project_priority
+
+                # Cache in database for future fetches
+                item.project_fields = project_fields  # type: ignore
+                item.project_status = project_status  # type: ignore
+                item.project_priority = project_priority  # type: ignore
+                session.commit()
+
+        return result
+
+
+def fetch_project_fields_for_item(
+    session: Session,
+    repo_path: str,
+    number: int,
+    kind: str,
+) -> dict[str, Any] | None:
+    """Fetch project fields from GitHub API for an issue or PR.
+
+    Args:
+        session: Database session
+        repo_path: Repository path in "owner/repo" format
+        number: Issue or PR number
+        kind: "issue" or "pr"
+
+    Returns:
+        Project fields dict (may be empty if not in any project),
+        or None if fetch failed (no credentials, API error, etc.)
+    """
+    parts = repo_path.split("/")
+    if len(parts) != 2:
+        return None
+
+    owner, repo_name = parts
+
+    # Try to get GitHub client from the repo's account
+    repo_obj = (
+        session.query(GithubRepo)
+        .filter(GithubRepo.owner == owner, GithubRepo.name == repo_name)
+        .first()
+    )
+
+    if not repo_obj or not repo_obj.account or not repo_obj.account.active:
+        return None
+
+    try:
+        account = repo_obj.account
+        credentials = GithubCredentials(
+            auth_type=account.auth_type,
+            access_token=account.access_token,
+            app_id=account.app_id,
+            installation_id=account.installation_id,
+            private_key=account.private_key,
+        )
+        client = GithubClient(credentials)
+
+        # Fetch project fields based on item type
+        if kind == "pr":
+            project_fields = client.fetch_pr_project_fields(owner, repo_name, number)
+        else:
+            project_fields = client.fetch_project_fields(owner, repo_name, number)
+
+        # Return empty dict if API returned None (issue not in any project)
+        # This distinguishes "checked but empty" from "never checked"
+        return project_fields if project_fields is not None else {}
+    except Exception as e:
+        logger.warning(f"Failed to fetch project fields for {repo_path}#{number}: {e}")
+        return None
 
 
 def fetch_milestone(repo: str, number: int) -> dict:
