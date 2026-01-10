@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from memory.common.celery_app import app as celery_app
@@ -186,10 +187,12 @@ def list_jobs(
     query = session.query(PendingJob)
 
     if status:
-        query = query.filter(PendingJob.status == str(status))
+        status_val = status.value if isinstance(status, JobStatus) else status
+        query = query.filter(PendingJob.status == status_val)
 
     if job_type:
-        query = query.filter(PendingJob.job_type == str(job_type))
+        type_val = job_type.value if isinstance(job_type, JobType) else job_type
+        query = query.filter(PendingJob.job_type == type_val)
 
     if user_id:
         query = query.filter(PendingJob.user_id == user_id)
@@ -275,6 +278,8 @@ def dispatch_job(
     # Derive params from task_kwargs, excluding large fields
     exclude_set = set(exclude_from_params or [])
     params = {k: v for k, v in task_kwargs.items() if k not in exclude_set}
+    # Store task_name for retry capability
+    params["_task_name"] = task_name
 
     # Create job record
     job = create_job(
@@ -289,8 +294,15 @@ def dispatch_job(
     # Always inject job_id into task kwargs
     final_kwargs = {**task_kwargs, "job_id": job.id}
 
-    # Dispatch Celery task
-    task = celery_app.send_task(task_name, kwargs=final_kwargs)
+    # Dispatch Celery task - if this fails, mark job as failed
+    try:
+        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+    except Exception as e:
+        # Task dispatch failed - mark job as failed so it doesn't sit in PENDING forever
+        job.mark_failed(f"Failed to dispatch Celery task: {e}")
+        session.commit()
+        logger.error(f"Failed to dispatch task {task_name} for job {job.id}: {e}")
+        raise
 
     # Link job to Celery task and commit
     update_job_celery_task_id(session, job, task.id)
@@ -300,4 +312,92 @@ def dispatch_job(
         job=job,
         is_new=True,
         message=f"Job queued. Track status via GET /jobs/{job.id}",
+    )
+
+
+def retry_failed_job(
+    session: Session,
+    job: PendingJob,
+) -> DispatchResult:
+    """
+    Retry a failed job by resetting its status and re-dispatching.
+
+    This reuses the existing job record rather than creating a new one,
+    preserving history and keeping the same job ID for tracking.
+
+    Args:
+        session: Database session
+        job: The failed job to retry
+
+    Returns:
+        DispatchResult with the same job (is_new=False)
+
+    Raises:
+        ValueError: If job is not in failed status or missing required params
+    """
+    if job.status != JobStatus.FAILED.value:
+        raise ValueError(f"Can only retry failed jobs, current status: {job.status}")
+
+    task_name = job.params.get("_task_name")
+    if not task_name:
+        raise ValueError(
+            "Job is missing _task_name in params. "
+            "This job was created before retry support was added."
+        )
+
+    # Lock the job row to prevent concurrent retries (SELECT FOR UPDATE NOWAIT)
+    # Using nowait=True to fail fast if another retry is in progress
+    try:
+        locked_job = (
+            session.query(PendingJob)
+            .filter(PendingJob.id == job.id)
+            .with_for_update(nowait=True)
+            .first()
+        )
+    except OperationalError:
+        raise ValueError(
+            f"Job {job.id} is currently being retried by another process. "
+            "Please wait and try again."
+        )
+    if not locked_job:
+        raise ValueError(f"Job {job.id} not found")
+
+    # Re-check status after acquiring lock (another process may have retried)
+    if locked_job.status != JobStatus.FAILED.value:
+        raise ValueError(
+            f"Job {job.id} is no longer in failed status (current: {locked_job.status}). "
+            "It may have been retried by another process."
+        )
+
+    # Reset job status
+    locked_job.status = JobStatus.PENDING.value
+    locked_job.error_message = None
+    locked_job.completed_at = None
+    locked_job.updated_at = datetime.now(timezone.utc)
+    session.flush()
+
+    # Reconstruct task_kwargs from params (excluding internal fields)
+    task_kwargs = {k: v for k, v in locked_job.params.items() if not k.startswith("_")}
+
+    # Dispatch with same job_id - if this fails, revert status
+    final_kwargs = {**task_kwargs, "job_id": locked_job.id}
+    try:
+        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+    except Exception as e:
+        # Dispatch failed - revert to failed status
+        locked_job.mark_failed(f"Failed to dispatch retry task: {e}")
+        session.commit()
+        logger.error(f"Failed to dispatch retry for job {locked_job.id}: {e}")
+        raise
+
+    # Update task ID and commit
+    update_job_celery_task_id(session, locked_job, task.id)
+    session.commit()
+
+    logger.info(f"Retrying job {locked_job.id} (attempt {locked_job.attempts + 1})")
+
+    return DispatchResult(
+        job=locked_job,
+        is_new=False,
+        message=f"Job {locked_job.id} queued for retry. Track status via GET /jobs/{locked_job.id}",
     )

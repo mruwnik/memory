@@ -7,6 +7,7 @@ from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
+from memory.common.jobs import retry_failed_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -97,6 +98,8 @@ def retry_job(
 
     Only failed jobs can be retried. Creates a new job with the same
     parameters and dispatches it for processing.
+
+    Returns the new job that was created for the retry.
     """
     job = job_utils.get_job(db, job_id)
 
@@ -112,8 +115,8 @@ def retry_job(
             detail=f"Only failed jobs can be retried. Current status: {job.status}",
         )
 
-    # Job retry requires per-type dispatch logic that isn't implemented yet
-    raise HTTPException(
-        status_code=501,
-        detail="Job retry is not yet implemented. Please create a new job instead.",
-    )
+    try:
+        result = retry_failed_job(db, job)
+        return PendingJobPayload.model_validate(result.job)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -7,16 +7,17 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import User, JobType
 from memory.common.db.models.sources import Book
 from memory.common.db.models.source_items import BookSection, Photo
 from memory.common import settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_LESSWRONG, SYNC_PHOTO
 from memory.common.celery_app import app as celery_app
+from memory.common.jobs import dispatch_job
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class BookResponse(BaseModel):
 def list_books(
     limit: int = Query(default=100, ge=1, le=500),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> list[BookResponse]:
     """List all books in the knowledge base."""
     # Get books with section counts
@@ -95,7 +96,7 @@ class PhotoResponse(BaseModel):
 def list_photos(
     limit: int = Query(default=100, ge=1, le=500),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> list[PhotoResponse]:
     """List all photos in the knowledge base."""
     photos = (
@@ -128,7 +129,8 @@ def list_photos(
 class UploadResponse(BaseModel):
     status: str
     message: str
-    task_id: str | None = None
+    job_id: int | None = None
+    task_id: str | None = None  # Deprecated: use job_id for status tracking
     filename: str | None = None
 
 
@@ -143,8 +145,13 @@ async def upload_book(
     author: str = Form(default=""),
     tags: str = Form(default=""),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> UploadResponse:
-    """Upload an ebook file for processing."""
+    """
+    Upload an ebook file for processing.
+
+    Returns a job_id that can be used to track processing status via GET /jobs/{job_id}
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -172,21 +179,32 @@ async def upload_book(
     # Parse tags
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    # Trigger celery task
-    task = celery_app.send_task(
-        SYNC_BOOK,
-        kwargs={
-            "file_path": str(file_path),
-            "tags": tag_list,
-            "title": title,
-            "author": author,
-        },
-    )
+    # Dispatch job with tracking - clean up file on failure
+    try:
+        result = dispatch_job(
+            session=db,
+            job_type=JobType.CONTENT_INGEST,
+            task_name=SYNC_BOOK,
+            task_kwargs={
+                "file_path": str(file_path),
+                "tags": tag_list,
+                "title": title,
+                "author": author,
+            },
+            user_id=user.id,
+        )
+    except Exception:
+        # Clean up the uploaded file if job dispatch fails
+        # Use missing_ok=True to avoid race condition if another process deleted it
+        file_path.unlink(missing_ok=True)
+        logger.warning(f"Cleaned up orphaned file after dispatch failure: {file_path}")
+        raise
 
     return UploadResponse(
-        status="queued",
+        status="queued" if result.is_new else result.job.status,
         message=f"Book '{file.filename}' uploaded and queued for processing",
-        task_id=task.id,
+        job_id=result.job.id,
+        task_id=result.job.celery_task_id,
         filename=safe_filename,
     )
 
@@ -196,8 +214,13 @@ async def upload_photo(
     file: UploadFile = File(...),
     tags: str = Form(default=""),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> UploadResponse:
-    """Upload a photo for indexing."""
+    """
+    Upload a photo for indexing.
+
+    Returns a job_id that can be used to track processing status via GET /jobs/{job_id}
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -225,19 +248,30 @@ async def upload_photo(
     # Parse tags
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    # Trigger celery task for processing (extracts EXIF, generates embeddings)
-    task = celery_app.send_task(
-        SYNC_PHOTO,
-        kwargs={
-            "file_path": str(file_path),
-            "tags": tag_list,
-        },
-    )
+    # Dispatch job with tracking - clean up file on failure
+    try:
+        result = dispatch_job(
+            session=db,
+            job_type=JobType.CONTENT_INGEST,
+            task_name=SYNC_PHOTO,
+            task_kwargs={
+                "file_path": str(file_path),
+                "tags": tag_list,
+            },
+            user_id=user.id,
+        )
+    except Exception:
+        # Clean up the uploaded file if job dispatch fails
+        # Use missing_ok=True to avoid race condition if another process deleted it
+        file_path.unlink(missing_ok=True)
+        logger.warning(f"Cleaned up orphaned file after dispatch failure: {file_path}")
+        raise
 
     return UploadResponse(
-        status="queued",
+        status="queued" if result.is_new else result.job.status,
         message=f"Photo '{file.filename}' uploaded and queued for processing",
-        task_id=task.id,
+        job_id=result.job.id,
+        task_id=result.job.celery_task_id,
         filename=safe_filename,
     )
 

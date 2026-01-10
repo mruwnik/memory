@@ -5,8 +5,20 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.common.db.models import PendingJob, JobStatus, JobType
+from memory.common.db.models import PendingJob, JobStatus, JobType, User
 from memory.common import jobs as job_utils
+
+
+@pytest.fixture
+def test_user(db_session):
+    """Create a test user for job ownership tests."""
+    user = User(
+        name="Test User",
+        email="testuser@example.com",
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
 
 
 @pytest.fixture
@@ -315,3 +327,293 @@ def test_pending_job_model_mark_methods(db_session):
     assert job2.status == JobStatus.FAILED.value
     assert job2.error_message == "Test error"
     assert job2.completed_at is not None
+
+
+# =============================================================================
+# dispatch_job tests
+# =============================================================================
+
+
+def test_dispatch_job_creates_job_and_dispatches_task(db_session):
+    """Test dispatch_job creates job and dispatches Celery task."""
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-123"})()
+    ) as mock_send:
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="memory.workers.tasks.meetings.process_meeting",
+            task_kwargs={"title": "Test Meeting", "transcript": "Content"},
+        )
+
+    assert result.is_new is True
+    assert result.job.id is not None
+    assert result.job.job_type == JobType.MEETING.value
+    assert result.job.celery_task_id == "celery-123"
+    # params includes _task_name for retry support
+    assert result.job.params["title"] == "Test Meeting"
+    assert result.job.params["transcript"] == "Content"
+    assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
+
+    # Verify task was dispatched with job_id injected
+    mock_send.assert_called_once()
+    call_kwargs = mock_send.call_args.kwargs["kwargs"]
+    assert call_kwargs["job_id"] == result.job.id
+    assert call_kwargs["title"] == "Test Meeting"
+
+
+def test_dispatch_job_excludes_fields_from_params(db_session):
+    """Test dispatch_job excludes specified fields from stored params."""
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-456"})()
+    ):
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="memory.workers.tasks.meetings.process_meeting",
+            task_kwargs={"title": "Meeting", "transcript": "Very long content..."},
+            exclude_from_params=["transcript"],
+        )
+
+    # transcript should NOT be in params
+    assert "transcript" not in result.job.params
+    assert result.job.params["title"] == "Meeting"
+    assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
+
+
+def test_dispatch_job_idempotency_returns_existing(db_session):
+    """Test dispatch_job returns existing job for same external_id."""
+    # Create initial job
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-111"})()
+    ):
+        result1 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "value"},
+            external_id="unique-meeting-123",
+        )
+
+    # Try to create duplicate with same external_id
+    with patch.object(job_utils.celery_app, "send_task") as mock_send:
+        result2 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "new-value"},
+            external_id="unique-meeting-123",
+        )
+
+    assert result2.is_new is False
+    assert result2.job.id == result1.job.id
+    mock_send.assert_not_called()  # Should not dispatch new task
+
+
+def test_dispatch_job_allows_resubmit_failed(db_session):
+    """Test dispatch_job allows new job when previous job failed."""
+    # Create initial job
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-first"})()
+    ):
+        result1 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "value"},
+            external_id="retry-meeting-456",
+        )
+
+    # Mark first job as failed
+    result1.job.mark_failed("First attempt failed")
+    db_session.commit()
+
+    # Resubmit - should create new job
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-retry"})()
+    ) as mock_send:
+        result2 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "retry-value"},
+            external_id="retry-meeting-456",
+            allow_resubmit_failed=True,
+        )
+
+    assert result2.is_new is True
+    assert result2.job.id != result1.job.id
+    mock_send.assert_called_once()
+
+
+def test_dispatch_job_resubmit_disabled(db_session):
+    """Test dispatch_job blocks resubmit when allow_resubmit_failed=False."""
+    # Create and fail initial job
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-only"})()
+    ):
+        result1 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "value"},
+            external_id="no-retry-789",
+        )
+
+    result1.job.mark_failed("Failed")
+    db_session.commit()
+
+    # Try to resubmit with resubmit disabled
+    with patch.object(job_utils.celery_app, "send_task") as mock_send:
+        result2 = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={"data": "new"},
+            external_id="no-retry-789",
+            allow_resubmit_failed=False,
+        )
+
+    assert result2.is_new is False
+    assert result2.job.id == result1.job.id
+    mock_send.assert_not_called()
+
+
+def test_dispatch_job_with_user_id(db_session, test_user):
+    """Test dispatch_job stores user_id."""
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-user"})()
+    ):
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.REPROCESS,
+            task_name="test.task",
+            task_kwargs={},
+            user_id=test_user.id,
+        )
+
+    assert result.job.user_id == test_user.id
+
+
+def test_get_job_by_external_id_returns_most_recent(db_session):
+    """Test that get_job_by_external_id returns most recent job when multiple exist."""
+    # Create multiple jobs with same external_id (simulating retry after failure)
+    job1 = PendingJob(
+        job_type=JobType.MEETING.value,
+        external_id="multi-job-ext",
+        params={"attempt": 1},
+        status=JobStatus.FAILED.value,
+    )
+    db_session.add(job1)
+    db_session.commit()
+
+    job2 = PendingJob(
+        job_type=JobType.MEETING.value,
+        external_id="multi-job-ext",
+        params={"attempt": 2},
+        status=JobStatus.PENDING.value,
+    )
+    db_session.add(job2)
+    db_session.commit()
+
+    # Should return the most recent (job2)
+    retrieved = job_utils.get_job_by_external_id(db_session, "multi-job-ext")
+
+    assert retrieved is not None
+    assert retrieved.id == job2.id
+    assert retrieved.params["attempt"] == 2
+
+
+# =============================================================================
+# retry_failed_job tests
+# =============================================================================
+
+
+def test_retry_failed_job_resets_same_job(db_session):
+    """Test retry_failed_job resets the same job instead of creating new one."""
+    # Create and fail a job with _task_name
+    original_job = PendingJob(
+        job_type=JobType.MEETING.value,
+        external_id="retry-test-ext",
+        params={
+            "title": "Test Meeting",
+            "duration": 30,
+            "_task_name": "memory.workers.tasks.meetings.process_meeting",
+        },
+        status=JobStatus.FAILED.value,
+        error_message="Original failure",
+    )
+    original_job.completed_at = datetime.now(timezone.utc)
+    db_session.add(original_job)
+    db_session.commit()
+    original_id = original_job.id
+
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-retry"})()
+    ) as mock_send:
+        result = job_utils.retry_failed_job(db_session, original_job)
+
+    # Same job, not a new one
+    assert result.is_new is False
+    assert result.job.id == original_id
+
+    # Status reset, error cleared
+    assert result.job.status == JobStatus.PENDING.value
+    assert result.job.error_message is None
+    assert result.job.completed_at is None
+
+    # Params preserved
+    assert result.job.params["title"] == "Test Meeting"
+    assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
+
+    # Verify task was dispatched with correct params
+    mock_send.assert_called_once()
+    call_kwargs = mock_send.call_args.kwargs["kwargs"]
+    assert call_kwargs["job_id"] == original_id  # Same job ID
+    assert call_kwargs["title"] == "Test Meeting"
+    assert call_kwargs["duration"] == 30
+    assert "_task_name" not in call_kwargs  # Internal field excluded from task
+
+
+def test_retry_failed_job_rejects_non_failed(db_session):
+    """Test retry_failed_job raises for non-failed jobs."""
+    job = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={"_task_name": "test.task"},
+        status=JobStatus.PENDING.value,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Can only retry failed jobs"):
+        job_utils.retry_failed_job(db_session, job)
+
+
+def test_retry_failed_job_rejects_missing_task_name(db_session):
+    """Test retry_failed_job raises for jobs without _task_name."""
+    job = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={"title": "Old job without task name"},  # No _task_name
+        status=JobStatus.FAILED.value,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="missing _task_name"):
+        job_utils.retry_failed_job(db_session, job)
+
+
+def test_dispatch_job_stores_task_name(db_session):
+    """Test that dispatch_job stores _task_name in params for retry."""
+    with patch.object(
+        job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-xyz"})()
+    ):
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="memory.workers.tasks.meetings.process_meeting",
+            task_kwargs={"title": "Meeting"},
+        )
+
+    assert "_task_name" in result.job.params
+    assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
