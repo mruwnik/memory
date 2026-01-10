@@ -28,6 +28,7 @@ export default defineConfig({
       "/photos": "http://localhost:8000",
       "/books": "http://localhost:8000",
       "/forum-posts": "http://localhost:8000",
+      "/jobs": "http://localhost:8000",
     },
   },
 })
