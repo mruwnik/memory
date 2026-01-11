@@ -558,7 +558,11 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
   }
 
   if (loading) {
-    return <div className="text-sm text-slate-500 py-4">Loading repositories...</div>
+    return (
+      <div className="min-h-60 flex items-center justify-center text-sm text-slate-500">
+        Loading repositories...
+      </div>
+    )
   }
 
   if (error) {

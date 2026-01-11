@@ -100,6 +100,7 @@ def email_accounts(db_session, test_user):
             account_type="imap",
             imap_server="imap.example.com",
             active=False,
+            send_enabled=False,  # Disable sending for this account
         ),
     ]
     db_session.add_all(accounts)
@@ -141,6 +142,9 @@ async def test_send_email_message_success(
     from memory.api.MCP.servers.email import send_email_message
     from memory.common.email_sender import EmailResult
 
+    # send_email_message is a FunctionTool, get the underlying function
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     mock_result = EmailResult(success=True, message_id="msg-123")
 
     with patch("memory.api.MCP.servers.email.make_session") as mock_make_session:
@@ -150,7 +154,7 @@ async def test_send_email_message_success(
         with patch(
             "memory.api.MCP.servers.email.send_email", return_value=mock_result
         ) as mock_send:
-            result = await send_email_message(
+            result = await send_fn(
                 to=["recipient@example.com"],
                 subject="Test Subject",
                 body="Test body",
@@ -170,12 +174,14 @@ async def test_send_email_message_invalid_from_address(
 ):
     from memory.api.MCP.servers.email import send_email_message
 
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     with patch("memory.api.MCP.servers.email.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = Mock(return_value=db_session)
         mock_make_session.return_value.__exit__ = Mock(return_value=False)
 
         with pytest.raises(ValueError, match="No active email account found"):
-            await send_email_message(
+            await send_fn(
                 to=["recipient@example.com"],
                 subject="Test",
                 body="Body",
@@ -189,12 +195,14 @@ async def test_send_email_message_inactive_account(
 ):
     from memory.api.MCP.servers.email import send_email_message
 
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     with patch("memory.api.MCP.servers.email.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = Mock(return_value=db_session)
         mock_make_session.return_value.__exit__ = Mock(return_value=False)
 
         with pytest.raises(ValueError, match="No active email account found"):
-            await send_email_message(
+            await send_fn(
                 to=["recipient@example.com"],
                 subject="Test",
                 body="Body",
@@ -208,8 +216,10 @@ async def test_send_email_message_empty_recipients(
 ):
     from memory.api.MCP.servers.email import send_email_message
 
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     with pytest.raises(ValueError, match="At least one recipient is required"):
-        await send_email_message(
+        await send_fn(
             to=[],
             subject="Test",
             body="Body",
@@ -224,6 +234,8 @@ async def test_send_email_message_with_optional_fields(
     from memory.api.MCP.servers.email import send_email_message
     from memory.common.email_sender import EmailResult
 
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     mock_result = EmailResult(success=True, message_id="msg-456")
 
     with patch("memory.api.MCP.servers.email.make_session") as mock_make_session:
@@ -233,7 +245,7 @@ async def test_send_email_message_with_optional_fields(
         with patch(
             "memory.api.MCP.servers.email.send_email", return_value=mock_result
         ) as mock_send:
-            result = await send_email_message(
+            result = await send_fn(
                 to=["to@example.com"],
                 subject="Test",
                 body="Body",
@@ -259,6 +271,8 @@ async def test_send_email_message_send_failure(
     from memory.api.MCP.servers.email import send_email_message
     from memory.common.email_sender import EmailResult
 
+    send_fn = send_email_message.fn if hasattr(send_email_message, 'fn') else send_email_message
+
     mock_result = EmailResult(success=False, error="SMTP connection failed")
 
     with patch("memory.api.MCP.servers.email.make_session") as mock_make_session:
@@ -268,7 +282,7 @@ async def test_send_email_message_send_failure(
         with patch(
             "memory.api.MCP.servers.email.send_email", return_value=mock_result
         ):
-            result = await send_email_message(
+            result = await send_fn(
                 to=["recipient@example.com"],
                 subject="Test",
                 body="Body",

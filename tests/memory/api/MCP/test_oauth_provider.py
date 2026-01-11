@@ -33,7 +33,13 @@ class TestMakeToken:
         client = OAuthClientInformation(
             client_id="test-client",
             client_secret="test-secret",
+            client_id_issued_at=datetime.now().timestamp(),
             redirect_uris=["http://localhost/callback"],
+            token_endpoint_auth_method="client_secret_post",
+            grant_types=["authorization_code"],
+            response_types=["code"],
+            scope="read write",
+            client_name="Test Client",
         )
         db_session.add(client)
         db_session.commit()
@@ -74,7 +80,13 @@ class TestMakeToken:
         client = OAuthClientInformation(
             client_id="test-client",
             client_secret="test-secret",
+            client_id_issued_at=datetime.now().timestamp(),
             redirect_uris=["http://localhost/callback"],
+            token_endpoint_auth_method="client_secret_post",
+            grant_types=["authorization_code"],
+            response_types=["code"],
+            scope="read write",
+            client_name="Test Client",
         )
         db_session.add(client)
         db_session.commit()
