@@ -48,6 +48,11 @@ const Dashboard = ({ onLogout }) => {
                         <p className="text-gray-600 text-base">System health, task performance, and API usage</p>
                     </Link>
 
+                    <Link to="/ui/telemetry" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Telemetry</h3>
+                        <p className="text-gray-600 text-base">Claude Code usage, tokens, costs, and sessions</p>
+                    </Link>
+
                     <Link to="/ui/jobs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
                         <h3 className="text-slate-800 text-xl mb-2 font-semibold">Jobs</h3>
                         <p className="text-gray-600 text-base">View background job status and retry failed jobs</p>

@@ -13,7 +13,7 @@ class MockFastMCP:
     def __init__(self, name):
         self.name = name
 
-    def tool(self):
+    def tool(self, **kwargs):
         def decorator(func):
             return func
 
