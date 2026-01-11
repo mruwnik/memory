@@ -401,3 +401,94 @@ def retry_failed_job(
         is_new=False,
         message=f"Job {locked_job.id} queued for retry. Track status via GET /jobs/{locked_job.id}",
     )
+
+
+def reingest_job(
+    session: Session,
+    job: PendingJob,
+) -> DispatchResult:
+    """
+    Reingest a completed job by resetting its status and re-dispatching.
+
+    This allows re-running successful ingestion jobs to update content.
+
+    Args:
+        session: Database session
+        job: The completed job to reingest
+
+    Returns:
+        DispatchResult with the same job (is_new=False)
+
+    Raises:
+        ValueError: If job is pending/processing or missing required params
+    """
+    if job.status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):
+        raise ValueError(
+            f"Cannot reingest a job that is still {job.status}. "
+            "Wait for it to complete or fail first."
+        )
+
+    task_name = job.params.get("_task_name")
+    if not task_name:
+        raise ValueError(
+            "Job is missing _task_name in params. "
+            "This job was created before reingest support was added."
+        )
+
+    # Lock the job row to prevent concurrent reingests
+    try:
+        locked_job = (
+            session.query(PendingJob)
+            .filter(PendingJob.id == job.id)
+            .with_for_update(nowait=True)
+            .first()
+        )
+    except OperationalError:
+        raise ValueError(
+            f"Job {job.id} is currently being reingested by another process. "
+            "Please wait and try again."
+        )
+    if not locked_job:
+        raise ValueError(f"Job {job.id} not found")
+
+    # Re-check status after acquiring lock
+    if locked_job.status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):
+        raise ValueError(
+            f"Job {job.id} is now {locked_job.status}. "
+            "It may have been reingested by another process."
+        )
+
+    # Reset job status
+    locked_job.status = JobStatus.PENDING.value
+    locked_job.error_message = None
+    locked_job.completed_at = None
+    locked_job.result_id = None
+    locked_job.result_type = None
+    locked_job.updated_at = datetime.now(timezone.utc)
+    session.flush()
+
+    # Reconstruct task_kwargs from params (excluding internal fields)
+    task_kwargs = {k: v for k, v in locked_job.params.items() if not k.startswith("_")}
+
+    # Dispatch with same job_id
+    final_kwargs = {**task_kwargs, "job_id": locked_job.id}
+    try:
+        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+    except Exception as e:
+        # Dispatch failed - mark as failed
+        locked_job.mark_failed(f"Failed to dispatch reingest task: {e}")
+        session.commit()
+        logger.error(f"Failed to dispatch reingest for job {locked_job.id}: {e}")
+        raise
+
+    # Update task ID and commit
+    update_job_celery_task_id(session, locked_job, task.id)
+    session.commit()
+
+    logger.info(f"Reingesting job {locked_job.id}")
+
+    return DispatchResult(
+        job=locked_job,
+        is_new=False,
+        message=f"Job {locked_job.id} queued for reingest. Track status via GET /jobs/{locked_job.id}",
+    )

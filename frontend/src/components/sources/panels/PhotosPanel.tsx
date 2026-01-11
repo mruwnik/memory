@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { EmptyState, LoadingState, ErrorState } from '../shared'
+import { useSources } from '@/hooks/useSources'
+import { EmptyState, LoadingState, ErrorState, ConfirmDialog } from '../shared'
 import { styles } from '../styles'
 
 interface Photo {
@@ -15,12 +16,15 @@ interface Photo {
 
 export const PhotosPanel = () => {
   const { apiCall } = useAuth()
+  const { deletePhoto } = useSources()
   const [photos, setPhotos] = useState<Photo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+  const [photoToDelete, setPhotoToDelete] = useState<Photo | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadPhotos = useCallback(async () => {
@@ -83,6 +87,21 @@ export const PhotosPanel = () => {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  const handleDelete = async () => {
+    if (!photoToDelete) return
+    setDeleting(true)
+    try {
+      await deletePhoto(photoToDelete.id)
+      setPhotos(photos.filter(p => p.id !== photoToDelete.id))
+      setPhotoToDelete(null)
+    } catch (e) {
+      setPhotoToDelete(null)  // Close dialog before showing error
+      setError(e instanceof Error ? e.message : 'Failed to delete photo')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadPhotos} />
 
@@ -119,7 +138,7 @@ export const PhotosPanel = () => {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {photos.map(photo => (
-            <div key={photo.id} className="border border-slate-200 rounded-lg overflow-hidden hover:border-slate-300 transition-colors">
+            <div key={photo.id} className="group relative border border-slate-200 rounded-lg overflow-hidden hover:border-slate-300 transition-colors">
               {photo.file_path && (
                 <div className="aspect-square bg-slate-100">
                   <img
@@ -130,6 +149,16 @@ export const PhotosPanel = () => {
                   />
                 </div>
               )}
+              <button
+                onClick={() => setPhotoToDelete(photo)}
+                className="absolute top-1 right-1 p-1 bg-black/50 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                title="Delete photo"
+                aria-label="Delete photo"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
               <div className="p-2">
                 <span className="text-xs text-slate-700 truncate block" title={photo.filename}>
                   {photo.filename}
@@ -142,6 +171,14 @@ export const PhotosPanel = () => {
             </div>
           ))}
         </div>
+      )}
+
+      {photoToDelete && (
+        <ConfirmDialog
+          message={`Are you sure you want to delete "${photoToDelete.filename}"?`}
+          onConfirm={handleDelete}
+          onCancel={() => setPhotoToDelete(null)}
+        />
       )}
     </div>
   )

@@ -7,7 +7,7 @@ from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
-from memory.common.jobs import retry_failed_job
+from memory.common.jobs import retry_failed_job, reingest_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -117,6 +117,43 @@ def retry_job(
 
     try:
         result = retry_failed_job(db, job)
+        return PendingJobPayload.model_validate(result.job)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{job_id}/reingest")
+def reingest_job_endpoint(
+    job_id: int,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> PendingJobPayload:
+    """
+    Reingest a completed job.
+
+    This re-runs a successful (or failed) job to update or re-process content.
+    Useful for refreshing content after parser improvements or fixing issues.
+
+    Jobs that are currently pending or processing cannot be reingested.
+
+    Returns the job that was queued for reingestion.
+    """
+    job = job_utils.get_job(db, job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.user_id and job.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reingest a job that is {job.status}. Wait for it to complete first.",
+        )
+
+    try:
+        result = reingest_job(db, job)
         return PendingJobPayload.model_validate(result.job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

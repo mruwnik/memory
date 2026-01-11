@@ -27,18 +27,19 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const Jobs = () => {
-  const { listJobs, retryJob } = useJobs()
+  const { listJobs, retryJob, reingestJob } = useJobs()
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [retryingId, setRetryingId] = useState<number | null>(null)
-  const [retryError, setRetryError] = useState<string | null>(null)
+  const [reingestingId, setReingestingId] = useState<number | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
-    setRetryError(null)
+    setActionError(null)
     try {
       const filters = statusFilter !== 'all' ? { status: statusFilter } : {}
       const data = await listJobs({ ...filters, limit: 100 })
@@ -75,14 +76,27 @@ const Jobs = () => {
 
   const handleRetry = async (jobId: number) => {
     setRetryingId(jobId)
-    setRetryError(null)
+    setActionError(null)
     try {
       await retryJob(jobId)
       loadJobs()
     } catch (e) {
-      setRetryError(e instanceof Error ? e.message : 'Failed to retry job')
+      setActionError(e instanceof Error ? e.message : 'Failed to retry job')
     } finally {
       setRetryingId(null)
+    }
+  }
+
+  const handleReingest = async (jobId: number) => {
+    setReingestingId(jobId)
+    setActionError(null)
+    try {
+      await reingestJob(jobId)
+      loadJobs()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to reingest job')
+    } finally {
+      setReingestingId(null)
     }
   }
 
@@ -159,11 +173,11 @@ const Jobs = () => {
           </button>
         </div>
 
-        {/* Retry Error */}
-        {retryError && (
+        {/* Action Error */}
+        {actionError && (
           <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{retryError}</p>
-            <button onClick={() => setRetryError(null)} className="text-red-700 hover:underline">Dismiss</button>
+            <p>{actionError}</p>
+            <button onClick={() => setActionError(null)} className="text-red-700 hover:underline">Dismiss</button>
           </div>
         )}
 
@@ -220,15 +234,25 @@ const Jobs = () => {
                     )}
                   </div>
 
-                  <div className="shrink-0">
+                  <div className="shrink-0 flex gap-2">
                     {job.status === 'failed' && (
                       <button
                         onClick={() => handleRetry(job.id)}
-                        disabled={retryingId === job.id}
+                        disabled={retryingId === job.id || reingestingId === job.id}
                         className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark disabled:bg-slate-400"
-                        title="Retry job"
+                        title="Retry failed job"
                       >
                         {retryingId === job.id ? 'Retrying...' : 'Retry'}
+                      </button>
+                    )}
+                    {(job.status === 'complete' || job.status === 'failed') && (
+                      <button
+                        onClick={() => handleReingest(job.id)}
+                        disabled={retryingId === job.id || reingestingId === job.id}
+                        className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200 disabled:bg-slate-200 disabled:text-slate-400"
+                        title="Re-run this job"
+                      >
+                        {reingestingId === job.id ? 'Reingesting...' : 'Reingest'}
                       </button>
                     )}
                   </div>
