@@ -165,7 +165,7 @@ async def update(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def get(identifier: str) -> dict | None:
+async def get_person(identifier: str) -> dict | None:
     """
     Get a person by their identifier.
 
@@ -190,6 +190,7 @@ async def list_people(
     tags: list[str] | None = None,
     search: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict]:
     """
     List all tracked people, optionally filtered by tags or search term.
@@ -198,6 +199,7 @@ async def list_people(
         tags: Filter to people with at least one of these tags
         search: Search term to match against name, aliases, or notes
         limit: Maximum number of results (default 50, max 200)
+        offset: Number of results to skip for pagination (default 0, max 10000)
 
     Returns:
         List of person records matching the filters
@@ -205,6 +207,7 @@ async def list_people(
     logger.info(f"MCP: Listing people (tags={tags}, search={search})")
 
     limit = min(limit, 200)
+    offset = min(max(offset, 0), 10000)
 
     with make_session() as session:
         query = session.query(Person)
@@ -220,7 +223,7 @@ async def list_people(
                 | (Person.identifier.ilike(search_term))
             )
 
-        query = query.order_by(Person.display_name).limit(limit)
+        query = query.order_by(Person.display_name).offset(offset).limit(limit)
         people = query.all()
 
         return [_person_to_dict(p) for p in people]

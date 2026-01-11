@@ -118,7 +118,9 @@ async def schedule_message(
 @schedule_mcp.tool()
 @visible_when(require_scopes("schedule"))
 async def list_scheduled_llm_calls(
-    status: str | None = None, limit: int | None = 50
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """
     List scheduled LLM calls for the authenticated user.
@@ -126,6 +128,7 @@ async def list_scheduled_llm_calls(
     Args:
         status: Optional status filter ("pending", "executing", "completed", "failed", "cancelled")
         limit: Maximum number of calls to return (default: 50)
+        offset: Number of results to skip for pagination (default: 0)
 
     Returns:
         Dict with list of scheduled calls
@@ -139,6 +142,9 @@ async def list_scheduled_llm_calls(
     if not user_id:
         return {"error": "User not found", "user": current_user}
 
+    limit = min(max(limit, 1), 200)
+    offset = min(max(offset, 0), 10000)
+
     with make_session() as session:
         query = (
             session.query(ScheduledLLMCall)
@@ -149,15 +155,52 @@ async def list_scheduled_llm_calls(
         if status:
             query = query.filter(ScheduledLLMCall.status == status)
 
-        if limit:
-            query = query.limit(limit)
-
-        calls = query.all()
+        calls = query.offset(offset).limit(limit).all()
 
         return {
             "success": True,
             "scheduled_calls": [call.serialize() for call in calls],
             "count": len(calls),
+        }
+
+
+@schedule_mcp.tool()
+@visible_when(require_scopes("schedule"))
+async def get_scheduled_call(scheduled_call_id: str) -> dict[str, Any]:
+    """
+    Get details of a specific scheduled LLM call.
+
+    Args:
+        scheduled_call_id: ID of the scheduled call to retrieve
+
+    Returns:
+        Dict with the scheduled call details, or error if not found
+    """
+    logger.info(f"get_scheduled_call tool called for ID: {scheduled_call_id}")
+
+    current_user = get_current_user()
+    if not current_user["authenticated"]:
+        return {"error": "Not authenticated", "user": current_user}
+    user_id = current_user.get("user", {}).get("user_id")
+    if not user_id:
+        return {"error": "User not found", "user": current_user}
+
+    with make_session() as session:
+        scheduled_call = (
+            session.query(ScheduledLLMCall)
+            .filter(
+                ScheduledLLMCall.id == scheduled_call_id,
+                ScheduledLLMCall.user_id == user_id,
+            )
+            .first()
+        )
+
+        if not scheduled_call:
+            return {"error": "Scheduled call not found"}
+
+        return {
+            "success": True,
+            "scheduled_call": scheduled_call.serialize(),
         }
 
 

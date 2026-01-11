@@ -48,6 +48,7 @@ def get_tasks(
     due_before: datetime | None = None,
     due_after: datetime | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[TaskDict]:
     """Get tasks with optional filters.
 
@@ -59,6 +60,7 @@ def get_tasks(
         due_before: Only tasks due before this date
         due_after: Only tasks due after this date
         limit: Maximum number of tasks to return
+        offset: Number of tasks to skip for pagination
 
     Returns:
         List of task dictionaries, sorted by due_date (nulls last), then priority
@@ -107,7 +109,7 @@ def get_tasks(
         Task.inserted_at.desc(),
     )
 
-    tasks = query.limit(limit).all()
+    tasks = query.offset(offset).limit(limit).all()
     return [task_to_dict(t) for t in tasks]
 
 

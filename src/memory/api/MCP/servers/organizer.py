@@ -64,6 +64,7 @@ async def list_tasks(
     priority: Literal["low", "medium", "high", "urgent"] | None = None,
     include_completed: bool = False,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict]:
     """
     List the user's tasks/todos with optional filtering.
@@ -74,11 +75,13 @@ async def list_tasks(
         priority: Filter by priority (low, medium, high, urgent)
         include_completed: Include done/cancelled tasks (default False)
         limit: Maximum tasks to return (default 50, max 200)
+        offset: Number of results to skip for pagination (default 0, max 10000)
 
     Returns: List of tasks with id, task_title, due_date, priority, status,
              recurrence, completed_at, tags. Sorted by due_date then priority.
     """
     limit = min(max(limit, 1), 200)
+    offset = min(max(offset, 0), 10000)
 
     with make_session() as session:
         return get_tasks(
@@ -87,7 +90,29 @@ async def list_tasks(
             priority=priority,
             include_completed=include_completed,
             limit=limit,
+            offset=offset,
         )
+
+
+@organizer_mcp.tool()
+@visible_when(require_scopes("organizer"), has_items(Task))
+async def get_task(task_id: int) -> dict:
+    """
+    Get a specific task by ID.
+    Use to retrieve full details of a single task.
+
+    Args:
+        task_id: ID of the task to retrieve
+
+    Returns:
+        Dict with task details (id, task_title, due_date, priority, status,
+        recurrence, completed_at, tags), or error dict if not found.
+    """
+    with make_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            return {"error": f"Task {task_id} not found"}
+        return {"success": True, "task": task_to_dict(task)}
 
 
 @organizer_mcp.tool()
