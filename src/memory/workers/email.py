@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Callable, Generator, Sequence, cast
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, scoped_session
 
 from memory.common import collections, embedding, qdrant, settings
@@ -652,6 +653,34 @@ def get_gmail_message_ids(
     }
 
     return message_ids, service
+
+
+def gmail_message_exists(service, message_id: str) -> bool:
+    """
+    Check if a Gmail message exists by its ID.
+
+    Uses the messages.get API with minimal fields to check existence efficiently.
+    This is useful for verifying individual messages that might have been archived
+    (removed from monitored labels) but still exist in Gmail.
+
+    Args:
+        service: Gmail API service object
+        message_id: Gmail message ID to check
+
+    Returns:
+        True if the message exists, False if deleted or not found
+    """
+    try:
+        # Use fields parameter to minimize data transfer - we only need to know it exists
+        service.users().messages().get(
+            userId="me", id=message_id, format="minimal", fields="id"
+        ).execute()
+        return True
+    except HttpError as e:
+        if e.resp.status == 404:
+            return False
+        # For other errors (rate limiting, auth), we can't confirm non-existence
+        raise
 
 
 def find_removed_emails(

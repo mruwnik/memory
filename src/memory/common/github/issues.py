@@ -755,6 +755,101 @@ class IssuesMixin:
             return None
         return self._extract_nested(data, "repository", "issue", "id")
 
+    def item_exists(self, owner: str, repo: str, number: int, kind: str) -> bool:
+        """Check if an issue or PR exists in a repository.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            number: Issue or PR number
+            kind: Item type ('issue' or 'pr')
+
+        Returns:
+            True if the item exists, False otherwise
+        """
+        if kind == "pr":
+            query = """
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) { id }
+              }
+            }
+            """
+            extract_path = ("repository", "pullRequest", "id")
+        else:
+            # Default to issue query
+            query = """
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) { id }
+              }
+            }
+            """
+            extract_path = ("repository", "issue", "id")
+
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name=f"check_{kind}_exists",
+        )
+        if errors or data is None:
+            return False
+        return self._extract_nested(data, *extract_path) is not None
+
+    def items_exist(
+        self,
+        owner: str,
+        repo: str,
+        items: list[tuple[int, str]],
+    ) -> dict[tuple[int, str], bool]:
+        """Check if multiple issues/PRs exist in a single GraphQL query.
+
+        Uses GraphQL aliasing to batch multiple existence checks efficiently.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            items: List of (number, kind) tuples where kind is 'issue' or 'pr'
+
+        Returns:
+            Dict mapping each (number, kind) to True if exists, False otherwise
+        """
+        if not items:
+            return {}
+
+        # Build aliased query fields for each item
+        fields = []
+        for number, kind in items:
+            alias = f"item_{number}_{kind}"
+            if kind == "pr":
+                fields.append(f"{alias}: pullRequest(number: {number}) {{ id }}")
+            else:
+                fields.append(f"{alias}: issue(number: {number}) {{ id }}")
+
+        query = f"""
+        query($owner: String!, $repo: String!) {{
+          repository(owner: $owner, name: $repo) {{
+            {chr(10).join(fields)}
+          }}
+        }}
+        """
+
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo},
+            operation_name="check_items_exist_batch",
+        )
+
+        results: dict[tuple[int, str], bool] = {}
+        repo_data = self._extract_nested(data, "repository") or {}
+
+        for number, kind in items:
+            alias = f"item_{number}_{kind}"
+            item_data = repo_data.get(alias)
+            results[(number, kind)] = item_data is not None and item_data.get("id") is not None
+
+        return results
+
     def get_label_ids(self, owner: str, repo: str, label_names: list[str]) -> list[str]:
         """Resolve label names to GraphQL node IDs."""
         if not label_names:

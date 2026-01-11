@@ -791,6 +791,112 @@ def test_get_issue_node_id():
     assert issue_id == "I_456def"
 
 
+def test_item_exists_issue():
+    """Test checking if an issue exists."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {"repository": {"issue": {"id": "I_456def"}}}
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        exists = client.item_exists("owner", "repo", 1, "issue")
+
+    assert exists is True
+
+
+def test_item_exists_issue_not_found():
+    """Test checking an issue that doesn't exist."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {"repository": {"issue": None}}
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        exists = client.item_exists("owner", "repo", 999, "issue")
+
+    assert exists is False
+
+
+def test_item_exists_pr():
+    """Test checking if a PR exists."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {"repository": {"pullRequest": {"id": "PR_789xyz"}}}
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        exists = client.item_exists("owner", "repo", 42, "pr")
+
+    assert exists is True
+
+
+def test_item_exists_pr_not_found():
+    """Test checking a PR that doesn't exist."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {"repository": {"pullRequest": None}}
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        exists = client.item_exists("owner", "repo", 999, "pr")
+
+    assert exists is False
+
+
+def test_items_exist_batch():
+    """Test batch checking if multiple issues/PRs exist."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    # Response with aliases for each item
+    graphql_data = {
+        "repository": {
+            "item_1_issue": {"id": "I_123"},
+            "item_2_pr": {"id": "PR_456"},
+            "item_3_issue": None,  # Doesn't exist
+        }
+    }
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        results = client.items_exist(
+            "owner", "repo", [(1, "issue"), (2, "pr"), (3, "issue")]
+        )
+
+    assert results[(1, "issue")] is True
+    assert results[(2, "pr")] is True
+    assert results[(3, "issue")] is False
+
+
+def test_items_exist_empty():
+    """Test batch check with empty list returns empty dict."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        client = GithubClient(credentials)
+        results = client.items_exist("owner", "repo", [])
+
+    assert results == {}
+    mock_post.assert_not_called()
+
+
+def test_items_exist_api_error():
+    """Test batch check when API returns error."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(None, errors=[{"message": "Error"}])
+        client = GithubClient(credentials)
+        results = client.items_exist("owner", "repo", [(1, "issue")])
+
+    # Should return False for items when API errors
+    assert results[(1, "issue")] is False
+
+
 def test_get_label_ids():
     """Test resolving label names to node IDs."""
     credentials = GithubCredentials(auth_type="pat", access_token="token")

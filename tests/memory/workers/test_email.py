@@ -28,6 +28,7 @@ from memory.workers.email import (
     get_folder_uids,
     get_gmail_label_ids,
     get_gmail_message_ids,
+    gmail_message_exists,
     process_attachment,
     process_attachments,
     process_folder,
@@ -800,3 +801,47 @@ def test_get_gmail_message_ids_no_google_account(db_session):
 
     with pytest.raises(ValueError, match="Gmail account requires linked GoogleAccount"):
         get_gmail_message_ids(email_account, db_session)
+
+
+def test_gmail_message_exists_found():
+    """Test gmail_message_exists returns True when message exists."""
+    mock_service = MagicMock()
+    mock_service.users().messages().get().execute.return_value = {"id": "msg123"}
+
+    result = gmail_message_exists(mock_service, "msg123")
+
+    assert result is True
+    mock_service.users().messages().get.assert_called_with(
+        userId="me", id="msg123", format="minimal", fields="id"
+    )
+
+
+def test_gmail_message_exists_not_found():
+    """Test gmail_message_exists returns False when message is deleted."""
+    from googleapiclient.errors import HttpError
+
+    mock_service = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status = 404
+    mock_service.users().messages().get().execute.side_effect = HttpError(
+        mock_resp, b"Not Found"
+    )
+
+    result = gmail_message_exists(mock_service, "msg_deleted")
+
+    assert result is False
+
+
+def test_gmail_message_exists_api_error():
+    """Test gmail_message_exists raises on non-404 errors."""
+    from googleapiclient.errors import HttpError
+
+    mock_service = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status = 500
+    mock_service.users().messages().get().execute.side_effect = HttpError(
+        mock_resp, b"Internal Server Error"
+    )
+
+    with pytest.raises(HttpError):
+        gmail_message_exists(mock_service, "msg123")

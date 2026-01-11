@@ -276,15 +276,23 @@ class SourceItem(Base):
     # Discriminator column for SQLAlchemy inheritance
     type = Column(String(50))
 
+    # Orphan verification tracking
+    last_verified_at = Column(DateTime(timezone=True), nullable=True)
+    verification_failures = Column(Integer, nullable=False, server_default="0")
+
     __mapper_args__ = {"polymorphic_on": type, "polymorphic_identity": "source_item"}
 
     # Add table-level constraint and indexes
     __table_args__ = (
         CheckConstraint("embed_status IN ('RAW','QUEUED','STORED','FAILED')"),
+        CheckConstraint(
+            "verification_failures >= 0", name="verification_failures_non_negative"
+        ),
         Index("source_modality_idx", "modality"),
         Index("source_status_idx", "embed_status"),
         Index("source_tags_idx", "tags", postgresql_using="gin"),
         Index("source_filename_idx", "filename"),
+        Index("source_verified_at_idx", "type", "last_verified_at"),
     )
 
     @property

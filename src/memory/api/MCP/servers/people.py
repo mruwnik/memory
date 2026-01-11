@@ -206,7 +206,7 @@ async def list_people(
     """
     logger.info(f"MCP: Listing people (tags={tags}, search={search})")
 
-    limit = min(limit, 200)
+    limit = min(max(limit, 1), 200)
     offset = min(max(offset, 0), 10000)
 
     with make_session() as session:

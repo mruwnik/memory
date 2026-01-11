@@ -20,6 +20,7 @@ from memory.common.celery_app import (
     SYNC_ALL_GITHUB_REPOS,
     SYNC_ALL_GOOGLE_ACCOUNTS,
     SYNC_ALL_CALENDARS,
+    VERIFY_ORPHANS,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,10 @@ app.conf.beat_schedule.update({
     "sync-calendars": {
         "task": SYNC_ALL_CALENDARS,
         "schedule": settings.CALENDAR_SYNC_INTERVAL,
+    },
+    "verify-orphans": {
+        "task": VERIFY_ORPHANS,
+        "schedule": settings.VERIFICATION_SYNC_INTERVAL,
     },
 })
 

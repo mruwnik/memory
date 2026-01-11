@@ -288,3 +288,11 @@ GOOGLE_DRIVE_STORAGE_DIR = pathlib.Path(
 )
 GOOGLE_DRIVE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 GOOGLE_SYNC_INTERVAL = int(os.getenv("GOOGLE_SYNC_INTERVAL", 60 * 60))  # 1 hour default
+
+# Orphan verification settings
+VERIFICATION_BATCH_SIZE = int(os.getenv("VERIFICATION_BATCH_SIZE", 100))
+VERIFICATION_INTERVAL_HOURS = int(os.getenv("VERIFICATION_INTERVAL_HOURS", 24))
+MAX_VERIFICATION_FAILURES = int(os.getenv("MAX_VERIFICATION_FAILURES", 3))
+VERIFICATION_SYNC_INTERVAL = int(
+    os.getenv("VERIFICATION_SYNC_INTERVAL", 60 * 60 * 6)
+)  # 6 hours

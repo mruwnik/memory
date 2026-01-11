@@ -237,7 +237,7 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler"
+      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,verification"
 
   ingest-hub:
     <<: *worker-base

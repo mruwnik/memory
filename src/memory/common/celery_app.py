@@ -21,6 +21,7 @@ GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
 MEETINGS_ROOT = "memory.workers.tasks.meetings"
 METRICS_ROOT = "memory.workers.tasks.metrics"
+VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
@@ -103,6 +104,11 @@ COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
 CLEANUP_OLD_METRICS = f"{METRICS_ROOT}.cleanup_old_metrics"
 REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
 
+# Verification tasks
+VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
+VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
+
+
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
     user = safequote(settings.CELERY_BROKER_USER)
@@ -164,6 +170,9 @@ app.conf.update(
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
+        f"{VERIFICATION_ROOT}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
+        },
     },
 )
 
