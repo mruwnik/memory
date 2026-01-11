@@ -237,3 +237,24 @@ async def complete_task_by_id(task_id: int) -> dict:
         if not task:
             raise ValueError(f"Task {task_id} not found")
         return task_to_dict(task)
+
+
+@organizer_mcp.tool()
+@visible_when(require_scopes("organizer"), has_items(Task))
+async def delete_task(task_id: int) -> dict:
+    """
+    Delete a task permanently.
+    Use when the user wants to remove a task entirely.
+
+    Args:
+        task_id: ID of the task to delete
+
+    Returns: Confirmation of deletion with task_id.
+    """
+    with make_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+        session.delete(task)
+        session.commit()
+        return {"deleted": True, "task_id": task_id}

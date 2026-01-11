@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, CalendarEvent } from '@/hooks/useSources'
-import './Calendar.css'
+import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -17,7 +16,7 @@ interface DayCell {
 }
 
 const Calendar = () => {
-  const { getUpcomingEvents } = useSources()
+  const { getUpcomingEvents } = useCalendar()
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -128,42 +127,58 @@ const Calendar = () => {
   }
 
   return (
-    <div className="calendar-view">
-      <div className="calendar-header">
-        <Link to="/ui/dashboard" className="back-btn">Back</Link>
-        <h1>{MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}</h1>
-        <div className="calendar-nav">
-          <button onClick={goToPreviousMonth} className="nav-btn">&lt;</button>
-          <button onClick={goToToday} className="today-btn">Today</button>
-          <button onClick={goToNextMonth} className="nav-btn">&gt;</button>
+    <div className="min-h-screen bg-slate-50 p-6">
+      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
+          Back
+        </Link>
+        <h1 className="text-2xl font-semibold text-slate-800 flex-1">
+          {MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}
+        </h1>
+        <div className="flex gap-2">
+          <button onClick={goToPreviousMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&lt;</button>
+          <button onClick={goToToday} className="px-4 h-9 bg-primary text-white rounded-md hover:bg-primary-dark">Today</button>
+          <button onClick={goToNextMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&gt;</button>
         </div>
-      </div>
+      </header>
 
       {error && (
-        <div className="calendar-error">
+        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4 flex justify-between items-center">
           <p>{error}</p>
-          <button onClick={() => loadEvents(currentDate)}>Retry</button>
+          <button onClick={() => loadEvents(currentDate)} className="text-primary hover:underline">Retry</button>
         </div>
       )}
 
-      <div className="calendar-grid">
+      <div className="grid grid-cols-7 bg-white rounded-xl shadow-md overflow-hidden">
         {/* Day headers */}
         {DAYS_OF_WEEK.map(day => (
-          <div key={day} className="calendar-day-header">{day}</div>
+          <div key={day} className="py-3 text-center text-sm font-semibold text-slate-600 bg-slate-50 border-b border-slate-200">
+            {day}
+          </div>
         ))}
 
         {/* Calendar cells */}
         {calendarDays.map((day, index) => (
           <div
             key={index}
-            className={`calendar-cell ${!day.isCurrentMonth ? 'other-month' : ''} ${day.isToday ? 'today' : ''}`}
+            className={`min-h-28 p-2 border-b border-r border-slate-100 ${
+              !day.isCurrentMonth ? 'bg-slate-50/50' : 'bg-white'
+            } ${day.isToday ? 'bg-primary/5' : ''}`}
           >
-            <div className="cell-date">{day.date.getDate()}</div>
-            <div className="cell-events">
-              {day.events.slice(0, 4).map((event, eventIndex) => (
+            <div className={`text-sm font-medium mb-1 ${
+              !day.isCurrentMonth ? 'text-slate-400' : 'text-slate-700'
+            } ${day.isToday ? 'text-primary font-bold' : ''}`}>
+              {day.date.getDate()}
+            </div>
+            <div className="space-y-1">
+              {day.events.slice(0, 4).map((event) => (
                 <div
                   key={`${event.id}-${event.start_time}`}
-                  className={`event-item ${event.all_day ? 'all-day' : ''}`}
+                  className={`text-xs p-1 rounded truncate cursor-pointer ${
+                    event.all_day
+                      ? 'bg-primary/20 text-primary'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
                   title={`${event.event_title}${event.location ? ` - ${event.location}` : ''}`}
                   onClick={(e) => {
                     e.stopPropagation()
@@ -171,33 +186,48 @@ const Calendar = () => {
                   }}
                 >
                   {!event.all_day && (
-                    <span className="event-time">{formatEventTime(event)}</span>
+                    <span className="font-medium text-primary mr-1">{formatEventTime(event)}</span>
                   )}
-                  <span className="event-title">{event.event_title}</span>
+                  <span>{event.event_title}</span>
                 </div>
               ))}
               {day.events.length > 4 && (
-                <div className="more-events">+{day.events.length - 4} more</div>
+                <div className="text-xs text-slate-500 pl-1">+{day.events.length - 4} more</div>
               )}
             </div>
           </div>
         ))}
       </div>
 
-      {loading && <div className="loading-overlay">Loading events...</div>}
+      {loading && (
+        <div className="fixed inset-0 bg-white/80 flex items-center justify-center z-10">
+          <div className="text-slate-600">Loading events...</div>
+        </div>
+      )}
 
       {/* Event Detail Modal */}
       {selectedEvent && (
-        <div className="event-modal-overlay" onClick={() => setSelectedEvent(null)}>
-          <div className="event-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="event-modal-header">
-              <h2>{selectedEvent.event_title}</h2>
-              <button className="modal-close" onClick={() => setSelectedEvent(null)}>&times;</button>
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedEvent(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between p-6 border-b border-slate-100">
+              <h2 className="text-xl font-semibold text-slate-800 pr-4">{selectedEvent.event_title}</h2>
+              <button
+                className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
+                onClick={() => setSelectedEvent(null)}
+              >
+                &times;
+              </button>
             </div>
-            <div className="event-modal-content">
-              <div className="event-detail">
-                <span className="detail-label">Date</span>
-                <span className="detail-value">
+            <div className="p-6 space-y-4">
+              <div className="flex">
+                <span className="w-24 text-sm text-slate-500 shrink-0">Date</span>
+                <span className="text-sm text-slate-800">
                   {new Date(selectedEvent.start_time).toLocaleDateString('en-US', {
                     weekday: 'long',
                     year: 'numeric',
@@ -207,9 +237,9 @@ const Calendar = () => {
                 </span>
               </div>
 
-              <div className="event-detail">
-                <span className="detail-label">Time</span>
-                <span className="detail-value">
+              <div className="flex">
+                <span className="w-24 text-sm text-slate-500 shrink-0">Time</span>
+                <span className="text-sm text-slate-800">
                   {selectedEvent.all_day ? 'All day' : (
                     <>
                       {new Date(selectedEvent.start_time).toLocaleTimeString('en-US', {
@@ -228,45 +258,50 @@ const Calendar = () => {
               </div>
 
               {selectedEvent.location && (
-                <div className="event-detail">
-                  <span className="detail-label">Location</span>
-                  <span className="detail-value">{selectedEvent.location}</span>
+                <div className="flex">
+                  <span className="w-24 text-sm text-slate-500 shrink-0">Location</span>
+                  <span className="text-sm text-slate-800">{selectedEvent.location}</span>
                 </div>
               )}
 
               {selectedEvent.calendar_name && (
-                <div className="event-detail">
-                  <span className="detail-label">Calendar</span>
-                  <span className="detail-value">{selectedEvent.calendar_name}</span>
+                <div className="flex">
+                  <span className="w-24 text-sm text-slate-500 shrink-0">Calendar</span>
+                  <span className="text-sm text-slate-800">{selectedEvent.calendar_name}</span>
                 </div>
               )}
 
               {selectedEvent.recurrence_rule && (
-                <div className="event-detail">
-                  <span className="detail-label">Repeats</span>
-                  <span className="detail-value recurring-badge">Recurring event</span>
+                <div className="flex">
+                  <span className="w-24 text-sm text-slate-500 shrink-0">Repeats</span>
+                  <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">Recurring event</span>
                 </div>
               )}
 
               {selectedEvent.meeting_link && (
-                <div className="event-detail">
-                  <span className="detail-label">Meeting</span>
-                  <span className="detail-value">
-                    <a href={selectedEvent.meeting_link} target="_blank" rel="noopener noreferrer" className="meeting-link">
-                      Join Meeting
-                    </a>
-                  </span>
+                <div className="flex">
+                  <span className="w-24 text-sm text-slate-500 shrink-0">Meeting</span>
+                  <a
+                    href={selectedEvent.meeting_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Join Meeting
+                  </a>
                 </div>
               )}
 
               {selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
-                <div className="event-detail">
-                  <span className="detail-label">Attendees</span>
-                  <span className="detail-value attendees-list">
+                <div className="flex">
+                  <span className="w-24 text-sm text-slate-500 shrink-0">Attendees</span>
+                  <div className="flex flex-wrap gap-1">
                     {selectedEvent.attendees.map((email, i) => (
-                      <span key={i} className="attendee">{email}</span>
+                      <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">
+                        {email}
+                      </span>
                     ))}
-                  </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -274,9 +309,11 @@ const Calendar = () => {
         </div>
       )}
 
-      <div className="calendar-footer">
-        <Link to="/ui/sources" className="config-link">Configure calendar accounts</Link>
-      </div>
+      <footer className="mt-6 text-center">
+        <Link to="/ui/sources" className="text-primary text-sm hover:underline">
+          Configure calendar accounts
+        </Link>
+      </footer>
     </div>
   )
 }
@@ -284,8 +321,13 @@ const Calendar = () => {
 function getEventsForDate(date: Date, events: CalendarEvent[]): CalendarEvent[] {
   const dateStr = date.toISOString().split('T')[0]
   return events.filter(event => {
-    const eventDate = new Date(event.start_time).toISOString().split('T')[0]
-    return eventDate === dateStr
+    if (!event.start_time) return false
+    try {
+      const eventDate = new Date(event.start_time).toISOString().split('T')[0]
+      return eventDate === dateStr
+    } catch {
+      return false
+    }
   }).sort((a, b) => {
     // All-day events first, then by time
     if (a.all_day && !b.all_day) return -1

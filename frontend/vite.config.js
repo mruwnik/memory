@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   base: '/ui/',
   resolve: {
     alias: {
@@ -24,9 +25,8 @@ export default defineConfig({
       '/article-feeds': 'http://localhost:8000',
       '/github': 'http://localhost:8000',
       '/google-drive': 'http://localhost:8000',
-      '/tasks': 'http://localhost:8000',
-      "/photos": "http://localhost:8000",
       "/books": "http://localhost:8000",
+      "/photos": "http://localhost:8000",
       "/forum-posts": "http://localhost:8000",
       "/jobs": "http://localhost:8000",
       "/polls": "http://localhost:8000",

@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+/* Custom CSS variables for theming */
+@theme {
+  --color-primary: #667eea;
+  --color-primary-dark: #5a67d8;
+  --color-secondary: #764ba2;
+  --color-success: #16a34a;
+  --color-warning: #ca8a04;
+  --color-danger: #dc2626;
+  --color-urgent: #dc2626;
+  --color-high: #ea580c;
+  --color-medium: #ca8a04;
+  --color-low: #16a34a;
+}
+
+/* Base styles */
+@layer base {
+  body {
+    @apply font-sans leading-relaxed text-gray-800 bg-slate-50;
+  }
+}

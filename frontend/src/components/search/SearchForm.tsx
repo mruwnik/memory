@@ -14,7 +14,6 @@ type SearchConfig = {
     previews: boolean
     useScores: boolean
     limit: number
-    // Search enhancement options
     useBm25?: boolean
     useHyde?: boolean
     useReranking?: boolean
@@ -33,16 +32,13 @@ interface SearchFormProps {
     onSearch: (params: SearchParams) => void
 }
 
-
-
-// Pure helper functions for SearchForm
-const createFlags = (items: string[], defaultValue = false): Record<string, boolean> => 
+const createFlags = (items: string[], defaultValue = false): Record<string, boolean> =>
     items.reduce((acc, item) => ({ ...acc, [item]: defaultValue }), {})
 
-const getSelectedItems = (items: Record<string, boolean>): string[] => 
+const getSelectedItems = (items: Record<string, boolean>): string[] =>
     Object.entries(items).filter(([_, selected]) => selected).map(([key]) => key)
 
-const cleanFilters = (filters: Record<string, any>): Record<string, any> => 
+const cleanFilters = (filters: Record<string, any>): Record<string, any> =>
     Object.entries(filters)
         .filter(([_, value]) => value !== null && value !== '' && value !== undefined)
         .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {})
@@ -56,14 +52,12 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     const [tags, setTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState(10)
-    // Search enhancement options - initialize to match server defaults
-    // All enabled by default (query analysis runs in parallel with HyDE, no extra latency)
     const [useBm25, setUseBm25] = useState<boolean | undefined>(true)
     const [useHyde, setUseHyde] = useState<boolean | undefined>(true)
     const [useReranking, setUseReranking] = useState<boolean | undefined>(true)
     const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(true)
     const { getMetadataSchemas, getTags } = useMCP()
-    
+
     useEffect(() => {
         const setupFilters = async () => {
            const [schemas, tags] = await Promise.all([
@@ -77,7 +71,7 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
         setupFilters()
     }, [getMetadataSchemas, getTags])
 
-    const handleFilterChange = (field: string, value: any) => 
+    const handleFilterChange = (field: string, value: any) =>
         setDynamicFilters(prev => ({ ...prev, [field]: value }))
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -101,103 +95,99 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
             },
         })
     }
-    
+
     return (
-        <form onSubmit={handleSubmit} className="search-form">
-            <div className="search-input-group">
+        <form onSubmit={handleSubmit} className="bg-white p-8 rounded-xl shadow-md mb-8">
+            <div className="flex gap-4 items-center mb-6">
                 <input
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search your knowledge base..."
-                    className="search-input"
+                    className="flex-1 py-3 px-4 border border-slate-200 rounded-lg text-base transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     required
                 />
-                <button type="submit" disabled={isLoading} className="search-btn">
+                <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="bg-primary text-white border-none py-3 px-6 rounded-lg text-base font-medium cursor-pointer transition-colors hover:bg-primary-dark disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
                     {isLoading ? 'Searching...' : 'Search'}
                 </button>
             </div>
 
-            <div className="search-options">
-                <div className="search-option">
-                    <label>
-                        <input
-                            type="checkbox"
-                            checked={previews}
-                            onChange={(e) => setPreviews(e.target.checked)}
-                        />
-                        Include content previews
-                    </label>
-                </div>
-                <div className="search-option">
-                    <label>
-                        <input
-                            type="checkbox"
-                            checked={useScores}
-                            onChange={(e) => setUseScores(e.target.checked)}
-                        />
-                        Score results with a LLM before returning
-                    </label>
-                </div>
+            <div className="space-y-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={previews}
+                        onChange={(e) => setPreviews(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    Include content previews
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={useScores}
+                        onChange={(e) => setUseScores(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    Score results with a LLM before returning
+                </label>
 
-                <details className="search-enhancements">
-                    <summary>Search Enhancements</summary>
-                    <div className="enhancement-options">
-                        <div className="search-option">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={useBm25}
-                                    onChange={(e) => setUseBm25(e.target.checked)}
-                                />
-                                BM25 keyword search
-                            </label>
-                        </div>
-                        <div className="search-option">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={useHyde}
-                                    onChange={(e) => setUseHyde(e.target.checked)}
-                                />
-                                HyDE (hypothetical document expansion)
-                            </label>
-                        </div>
-                        <div className="search-option">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={useReranking}
-                                    onChange={(e) => setUseReranking(e.target.checked)}
-                                />
-                                Reranking (cross-encoder)
-                            </label>
-                        </div>
-                        <div className="search-option">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={useQueryAnalysis}
-                                    onChange={(e) => setUseQueryAnalysis(e.target.checked)}
-                                />
-                                Query analysis (LLM-based)
-                            </label>
-                        </div>
+                <details className="border border-slate-200 rounded-lg p-4">
+                    <summary className="cursor-pointer font-medium text-slate-700">Search Enhancements</summary>
+                    <div className="mt-4 space-y-3 pl-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useBm25}
+                                onChange={(e) => setUseBm25(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            />
+                            BM25 keyword search
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useHyde}
+                                onChange={(e) => setUseHyde(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            />
+                            HyDE (hypothetical document expansion)
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useReranking}
+                                onChange={(e) => setUseReranking(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            />
+                            Reranking (cross-encoder)
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useQueryAnalysis}
+                                onChange={(e) => setUseQueryAnalysis(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            />
+                            Query analysis (LLM-based)
+                        </label>
                     </div>
                 </details>
 
-                <SelectableTags 
-                    title="Modalities" 
-                    className="modality-checkboxes" 
-                    tags={modalities} 
+                <SelectableTags
+                    title="Modalities"
+                    tags={modalities}
                     onSelect={(tag, selected) => setModalities({ ...modalities, [tag]: selected })}
                     onBatchUpdate={(updates) => setModalities(updates)}
                 />
 
-                <SelectableTags 
-                    title="Tags" 
-                    className="tags-container" 
-                    tags={tags} 
+                <SelectableTags
+                    title="Tags"
+                    tags={tags}
                     onSelect={(tag, selected) => setTags({ ...tags, [tag]: selected })}
                     onBatchUpdate={(updates) => setTags(updates)}
                     searchable={true}
@@ -210,19 +200,17 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                     onFilterChange={handleFilterChange}
                 />
 
-                <div className="search-option">
-                    <label>
-                        Max Results:
-                        <input
-                            type="number"
-                            value={limit}
-                            onChange={(e) => setLimit(parseInt(e.target.value) || 10)}
-                            min={1}
-                            max={100}
-                            className="limit-input"
-                        />
-                    </label>
-                </div>
+                <label className="flex items-center gap-2">
+                    Max Results:
+                    <input
+                        type="number"
+                        value={limit}
+                        onChange={(e) => setLimit(parseInt(e.target.value) || 10)}
+                        min={1}
+                        max={100}
+                        className="w-20 py-1 px-2 border border-slate-200 rounded text-sm"
+                    />
+                </label>
             </div>
         </form>
     )

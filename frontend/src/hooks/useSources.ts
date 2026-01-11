@@ -377,61 +377,6 @@ export interface CeleryTaskResponse {
   status: string
 }
 
-// Todo/Task types
-export interface TodoTask {
-  id: number
-  task_title: string
-  due_date: string | null
-  priority: 'low' | 'medium' | 'high' | 'urgent' | null
-  status: 'pending' | 'in_progress' | 'done' | 'cancelled'
-  recurrence: string | null
-  completed_at: string | null
-  source_item_id: number | null
-  tags: string[]
-  inserted_at: string | null
-}
-
-export interface TodoTaskCreate {
-  task_title: string
-  due_date?: string
-  priority?: 'low' | 'medium' | 'high' | 'urgent'
-  recurrence?: string
-  tags?: string[]
-}
-
-export interface TodoTaskUpdate {
-  task_title?: string
-  due_date?: string
-  priority?: 'low' | 'medium' | 'high' | 'urgent'
-  status?: 'pending' | 'in_progress' | 'done' | 'cancelled'
-  recurrence?: string
-  tags?: string[]
-}
-
-export interface TodoTaskFilters {
-  status?: string
-  priority?: string
-  include_completed?: boolean
-  due_before?: string
-  due_after?: string
-  limit?: number
-}
-
-// Calendar Event
-export interface CalendarEvent {
-  id: number
-  event_title: string
-  start_time: string
-  end_time: string | null
-  all_day: boolean
-  location: string | null
-  calendar_name: string | null
-  recurrence_rule: string | null
-  calendar_account_id: number | null
-  attendees: string[] | null
-  meeting_link: string | null
-}
-
 export const useSources = () => {
   const { apiCall } = useAuth()
 
@@ -866,74 +811,6 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
-  const getUpcomingEvents = useCallback(async (
-    options: { days?: number; limit?: number; startDate?: string; endDate?: string } = {}
-  ): Promise<CalendarEvent[]> => {
-    const { days = 7, limit = 100, startDate, endDate } = options
-    let url = `/calendar-accounts/events/upcoming?limit=${limit}`
-    if (startDate && endDate) {
-      url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`
-    } else {
-      url += `&days=${days}`
-    }
-    const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch upcoming events')
-    return response.json()
-  }, [apiCall])
-
-  // === Tasks/Todos ===
-
-  const listTasks = useCallback(async (filters: TodoTaskFilters = {}): Promise<TodoTask[]> => {
-    const params = new URLSearchParams()
-    if (filters.status) params.append('status', filters.status)
-    if (filters.priority) params.append('priority', filters.priority)
-    if (filters.include_completed) params.append('include_completed', 'true')
-    if (filters.due_before) params.append('due_before', filters.due_before)
-    if (filters.due_after) params.append('due_after', filters.due_after)
-    if (filters.limit) params.append('limit', filters.limit.toString())
-
-    const queryString = params.toString()
-    const url = queryString ? `/tasks?${queryString}` : '/tasks'
-    const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch tasks')
-    return response.json()
-  }, [apiCall])
-
-  const createTask = useCallback(async (data: TodoTaskCreate): Promise<TodoTask> => {
-    const response = await apiCall('/tasks', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create task')
-    }
-    return response.json()
-  }, [apiCall])
-
-  const updateTask = useCallback(async (id: number, data: TodoTaskUpdate): Promise<TodoTask> => {
-    const response = await apiCall(`/tasks/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update task')
-    }
-    return response.json()
-  }, [apiCall])
-
-  const deleteTask = useCallback(async (id: number): Promise<void> => {
-    const response = await apiCall(`/tasks/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete task')
-  }, [apiCall])
-
-  const completeTask = useCallback(async (id: number): Promise<TodoTask> => {
-    const response = await apiCall(`/tasks/${id}/complete`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to complete task')
-    return response.json()
-  }, [apiCall])
-
   return {
     // Email
     listEmailAccounts,
@@ -989,13 +866,5 @@ export const useSources = () => {
     updateCalendarAccount,
     deleteCalendarAccount,
     syncCalendarAccount,
-    // Calendar Events
-    getUpcomingEvents,
-    // Tasks/Todos
-    listTasks,
-    createTask,
-    updateTask,
-    deleteTask,
-    completeTask,
   }
 }

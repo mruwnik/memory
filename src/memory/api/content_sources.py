@@ -6,14 +6,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
-from memory.common.db.models.sources import Book
-from memory.common.db.models.source_items import BookSection, Photo
+from memory.common.db.models.source_items import Photo
 from memory.common import settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_LESSWRONG, SYNC_PHOTO
 from memory.common.celery_app import app as celery_app
@@ -22,61 +20,6 @@ from memory.common.jobs import dispatch_job
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["content-sources"])
-
-
-# === Books ===
-
-
-class BookResponse(BaseModel):
-    id: int
-    title: str
-    author: str | None
-    publisher: str | None
-    published: str | None
-    language: str | None
-    total_pages: int | None
-    tags: list[str]
-    section_count: int
-    file_path: str | None
-
-
-@router.get("/books")
-def list_books(
-    limit: int = Query(default=100, ge=1, le=500),
-    user: User = Depends(get_current_user),
-    db: DBSession = Depends(get_session),
-) -> list[BookResponse]:
-    """List all books in the knowledge base."""
-    # Get books with section counts
-    section_counts = (
-        db.query(BookSection.book_id, func.count(BookSection.id).label("count"))
-        .group_by(BookSection.book_id)
-        .subquery()
-    )
-
-    books = (
-        db.query(Book, func.coalesce(section_counts.c.count, 0).label("section_count"))
-        .outerjoin(section_counts, Book.id == section_counts.c.book_id)
-        .order_by(Book.title)
-        .limit(limit)
-        .all()
-    )
-
-    return [
-        BookResponse(
-            id=book.id,
-            title=book.title,
-            author=book.author,
-            publisher=book.publisher,
-            published=book.published.isoformat() if book.published else None,
-            language=book.language,
-            total_pages=book.total_pages,
-            tags=book.tags or [],
-            section_count=section_count,
-            file_path=book.file_path,
-        )
-        for book, section_count in books
-    ]
 
 
 # === Photos ===

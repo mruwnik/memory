@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 interface SelectableTagProps {
     tag: string
     selected: boolean
@@ -6,8 +8,12 @@ interface SelectableTagProps {
 
 const SelectableTag = ({ tag, selected, onSelect }: SelectableTagProps) => {
     return (
-        <span 
-            className={`tag ${selected ? 'selected' : ''}`} 
+        <span
+            className={`px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
+                selected
+                    ? 'bg-primary text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
             onClick={() => onSelect(tag, !selected)}
         >
             {tag}
@@ -15,19 +21,17 @@ const SelectableTag = ({ tag, selected, onSelect }: SelectableTagProps) => {
     )
 }
 
-import { useState } from 'react'
-
 interface SelectableTagsProps {
     title: string
-    className: string
     tags: Record<string, boolean>
     onSelect: (tag: string, selected: boolean) => void
     onBatchUpdate?: (updates: Record<string, boolean>) => void
     searchable?: boolean
 }
 
-export const SelectableTags = ({ title, className, tags, onSelect, onBatchUpdate, searchable = false }: SelectableTagsProps) => {
+export const SelectableTags = ({ title, tags, onSelect, onBatchUpdate, searchable = false }: SelectableTagsProps) => {
     const [searchTerm, setSearchTerm] = useState('')
+
     const handleSelectAll = () => {
         if (onBatchUpdate) {
             const updates = Object.keys(tags).reduce((acc, tag) => {
@@ -36,7 +40,6 @@ export const SelectableTags = ({ title, className, tags, onSelect, onBatchUpdate
             }, {} as Record<string, boolean>)
             onBatchUpdate(updates)
         } else {
-            // Fallback to individual updates (though this won't work well)
             Object.keys(tags).forEach(tag => {
                 if (!tags[tag]) {
                     onSelect(tag, true)
@@ -53,7 +56,6 @@ export const SelectableTags = ({ title, className, tags, onSelect, onBatchUpdate
             }, {} as Record<string, boolean>)
             onBatchUpdate(updates)
         } else {
-            // Fallback to individual updates (though this won't work well)
             Object.keys(tags).forEach(tag => {
                 if (tags[tag]) {
                     onSelect(tag, false)
@@ -62,8 +64,7 @@ export const SelectableTags = ({ title, className, tags, onSelect, onBatchUpdate
         }
     }
 
-    // Filter tags based on search term
-    const filteredTags = Object.entries(tags).filter(([tag, selected]) => {
+    const filteredTags = Object.entries(tags).filter(([tag]) => {
         return !searchTerm || tag.toLowerCase().includes(searchTerm.toLowerCase())
     })
 
@@ -75,62 +76,60 @@ export const SelectableTags = ({ title, className, tags, onSelect, onBatchUpdate
     const noneSelected = selectedCount === 0
 
     return (
-        <div className="search-option">
-            <details className="selectable-tags-details">
-                <summary className="selectable-tags-summary">
-                    {title} ({selectedCount} selected)
-                </summary>
-                
-                <div className="tag-controls">
-                    <button 
-                        type="button"
-                        className="tag-control-btn"
-                        onClick={handleSelectAll}
-                        disabled={allSelected}
-                    >
-                        All
-                    </button>
-                    <button 
-                        type="button"
-                        className="tag-control-btn"
-                        onClick={handleDeselectAll}
-                        disabled={noneSelected}
-                    >
-                        None
-                    </button>
-                    <span className="tag-count">
-                        ({selectedCount}/{totalCount})
-                    </span>
+        <details className="border border-slate-200 rounded-lg p-4">
+            <summary className="cursor-pointer font-medium text-slate-700">
+                {title} ({selectedCount} selected)
+            </summary>
+
+            <div className="mt-4 flex items-center gap-2">
+                <button
+                    type="button"
+                    className="px-3 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={handleSelectAll}
+                    disabled={allSelected}
+                >
+                    All
+                </button>
+                <button
+                    type="button"
+                    className="px-3 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={handleDeselectAll}
+                    disabled={noneSelected}
+                >
+                    None
+                </button>
+                <span className="text-xs text-slate-500">
+                    ({selectedCount}/{totalCount})
+                </span>
+            </div>
+
+            {searchable && (
+                <div className="mt-3 flex items-center gap-2">
+                    <input
+                        type="text"
+                        placeholder={`Search ${title.toLowerCase()}...`}
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="flex-1 py-1 px-2 border border-slate-200 rounded text-sm"
+                    />
+                    {searchTerm && (
+                        <span className="text-xs text-slate-500">
+                            Showing {filteredSelectedCount}/{filteredTotalCount}
+                        </span>
+                    )}
                 </div>
-                
-                {searchable && (
-                    <div className="tag-search-controls">
-                        <input
-                            type="text"
-                            placeholder={`Search ${title.toLowerCase()}...`}
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="tag-search-input"
-                        />
-                        {searchTerm && (
-                            <span className="filtered-count">
-                                Showing {filteredSelectedCount}/{filteredTotalCount}
-                            </span>
-                        )}
-                    </div>
-                )}
-                
-                <div className={`${className} tags-display-area`}>
-                    {filteredTags.map(([tag, selected]: [string, boolean]) => (
-                        <SelectableTag 
-                            key={tag} 
-                            tag={tag} 
-                            selected={selected} 
-                            onSelect={onSelect} 
-                        />
-                    ))}
-                </div>
-            </details>
-        </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+                {filteredTags.map(([tag, selected]: [string, boolean]) => (
+                    <SelectableTag
+                        key={tag}
+                        tag={tag}
+                        selected={selected}
+                        onSelect={onSelect}
+                    />
+                ))}
+            </div>
+        </details>
     )
-} 
+}

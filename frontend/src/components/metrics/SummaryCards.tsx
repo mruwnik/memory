@@ -19,48 +19,48 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
   const diskPercent = systemMetrics['system.disk_usage_percent']
 
   return (
-    <div className="summary-cards">
-      <div className="summary-card">
-        <span className="card-value">{formatNumber(totalEvents)}</span>
-        <span className="card-label">Total Events</span>
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <span className="block text-2xl font-bold text-slate-800">{formatNumber(totalEvents)}</span>
+        <span className="text-sm text-slate-500">Total Events</span>
       </div>
 
-      <div className="summary-card">
-        <span className={`card-value ${getSuccessRateColor(successRate)}`}>
+      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <span className={`block text-2xl font-bold ${getSuccessRateColor(successRate)}`}>
           {successRate}%
         </span>
-        <span className="card-label">Success Rate</span>
+        <span className="text-sm text-slate-500">Success Rate</span>
       </div>
 
-      <div className="summary-card">
-        <span className="card-value">{formatDuration(avgDuration)}</span>
-        <span className="card-label">Avg Duration</span>
+      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <span className="block text-2xl font-bold text-slate-800">{formatDuration(avgDuration)}</span>
+        <span className="text-sm text-slate-500">Avg Duration</span>
       </div>
 
       {cpuPercent !== undefined && (
-        <div className="summary-card">
-          <span className={`card-value ${getUsageColor(cpuPercent)}`}>
+        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+          <span className={`block text-2xl font-bold ${getUsageColor(cpuPercent)}`}>
             {cpuPercent.toFixed(1)}%
           </span>
-          <span className="card-label">{hasSystemCpu ? 'System CPU' : 'Process CPU'}</span>
+          <span className="text-sm text-slate-500">{hasSystemCpu ? 'System CPU' : 'Process CPU'}</span>
         </div>
       )}
 
       {memoryPercent !== undefined && (
-        <div className="summary-card">
-          <span className={`card-value ${getUsageColor(memoryPercent)}`}>
+        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+          <span className={`block text-2xl font-bold ${getUsageColor(memoryPercent)}`}>
             {memoryPercent.toFixed(1)}%
           </span>
-          <span className="card-label">Memory Usage</span>
+          <span className="text-sm text-slate-500">Memory Usage</span>
         </div>
       )}
 
       {diskPercent !== undefined && (
-        <div className="summary-card">
-          <span className={`card-value ${getUsageColor(diskPercent)}`}>
+        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+          <span className={`block text-2xl font-bold ${getUsageColor(diskPercent)}`}>
             {diskPercent.toFixed(1)}%
           </span>
-          <span className="card-label">Disk Usage</span>
+          <span className="text-sm text-slate-500">Disk Usage</span>
         </div>
       )}
     </div>
@@ -82,13 +82,13 @@ const formatDuration = (ms: number): string => {
 }
 
 const getSuccessRateColor = (rate: number): string => {
-  if (rate >= 95) return 'color-success'
-  if (rate >= 80) return 'color-warning'
-  return 'color-error'
+  if (rate >= 95) return 'text-success'
+  if (rate >= 80) return 'text-warning'
+  return 'text-danger'
 }
 
 const getUsageColor = (percent: number): string => {
-  if (percent <= 60) return 'color-success'
-  if (percent <= 80) return 'color-warning'
-  return 'color-error'
+  if (percent <= 60) return 'text-success'
+  if (percent <= 80) return 'text-warning'
+  return 'text-danger'
 }

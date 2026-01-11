@@ -1,20 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useSources, TodoTask, TodoTaskFilters } from '@/hooks/useSources'
-import './Tasks.css'
-
-const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
-const PRIORITY_COLORS: Record<string, string> = {
-  urgent: '#dc2626',
-  high: '#ea580c',
-  medium: '#ca8a04',
-  low: '#16a34a',
-}
+import { useTasks, TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
+import { PRIORITY_ORDER, PRIORITY_COLORS } from '@/constants/priority'
 
 type StatusFilter = 'active' | 'completed' | 'all'
 
 const Tasks = () => {
-  const { listTasks, completeTask, createTask, updateTask, deleteTask } = useSources()
+  const { listTasks, completeTask, createTask, updateTask, deleteTask } = useTasks()
   const [tasks, setTasks] = useState<TodoTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -40,16 +32,12 @@ const Tasks = () => {
       }
 
       const data = await listTasks(filters)
-      // Sort by priority then due date
       const sorted = [...data].sort((a, b) => {
-        // Completed tasks at the end
         if (a.status === 'done' && b.status !== 'done') return 1
         if (a.status !== 'done' && b.status === 'done') return -1
-        // Priority first
         const aPriority = a.priority ? PRIORITY_ORDER[a.priority] ?? 4 : 4
         const bPriority = b.priority ? PRIORITY_ORDER[b.priority] ?? 4 : 4
         if (aPriority !== bPriority) return aPriority - bPriority
-        // Then by due date
         if (a.due_date && b.due_date) {
           return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
         }
@@ -142,17 +130,17 @@ const Tasks = () => {
     taskDate.setHours(0, 0, 0, 0)
 
     if (taskDate.getTime() < today.getTime()) {
-      return { text: 'Overdue', className: 'overdue' }
+      return { text: 'Overdue', className: 'text-[var(--color-danger)] font-medium' }
     }
     if (taskDate.getTime() === today.getTime()) {
-      return { text: 'Today', className: 'today' }
+      return { text: 'Today', className: 'text-[var(--color-high)] font-medium' }
     }
     if (taskDate.getTime() === tomorrow.getTime()) {
-      return { text: 'Tomorrow', className: 'tomorrow' }
+      return { text: 'Tomorrow', className: 'text-[var(--color-medium)]' }
     }
     return {
       text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      className: ''
+      className: 'text-slate-500'
     }
   }
 
@@ -160,37 +148,43 @@ const Tasks = () => {
   const completedCount = tasks.filter(t => t.status === 'done').length
 
   return (
-    <div className="tasks-page">
-      <header className="tasks-header">
-        <Link to="/ui/dashboard" className="back-btn">Back</Link>
-        <h1>Tasks</h1>
-        <div className="tasks-stats">
-          <span className="stat">{activeCount} active</span>
-          <span className="stat">{completedCount} completed</span>
+    <div className="min-h-screen bg-slate-50 p-8 max-w-3xl mx-auto">
+      <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
+        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
+          Back
+        </Link>
+        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Tasks</h1>
+        <div className="flex gap-4 text-sm text-slate-600">
+          <span>{activeCount} active</span>
+          <span>{completedCount} completed</span>
         </div>
       </header>
 
-      <div className="tasks-content">
+      <div className="space-y-6">
         {/* Add Task Form */}
-        <form onSubmit={handleAddTask} className="add-task-form">
-          <div className="form-row">
+        <form onSubmit={handleAddTask} className="bg-white p-6 rounded-xl shadow-md">
+          <div className="flex gap-3 mb-4">
             <input
               type="text"
               placeholder="What needs to be done?"
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               disabled={isAdding}
-              className="task-input"
+              className="flex-1 py-2 px-3 border border-slate-200 rounded-lg text-base focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
-            <button type="submit" disabled={isAdding || !newTaskTitle.trim()} className="add-btn">
+            <button
+              type="submit"
+              disabled={isAdding || !newTaskTitle.trim()}
+              className="bg-primary text-white py-2 px-4 rounded-lg font-medium hover:bg-primary-dark disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
               Add Task
             </button>
           </div>
-          <div className="form-row form-options">
+          <div className="flex gap-3">
             <select
               value={newTaskPriority}
               onChange={(e) => setNewTaskPriority(e.target.value)}
-              className="priority-select"
+              className="py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white"
             >
               <option value="">No priority</option>
               <option value="low">Low</option>
@@ -202,47 +196,42 @@ const Tasks = () => {
               type="date"
               value={newTaskDueDate}
               onChange={(e) => setNewTaskDueDate(e.target.value)}
-              className="date-input"
+              className="py-2 px-3 border border-slate-200 rounded-lg text-sm"
             />
           </div>
         </form>
 
         {/* Filters */}
-        <div className="tasks-filters">
-          <button
-            className={`filter-btn ${statusFilter === 'active' ? 'active' : ''}`}
-            onClick={() => setStatusFilter('active')}
-          >
-            Active
-          </button>
-          <button
-            className={`filter-btn ${statusFilter === 'completed' ? 'active' : ''}`}
-            onClick={() => setStatusFilter('completed')}
-          >
-            Completed
-          </button>
-          <button
-            className={`filter-btn ${statusFilter === 'all' ? 'active' : ''}`}
-            onClick={() => setStatusFilter('all')}
-          >
-            All
-          </button>
+        <div className="flex gap-2">
+          {(['active', 'completed', 'all'] as StatusFilter[]).map((filter) => (
+            <button
+              key={filter}
+              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                statusFilter === filter
+                  ? 'bg-primary text-white'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+              }`}
+              onClick={() => setStatusFilter(filter)}
+            >
+              {filter.charAt(0).toUpperCase() + filter.slice(1)}
+            </button>
+          ))}
         </div>
 
         {/* Error */}
         {error && (
-          <div className="tasks-error">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
             <p>{error}</p>
-            <button onClick={loadTasks}>Retry</button>
+            <button onClick={loadTasks} className="text-primary hover:underline">Retry</button>
           </div>
         )}
 
         {/* Loading */}
-        {loading && <div className="tasks-loading">Loading tasks...</div>}
+        {loading && <div className="text-center py-8 text-slate-500">Loading tasks...</div>}
 
-        {/* Task List */}
+        {/* Empty State */}
         {!loading && tasks.length === 0 && (
-          <div className="tasks-empty">
+          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
             {statusFilter === 'completed'
               ? 'No completed tasks yet'
               : statusFilter === 'active'
@@ -251,57 +240,64 @@ const Tasks = () => {
           </div>
         )}
 
+        {/* Task List */}
         {!loading && tasks.length > 0 && (
-          <ul className="tasks-list">
+          <ul className="space-y-2">
             {tasks.map(task => (
-              <li key={task.id} className={`task-item ${task.status === 'done' ? 'completed' : ''}`}>
+              <li
+                key={task.id}
+                className={`bg-white p-4 rounded-lg shadow-sm flex items-center gap-4 ${
+                  task.status === 'done' ? 'opacity-60' : ''
+                }`}
+              >
                 <button
-                  className={`task-checkbox ${task.status === 'done' ? 'checked' : ''}`}
+                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                    task.status === 'done'
+                      ? 'bg-success border-success text-white'
+                      : 'border-slate-300 hover:border-primary'
+                  }`}
                   onClick={() => task.status !== 'done' && handleComplete(task.id)}
                   title={task.status === 'done' ? 'Completed' : 'Mark as complete'}
                   disabled={task.status === 'done'}
                 >
-                  {task.status === 'done' && <span className="checkmark">&#10003;</span>}
+                  {task.status === 'done' && <span className="text-sm">✓</span>}
                 </button>
 
-                <div className="task-content">
+                <div className="flex-1 min-w-0">
                   {editingTask === task.id ? (
-                    <div className="task-edit-form">
+                    <div className="flex gap-2">
                       <input
                         type="text"
                         value={editTitle}
                         onChange={(e) => setEditTitle(e.target.value)}
-                        className="task-edit-input"
+                        className="flex-1 py-1 px-2 border border-slate-200 rounded text-sm focus:border-primary focus:outline-none"
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') handleSaveEdit(task.id)
                           if (e.key === 'Escape') handleCancelEdit()
                         }}
                       />
-                      <button onClick={() => handleSaveEdit(task.id)} className="save-btn">Save</button>
-                      <button onClick={handleCancelEdit} className="cancel-btn">Cancel</button>
+                      <button onClick={() => handleSaveEdit(task.id)} className="text-sm text-primary hover:underline">Save</button>
+                      <button onClick={handleCancelEdit} className="text-sm text-slate-500 hover:underline">Cancel</button>
                     </div>
                   ) : (
                     <>
-                      <span className={`task-title ${task.status === 'done' ? 'done' : ''}`}>
+                      <span className={`block truncate ${task.status === 'done' ? 'line-through text-slate-400' : 'text-slate-800'}`}>
                         {task.task_title}
                       </span>
-                      <div className="task-meta">
+                      <div className="flex gap-2 mt-1 flex-wrap">
                         {task.priority && (
-                          <span
-                            className="task-priority"
-                            style={{ backgroundColor: PRIORITY_COLORS[task.priority] }}
-                          >
+                          <span className={`${PRIORITY_COLORS[task.priority]} text-white text-xs px-2 py-0.5 rounded`}>
                             {task.priority}
                           </span>
                         )}
                         {task.due_date && (
-                          <span className={`task-due ${formatDueDate(task.due_date).className}`}>
+                          <span className={`text-xs ${formatDueDate(task.due_date).className}`}>
                             {formatDueDate(task.due_date).text}
                           </span>
                         )}
                         {task.status === 'in_progress' && (
-                          <span className="task-status in-progress">In Progress</span>
+                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">In Progress</span>
                         )}
                       </div>
                     </>
@@ -309,14 +305,22 @@ const Tasks = () => {
                 </div>
 
                 {editingTask !== task.id && (
-                  <div className="task-actions">
+                  <div className="flex gap-2">
                     {task.status !== 'done' && (
-                      <button onClick={() => handleStartEdit(task)} className="edit-btn" title="Edit">
-                        &#9998;
+                      <button
+                        onClick={() => handleStartEdit(task)}
+                        className="text-slate-400 hover:text-slate-600 p-1"
+                        title="Edit"
+                      >
+                        ✎
                       </button>
                     )}
-                    <button onClick={() => handleDelete(task.id)} className="delete-btn" title="Delete">
-                      &#10005;
+                    <button
+                      onClick={() => handleDelete(task.id)}
+                      className="text-slate-400 hover:text-danger p-1"
+                      title="Delete"
+                    >
+                      ✕
                     </button>
                   </div>
                 )}

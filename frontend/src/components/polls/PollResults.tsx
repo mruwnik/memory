@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { getPollResults, usePolls } from '../../hooks/usePolls'
 import type { Poll, SlotAggregation } from '../../hooks/usePolls'
 import PollGrid from './PollGrid'
@@ -8,13 +8,18 @@ import {
   COMMON_TIMEZONES,
   formatTimezone,
   formatSlotTime,
-  formatDateTimeInTimezone,
 } from '../../utils/timezones'
 import { useAuth } from '../../hooks/useAuth'
 
+const STATUS_COLORS: Record<string, string> = {
+  open: 'bg-green-100 text-green-700',
+  closed: 'bg-slate-100 text-slate-600',
+  finalized: 'bg-blue-100 text-blue-700',
+  cancelled: 'bg-red-100 text-red-600',
+}
+
 export const PollResults: React.FC = () => {
   const { slug } = useParams<{ slug: string }>()
-  const navigate = useNavigate()
   const { isAuthenticated } = useAuth()
   const { closePoll, finalizePoll, cancelPoll, updatePoll } = usePolls()
 
@@ -25,7 +30,7 @@ export const PollResults: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [displayTimezone, setDisplayTimezone] = useState(getBrowserTimezone())
-  
+
   // Management state
   const [showManageMenu, setShowManageMenu] = useState(false)
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
@@ -127,317 +132,348 @@ export const PollResults: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="poll-results-page">
-        <div className="poll-loading">Loading results...</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="text-center py-8 text-slate-500">Loading results...</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="poll-results-page">
-        <div className="poll-error">{error}</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+            {error}
+          </div>
+        </div>
       </div>
     )
   }
 
   if (!poll) {
     return (
-      <div className="poll-results-page">
-        <div className="poll-error">Poll not found</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+            Poll not found
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="poll-results-page">
-      <div className="poll-header">
-        <div className="poll-header-top">
-          <h1>{poll.title}</h1>
-          <div className="poll-status-badge" data-status={poll.status}>
-            {poll.status}
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+          <div className="flex items-start justify-between mb-2">
+            <h1 className="text-2xl font-semibold text-slate-800">{poll.title}</h1>
+            <span className={`px-2 py-1 rounded text-xs font-medium capitalize ${STATUS_COLORS[poll.status] || 'bg-slate-100 text-slate-600'}`}>
+              {poll.status}
+            </span>
           </div>
-        </div>
-        {poll.description && <p className="poll-description">{poll.description}</p>}
-        
-        <div className="poll-header-controls">
-          <div className="poll-form-group poll-timezone-selector">
-            <label htmlFor="displayTimezone">Timezone</label>
-            <select
-              id="displayTimezone"
-              value={displayTimezone}
-              onChange={(e) => setDisplayTimezone(e.target.value)}
-            >
-              {!COMMON_TIMEZONES.includes(displayTimezone) && (
-                <option value={displayTimezone}>{formatTimezone(displayTimezone)}</option>
-              )}
-              {COMMON_TIMEZONES.map(tz => (
-                <option key={tz} value={tz}>{formatTimezone(tz)}</option>
-              ))}
-            </select>
+          {poll.description && <p className="text-slate-600 mb-4">{poll.description}</p>}
+
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <label htmlFor="displayTimezone" className="text-sm text-slate-500 mr-2">
+                Timezone
+              </label>
+              <select
+                id="displayTimezone"
+                value={displayTimezone}
+                onChange={(e) => setDisplayTimezone(e.target.value)}
+                className="py-1.5 px-2 border border-slate-200 rounded text-sm bg-white"
+              >
+                {!COMMON_TIMEZONES.includes(displayTimezone) && (
+                  <option value={displayTimezone}>{formatTimezone(displayTimezone)}</option>
+                )}
+                {COMMON_TIMEZONES.map(tz => (
+                  <option key={tz} value={tz}>{formatTimezone(tz)}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Poll Management Dropdown - only show for authenticated users */}
+            {isAuthenticated && (
+              <div className="relative ml-auto">
+                <button
+                  type="button"
+                  className="py-1.5 px-3 bg-slate-100 text-slate-700 rounded text-sm hover:bg-slate-200"
+                  onClick={() => setShowManageMenu(!showManageMenu)}
+                >
+                  Manage Poll ▾
+                </button>
+                {showManageMenu && (
+                  <div className="absolute right-0 mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-lg z-10">
+                    {poll.status === 'open' && (
+                      <>
+                        <button
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={() => {
+                            setShowFinalizeModal(true)
+                            setShowManageMenu(false)
+                          }}
+                          disabled={actionLoading}
+                        >
+                          Finalize Poll
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={handleClosePoll}
+                          disabled={actionLoading}
+                        >
+                          Close Poll
+                        </button>
+                      </>
+                    )}
+                    {poll.status === 'closed' && (
+                      <>
+                        <button
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={() => {
+                            setShowFinalizeModal(true)
+                            setShowManageMenu(false)
+                          }}
+                          disabled={actionLoading}
+                        >
+                          Finalize Poll
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={handleReopenPoll}
+                          disabled={actionLoading}
+                        >
+                          Reopen Poll
+                        </button>
+                      </>
+                    )}
+                    <Link
+                      to={`/ui/polls/edit/${slug}`}
+                      className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                      onClick={() => setShowManageMenu(false)}
+                    >
+                      Edit Poll
+                    </Link>
+                    {poll.status !== 'cancelled' && (
+                      <>
+                        <hr className="my-1 border-slate-200" />
+                        <button
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          onClick={() => {
+                            setShowCancelConfirm(true)
+                            setShowManageMenu(false)
+                          }}
+                          disabled={actionLoading}
+                        >
+                          Cancel Poll
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Poll Management Dropdown - only show for authenticated users */}
-          {isAuthenticated && (
-            <div className="poll-manage-dropdown">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setShowManageMenu(!showManageMenu)}
-              >
-                Manage Poll ▾
-              </button>
-              {showManageMenu && (
-                <div className="poll-manage-menu">
-                  {poll.status === 'open' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowFinalizeModal(true)
-                          setShowManageMenu(false)
-                        }}
-                        disabled={actionLoading}
-                      >
-                        Finalize Poll
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleClosePoll}
-                        disabled={actionLoading}
-                      >
-                        Close Poll
-                      </button>
-                    </>
-                  )}
-                  {poll.status === 'closed' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowFinalizeModal(true)
-                          setShowManageMenu(false)
-                        }}
-                        disabled={actionLoading}
-                      >
-                        Finalize Poll
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleReopenPoll}
-                        disabled={actionLoading}
-                      >
-                        Reopen Poll
-                      </button>
-                    </>
-                  )}
-                  <Link
-                    to={`/ui/polls/edit/${slug}`}
-                    onClick={() => setShowManageMenu(false)}
-                  >
-                    Edit Poll
-                  </Link>
-                  {poll.status !== 'cancelled' && (
-                    <>
-                      <hr />
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => {
-                          setShowCancelConfirm(true)
-                          setShowManageMenu(false)
-                        }}
-                        disabled={actionLoading}
-                      >
-                        Cancel Poll
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+          {actionError && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+              {actionError}
             </div>
           )}
         </div>
 
-        {actionError && (
-          <div className="poll-error" style={{ marginTop: '1rem' }}>{actionError}</div>
-        )}
-      </div>
+        {/* Finalize Modal */}
+        {showFinalizeModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowFinalizeModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-slate-800 mb-2">Finalize Poll</h2>
+              <p className="text-slate-600 mb-4">Select a time to schedule the meeting:</p>
 
-      {/* Finalize Modal */}
-      {showFinalizeModal && (
-        <div className="modal-overlay" onClick={() => setShowFinalizeModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2>Finalize Poll</h2>
-            <p>Select a time to schedule the meeting:</p>
-            
-            {bestSlots.length > 0 ? (
-              <div className="finalize-time-options">
-                {bestSlots.slice(0, 10).map((slot, i) => (
-                  <label key={i} className="finalize-time-option">
-                    <input
-                      type="radio"
-                      name="finalize_time"
-                      value={slot.slot_start}
-                      checked={selectedFinalizeTime === slot.slot_start}
-                      onChange={() => setSelectedFinalizeTime(slot.slot_start)}
-                    />
-                    <span className="option-time">{formatSlot(slot)}</span>
-                    <span className="option-count">
-                      {slot.available_count} available
-                      {slot.if_needed_count > 0 && ` (+${slot.if_needed_count})`}
-                    </span>
-                  </label>
-                ))}
+              {bestSlots.length > 0 ? (
+                <div className="space-y-2 max-h-64 overflow-y-auto mb-4">
+                  {bestSlots.slice(0, 10).map((slot, i) => (
+                    <label key={i} className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50">
+                      <input
+                        type="radio"
+                        name="finalize_time"
+                        value={slot.slot_start}
+                        checked={selectedFinalizeTime === slot.slot_start}
+                        onChange={() => setSelectedFinalizeTime(slot.slot_start)}
+                        className="text-primary"
+                      />
+                      <span className="flex-1 text-sm">{formatSlot(slot)}</span>
+                      <span className="text-xs text-slate-500">
+                        {slot.available_count} available
+                        {slot.if_needed_count > 0 && ` (+${slot.if_needed_count})`}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-sm mb-4">No responses yet. You can still finalize with a custom time.</p>
+              )}
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="py-2 px-4 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50"
+                  onClick={() => setShowFinalizeModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark disabled:bg-slate-300"
+                  onClick={handleFinalizePoll}
+                  disabled={!selectedFinalizeTime || actionLoading}
+                >
+                  {actionLoading ? 'Finalizing...' : 'Finalize'}
+                </button>
               </div>
-            ) : (
-              <p className="no-slots-message">No responses yet. You can still finalize with a custom time.</p>
-            )}
-
-            <div className="modal-actions">
-              <button 
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowFinalizeModal(false)}
-              >
-                Cancel
-              </button>
-              <button 
-                type="button"
-                className="btn btn-primary"
-                onClick={handleFinalizePoll}
-                disabled={!selectedFinalizeTime || actionLoading}
-              >
-                {actionLoading ? 'Finalizing...' : 'Finalize'}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Cancel Confirmation Modal */}
-      {showCancelConfirm && (
-        <div className="modal-overlay" onClick={() => setShowCancelConfirm(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2>Cancel Poll</h2>
-            <p>Are you sure you want to cancel "{poll.title}"?</p>
-            <p className="warning-text">The poll will be marked as cancelled and will no longer accept responses.</p>
+        {/* Cancel Confirmation Modal */}
+        {showCancelConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowCancelConfirm(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-slate-800 mb-2">Cancel Poll</h2>
+              <p className="text-slate-600 mb-2">Are you sure you want to cancel "{poll.title}"?</p>
+              <p className="text-sm text-amber-600 mb-4">The poll will be marked as cancelled and will no longer accept responses.</p>
 
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowCancelConfirm(false)}
-              >
-                Keep Open
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={handleCancelPoll}
-                disabled={actionLoading}
-              >
-                {actionLoading ? 'Cancelling...' : 'Cancel Poll'}
-              </button>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="py-2 px-4 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50"
+                  onClick={() => setShowCancelConfirm(false)}
+                >
+                  Keep Open
+                </button>
+                <button
+                  type="button"
+                  className="py-2 px-4 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:bg-slate-300"
+                  onClick={handleCancelPoll}
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? 'Cancelling...' : 'Cancel Poll'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {poll.finalized_time && (
-        <div className="poll-finalized-banner">
-          <h2>Meeting Scheduled</h2>
-          <p className="finalized-time">
-            {new Date(poll.finalized_time).toLocaleString('en-US', {
-              timeZone: displayTimezone,
-              weekday: 'long',
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
-          </p>
-        </div>
-      )}
+        {/* Finalized Banner */}
+        {poll.finalized_time && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-6 text-center">
+            <h2 className="text-lg font-semibold text-green-800 mb-2">Meeting Scheduled</h2>
+            <p className="text-green-700 text-lg">
+              {new Date(poll.finalized_time).toLocaleString('en-US', {
+                timeZone: displayTimezone,
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </p>
+          </div>
+        )}
 
-      <div className="poll-results-summary">
-        <div className="summary-stat">
-          <span className="stat-value">{responseCount}</span>
-          <span className="stat-label">Responses</span>
+        {/* Summary Stats */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="bg-white p-4 rounded-xl shadow-sm text-center">
+            <div className="text-3xl font-bold text-primary">{responseCount}</div>
+            <div className="text-sm text-slate-500">Responses</div>
+          </div>
+          {displayBestSlots.length > 0 && (
+            <div className="bg-white p-4 rounded-xl shadow-sm text-center">
+              <div className="text-3xl font-bold text-primary">{displayBestSlots[0].available_count}</div>
+              <div className="text-sm text-slate-500">Max Available</div>
+            </div>
+          )}
         </div>
+
+        {/* Best Times */}
         {displayBestSlots.length > 0 && (
-          <div className="summary-stat">
-            <span className="stat-value">{displayBestSlots[0].available_count}</span>
-            <span className="stat-label">Max Available</span>
+          <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Best Times</h3>
+            <ul className="space-y-2">
+              {displayBestSlots.map((slot, i) => (
+                <li key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                  <span className="font-medium text-slate-700">{formatSlot(slot)}</span>
+                  <span className="text-sm text-slate-500">
+                    {slot.available_count} available
+                    {slot.if_needed_count > 0 && ` (+${slot.if_needed_count} if needed)`}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
-      </div>
 
-      {displayBestSlots.length > 0 && (
-        <div className="poll-best-times">
-          <h3>Best Times</h3>
-          <ul>
-            {displayBestSlots.map((slot, i) => (
-              <li key={i} className="best-time-item">
-                <span className="best-time-slot">{formatSlot(slot)}</span>
-                <span className="best-time-count">
-                  {slot.available_count} available
-                  {slot.if_needed_count > 0 && ` (+${slot.if_needed_count} if needed)`}
-                </span>
-              </li>
-            ))}
-          </ul>
+        {/* Availability Heatmap */}
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4">Availability Heatmap</h3>
+          <PollGrid
+            datetimeStart={new Date(poll.datetime_start)}
+            datetimeEnd={new Date(poll.datetime_end)}
+            slotDurationMinutes={poll.slot_duration_minutes}
+            displayTimezone={displayTimezone}
+            selectedSlots={[]}
+            aggregatedData={aggregation}
+            totalResponses={responseCount}
+            readonly={true}
+          />
+
+          <div className="flex items-center justify-center gap-2 mt-4 text-sm text-slate-500">
+            <span>Fewer</span>
+            <div className="w-24 h-3 bg-gradient-to-r from-slate-100 via-green-200 to-green-500 rounded" />
+            <span>More Available</span>
+          </div>
         </div>
-      )}
 
-      <div className="poll-results-grid">
-        <h3>Availability Heatmap</h3>
-        <PollGrid
-          datetimeStart={new Date(poll.datetime_start)}
-          datetimeEnd={new Date(poll.datetime_end)}
-          slotDurationMinutes={poll.slot_duration_minutes}
-          displayTimezone={displayTimezone}
-          selectedSlots={[]}
-          aggregatedData={aggregation}
-          totalResponses={responseCount}
-          readonly={true}
-        />
-
-        <div className="poll-results-legend">
-          <span className="legend-label">Fewer</span>
-          <div className="legend-gradient"></div>
-          <span className="legend-label">More Available</span>
+        {/* Respondents */}
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-2">Respondents ({responseCount})</h3>
+          {responseCount === 0 ? (
+            <p className="text-slate-500">No responses yet. Be the first to add your availability!</p>
+          ) : (
+            <p className="text-slate-600">
+              {responseCount} {responseCount === 1 ? 'person has' : 'people have'} responded to this poll.
+            </p>
+          )}
         </div>
-      </div>
 
-      <div className="poll-respondents-list">
-        <h3>Respondents ({responseCount})</h3>
-        {responseCount === 0 ? (
-          <p className="no-responses">No responses yet. Be the first to add your availability!</p>
-        ) : (
-          <p className="responses-info">
-            {responseCount} {responseCount === 1 ? 'person has' : 'people have'} responded to this poll.
-          </p>
-        )}
-      </div>
-
-      <div className="poll-results-actions">
-        {poll.status === 'open' && (
-          <Link to={`/ui/polls/respond/${slug}`} className="btn btn-primary">
-            Add Your Availability
-          </Link>
-        )}
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => {
-            const url = `${window.location.origin}/ui/polls/respond/${slug}`
-            navigator.clipboard.writeText(url)
-          }}
-        >
-          Copy Share Link
-        </button>
+        {/* Actions */}
+        <div className="flex gap-3 flex-wrap">
+          {poll.status === 'open' && (
+            <Link
+              to={`/ui/polls/respond/${slug}`}
+              className="py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark"
+            >
+              Add Your Availability
+            </Link>
+          )}
+          <button
+            type="button"
+            className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200"
+            onClick={() => {
+              const url = `${window.location.origin}/ui/polls/respond/${slug}`
+              navigator.clipboard.writeText(url)
+            }}
+          >
+            Copy Share Link
+          </button>
+        </div>
       </div>
     </div>
   )

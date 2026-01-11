@@ -2,12 +2,11 @@
 
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
-from memory.common.calendar import get_events_in_range, parse_date_range
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -50,20 +49,6 @@ class GoogleAccountInfo(BaseModel):
     id: int
     name: str
     email: str
-
-
-class CalendarEventResponse(BaseModel):
-    id: int
-    event_title: str
-    start_time: str
-    end_time: str | None
-    all_day: bool
-    location: str | None
-    calendar_name: str | None
-    recurrence_rule: str | None
-    calendar_account_id: int | None
-    attendees: list[str] | None = None
-    meeting_link: str | None = None
 
 
 class CalendarAccountResponse(BaseModel):
@@ -235,7 +220,7 @@ def delete_account(
     account_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-):
+) -> dict[str, str]:
     """Delete a calendar account."""
     account = db.get(CalendarAccount, account_id)
     if not account:
@@ -270,40 +255,3 @@ def trigger_sync(
     return {"task_id": task.id, "status": "scheduled"}
 
 
-@router.get("/events/upcoming")
-def get_upcoming_events(
-    days: int = Query(default=7, ge=1, le=365),
-    limit: int = Query(default=10, ge=1, le=200),
-    start_date: str | None = Query(default=None, description="ISO format start date"),
-    end_date: str | None = Query(default=None, description="ISO format end date"),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> list[CalendarEventResponse]:
-    """Get calendar events within a date range.
-
-    If start_date/end_date provided, uses those. Otherwise uses days from now.
-    Expands recurring events to show future occurrences.
-    """
-    try:
-        range_start, range_end = parse_date_range(start_date, end_date, days)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    events = get_events_in_range(db, range_start, range_end, limit)
-
-    return [
-        CalendarEventResponse(
-            id=e["id"],
-            event_title=e["event_title"],
-            start_time=e["start_time"],
-            end_time=e["end_time"],
-            all_day=e["all_day"],
-            location=e["location"],
-            calendar_name=e["calendar_name"],
-            recurrence_rule=e["recurrence_rule"],
-            calendar_account_id=e["calendar_account_id"],
-            attendees=e.get("attendees"),
-            meeting_link=e.get("meeting_link"),
-        )
-        for e in events
-    ]

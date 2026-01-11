@@ -185,7 +185,7 @@ def test_record_metric_starts_writer():
     """Test that record_metric starts the background writer if not running."""
     with (
         patch("memory.common.metrics._writer_started", False),
-        patch("memory.common.metrics.start_metrics_writer") as mock_start,
+        patch("memory.common.metrics._start_metrics_writer_locked") as mock_start,
         patch("memory.common.metrics.write_metric"),
     ):
         record_metric(metric_type="test", name="test_metric")

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'  
+import { useNavigate } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
 import Loading from '@/components/Loading'
 import { SearchResult } from './results'
@@ -10,9 +10,9 @@ const SearchResults = ({ results, isLoading }: { results: any[], isLoading: bool
         return <Loading message="Searching..." />
     }
     return (
-        <div className="search-results">
+        <div className="space-y-4">
             {results.length > 0 && (
-                <div className="results-count">
+                <div className="text-sm text-gray-600 mb-4">
                     Found {results.length} result{results.length !== 1 ? 's' : ''}
                 </div>
             )}
@@ -20,7 +20,7 @@ const SearchResults = ({ results, isLoading }: { results: any[], isLoading: bool
             {results.map((result, index) => <SearchResult key={index} result={result} />)}
 
             {results.length === 0 && (
-                <div className="no-results">
+                <div className="text-center py-12 text-gray-500 bg-white rounded-lg">
                     No results found
                 </div>
             )}
@@ -51,12 +51,15 @@ const Search = () => {
     }
 
     return (
-        <div className="search-view">
-            <header className="search-header">
-                <button onClick={() => navigate('/ui/dashboard')} className="back-btn">
+        <div className="min-h-screen bg-slate-50 p-8 max-w-5xl mx-auto">
+            <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
+                <button
+                    onClick={() => navigate('/ui/dashboard')}
+                    className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm cursor-pointer transition-all hover:bg-slate-100 hover:text-slate-800"
+                >
                     ← Back to Dashboard
                 </button>
-                <h2>🔍 Search Knowledge Base</h2>
+                <h2 className="text-slate-800 text-2xl font-semibold">🔍 Search Knowledge Base</h2>
             </header>
 
             <SearchForm isLoading={isLoading} onSearch={handleSearch} />
@@ -65,4 +68,4 @@ const Search = () => {
     )
 }
 
-export default Search 
+export default Search

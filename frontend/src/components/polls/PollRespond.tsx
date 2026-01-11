@@ -135,49 +135,59 @@ export const PollRespond: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="poll-respond-page">
-        <div className="poll-loading">Loading poll...</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="text-center py-8 text-slate-500">Loading poll...</div>
       </div>
     )
   }
 
   if (error && !poll) {
     return (
-      <div className="poll-respond-page">
-        <div className="poll-error">{error}</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+            {error}
+          </div>
+        </div>
       </div>
     )
   }
 
   if (!poll) {
     return (
-      <div className="poll-respond-page">
-        <div className="poll-error">Poll not found</div>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+            Poll not found
+          </div>
+        </div>
       </div>
     )
   }
 
   if (poll.status !== 'open') {
     return (
-      <div className="poll-respond-page">
-        <div className="poll-header">
-          <h1>{poll.title}</h1>
-          {poll.description && <p className="poll-description">{poll.description}</p>}
-        </div>
-        <div className="poll-closed-message">
-          This poll is no longer accepting responses.
-          {poll.finalized_time && (
-            <p>
-              Meeting scheduled for:{' '}
-              <strong>
-                {new Date(poll.finalized_time).toLocaleString('en-US', {
-                  timeZone: displayTimezone,
-                  dateStyle: 'full',
-                  timeStyle: 'short',
-                })}
-              </strong>
-            </p>
-          )}
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+            <h1 className="text-2xl font-semibold text-slate-800 mb-2">{poll.title}</h1>
+            {poll.description && <p className="text-slate-600">{poll.description}</p>}
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
+            <p className="text-amber-800 mb-2">This poll is no longer accepting responses.</p>
+            {poll.finalized_time && (
+              <p className="text-amber-700">
+                Meeting scheduled for:{' '}
+                <strong>
+                  {new Date(poll.finalized_time).toLocaleString('en-US', {
+                    timeZone: displayTimezone,
+                    dateStyle: 'full',
+                    timeStyle: 'short',
+                  })}
+                </strong>
+              </p>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -189,42 +199,50 @@ export const PollRespond: React.FC = () => {
       : null
 
     return (
-      <div className="poll-respond-page">
-        <div className="poll-header">
-          <h1>{poll.title}</h1>
-        </div>
-        <div className="poll-success">
-          <h2>Response submitted!</h2>
-          <p>Your availability has been recorded.</p>
-          {editUrl && (
-            <div className="edit-link-box">
-              <p>Save this link to edit your response later:</p>
-              <input
-                type="text"
-                readOnly
-                value={editUrl}
-                onClick={(e) => (e.target as HTMLInputElement).select()}
-              />
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+            <h1 className="text-2xl font-semibold text-slate-800">{poll.title}</h1>
+          </div>
+          <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
+            <h2 className="text-xl font-semibold text-green-800 mb-2">Response submitted!</h2>
+            <p className="text-green-700 mb-4">Your availability has been recorded.</p>
+            {editUrl && (
+              <div className="bg-white border border-slate-200 rounded-lg p-4 mb-4 text-left">
+                <p className="text-sm text-slate-600 mb-2">Save this link to edit your response later:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={editUrl}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                    className="flex-1 py-2 px-3 border border-slate-200 rounded text-sm bg-slate-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(editUrl)}
+                    className="py-2 px-3 bg-slate-100 text-slate-700 rounded text-sm hover:bg-slate-200"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-center gap-3">
               <button
                 type="button"
-                onClick={() => navigator.clipboard.writeText(editUrl)}
-                className="btn btn-secondary"
+                className="py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark"
+                onClick={() => setSubmitted(false)}
               >
-                Copy Link
+                Edit Response
               </button>
+              <a
+                href={`/ui/polls/results/${slug}`}
+                className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200"
+              >
+                View Results
+              </a>
             </div>
-          )}
-          <div className="poll-success-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => setSubmitted(false)}
-            >
-              Edit Response
-            </button>
-            <a href={`/ui/polls/results/${slug}`} className="btn btn-secondary">
-              View Results
-            </a>
           </div>
         </div>
       </div>
@@ -232,110 +250,140 @@ export const PollRespond: React.FC = () => {
   }
 
   return (
-    <div className="poll-respond-page">
-      <div className="poll-header">
-        <h1>{poll.title}</h1>
-        {poll.description && <p className="poll-description">{poll.description}</p>}
-      </div>
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="max-w-3xl mx-auto">
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+          <h1 className="text-2xl font-semibold text-slate-800 mb-2">{poll.title}</h1>
+          {poll.description && <p className="text-slate-600">{poll.description}</p>}
+        </div>
 
-      {error && <div className="poll-error">{error}</div>}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-6">
+            {error}
+          </div>
+        )}
 
-      <form onSubmit={handleSubmit} className="poll-respond-form">
-        <div className="poll-form-row">
-          <div className="poll-form-group">
-            <label htmlFor="respondentName">Your Name *</label>
-            <input
-              type="text"
-              id="respondentName"
-              value={respondentName}
-              onChange={(e) => setRespondentName(e.target.value)}
-              placeholder="Enter your name"
-              required
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Name and Timezone */}
+          <div className="bg-white p-6 rounded-xl shadow-sm">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="respondentName" className="block text-sm font-medium text-slate-700 mb-1">
+                  Your Name *
+                </label>
+                <input
+                  type="text"
+                  id="respondentName"
+                  value={respondentName}
+                  onChange={(e) => setRespondentName(e.target.value)}
+                  placeholder="Enter your name"
+                  required
+                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="displayTimezone" className="block text-sm font-medium text-slate-700 mb-1">
+                  Your Timezone
+                </label>
+                <select
+                  id="displayTimezone"
+                  value={displayTimezone}
+                  onChange={(e) => setDisplayTimezone(e.target.value)}
+                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none"
+                >
+                  {!COMMON_TIMEZONES.includes(displayTimezone) && (
+                    <option value={displayTimezone}>{formatTimezone(displayTimezone)}</option>
+                  )}
+                  {COMMON_TIMEZONES.map(tz => (
+                    <option key={tz} value={tz}>{formatTimezone(tz)}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Availability Level Selector */}
+          <div className="bg-white p-6 rounded-xl shadow-sm">
+            <label className="block text-sm font-medium text-slate-700 mb-2">Availability Level:</label>
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                  currentLevel === 1
+                    ? 'bg-green-500 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+                onClick={() => setCurrentLevel(1)}
+              >
+                Available
+              </button>
+              <button
+                type="button"
+                className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                  currentLevel === 2
+                    ? 'bg-yellow-400 text-slate-800'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+                onClick={() => setCurrentLevel(2)}
+              >
+                If Needed
+              </button>
+            </div>
+            <p className="text-sm text-slate-500">
+              Click and drag on the grid to mark your availability
+            </p>
+          </div>
+
+          {/* Grid */}
+          <div className="bg-white p-6 rounded-xl shadow-sm overflow-x-auto">
+            <PollGrid
+              datetimeStart={new Date(poll.datetime_start)}
+              datetimeEnd={new Date(poll.datetime_end)}
+              slotDurationMinutes={poll.slot_duration_minutes}
+              displayTimezone={displayTimezone}
+              selectedSlots={selectedSlots}
+              onSlotsChange={handleSlotsChange}
+              availabilityLevel={currentLevel}
             />
           </div>
 
-          <div className="poll-form-group">
-            <label htmlFor="displayTimezone">Your Timezone</label>
-            <select
-              id="displayTimezone"
-              value={displayTimezone}
-              onChange={(e) => setDisplayTimezone(e.target.value)}
-            >
-              {!COMMON_TIMEZONES.includes(displayTimezone) && (
-                <option value={displayTimezone}>{formatTimezone(displayTimezone)}</option>
-              )}
-              {COMMON_TIMEZONES.map(tz => (
-                <option key={tz} value={tz}>{formatTimezone(tz)}</option>
-              ))}
-            </select>
+          {/* Legend */}
+          <div className="flex justify-center gap-6 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="w-4 h-4 rounded bg-green-500" />
+              <span className="text-slate-600">Available</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-4 h-4 rounded bg-yellow-400" />
+              <span className="text-slate-600">If Needed</span>
+            </div>
           </div>
-        </div>
 
-        <div className="poll-level-selector">
-          <label>Availability Level:</label>
-          <div className="level-buttons">
+          {/* Submit */}
+          <div className="flex justify-center">
             <button
-              type="button"
-              className={`level-btn ${currentLevel === 1 ? 'active available' : ''}`}
-              onClick={() => setCurrentLevel(1)}
+              type="submit"
+              className="py-3 px-6 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark disabled:bg-slate-300 disabled:cursor-not-allowed"
+              disabled={isSubmitting || !respondentName.trim()}
             >
-              Available
-            </button>
-            <button
-              type="button"
-              className={`level-btn ${currentLevel === 2 ? 'active if-needed' : ''}`}
-              onClick={() => setCurrentLevel(2)}
-            >
-              If Needed
+              {isSubmitting ? 'Submitting...' : isEditMode ? 'Update Availability' : 'Submit Availability'}
             </button>
           </div>
-          <p className="level-hint">
-            Click and drag on the grid to mark your availability
-          </p>
-        </div>
+        </form>
 
-        <div className="poll-grid-wrapper">
-          <PollGrid
-            datetimeStart={new Date(poll.datetime_start)}
-            datetimeEnd={new Date(poll.datetime_end)}
-            slotDurationMinutes={poll.slot_duration_minutes}
-            displayTimezone={displayTimezone}
-            selectedSlots={selectedSlots}
-            onSlotsChange={handleSlotsChange}
-            availabilityLevel={currentLevel}
-          />
-        </div>
-
-        <div className="poll-respond-legend">
-          <div className="legend-item">
-            <span className="legend-color available"></span>
-            <span>Available</span>
+        {/* Current Results Link */}
+        {aggregation.length > 0 && (
+          <div className="mt-6 text-center">
+            <p className="text-slate-500">
+              {poll.response_count} {poll.response_count === 1 ? 'response' : 'responses'} so far.{' '}
+              <a href={`/ui/polls/results/${slug}`} className="text-primary hover:underline">
+                View full results
+              </a>
+            </p>
           </div>
-          <div className="legend-item">
-            <span className="legend-color if-needed"></span>
-            <span>If Needed</span>
-          </div>
-        </div>
-
-        <div className="poll-form-actions">
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={isSubmitting || !respondentName.trim()}
-          >
-            {isSubmitting ? 'Submitting...' : isEditMode ? 'Update Availability' : 'Submit Availability'}
-          </button>
-        </div>
-      </form>
-
-      {aggregation.length > 0 && (
-        <div className="poll-current-results">
-          <h3>Current Responses ({poll.response_count})</h3>
-          <p className="results-hint">
-            <a href={`/ui/polls/results/${slug}`}>View full results</a>
-          </p>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

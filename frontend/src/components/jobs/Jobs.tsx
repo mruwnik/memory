@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useJobs, Job, JobStatus } from '@/hooks/useJobs'
-import './Jobs.css'
 
 type StatusFilter = 'all' | JobStatus
 
@@ -19,6 +18,13 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'complete', label: 'Complete' },
 ]
+
+const STATUS_COLORS: Record<string, string> = {
+  failed: 'bg-red-100 text-red-700 border-red-200',
+  processing: 'bg-blue-100 text-blue-700 border-blue-200',
+  pending: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  complete: 'bg-green-100 text-green-700 border-green-200',
+}
 
 const Jobs = () => {
   const { listJobs, retryJob } = useJobs()
@@ -107,31 +113,37 @@ const Jobs = () => {
   const completeCount = jobs.filter(j => j.status === 'complete').length
 
   return (
-    <div className="jobs-page">
-      <header className="jobs-header">
-        <Link to="/ui/dashboard" className="back-btn">Back</Link>
-        <h1>Jobs</h1>
-        <div className="jobs-stats">
+    <div className="min-h-screen bg-slate-50 p-6">
+      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
+          Back
+        </Link>
+        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Jobs</h1>
+        <div className="flex gap-3 text-sm">
           {showStats ? (
             <>
-              {failedCount > 0 && <span className="stat stat-failed">{failedCount} failed</span>}
-              {processingCount > 0 && <span className="stat stat-processing">{processingCount} processing</span>}
-              <span className="stat">{pendingCount} pending</span>
-              <span className="stat">{completeCount} complete</span>
+              {failedCount > 0 && <span className="text-red-600 font-medium">{failedCount} failed</span>}
+              {processingCount > 0 && <span className="text-blue-600 font-medium">{processingCount} processing</span>}
+              <span className="text-slate-600">{pendingCount} pending</span>
+              <span className="text-slate-600">{completeCount} complete</span>
             </>
           ) : (
-            <span className="stat">Showing {jobs.length} {statusFilter}</span>
+            <span className="text-slate-600">Showing {jobs.length} {statusFilter}</span>
           )}
         </div>
       </header>
 
-      <div className="jobs-content">
+      <div className="space-y-4">
         {/* Filters */}
-        <div className="jobs-filters">
+        <div className="flex gap-2 items-center">
           {FILTERS.map(f => (
             <button
               key={f.value}
-              className={`filter-btn ${statusFilter === f.value ? 'active' : ''}`}
+              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                statusFilter === f.value
+                  ? 'bg-primary text-white'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+              }`}
               onClick={() => setStatusFilter(f.value)}
             >
               {f.label}
@@ -139,7 +151,7 @@ const Jobs = () => {
           ))}
           <button
             onClick={() => loadJobs()}
-            className="refresh-btn"
+            className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
             title="Refresh"
             aria-label="Refresh jobs list"
           >
@@ -149,26 +161,26 @@ const Jobs = () => {
 
         {/* Retry Error */}
         {retryError && (
-          <div className="jobs-error">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
             <p>{retryError}</p>
-            <button onClick={() => setRetryError(null)}>Dismiss</button>
+            <button onClick={() => setRetryError(null)} className="text-red-700 hover:underline">Dismiss</button>
           </div>
         )}
 
         {/* Load Error */}
         {error && (
-          <div className="jobs-error">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
             <p>{error}</p>
-            <button onClick={() => loadJobs()}>Retry</button>
+            <button onClick={() => loadJobs()} className="text-primary hover:underline">Retry</button>
           </div>
         )}
 
         {/* Loading */}
-        {loading && <div className="jobs-loading">Loading jobs...</div>}
+        {loading && <div className="text-center py-8 text-slate-500">Loading jobs...</div>}
 
         {/* Empty State */}
         {!loading && jobs.length === 0 && (
-          <div className="jobs-empty">
+          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
             {statusFilter === 'all'
               ? 'No jobs found'
               : `No ${statusFilter} jobs`}
@@ -177,44 +189,49 @@ const Jobs = () => {
 
         {/* Job List */}
         {!loading && jobs.length > 0 && (
-          <ul className="jobs-list">
+          <ul className="space-y-3">
             {jobs.map(job => (
-              <li key={job.id} className={`job-item status-${job.status}`}>
-                <div className="job-content">
-                  <div className="job-header">
-                    <span className="job-type">{formatJobType(job.job_type)}</span>
-                    <span className={`job-status status-${job.status}`}>
-                      {job.status}
-                    </span>
-                  </div>
-                  <div className="job-subtitle">
-                    {job.external_id || `Job #${job.id}`}
-                  </div>
-                  <div className="job-meta">
-                    <span className="job-time">{formatRelativeTime(job.created_at)}</span>
-                    <span className="job-attempts">{job.attempts} attempt{job.attempts !== 1 ? 's' : ''}</span>
-                    {job.result_type && job.result_id && (
-                      <span className="job-result">
-                        {job.result_type} #{job.result_id}
+              <li
+                key={job.id}
+                className={`bg-white p-4 rounded-lg shadow-sm border-l-4 ${
+                  STATUS_COLORS[job.status]?.split(' ')[2] ?? 'border-slate-200'
+                }`}
+              >
+                <div className="flex items-start gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-slate-800">{formatJobType(job.job_type)}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[job.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                        {job.status}
                       </span>
+                    </div>
+                    <div className="text-sm text-slate-600 truncate">
+                      {job.external_id || `Job #${job.id}`}
+                    </div>
+                    <div className="flex gap-4 mt-2 text-xs text-slate-500">
+                      <span>{formatRelativeTime(job.created_at)}</span>
+                      <span>{job.attempts} attempt{job.attempts !== 1 ? 's' : ''}</span>
+                      {job.result_type && job.result_id && (
+                        <span className="text-primary">{job.result_type} #{job.result_id}</span>
+                      )}
+                    </div>
+                    {job.error_message && (
+                      <div className="mt-2 text-sm text-red-600 bg-red-50 p-2 rounded">{job.error_message}</div>
                     )}
                   </div>
-                  {job.error_message && (
-                    <div className="job-error">{job.error_message}</div>
-                  )}
-                </div>
 
-                <div className="job-actions">
-                  {job.status === 'failed' && (
-                    <button
-                      onClick={() => handleRetry(job.id)}
-                      disabled={retryingId === job.id}
-                      className="retry-btn"
-                      title="Retry job"
-                    >
-                      {retryingId === job.id ? 'Retrying...' : 'Retry'}
-                    </button>
-                  )}
+                  <div className="shrink-0">
+                    {job.status === 'failed' && (
+                      <button
+                        onClick={() => handleRetry(job.id)}
+                        disabled={retryingId === job.id}
+                        className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark disabled:bg-slate-400"
+                        title="Retry job"
+                      >
+                        {retryingId === job.id ? 'Retrying...' : 'Retry'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </li>
             ))}

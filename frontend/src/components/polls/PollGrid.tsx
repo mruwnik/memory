@@ -41,65 +41,65 @@ function generateTimeSlots(
   displayTimezone: string
 ): GridData {
   const slotMs = slotDurationMinutes * 60 * 1000
-  
+
   // First pass: collect all slots grouped by date
   const dayMap = new Map<string, Map<string, TimeSlot>>() // date -> timeKey -> slot
   const allTimeKeys = new Set<string>()
-  
+
   let currentTime = new Date(datetimeStart)
   while (currentTime < datetimeEnd) {
     const slotEnd = new Date(currentTime.getTime() + slotMs)
-    
+
     // Don't create partial slots that go past the end
     if (slotEnd > datetimeEnd) break
-    
+
     const dateKey = getDateKey(currentTime, displayTimezone)
     const timeKey = getTimeKey(currentTime, displayTimezone)
-    
+
     if (!dayMap.has(dateKey)) {
       dayMap.set(dateKey, new Map())
     }
-    
+
     dayMap.get(dateKey)!.set(timeKey, {
       start: new Date(currentTime),
       end: slotEnd,
       key: currentTime.toISOString(),
     })
-    
+
     allTimeKeys.add(timeKey)
     currentTime = slotEnd
   }
-  
+
   // Sort dates chronologically
   const sortedDates = Array.from(dayMap.keys()).sort((a, b) => {
     return new Date(a).getTime() - new Date(b).getTime()
   })
-  
+
   // Sort time keys chronologically
   const sortedTimeKeys = Array.from(allTimeKeys).sort()
-  
+
   // Build the grid: for each day, create array with slots at their correct positions
   // Use null for times where that day doesn't have a slot
   const slots: (TimeSlot | null)[][] = []
-  
+
   for (const dateKey of sortedDates) {
     const daySlots: (TimeSlot | null)[] = []
     const dayTimeMap = dayMap.get(dateKey)!
-    
+
     for (const timeKey of sortedTimeKeys) {
       const slot = dayTimeMap.get(timeKey)
       daySlots.push(slot || null)
     }
-    
+
     slots.push(daySlots)
   }
-  
+
   return { slots, timeKeys: sortedTimeKeys, dateKeys: sortedDates }
 }
 
 // Get heatmap color based on availability
 function getHeatmapColor(available: number, ifNeeded: number, total: number, maxResponses: number): string {
-  if (maxResponses === 0) return '#f3f4f6' // gray-100
+  if (maxResponses === 0) return '#f1f5f9' // slate-100
 
   const ratio = available / maxResponses
   const ifNeededRatio = ifNeeded / maxResponses
@@ -116,7 +116,7 @@ function getHeatmapColor(available: number, ifNeeded: number, total: number, max
     return `hsl(48, 96%, ${lightness}%)`
   }
 
-  return '#f3f4f6' // gray-100
+  return '#f1f5f9' // slate-100
 }
 
 export const PollGrid: React.FC<PollGridProps> = ({
@@ -251,39 +251,39 @@ export const PollGrid: React.FC<PollGridProps> = ({
   const isHeatmapMode = !!aggregatedData
 
   return (
-    <div className="poll-grid-container">
+    <div className="space-y-4">
       {showLegend && (
-        <div className="poll-grid-legend">
+        <div className="flex flex-wrap gap-4 text-sm text-slate-600">
           {isHeatmapMode ? (
             <>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: '#f3f4f6' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-slate-100" />
                 No responses
               </span>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: 'hsl(142, 76%, 70%)' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-green-400" />
                 Some available
               </span>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: '#22c55e' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-green-500" />
                 All available
               </span>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: 'hsl(48, 96%, 75%)' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-yellow-300" />
                 If needed only
               </span>
             </>
           ) : (
             <>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: '#22c55e' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-green-500" />
                 Available
               </span>
-              <span className="legend-item">
-                <span className="legend-color" style={{ background: '#facc15' }} />
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded bg-yellow-400" />
                 If needed
               </span>
-              <span className="legend-tip">Click and drag to select times</span>
+              <span className="text-slate-500">Click and drag to select times</span>
             </>
           )}
         </div>
@@ -291,7 +291,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
 
       <div
         ref={gridRef}
-        className="poll-grid"
+        className="grid gap-px bg-slate-200 rounded-lg overflow-hidden"
         style={{
           gridTemplateColumns: `auto repeat(${gridData.slots.length}, 1fr)`,
         }}
@@ -300,9 +300,9 @@ export const PollGrid: React.FC<PollGridProps> = ({
         onTouchMove={handleTouchMove}
       >
         {/* Header row - dates */}
-        <div className="poll-grid-header-corner" />
+        <div className="bg-slate-50 p-2" />
         {gridData.dateKeys.map((dateKey, dayIndex) => (
-          <div key={dayIndex} className="poll-grid-header">
+          <div key={dayIndex} className="bg-slate-50 p-2 text-center text-xs font-medium text-slate-700">
             {formatDateInTimezone(dateKey, displayTimezone)}
           </div>
         ))}
@@ -310,12 +310,12 @@ export const PollGrid: React.FC<PollGridProps> = ({
         {/* Time rows */}
         {gridData.timeKeys.map((_, rowIndex) => (
           <React.Fragment key={rowIndex}>
-            <div className="poll-grid-time-label">
+            <div className="bg-slate-50 p-2 text-xs text-slate-500 text-right whitespace-nowrap">
               {timeLabels[rowIndex] || ''}
             </div>
             {gridData.slots.map((daySlots, dayIndex) => {
               const slot = daySlots[rowIndex]
-              if (!slot) return <div key={dayIndex} className="poll-grid-cell empty" />
+              if (!slot) return <div key={dayIndex} className="bg-slate-100" />
 
               const selectedSlot = selectedMap.get(slot.key)
               const isSelected = !!selectedSlot
@@ -324,7 +324,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
               const aggregated = aggregatedMap.get(aggregatedKey)
 
               let cellStyle: React.CSSProperties = {}
-              let cellClass = 'poll-grid-cell'
+              let cellClass = 'min-h-[32px] flex items-center justify-center text-xs font-medium transition-colors'
 
               if (isHeatmapMode && aggregated) {
                 cellStyle.background = getHeatmapColor(
@@ -333,13 +333,14 @@ export const PollGrid: React.FC<PollGridProps> = ({
                   aggregated.total_count,
                   totalResponses
                 )
-                cellClass += ' heatmap'
               } else if (isSelected) {
-                cellClass += selectedSlot?.availability_level === 2 ? ' if-needed' : ' selected'
+                cellClass += selectedSlot?.availability_level === 2 ? ' bg-yellow-400' : ' bg-green-500'
+              } else {
+                cellClass += ' bg-white'
               }
 
               if (!readonly) {
-                cellClass += ' interactive'
+                cellClass += ' cursor-pointer hover:opacity-80'
               }
 
               return (
@@ -358,7 +359,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
                   }
                 >
                   {isHeatmapMode && aggregated && aggregated.total_count > 0 && (
-                    <span className="poll-grid-count">{aggregated.available_count}</span>
+                    <span className="text-slate-700">{aggregated.available_count}</span>
                   )}
                 </div>
               )

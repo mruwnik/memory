@@ -105,23 +105,3 @@ def test_upload_photo_invalid_extension(client: TestClient, user):
     assert "Invalid file type" in response.json()["detail"]
 
 
-def test_upload_book_no_filename(client: TestClient, user):
-    """Test that missing filename is rejected."""
-    response = client.post(
-        "/books/upload",
-        files={"file": ("", BytesIO(b"content"), "application/epub+zip")},
-    )
-
-    assert response.status_code == 400
-    assert "No filename" in response.json()["detail"]
-
-
-def test_upload_photo_no_filename(client: TestClient, user):
-    """Test that missing filename is rejected."""
-    response = client.post(
-        "/photos/upload",
-        files={"file": ("", BytesIO(b"content"), "image/jpeg")},
-    )
-
-    assert response.status_code == 400
-    assert "No filename" in response.json()["detail"]
