@@ -16,7 +16,7 @@ from memory.common.celery_app import (
     SYNC_SMBC,
     SYNC_XKCD,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     process_content_item,

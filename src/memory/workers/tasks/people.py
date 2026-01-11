@@ -8,7 +8,7 @@ from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Person
 from memory.common.celery_app import app, SYNC_PERSON, UPDATE_PERSON, SYNC_PROFILE_FROM_FILE
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     create_task_result,

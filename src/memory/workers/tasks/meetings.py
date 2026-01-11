@@ -15,7 +15,7 @@ from memory.common.db.models import Task
 from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.people import Person
 from memory.common.celery_app import app, PROCESS_MEETING, REPROCESS_MEETING
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     clear_item_chunks,
     create_content_hash,
     process_content_item,

@@ -15,7 +15,7 @@ from memory.common.celery_app import SYNC_PHOTO, REPROCESS_PHOTO, app
 from memory.common.db.connection import make_session
 from memory.common.db.models import Photo
 from memory.common import jobs as job_utils
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     clear_item_chunks,
     process_content_item,

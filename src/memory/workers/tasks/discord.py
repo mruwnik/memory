@@ -25,7 +25,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, DiscordUser
 from memory.discord.messages import call_llm, comm_channel_prompt, send_discord_response
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_task_result,
     process_content_item,

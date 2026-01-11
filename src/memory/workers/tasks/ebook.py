@@ -24,7 +24,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection
 from memory.common import jobs as job_utils
 from memory.parsers.ebook import Ebook, Section, parse_ebook
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     clear_item_chunks,
     create_content_hash,

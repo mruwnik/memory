@@ -811,6 +811,13 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  // === Photos ===
+
+  const deletePhoto = useCallback(async (id: number): Promise<void> => {
+    const response = await apiCall(`/photos/${id}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Failed to delete photo')
+  }, [apiCall])
+
   return {
     // Email
     listEmailAccounts,
@@ -866,5 +873,7 @@ export const useSources = () => {
     updateCalendarAccount,
     deleteCalendarAccount,
     syncCalendarAccount,
+    // Photos
+    deletePhoto,
   }
 }

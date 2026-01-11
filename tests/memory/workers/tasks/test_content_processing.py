@@ -10,7 +10,7 @@ from memory.common.db.models import (
     MailMessage,
     SourceItem,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     create_task_result,
@@ -318,7 +318,7 @@ def test_push_to_qdrant_exception(sample_mail_message, mock_chunk):
     sample_mail_message.chunks = [mock_chunk]
 
     with patch(
-        "memory.workers.tasks.content_processing.qdrant.upsert_vectors",
+        "memory.common.content_processing.qdrant.upsert_vectors",
         side_effect=Exception("Qdrant error"),
     ):
         with pytest.raises(Exception, match="Qdrant error"):
@@ -664,7 +664,7 @@ def test_process_content_item(
     with patch("memory.common.embedding.embed_source_item", return_value=mock_chunks):
         if qdrant_error:
             with patch(
-                "memory.workers.tasks.content_processing.push_to_qdrant",
+                "memory.common.content_processing.push_to_qdrant",
                 side_effect=Exception("Qdrant error"),
             ):
                 result = process_content_item(mail_message, db_session)

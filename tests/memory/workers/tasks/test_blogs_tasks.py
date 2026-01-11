@@ -149,7 +149,7 @@ def test_sync_webpage_already_exists(mock_parse, mock_article, db_session):
     mock_parse.return_value = mock_article
 
     # Add existing blog post with same content hash
-    from memory.workers.tasks.content_processing import create_content_hash
+    from memory.common.content_processing import create_content_hash
 
     existing_post = BlogPost(
         url="https://example.com/article/1",

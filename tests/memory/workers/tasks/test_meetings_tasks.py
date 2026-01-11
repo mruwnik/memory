@@ -11,7 +11,7 @@ from memory.common.db.models import Person, Task
 from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import meetings
-from memory.workers.tasks.content_processing import create_content_hash
+from memory.common.content_processing import create_content_hash
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -39,7 +39,7 @@ def mock_make_session(db_session):
             "memory.common.embedding.embed_source_item",
             side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
         ):
-            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+            with patch("memory.common.content_processing.push_to_qdrant"):
                 yield db_session
 
 

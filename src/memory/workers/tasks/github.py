@@ -24,7 +24,7 @@ from memory.common.github import (
     GithubPRDataDict,
     serialize_issue_data,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,

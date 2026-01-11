@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, Mock, MagicMock, patch
+from unittest.mock import patch
 
 from memory.common.db.models import GithubItem
 from memory.common.db import connection as db_connection
@@ -41,7 +41,6 @@ def sample_issues(db_session):
             author="alice",
             labels=["bug", "security"],
             assignees=["bob", "charlie"],
-            milestone="v1.0",
             project_status="In Progress",
             project_priority="High",
             project_fields={
@@ -65,7 +64,6 @@ def sample_issues(db_session):
             author="bob",
             labels=["enhancement", "ui"],
             assignees=["alice"],
-            milestone="v2.0",
             project_status="Backlog",
             project_priority="Medium",
             project_fields={
@@ -89,7 +87,6 @@ def sample_issues(db_session):
             author="charlie",
             labels=["bug"],
             assignees=["alice"],
-            milestone=None,
             project_status="Closed",
             project_priority=None,
             project_fields={
@@ -113,7 +110,6 @@ def sample_issues(db_session):
             author="alice",
             labels=["refactor"],
             assignees=["bob"],
-            milestone="v1.0",
             project_status="Approved for Payment",
             project_priority="Low",
             project_fields={
@@ -138,7 +134,6 @@ def sample_issues(db_session):
             author="dave",
             labels=["stale"],
             assignees=[],
-            milestone=None,
             project_status=None,
             project_priority=None,
             project_fields=None,
@@ -162,17 +157,18 @@ def sample_issues(db_session):
 
 
 # =============================================================================
-# Tests for list_github_issues
+# Tests for list_issues
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_no_filters(db_session, sample_issues):
+def test_list_issues_no_filters(db_session, sample_issues):
     """Test listing all issues without filters."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues()
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues()
 
     # Should return all issues and PRs (not comments)
     assert len(results) == 5
@@ -180,51 +176,63 @@ async def test_list_github_issues_no_filters(db_session, sample_issues):
     assert results[0]["number"] == 1  # Most recently updated
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_repo(db_session, sample_issues):
+def test_list_issues_filter_by_repo(db_session, sample_issues):
     """Test filtering by repository."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(repo="owner/repo1")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(repo="owner/repo1")
 
     assert len(results) == 4
     assert all(r["repo_path"] == "owner/repo1" for r in results)
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_assignee(db_session, sample_issues):
+def test_list_issues_filter_by_assignee(db_session, sample_issues):
     """Test filtering by assignee."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(assignee="alice")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(assignee="alice")
 
     assert len(results) == 2
     assert all("alice" in r["assignees"] for r in results)
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_author(db_session, sample_issues):
+def test_list_issues_filter_by_author(db_session, sample_issues):
     """Test filtering by author."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(author="alice")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(author="alice")
 
     assert len(results) == 2
     assert all(r["author"] == "alice" for r in results)
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_state(db_session, sample_issues):
+def test_list_issues_filter_by_state(db_session, sample_issues):
     """Test filtering by state."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        open_results = await list_github_issues(state="open")
-        closed_results = await list_github_issues(state="closed")
-        merged_results = await list_github_issues(state="merged")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        open_results = list_issues(state="open")
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        closed_results = list_issues(state="closed")
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        merged_results = list_issues(state="merged")
 
     assert len(open_results) == 3
     assert all(r["state"] == "open" for r in open_results)
@@ -236,14 +244,19 @@ async def test_list_github_issues_filter_by_state(db_session, sample_issues):
     assert merged_results[0]["state"] == "merged"
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_kind(db_session, sample_issues):
+def test_list_issues_filter_by_kind(db_session, sample_issues):
     """Test filtering by kind (issue vs PR)."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        issues = await list_github_issues(kind="issue")
-        prs = await list_github_issues(kind="pr")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        issues = list_issues(kind="issue")
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        prs = list_issues(kind="pr")
 
     assert len(issues) == 4
     assert all(r["kind"] == "issue" for r in issues)
@@ -252,38 +265,41 @@ async def test_list_github_issues_filter_by_kind(db_session, sample_issues):
     assert prs[0]["kind"] == "pr"
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_labels(db_session, sample_issues):
+def test_list_issues_filter_by_labels(db_session, sample_issues):
     """Test filtering by labels."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(labels=["bug"])
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(labels=["bug"])
 
     assert len(results) == 2
     assert all("bug" in r["labels"] for r in results)
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_project_status(db_session, sample_issues):
+def test_list_issues_filter_by_project_status(db_session, sample_issues):
     """Test filtering by project status."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(project_status="In Progress")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(project_status="In Progress")
 
     assert len(results) == 1
     assert results[0]["project_status"] == "In Progress"
     assert results[0]["number"] == 1
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_project_field(db_session, sample_issues):
+def test_list_issues_filter_by_project_field(db_session, sample_issues):
     """Test filtering by project field (JSONB)."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(
             project_field={"EquiStamp.Client": "Redwood"}
         )
 
@@ -293,81 +309,87 @@ async def test_list_github_issues_filter_by_project_field(db_session, sample_iss
     )
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_updated_since(db_session, sample_issues):
+def test_list_issues_filter_by_updated_since(db_session, sample_issues):
     """Test filtering by updated_since."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=2)).isoformat()
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(updated_since=since)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(updated_since=since)
 
     # Only issue #1 was updated within last 2 days
     assert len(results) == 1
     assert results[0]["number"] == 1
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_filter_by_updated_before(db_session, sample_issues):
+def test_list_issues_filter_by_updated_before(db_session, sample_issues):
     """Test filtering by updated_before (stale issues)."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
     now = datetime.now(timezone.utc)
     before = (now - timedelta(days=30)).isoformat()
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(updated_before=before)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(updated_before=before)
 
     # Only issue #100 hasn't been updated in 30+ days
     assert len(results) == 1
     assert results[0]["number"] == 100
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_order_by_created(db_session, sample_issues):
+def test_list_issues_order_by_created(db_session, sample_issues):
     """Test ordering by created date."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(order_by="created")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(order_by="created")
 
     # Should be ordered by created_at desc
     assert results[0]["number"] == 2  # Most recently created
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_limit(db_session, sample_issues):
+def test_list_issues_limit(db_session, sample_issues):
     """Test limiting results."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(limit=2)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(limit=2)
 
     assert len(results) == 2
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_limit_max_enforced(db_session, sample_issues):
+def test_list_issues_limit_max_enforced(db_session, sample_issues):
     """Test that limit is capped at 200."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
         # Request 500 but should be capped at 200
-        results = await list_github_issues(limit=500)
+        results = list_issues(limit=500)
 
     # We only have 5 issues, but the limit should be internally capped at 200
     assert len(results) <= 200
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_combined_filters(db_session, sample_issues):
+def test_list_issues_combined_filters(db_session, sample_issues):
     """Test combining multiple filters."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(
             repo="owner/repo1",
             state="open",
             kind="issue",
@@ -379,36 +401,40 @@ async def test_list_github_issues_combined_filters(db_session, sample_issues):
     assert results[0]["title"] == "Fix authentication bug"
 
 
-@pytest.mark.asyncio
-async def test_list_github_issues_url_construction(db_session, sample_issues):
+def test_list_issues_url_construction(db_session, sample_issues):
     """Test that URLs are correctly constructed."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(kind="issue", limit=1)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(kind="issue", limit=1)
 
     assert "url" in results[0]
     assert "github.com" in results[0]["url"]
     assert "/issues/" in results[0]["url"]
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        pr_results = await list_github_issues(kind="pr")
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        pr_results = list_issues(kind="pr")
 
     assert "/pull/" in pr_results[0]["url"]
 
 
 # =============================================================================
-# Tests for github_issue_details
+# Tests for fetch_issue
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_github_issue_details_found(db_session, sample_issues):
+def test_fetch_issue_found(db_session, sample_issues):
     """Test getting details for an existing issue."""
-    from memory.api.MCP.servers.github import github_issue_details
+    from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_issue_details(repo="owner/repo1", number=1)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=1)
 
     assert result["number"] == 1
     assert result["title"] == "Fix authentication bug"
@@ -417,23 +443,25 @@ async def test_github_issue_details_found(db_session, sample_issues):
     assert result["project_fields"]["EquiStamp.Client"] == "Redwood"
 
 
-@pytest.mark.asyncio
-async def test_github_issue_details_not_found(db_session, sample_issues):
+def test_fetch_issue_not_found(db_session, sample_issues):
     """Test getting details for a non-existent issue."""
-    from memory.api.MCP.servers.github import github_issue_details
+    from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
         with pytest.raises(ValueError, match="not found"):
-            await github_issue_details(repo="owner/repo1", number=999)
+            fetch_issue(repo="owner/repo1", number=999)
 
 
-@pytest.mark.asyncio
-async def test_github_issue_details_pr(db_session, sample_issues):
+def test_fetch_issue_pr(db_session, sample_issues):
     """Test getting details for a PR."""
-    from memory.api.MCP.servers.github import github_issue_details
+    from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_issue_details(repo="owner/repo1", number=50)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=50)
 
     assert result["kind"] == "pr"
     assert result["state"] == "merged"
@@ -441,369 +469,10 @@ async def test_github_issue_details_pr(db_session, sample_issues):
 
 
 # =============================================================================
-# Tests for github_work_summary
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_by_client(db_session, sample_issues):
-    """Test work summary grouped by client."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by="client")
-
-    assert "period" in result
-    assert "summary" in result
-    assert result["group_by"] == "client"
-
-    # Check Redwood group
-    redwood = next((g for g in result["summary"] if g["group"] == "Redwood"), None)
-    assert redwood is not None
-    assert redwood["total"] >= 1
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_by_status(db_session, sample_issues):
-    """Test work summary grouped by status."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by="status")
-
-    assert result["group_by"] == "status"
-    # Check that we have status groups
-    statuses = [g["group"] for g in result["summary"]]
-    assert any(s in statuses for s in ["In Progress", "Backlog", "Closed", "(unset)"])
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_by_author(db_session, sample_issues):
-    """Test work summary grouped by author."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by="author")
-
-    assert result["group_by"] == "author"
-    authors = [g["group"] for g in result["summary"]]
-    assert "alice" in authors
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_by_repo(db_session, sample_issues):
-    """Test work summary grouped by repository."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by="repo")
-
-    assert result["group_by"] == "repo"
-    repos = [g["group"] for g in result["summary"]]
-    assert "owner/repo1" in repos
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_with_until(db_session, sample_issues):
-    """Test work summary with until date."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-    until = (now - timedelta(days=5)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, until=until)
-
-    assert result["period"]["until"] is not None
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_with_repo_filter(db_session, sample_issues):
-    """Test work summary filtered by repository."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(
-            since=since, group_by="client", repo="owner/repo1"
-        )
-
-    # Should only include items from repo1
-    total = sum(g["total"] for g in result["summary"])
-    assert total <= 4  # repo1 has 4 items
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_invalid_group_by(db_session, sample_issues):
-    """Test work summary with invalid group_by value."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with pytest.raises(ValueError, match="Invalid group_by"):
-            await github_work_summary(since=since, group_by="invalid")
-
-
-@pytest.mark.asyncio
-async def test_github_work_summary_includes_sample_issues(db_session, sample_issues):
-    """Test that work summary includes sample issues."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by="client")
-
-    for group in result["summary"]:
-        assert "issues" in group
-        if group["total"] > 0:
-            assert len(group["issues"]) <= 5  # Limited to 5 samples
-            for issue in group["issues"]:
-                assert "number" in issue
-                assert "title" in issue
-                assert "url" in issue
-
-
-# =============================================================================
-# Tests for github_repo_overview
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_basic(db_session, sample_issues):
-    """Test basic repo overview."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    assert result["repo_path"] == "owner/repo1"
-    assert "counts" in result
-    assert result["counts"]["total"] == 4
-    assert result["counts"]["total_issues"] == 3
-    assert result["counts"]["total_prs"] == 1
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_counts(db_session, sample_issues):
-    """Test repo overview counts are correct."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    counts = result["counts"]
-    assert counts["open_issues"] == 3  # Issues 1, 2, 100 are all open in repo1
-    assert counts["merged_prs"] == 1
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_status_breakdown(db_session, sample_issues):
-    """Test repo overview includes status breakdown."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    assert "status_breakdown" in result
-    assert "In Progress" in result["status_breakdown"]
-    assert "Backlog" in result["status_breakdown"]
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_top_assignees(db_session, sample_issues):
-    """Test repo overview includes top assignees."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    assert "top_assignees" in result
-    assert isinstance(result["top_assignees"], list)
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_labels(db_session, sample_issues):
-    """Test repo overview includes labels."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    assert "labels" in result
-    assert "bug" in result["labels"]
-    assert "enhancement" in result["labels"]
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_last_updated(db_session, sample_issues):
-    """Test repo overview includes last updated timestamp."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="owner/repo1")
-
-    assert "last_updated" in result
-    assert result["last_updated"] is not None
-
-
-@pytest.mark.asyncio
-async def test_github_repo_overview_empty_repo(db_session):
-    """Test repo overview for a repo with no issues."""
-    from memory.api.MCP.servers.github import github_repo_overview
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_repo_overview(repo="nonexistent/repo")
-
-    assert result["counts"]["total"] == 0
-
-
-# =============================================================================
-# Tests for search_github_issues
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_search_github_issues_basic(db_session, sample_issues):
-    """Test basic search functionality."""
-    from memory.api.MCP.servers.github import search_github_issues
-
-    mock_search_result = Mock()
-    mock_search_result.id = sample_issues[0].id
-    mock_search_result.score = 0.95
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = [mock_search_result]
-            results = await search_github_issues(query="authentication bug")
-
-    assert len(results) == 1
-    assert "search_score" in results[0]
-    mock_search.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_search_github_issues_with_repo_filter(db_session, sample_issues):
-    """Test search with repository filter."""
-    from memory.api.MCP.servers.github import search_github_issues
-
-    mock_search_result = Mock()
-    mock_search_result.id = sample_issues[0].id
-    mock_search_result.score = 0.85
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = [mock_search_result]
-            results = await search_github_issues(
-                query="authentication", repo="owner/repo1"
-            )
-
-    # Verify search was called with source_ids filter
-    mock_search.assert_called_once()
-    call_kwargs = mock_search.call_args[1]
-    assert "filters" in call_kwargs
-
-
-@pytest.mark.asyncio
-async def test_search_github_issues_with_state_filter(db_session, sample_issues):
-    """Test search with state filter."""
-    from memory.api.MCP.servers.github import search_github_issues
-
-    mock_search_result = Mock()
-    mock_search_result.id = sample_issues[0].id
-    mock_search_result.score = 0.80
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = [mock_search_result]
-            results = await search_github_issues(query="bug", state="open")
-
-    mock_search.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_search_github_issues_limit(db_session, sample_issues):
-    """Test search respects limit."""
-    from memory.api.MCP.servers.github import search_github_issues
-
-    mock_results = [Mock(id=issue.id, score=0.9 - i * 0.1) for i, issue in enumerate(sample_issues[:3])]
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = mock_results
-            results = await search_github_issues(query="test", limit=2)
-
-    # The search function should have been called with limit=2 in config
-    call_kwargs = mock_search.call_args[1]
-    assert call_kwargs["config"].limit == 2
-
-
-@pytest.mark.asyncio
-async def test_search_github_issues_uses_github_modality(db_session, sample_issues):
-    """Test that search uses github modality."""
-    from memory.api.MCP.servers.github import search_github_issues
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        with patch("memory.api.MCP.github.search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = []
-            await search_github_issues(query="test")
-
-    call_kwargs = mock_search.call_args[1]
-    assert call_kwargs["modalities"] == {"github"}
-
-
-def test_serialize_issue_basic(db_session, sample_issues):
-    """Test issue serialization."""
-    from memory.api.MCP.servers.github import _serialize_issue
-
-    issue = sample_issues[0]
-    result = _serialize_issue(issue)
-
-    assert result["id"] == issue.id
-    assert result["number"] == issue.number
-    assert result["title"] == issue.title
-    assert result["state"] == issue.state
-    assert result["author"] == issue.author
-    assert result["assignees"] == issue.assignees
-    assert result["labels"] == issue.labels
-    assert "content" not in result
-
-
-def test_serialize_issue_with_content(db_session, sample_issues):
-    """Test issue serialization with content."""
-    from memory.api.MCP.servers.github import _serialize_issue
-
-    issue = sample_issues[0]
-    result = _serialize_issue(issue, include_content=True)
-
-    assert "content" in result
-    assert result["content"] == issue.content
-
-
-# =============================================================================
 # Parametrized tests
 # =============================================================================
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "order_by,expected_first_number",
     [
@@ -812,38 +481,20 @@ def test_serialize_issue_with_content(db_session, sample_issues):
         ("number", 100),  # Highest number
     ],
 )
-async def test_list_github_issues_ordering(
+def test_list_issues_ordering(
     db_session, sample_issues, order_by, expected_first_number
 ):
     """Test different ordering options."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(order_by=order_by)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(order_by=order_by)
 
     assert results[0]["number"] == expected_first_number
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "group_by",
-    ["client", "status", "author", "repo", "task_type"],
-)
-async def test_github_work_summary_all_group_by_options(db_session, sample_issues, group_by):
-    """Test all valid group_by options."""
-    from memory.api.MCP.servers.github import github_work_summary
-
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=30)).isoformat()
-
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_work_summary(since=since, group_by=group_by)
-
-    assert result["group_by"] == group_by
-    assert "summary" in result
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "labels,expected_count",
     [
@@ -853,14 +504,16 @@ async def test_github_work_summary_all_group_by_options(db_session, sample_issue
         (["nonexistent"], 0),
     ],
 )
-async def test_list_github_issues_label_filtering(
+def test_list_issues_label_filtering(
     db_session, sample_issues, labels, expected_count
 ):
     """Test various label filtering scenarios."""
-    from memory.api.MCP.servers.github import list_github_issues
+    from memory.api.MCP.servers.github_helpers import list_issues
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        results = await list_github_issues(labels=labels)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        results = list_issues(labels=labels)
 
     # Note: label filtering uses ANY match, so ["bug", "security"] matches
     # anything with "bug" OR "security"
@@ -925,7 +578,7 @@ def sample_pr_with_data(db_session):
         author="alice",
         labels=["feature"],
         assignees=["alice"],
-        milestone=None,
+        # milestone_id is a ForeignKey, omitting it (defaults to None)
         project_status="In Progress",
         project_priority=None,
         project_fields={"EquiStamp.Client": "Test"},
@@ -962,13 +615,14 @@ def sample_pr_with_data(db_session):
     return pr
 
 
-@pytest.mark.asyncio
-async def test_github_issue_details_includes_pr_data(db_session, sample_pr_with_data):
-    """Test that github_issue_details includes PR data for PRs."""
-    from memory.api.MCP.servers.github import github_issue_details
+def test_fetch_issue_includes_pr_data(db_session, sample_pr_with_data):
+    """Test that fetch_issue includes PR data for PRs."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_issue_details(repo="owner/repo1", number=999)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=999)
 
     assert result["kind"] == "pr"
     assert "pr_data" in result
@@ -982,23 +636,24 @@ async def test_github_issue_details_includes_pr_data(db_session, sample_pr_with_
     assert "diff --git" in result["pr_data"]["diff"]
 
 
-@pytest.mark.asyncio
-async def test_github_issue_details_no_pr_data_for_issues(db_session, sample_issues):
-    """Test that github_issue_details does not include pr_data for issues."""
-    from memory.api.MCP.servers.github import github_issue_details
+def test_fetch_issue_no_pr_data_for_issues(db_session, sample_issues):
+    """Test that fetch_issue does not include pr_data for issues."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    with patch("memory.api.MCP.servers.github.make_session", return_value=db_session):
-        result = await github_issue_details(repo="owner/repo1", number=1)
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=1)
 
     assert result["kind"] == "issue"
     assert "pr_data" not in result
 
 
 def test_serialize_issue_includes_pr_data(db_session, sample_pr_with_data):
-    """Test that _serialize_issue includes pr_data when include_content=True."""
-    from memory.api.MCP.servers.github import _serialize_issue
+    """Test that serialize_issue includes pr_data when include_content=True."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
 
-    result = _serialize_issue(sample_pr_with_data, include_content=True)
+    result = serialize_issue(sample_pr_with_data, include_content=True)
 
     assert "pr_data" in result
     assert result["pr_data"]["additions"] == 50
@@ -1006,10 +661,38 @@ def test_serialize_issue_includes_pr_data(db_session, sample_pr_with_data):
 
 
 def test_serialize_issue_no_pr_data_without_content(db_session, sample_pr_with_data):
-    """Test that _serialize_issue excludes pr_data when include_content=False."""
-    from memory.api.MCP.servers.github import _serialize_issue
+    """Test that serialize_issue excludes pr_data when include_content=False."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
 
-    result = _serialize_issue(sample_pr_with_data, include_content=False)
+    result = serialize_issue(sample_pr_with_data, include_content=False)
 
     assert "pr_data" not in result
     assert "content" not in result
+
+
+def test_serialize_issue_basic(db_session, sample_issues):
+    """Test issue serialization."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
+
+    issue = sample_issues[0]
+    result = serialize_issue(issue)
+
+    assert result["id"] == issue.id
+    assert result["number"] == issue.number
+    assert result["title"] == issue.title
+    assert result["state"] == issue.state
+    assert result["author"] == issue.author
+    assert result["assignees"] == issue.assignees
+    assert result["labels"] == issue.labels
+    assert "content" not in result
+
+
+def test_serialize_issue_with_content(db_session, sample_issues):
+    """Test issue serialization with content."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
+
+    issue = sample_issues[0]
+    result = serialize_issue(issue, include_content=True)
+
+    assert "content" in result
+    assert result["content"] == issue.content

@@ -15,7 +15,7 @@ from memory.common.celery_app import (
     TRACK_GIT_CHANGES,
     SYNC_PROFILE_FROM_FILE,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     create_task_result,

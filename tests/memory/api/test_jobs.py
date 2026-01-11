@@ -2,60 +2,11 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
 
 from memory.common.db.models import PendingJob, JobStatus, JobType, User
 
 
-@pytest.fixture(scope="module")
-def app_client():
-    """Create a test client with mocked authentication."""
-    from memory.api import auth
-    from memory.api.app import app
-
-    with patch.object(auth, "get_token", return_value="fake-token"):
-        with patch.object(auth, "get_session_user") as mock_get_user:
-            mock_user = MagicMock()
-            mock_user.id = 1
-            mock_user.email = "test@example.com"
-            mock_get_user.return_value = mock_user
-
-            with TestClient(app, raise_server_exceptions=False) as test_client:
-                yield test_client, app
-
-
-@pytest.fixture
-def client(app_client, db_session):
-    """Get the test client and configure DB session for each test."""
-    from memory.common.db.connection import get_session
-
-    test_client, app = app_client
-
-    def get_test_session():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_session] = get_test_session
-    yield test_client
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def user(db_session):
-    """Create a test user matching the mock auth user."""
-    existing = db_session.query(User).filter(User.id == 1).first()
-    if existing:
-        return existing
-    test_user = User(
-        id=1,
-        name="Test User",
-        email="test@example.com",
-    )
-    db_session.add(test_user)
-    db_session.commit()
-    return test_user
+# Note: app_client, client, and user fixtures are defined in conftest.py
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ import logging
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentObservation
 from memory.common.celery_app import app, SYNC_OBSERVATION
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     create_task_result,

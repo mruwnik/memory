@@ -9,7 +9,7 @@ import pytest
 from memory.common.db.models import Person
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import people
-from memory.workers.tasks.content_processing import create_content_hash
+from memory.common.content_processing import create_content_hash
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -39,7 +39,7 @@ def mock_make_session(db_session):
             side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
         ):
             # Mock push_to_qdrant to do nothing
-            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+            with patch("memory.common.content_processing.push_to_qdrant"):
                 yield db_session
 
 
@@ -417,7 +417,7 @@ def mock_make_session_with_file(db_session, tmp_path):
             "memory.common.embedding.embed_source_item",
             side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
         ):
-            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+            with patch("memory.common.content_processing.push_to_qdrant"):
                 with patch("memory.common.settings.NOTES_STORAGE_DIR", tmp_path):
                     # Create profiles directory
                     (tmp_path / "profiles").mkdir(exist_ok=True)

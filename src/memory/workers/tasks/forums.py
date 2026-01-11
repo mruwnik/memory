@@ -5,7 +5,7 @@ from memory.parsers.lesswrong import fetch_lesswrong_posts, LessWrongPost
 from memory.common.db.connection import make_session
 from memory.common.db.models import ForumPost
 from memory.common.celery_app import app, SYNC_LESSWRONG, SYNC_LESSWRONG_POST
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     create_task_result,

@@ -3,7 +3,7 @@
 import pytest
 
 from memory.common.db.models import Person
-from memory.workers.tasks.content_processing import create_content_hash
+from memory.common.content_processing import create_content_hash
 
 
 @pytest.fixture

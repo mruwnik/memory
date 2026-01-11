@@ -16,6 +16,7 @@ from memory.common import settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_LESSWRONG, SYNC_PHOTO
 from memory.common.celery_app import app as celery_app
 from memory.common.jobs import dispatch_job
+from memory.common.content_processing import clear_item_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,44 @@ def list_photos(
         )
         for photo in photos
     ]
+
+
+class DeleteResponse(BaseModel):
+    status: str
+
+
+@router.delete("/photos/{photo_id}")
+def delete_photo(
+    photo_id: int,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> DeleteResponse:
+    """Delete a photo and its associated data."""
+    photo = db.get(Photo, photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    # Delete chunks from Qdrant and PostgreSQL
+    try:
+        clear_item_chunks(photo, db)
+    except Exception as e:
+        logger.error(f"Error clearing chunks for photo {photo_id}: {e}")
+
+    # Delete the physical file if it exists
+    if photo.filename:
+        file_path = settings.FILE_STORAGE_DIR / photo.filename
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                logger.info(f"Deleted file: {file_path}")
+            except OSError as e:
+                logger.error(f"Error deleting file {file_path}: {e}")
+
+    # Delete the photo record
+    db.delete(photo)
+    db.commit()
+
+    return DeleteResponse(status="deleted")
 
 
 # === Upload Endpoints ===

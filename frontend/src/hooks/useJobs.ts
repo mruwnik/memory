@@ -69,9 +69,19 @@ export const useJobs = () => {
     return parseJsonResponse<Job>(response)
   }, [apiCall])
 
+  const reingestJob = useCallback(async (id: number): Promise<Job> => {
+    const response = await apiCall(`/jobs/${id}/reingest`, { method: 'POST' })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+      throw new Error(error.detail || `Failed to reingest job: ${response.status}`)
+    }
+    return parseJsonResponse<Job>(response)
+  }, [apiCall])
+
   return {
     listJobs,
     getJob,
     retryJob,
+    reingestJob,
   }
 }

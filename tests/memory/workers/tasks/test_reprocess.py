@@ -106,7 +106,7 @@ def test_prepare_meeting_for_reingest_clears_chunks_and_detaches_tasks(
     db_session.commit()
 
     with patch(
-        "memory.workers.tasks.content_processing.qdrant.delete_points"
+        "memory.common.content_processing.qdrant.delete_points"
     ) as mock_delete:
         result = prepare_meeting_for_reingest(db_session, meeting.id)
 
@@ -138,7 +138,7 @@ def test_reprocess_meeting_success(db_session, qdrant, meeting_with_chunks):
 
     with (
         patch(
-            "memory.workers.tasks.content_processing.qdrant.delete_points"
+            "memory.common.content_processing.qdrant.delete_points"
         ) as mock_delete,
         patch(
             "memory.workers.tasks.meetings.call_extraction_llm"
@@ -178,7 +178,7 @@ def test_reprocess_meeting_with_job_tracking(
 ):
     """Test reprocessing with job status tracking."""
     with (
-        patch("memory.workers.tasks.content_processing.qdrant.delete_points"),
+        patch("memory.common.content_processing.qdrant.delete_points"),
         patch("memory.workers.tasks.meetings.call_extraction_llm") as mock_llm,
         patch("memory.workers.tasks.meetings.process_content_item") as mock_embed,
     ):
@@ -205,7 +205,7 @@ def test_reprocess_meeting_job_fails_on_error(
 ):
     """Test that job is marked failed when reprocessing fails."""
     with (
-        patch("memory.workers.tasks.content_processing.qdrant.delete_points"),
+        patch("memory.common.content_processing.qdrant.delete_points"),
         patch("memory.workers.tasks.meetings.call_extraction_llm") as mock_llm,
     ):
         mock_llm.side_effect = Exception("LLM API error")

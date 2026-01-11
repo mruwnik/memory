@@ -16,7 +16,7 @@ from memory.common.celery_app import app
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordChannel, DiscordServer, DiscordUser
 from memory.discord.messages import call_llm, comm_channel_prompt, send_discord_response
-from memory.workers.tasks.content_processing import safe_task_execution
+from memory.common.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
 

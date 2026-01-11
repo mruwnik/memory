@@ -16,7 +16,7 @@ from memory.workers.verification import (
     group_items_by_batch_key,
     verify_items,
 )
-from memory.workers.tasks.content_processing import safe_task_execution
+from memory.common.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
 

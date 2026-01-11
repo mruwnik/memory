@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from memory.common.db.models import Note
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
-from memory.workers.tasks.content_processing import create_content_hash
+from memory.common.content_processing import create_content_hash
 from memory.common import settings
 
 
@@ -36,7 +36,7 @@ def mock_make_session(db_session):
             "memory.common.embedding.embed_source_item",
             side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
         ):
-            with patch("memory.workers.tasks.content_processing.push_to_qdrant"):
+            with patch("memory.common.content_processing.push_to_qdrant"):
                 yield db_session
 
 

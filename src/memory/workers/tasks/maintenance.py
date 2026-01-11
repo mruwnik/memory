@@ -23,7 +23,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
 )

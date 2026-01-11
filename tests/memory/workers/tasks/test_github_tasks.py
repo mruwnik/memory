@@ -122,9 +122,23 @@ def mock_closed_issue_data() -> GithubIssueData:
 
 
 @pytest.fixture
-def github_account(db_session) -> GithubAccount:
+def test_user(db_session):
+    """Create a test user for GitHub account fixtures."""
+    from memory.common.db.models import User
+    user = User(
+        name="Test User",
+        email="testuser@example.com",
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def github_account(db_session, test_user) -> GithubAccount:
     """Create a GitHub account for testing."""
     account = GithubAccount(
+        user_id=test_user.id,
         name="Test Account",
         auth_type="pat",
         access_token="ghp_test_token_12345",
@@ -136,9 +150,10 @@ def github_account(db_session) -> GithubAccount:
 
 
 @pytest.fixture
-def inactive_github_account(db_session) -> GithubAccount:
+def inactive_github_account(db_session, test_user) -> GithubAccount:
     """Create an inactive GitHub account."""
     account = GithubAccount(
+        user_id=test_user.id,
         name="Inactive Account",
         auth_type="pat",
         access_token="ghp_inactive_token",
@@ -559,7 +574,7 @@ def test_sync_github_item_existing_unchanged(
 
 def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
     """Test syncing existing item with content changes."""
-    from memory.workers.tasks.content_processing import create_content_hash
+    from memory.common.content_processing import create_content_hash
 
     # Create existing item directly in the test database
     existing_item = GithubItem(
@@ -1459,7 +1474,7 @@ def test_sync_github_item_pr_without_pr_data(github_repo, db_session, qdrant):
 def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdrant):
     """Test updating an existing PR with new pr_data."""
     from memory.common.db.models import GithubPRData
-    from memory.workers.tasks.content_processing import create_content_hash
+    from memory.common.content_processing import create_content_hash
 
     # Create initial PR with pr_data
     initial_content = "# Initial PR\n\nOriginal body"
@@ -1566,7 +1581,7 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
     github_repo, db_session, qdrant
 ):
     """Test updating a PR that didn't have pr_data to add it."""
-    from memory.workers.tasks.content_processing import create_content_hash
+    from memory.common.content_processing import create_content_hash
 
     # Create existing PR without pr_data (legacy data)
     initial_content = "# Legacy PR\n\nOriginal"

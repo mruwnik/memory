@@ -163,12 +163,18 @@ const Calendar = () => {
             key={index}
             className={`min-h-28 p-2 border-b border-r border-slate-100 ${
               !day.isCurrentMonth ? 'bg-slate-50/50' : 'bg-white'
-            } ${day.isToday ? 'bg-primary/5' : ''}`}
+            } ${day.isToday ? 'bg-primary/10' : ''}`}
           >
-            <div className={`text-sm font-medium mb-1 ${
-              !day.isCurrentMonth ? 'text-slate-400' : 'text-slate-700'
-            } ${day.isToday ? 'text-primary font-bold' : ''}`}>
-              {day.date.getDate()}
+            <div className="mb-1">
+              <span className={`inline-flex items-center justify-center w-7 h-7 text-sm font-medium rounded-full ${
+                day.isToday
+                  ? 'bg-primary text-white'
+                  : !day.isCurrentMonth
+                    ? 'text-slate-400'
+                    : 'text-slate-700'
+              }`}>
+                {day.date.getDate()}
+              </span>
             </div>
             <div className="space-y-1">
               {day.events.slice(0, 4).map((event) => (

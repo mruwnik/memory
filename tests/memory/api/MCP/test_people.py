@@ -42,7 +42,7 @@ sys.modules["memory.api.MCP.base"] = _mock_base
 
 from memory.common.db.models import Person
 from memory.common.db import connection as db_connection
-from memory.workers.tasks.content_processing import create_content_hash
+from memory.common.content_processing import create_content_hash
 
 
 @pytest.fixture(autouse=True)

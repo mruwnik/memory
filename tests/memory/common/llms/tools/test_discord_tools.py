@@ -1,6 +1,7 @@
 """Tests for Discord LLM tools."""
 
 import pytest
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 
@@ -22,6 +23,17 @@ from memory.common.db.models import (
     HumanUser,
     ScheduledLLMCall,
 )
+
+
+@pytest.fixture
+def mock_make_session(db_session):
+    """Fixture to patch make_session to use the test db_session."""
+    @contextmanager
+    def fake_make_session():
+        yield db_session
+
+    with patch("memory.common.llms.tools.discord.make_session", fake_make_session):
+        yield
 
 
 # Fixtures for Discord entities
@@ -110,7 +122,7 @@ def test_handle_update_summary_call_server_dict_input(
 
 
 def test_handle_update_summary_call_channel_dict_input(
-    db_session, sample_discord_channel
+    db_session, sample_discord_channel, mock_make_session
 ):
     """Test updating channel summary with dict input."""
     handler = handle_update_summary_call("channel", sample_discord_channel.id)
@@ -123,7 +135,7 @@ def test_handle_update_summary_call_channel_dict_input(
     assert sample_discord_channel.summary == "New channel summary"
 
 
-def test_handle_update_summary_call_user_dict_input(db_session, sample_discord_user):
+def test_handle_update_summary_call_user_dict_input(db_session, sample_discord_user, mock_make_session):
     """Test updating user summary with dict input."""
     handler = handle_update_summary_call("user", sample_discord_user.id)
 
@@ -135,7 +147,7 @@ def test_handle_update_summary_call_user_dict_input(db_session, sample_discord_u
     assert sample_discord_user.summary == "New user summary"
 
 
-def test_handle_update_summary_call_string_input(db_session, sample_discord_server):
+def test_handle_update_summary_call_string_input(db_session, sample_discord_server, mock_make_session):
     """Test updating summary with string input."""
     handler = handle_update_summary_call("server", sample_discord_server.id)
 
@@ -148,7 +160,7 @@ def test_handle_update_summary_call_string_input(db_session, sample_discord_serv
 
 
 def test_handle_update_summary_call_dict_without_summary_key(
-    db_session, sample_discord_server
+    db_session, sample_discord_server, mock_make_session
 ):
     """Test updating summary with dict that doesn't have 'summary' key."""
     handler = handle_update_summary_call("server", sample_discord_server.id)
@@ -206,6 +218,7 @@ def test_schedule_message_with_user(
     db_session,
     sample_human_user,
     sample_discord_user,
+    mock_make_session,
 ):
     """Test scheduling a message to a Discord user."""
     future_time = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -237,6 +250,7 @@ def test_schedule_message_with_channel(
     db_session,
     sample_human_user,
     sample_discord_channel,
+    mock_make_session,
 ):
     """Test scheduling a message to a Discord channel."""
     future_time = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -405,7 +419,7 @@ def test_make_prev_messages_tool_without_user_or_channel(sample_bot_user):
 
 
 def test_prev_messages_handler_success(
-    db_session, sample_bot_user, sample_discord_user, sample_discord_channel
+    db_session, sample_bot_user, sample_discord_user, sample_discord_channel, mock_make_session
 ):
     """Test previous messages handler with valid input."""
     tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
@@ -442,7 +456,7 @@ def test_prev_messages_handler_success(
     assert "Message 1" in result or "Message 2" in result
 
 
-def test_prev_messages_handler_with_defaults(db_session, sample_bot_user, sample_discord_user):
+def test_prev_messages_handler_with_defaults(db_session, sample_bot_user, sample_discord_user, mock_make_session):
     """Test previous messages handler with default values."""
     tool = make_prev_messages_tool(bot=sample_bot_user, user_id=sample_discord_user.id, channel_id=None)
 

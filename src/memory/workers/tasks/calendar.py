@@ -7,6 +7,7 @@ from typing import Any, TypedDict, cast
 
 import caldav
 from sqlalchemy.orm import Session
+from googleapiclient.discovery import build
 
 from memory.common.celery_app import (
     SYNC_ALL_CALENDARS,
@@ -18,7 +19,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
 from memory.parsers.google_drive import refresh_credentials
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     create_task_result,
     process_content_item,
     safe_task_execution,
@@ -121,7 +122,9 @@ def _ensure_timezone(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _create_calendar_event(account: CalendarAccount, event_data: EventData) -> CalendarEvent:
+def _create_calendar_event(
+    account: CalendarAccount, event_data: EventData
+) -> CalendarEvent:
     """Create a CalendarEvent model from parsed event data."""
     account_tags = cast(list[str], account.tags) or []
 
@@ -172,7 +175,7 @@ def _update_existing_event(existing: CalendarEvent, event_data: EventData) -> No
 # -----------------------------------------------------------------------------
 
 
-def _parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
+def parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
     """Parse a CalDAV VEVENT into EventData format."""
     summary = _get_vevent_attr(vevent, "summary", "Untitled Event")
     dtstart = _get_vevent_attr(vevent, "dtstart")
@@ -185,7 +188,9 @@ def _parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
     all_day = not hasattr(dtstart, "hour")
 
     if all_day:
-        start_time = datetime.combine(dtstart, datetime.min.time()).replace(tzinfo=timezone.utc)
+        start_time = datetime.combine(dtstart, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
         end_time = (
             datetime.combine(dtend, datetime.min.time()).replace(tzinfo=timezone.utc)
             if dtend
@@ -199,7 +204,9 @@ def _parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
     attendees: list[str] = []
     raw_attendees = _get_vevent_attr(vevent, "attendee")
     if raw_attendees:
-        attendee_list = raw_attendees if isinstance(raw_attendees, list) else [raw_attendees]
+        attendee_list = (
+            raw_attendees if isinstance(raw_attendees, list) else [raw_attendees]
+        )
         attendees = [str(a).replace("mailto:", "") for a in attendee_list]
 
     return EventData(
@@ -216,7 +223,7 @@ def _parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
     )
 
 
-def _fetch_caldav_events(
+def fetch_caldav_events(
     url: str,
     username: str,
     password: str,
@@ -245,9 +252,11 @@ def _fetch_caldav_events(
             vevents = calendar.events()
             for vevent in vevents:
                 try:
-                    events.append(_parse_caldav_event(vevent, calendar_name))
+                    events.append(parse_caldav_event(vevent, calendar_name))
                 except Exception as e:
-                    logger.error(f"Error parsing CalDAV event from {calendar_name}: {e}")
+                    logger.error(
+                        f"Error parsing CalDAV event from {calendar_name}: {e}"
+                    )
         except Exception as e:
             logger.error(f"Error fetching events from calendar {calendar_name}: {e}")
 
@@ -324,11 +333,6 @@ def _fetch_google_calendar_events(
 
     credentials = refresh_credentials(google_account, session)
 
-    try:
-        from googleapiclient.discovery import build
-    except ImportError as e:
-        raise ImportError("google-api-python-client not installed") from e
-
     service = build("calendar", "v3", credentials=credentials)
     events: list[EventData] = []
 
@@ -385,7 +389,9 @@ def _fetch_google_calendar_events(
 
 @app.task(name=SYNC_CALENDAR_EVENT)
 @safe_task_execution
-def sync_calendar_event(account_id: int, event_data_raw: dict[str, Any]) -> dict[str, Any]:
+def sync_calendar_event(
+    account_id: int, event_data_raw: dict[str, Any]
+) -> dict[str, Any]:
     """Sync a single calendar event."""
     event_data = _deserialize_event_data(event_data_raw)
     logger.info(f"Syncing calendar event: {event_data.get('title')}")
@@ -455,15 +461,23 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                 if not all([caldav_url, caldav_username, caldav_password]):
                     return {"status": "error", "error": "CalDAV credentials incomplete"}
 
-                events = _fetch_caldav_events(
-                    caldav_url, caldav_username, caldav_password, calendar_ids, since, until
+                events = fetch_caldav_events(
+                    caldav_url,
+                    caldav_username,
+                    caldav_password,
+                    calendar_ids,
+                    since,
+                    until,
                 )
             elif calendar_type == "google":
                 events = _fetch_google_calendar_events(
                     account, calendar_ids, since, until, session
                 )
             else:
-                return {"status": "error", "error": f"Unknown calendar type: {calendar_type}"}
+                return {
+                    "status": "error",
+                    "error": f"Unknown calendar type: {calendar_type}",
+                }
 
             # Queue sync tasks for each event
             task_ids = []
@@ -508,7 +522,9 @@ def sync_all_calendars(force_full: bool = False) -> list[dict[str, Any]]:
                 "account_id": account.id,
                 "account_name": account.name,
                 "calendar_type": account.calendar_type,
-                "task_id": sync_calendar_account.delay(account.id, force_full=force_full).id,
+                "task_id": sync_calendar_account.delay(
+                    account.id, force_full=force_full
+                ).id,
             }
             for account in active_accounts
         ]

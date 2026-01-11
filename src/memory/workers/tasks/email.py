@@ -20,7 +20,7 @@ from memory.workers.email import (
     process_folder,
     vectorize_email,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     check_content_exists,
     safe_task_execution,
 )

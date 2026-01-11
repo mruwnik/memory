@@ -13,7 +13,7 @@ from memory.common.db.models.source_items import (
     AgentObservation,
 )
 from memory.common.embedding import embed_source_item, embed_text
-from memory.workers.tasks.content_processing import push_to_qdrant
+from memory.common.content_processing import push_to_qdrant
 from tests.data.contents import SAMPLE_MARKDOWN
 
 

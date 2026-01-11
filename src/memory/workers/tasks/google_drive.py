@@ -16,7 +16,7 @@ from memory.parsers.google_drive import (
     refresh_credentials,
     _get_oauth_config,
 )
-from memory.workers.tasks.content_processing import (
+from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
