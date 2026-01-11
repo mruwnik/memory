@@ -49,6 +49,11 @@ from memory.common.db import connection as db_connection
 from memory.common.db.models import CalendarEvent, Task
 
 
+def get_fn(tool):
+    """Extract underlying function from FunctionTool if wrapped, else return as-is."""
+    return getattr(tool, 'fn', tool)
+
+
 @pytest.fixture(autouse=True)
 def reset_db_cache():
     """Reset the cached database engine between tests."""
@@ -196,11 +201,13 @@ async def test_list_tasks_no_filters(db_session, sample_tasks):
     """Test listing tasks without filters (excludes completed by default)."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks()
+        results = await list_tasks_fn()
 
     # Should exclude done and cancelled by default
     assert len(results) == 3
@@ -214,11 +221,13 @@ async def test_list_tasks_include_completed(db_session, sample_tasks):
     """Test listing tasks with completed included."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(include_completed=True)
+        results = await list_tasks_fn(include_completed=True)
 
     assert len(results) == 5
 
@@ -228,11 +237,13 @@ async def test_list_tasks_filter_by_status(db_session, sample_tasks):
     """Test filtering by status."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(status="in_progress")
+        results = await list_tasks_fn(status="in_progress")
 
     assert len(results) == 1
     assert results[0]["task_title"] == "High priority tomorrow"
@@ -243,11 +254,13 @@ async def test_list_tasks_filter_by_priority(db_session, sample_tasks):
     """Test filtering by priority."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(priority="urgent")
+        results = await list_tasks_fn(priority="urgent")
 
     assert len(results) == 1
     assert results[0]["task_title"] == "Urgent task due today"
@@ -258,11 +271,13 @@ async def test_list_tasks_limit(db_session, sample_tasks):
     """Test limiting results."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(limit=2)
+        results = await list_tasks_fn(limit=2)
 
     assert len(results) == 2
 
@@ -277,12 +292,14 @@ async def test_list_tasks_limit_capped_at_200(db_session, sample_tasks):
     """
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         # Request 500, but implementation should cap at 200
-        results = await list_tasks(limit=500)
+        results = await list_tasks_fn(limit=500)
 
     # Verifies the cap logic exists, though with only 3 tasks this is a weak assertion
     assert len(results) <= 200
@@ -293,12 +310,14 @@ async def test_list_tasks_offset(db_session, sample_tasks):
     """Test pagination with offset."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        all_results = await list_tasks()
-        offset_results = await list_tasks(offset=1)
+        all_results = await list_tasks_fn()
+        offset_results = await list_tasks_fn(offset=1)
 
     assert len(offset_results) == len(all_results) - 1
 
@@ -313,13 +332,14 @@ async def test_get_task_found(db_session, sample_tasks):
     """Test getting a task that exists."""
     from memory.api.MCP.servers.organizer import get_task
 
+    get_task_fn = get_fn(get_task)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await get_task(task_id=task_id)
+        result = await get_task_fn(task_id=task_id)
 
     assert result["success"] is True
     assert result["task"]["task_title"] == "Urgent task due today"
@@ -331,11 +351,13 @@ async def test_get_task_not_found(db_session, sample_tasks):
     """Test getting a task that doesn't exist."""
     from memory.api.MCP.servers.organizer import get_task
 
+    get_task_fn = get_fn(get_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await get_task(task_id=99999)
+        result = await get_task_fn(task_id=99999)
 
     assert "error" in result
     assert "not found" in result["error"]
@@ -351,11 +373,13 @@ async def test_create_task_success(db_session):
     """Test creating a new task."""
     from memory.api.MCP.servers.organizer import create_task
 
+    create_task_fn = get_fn(create_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await create_task(
+        result = await create_task_fn(
             title="New test task",
             priority="high",
             tags=["test"],
@@ -376,11 +400,13 @@ async def test_create_task_with_due_date(db_session):
     """Test creating a task with a due date."""
     from memory.api.MCP.servers.organizer import create_task
 
+    create_task_fn = get_fn(create_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await create_task(
+        result = await create_task_fn(
             title="Task with date",
             due_date="2024-12-25T10:00:00Z",
         )
@@ -394,12 +420,14 @@ async def test_create_task_invalid_due_date(db_session):
     """Test creating a task with invalid due date."""
     from memory.api.MCP.servers.organizer import create_task
 
+    create_task_fn = get_fn(create_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         with pytest.raises(ValueError, match="Invalid due_date format"):
-            await create_task(
+            await create_task_fn(
                 title="Task with bad date",
                 due_date="not-a-date",
             )
@@ -410,12 +438,14 @@ async def test_create_task_idempotent(db_session):
     """Test that creating a task with the same title returns existing task."""
     from memory.api.MCP.servers.organizer import create_task
 
+    create_task_fn = get_fn(create_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result1 = await create_task(title="Idempotent task")
-        result2 = await create_task(title="Idempotent task")
+        result1 = await create_task_fn(title="Idempotent task")
+        result2 = await create_task_fn(title="Idempotent task")
 
     assert result1["id"] == result2["id"]
 
@@ -434,13 +464,14 @@ async def test_update_task_success(db_session, sample_tasks):
     """Test updating a task."""
     from memory.api.MCP.servers.organizer import update_task
 
+    update_task_fn = get_fn(update_task)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await update_task(
+        result = await update_task_fn(
             task_id=task_id,
             title="Updated title",
             priority="low",
@@ -455,12 +486,14 @@ async def test_update_task_not_found(db_session, sample_tasks):
     """Test updating a task that doesn't exist."""
     from memory.api.MCP.servers.organizer import update_task
 
+    update_task_fn = get_fn(update_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         with pytest.raises(ValueError, match="not found"):
-            await update_task(task_id=99999, title="Won't work")
+            await update_task_fn(task_id=99999, title="Won't work")
 
 
 @pytest.mark.asyncio
@@ -468,13 +501,14 @@ async def test_update_task_status_to_done_sets_completed_at(db_session, sample_t
     """Test that updating status to done sets completed_at."""
     from memory.api.MCP.servers.organizer import update_task
 
+    update_task_fn = get_fn(update_task)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await update_task(task_id=task_id, status="done")
+        result = await update_task_fn(task_id=task_id, status="done")
 
     assert result["status"] == "done"
     assert result["completed_at"] is not None
@@ -487,6 +521,7 @@ async def test_update_task_status_to_pending_clears_completed_at(
     """Test that updating status to pending clears completed_at."""
     from memory.api.MCP.servers.organizer import update_task
 
+    update_task_fn = get_fn(update_task)
     # Use the completed task
     completed_task = next(t for t in sample_tasks if t.status == "done")
 
@@ -494,7 +529,7 @@ async def test_update_task_status_to_pending_clears_completed_at(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await update_task(task_id=completed_task.id, status="pending")
+        result = await update_task_fn(task_id=completed_task.id, status="pending")
 
     assert result["status"] == "pending"
     assert result["completed_at"] is None
@@ -505,13 +540,14 @@ async def test_update_task_due_date(db_session, sample_tasks):
     """Test updating task due date."""
     from memory.api.MCP.servers.organizer import update_task
 
+    update_task_fn = get_fn(update_task)
     task_id = sample_tasks[2].id  # The one with no due date
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await update_task(
+        result = await update_task_fn(
             task_id=task_id,
             due_date="2025-01-15T09:00:00Z",
         )
@@ -530,13 +566,14 @@ async def test_complete_task_success(db_session, sample_tasks):
     """Test completing a task."""
     from memory.api.MCP.servers.organizer import complete_task_by_id
 
+    complete_task_by_id_fn = get_fn(complete_task_by_id)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await complete_task_by_id(task_id=task_id)
+        result = await complete_task_by_id_fn(task_id=task_id)
 
     assert result["status"] == "done"
     assert result["completed_at"] is not None
@@ -547,12 +584,14 @@ async def test_complete_task_not_found(db_session, sample_tasks):
     """Test completing a task that doesn't exist."""
     from memory.api.MCP.servers.organizer import complete_task_by_id
 
+    complete_task_by_id_fn = get_fn(complete_task_by_id)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         with pytest.raises(ValueError, match="not found"):
-            await complete_task_by_id(task_id=99999)
+            await complete_task_by_id_fn(task_id=99999)
 
 
 # =============================================================================
@@ -565,13 +604,14 @@ async def test_delete_task_success(db_session, sample_tasks):
     """Test deleting a task."""
     from memory.api.MCP.servers.organizer import delete_task
 
+    delete_task_fn = get_fn(delete_task)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await delete_task(task_id=task_id)
+        result = await delete_task_fn(task_id=task_id)
 
     assert result["deleted"] is True
     assert result["task_id"] == task_id
@@ -586,12 +626,14 @@ async def test_delete_task_not_found(db_session, sample_tasks):
     """Test deleting a task that doesn't exist."""
     from memory.api.MCP.servers.organizer import delete_task
 
+    delete_task_fn = get_fn(delete_task)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         with pytest.raises(ValueError, match="not found"):
-            await delete_task(task_id=99999)
+            await delete_task_fn(task_id=99999)
 
 
 # =============================================================================
@@ -604,11 +646,13 @@ async def test_get_upcoming_events_default_range(db_session, sample_events):
     """Test getting events with default 7 day range."""
     from memory.api.MCP.servers.organizer import get_upcoming_events
 
+    get_upcoming_events_fn = get_fn(get_upcoming_events)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events()
+        results = await get_upcoming_events_fn()
 
     # Should include future events within 7 days
     assert len(results) >= 1
@@ -621,6 +665,7 @@ async def test_get_upcoming_events_with_dates(db_session, sample_events):
     """Test getting events with specific date range."""
     from memory.api.MCP.servers.organizer import get_upcoming_events
 
+    get_upcoming_events_fn = get_fn(get_upcoming_events)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=5)).isoformat()
     end = (now + timedelta(days=5)).isoformat()
@@ -629,7 +674,7 @@ async def test_get_upcoming_events_with_dates(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events(start_date=start, end_date=end)
+        results = await get_upcoming_events_fn(start_date=start, end_date=end)
 
     # Should include events in the range
     assert len(results) >= 1
@@ -640,6 +685,7 @@ async def test_get_upcoming_events_limit(db_session, sample_events):
     """Test limiting event results."""
     from memory.api.MCP.servers.organizer import get_upcoming_events
 
+    get_upcoming_events_fn = get_fn(get_upcoming_events)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=10)).isoformat()
     end = (now + timedelta(days=10)).isoformat()
@@ -648,7 +694,7 @@ async def test_get_upcoming_events_limit(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events(start_date=start, end_date=end, limit=1)
+        results = await get_upcoming_events_fn(start_date=start, end_date=end, limit=1)
 
     assert len(results) <= 1
 
@@ -658,12 +704,14 @@ async def test_get_upcoming_events_limit_capped(db_session, sample_events):
     """Test that limit is capped at 200."""
     from memory.api.MCP.servers.organizer import get_upcoming_events
 
+    get_upcoming_events_fn = get_fn(get_upcoming_events)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         # Request 500, should be capped
-        results = await get_upcoming_events(limit=500)
+        results = await get_upcoming_events_fn(limit=500)
 
     assert len(results) <= 200
 
@@ -673,12 +721,14 @@ async def test_get_upcoming_events_days_capped(db_session, sample_events):
     """Test that days parameter is capped at 365."""
     from memory.api.MCP.servers.organizer import get_upcoming_events
 
+    get_upcoming_events_fn = get_fn(get_upcoming_events)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         # Request 1000 days, should work but cap at 365
-        results = await get_upcoming_events(days=1000)
+        results = await get_upcoming_events_fn(days=1000)
 
     # Should not raise, just cap internally
     assert isinstance(results, list)
@@ -705,11 +755,13 @@ async def test_list_tasks_various_statuses(
     """Test filtering by various statuses."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(status=status, include_completed=True)
+        results = await list_tasks_fn(status=status, include_completed=True)
 
     assert len(results) == expected_count
 
@@ -730,10 +782,12 @@ async def test_list_tasks_various_priorities(
     """Test filtering by various priorities."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    list_tasks_fn = get_fn(list_tasks)
+
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks(priority=priority, include_completed=True)
+        results = await list_tasks_fn(priority=priority, include_completed=True)
 
     assert len(results) == expected_count

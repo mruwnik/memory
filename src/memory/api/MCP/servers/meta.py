@@ -15,7 +15,11 @@ from sqlalchemy.orm import Session
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.db.connection import make_session
-from memory.common.db.models import EmailAccount, SourceItem, UserSession
+from memory.common.db.models import (
+    EmailAccount,
+    SourceItem,
+    UserSession,
+)
 from memory.common.db.models.source_items import AgentObservation
 
 logger = logging.getLogger(__name__)

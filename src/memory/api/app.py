@@ -32,6 +32,7 @@ from memory.api.calendar_accounts import router as calendar_accounts_router
 from memory.api.meetings import router as meetings_router
 from memory.api.content_sources import router as content_sources_router
 from memory.api.metrics import router as metrics_router
+from memory.api.telemetry import router as telemetry_router
 from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.source_items import router as source_items_router
@@ -199,6 +200,7 @@ app.include_router(calendar_accounts_router)
 app.include_router(meetings_router)
 app.include_router(content_sources_router)
 app.include_router(metrics_router)
+app.include_router(telemetry_router)
 app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)

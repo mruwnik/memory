@@ -89,6 +89,9 @@ from memory.common.db.models.scheduled_calls import (
 from memory.common.db.models.metrics import (
     MetricEvent,
 )
+from memory.common.db.models.telemetry import (
+    TelemetryEvent,
+)
 from memory.common.db.models.jobs import (
     PendingJob,
     PendingJobPayload,
@@ -199,6 +202,8 @@ __all__ = [
     "ScheduledLLMCall",
     # Metrics
     "MetricEvent",
+    # Telemetry
+    "TelemetryEvent",
     # Jobs
     "PendingJob",
     "PendingJobPayload",

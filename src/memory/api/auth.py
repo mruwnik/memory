@@ -103,6 +103,20 @@ def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | 
     return None
 
 
+def authenticate_by_api_key(api_key: str, db: DBSession | scoped_session) -> User | None:
+    """Authenticate any user by API key.
+
+    Supports both bot users (bot_* keys) and human users (user_* keys).
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    # Query all users with API keys and compare with constant-time function
+    users = db.query(User).filter(User.api_key.isnot(None)).all()
+    for user in users:
+        if user.api_key and secrets.compare_digest(user.api_key, api_key):
+            return user
+    return None
+
+
 def get_session_user(request: Request, db: DBSession | scoped_session) -> User | None:
     """Get user from session ID or API key if valid.
 
@@ -114,9 +128,9 @@ def get_session_user(request: Request, db: DBSession | scoped_session) -> User |
     if not token:
         return None
 
-    # Check if this is an API key (for bot users)
-    if token.startswith("bot_"):
-        return authenticate_bot(token, db)
+    # Check if this is an API key (for bot or human users with API keys)
+    if token.startswith("bot_") or token.startswith("user_"):
+        return authenticate_by_api_key(token, db)
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
