@@ -4,12 +4,14 @@ import {
   useTelemetry,
   TelemetryMetricsResponse,
   TelemetryRawResponse,
+  ToolUsageResponse,
 } from '@/hooks/useTelemetry'
 import { TokenUsageChart } from './TokenUsageChart'
 import { CostChart } from './CostChart'
 import { SessionActivityChart } from './SessionActivityChart'
 import { TelemetrySummaryCards } from './TelemetrySummaryCards'
 import { RecentEventsTable } from './RecentEventsTable'
+import { ToolBreakdownChart } from './ToolBreakdownChart'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 
@@ -40,8 +42,9 @@ const Telemetry: React.FC = () => {
   const [costUsage, setCostUsage] = useState<TelemetryMetricsResponse | null>(null)
   const [sessionActivity, setSessionActivity] = useState<TelemetryMetricsResponse | null>(null)
   const [recentEvents, setRecentEvents] = useState<TelemetryRawResponse | null>(null)
+  const [toolUsage, setToolUsage] = useState<ToolUsageResponse | null>(null)
 
-  const { getMetrics, getRawEvents } = useTelemetry()
+  const { getMetrics, getRawEvents, getToolUsage } = useTelemetry()
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -51,24 +54,26 @@ const Telemetry: React.FC = () => {
     const to = new Date()
 
     try {
-      const [tokenRes, costRes, sessionRes, eventsRes] = await Promise.all([
+      const [tokenRes, costRes, sessionRes, eventsRes, toolRes] = await Promise.all([
         getMetrics('token.usage', { from, to, granularity, groupBy: ['source'] }),
         getMetrics('cost.usage', { from, to, granularity, groupBy: ['source'] }),
         getMetrics('session.count', { from, to, granularity, groupBy: [] }),
         getRawEvents({ from, to, limit: 50 }),
+        getToolUsage({ from, to }),
       ])
 
       setTokenUsage(tokenRes)
       setCostUsage(costRes)
       setSessionActivity(sessionRes)
       setRecentEvents(eventsRes)
+      setToolUsage(toolRes)
       setLastRefresh(new Date())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry')
     } finally {
       setLoading(false)
     }
-  }, [timeRange, getMetrics, getRawEvents])
+  }, [timeRange, getMetrics, getRawEvents, getToolUsage])
 
   useEffect(() => {
     loadData()
@@ -149,6 +154,13 @@ const Telemetry: React.FC = () => {
             <div className="bg-white p-6 rounded-xl shadow-md">
               <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent Events</h3>
               <RecentEventsTable events={recentEvents?.events ?? []} />
+            </div>
+          </section>
+
+          <section className="mb-8">
+            <div className="bg-white p-6 rounded-xl shadow-md">
+              <h3 className="text-lg font-semibold text-slate-800 mb-4">Token Usage by Tool</h3>
+              <ToolBreakdownChart data={toolUsage} />
             </div>
           </section>
         </>

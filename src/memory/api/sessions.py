@@ -9,7 +9,7 @@ Provides endpoints for:
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -122,6 +122,39 @@ class TranscriptResponse(BaseModel):
     events: list[dict[str, Any]]
 
 
+class ToolCallStats(BaseModel):
+    """Per-call statistics for token usage."""
+
+    median: float
+    p75: float
+    p90: float
+    p99: float
+    min: int
+    max: int
+
+
+class ToolUsageStats(BaseModel):
+    """Token usage statistics for a single tool."""
+
+    tool_name: str
+    call_count: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    total_tokens: int
+    per_call: ToolCallStats | None = None
+
+
+class ToolUsageResponse(BaseModel):
+    """Aggregated tool usage statistics."""
+
+    from_time: str
+    to_time: str
+    session_count: int
+    tools: list[ToolUsageStats]
+
+
 class ProjectListResponse(BaseModel):
     """List of projects."""
 
@@ -204,12 +237,13 @@ def get_or_create_session(
             pass
 
     # Determine transcript path (relative to SESSIONS_STORAGE_DIR)
-    transcript_path = f"{user_id}/{session_uuid}.jsonl"
+    project_id = project and project.id
+    transcript_path = f"{project_id}/{session_uuid}.jsonl"
 
     session = Session(
         id=session_uuid,
         user_id=user_id,
-        project_id=project.id if project else None,
+        project_id=project_id,
         parent_session_id=parent_session_id,
         git_branch=git_branch,
         tool_version=tool_version,
@@ -477,4 +511,221 @@ def get_session_transcript(
             offset=offset,
             limit=limit,
             events=events,
+        )
+
+
+def extract_tool_usage_from_transcript(
+    transcript_path: str,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+) -> dict[str, dict]:
+    """Extract tool usage from a session transcript.
+
+    Returns dict mapping tool_name -> {
+        call_count, input_tokens, output_tokens, ...,
+        per_call_totals: list[int]  # total tokens per individual call
+    }
+    """
+    transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
+    if not transcript_file.exists():
+        return {}
+
+    tool_stats: dict[str, dict] = {}
+
+    for event in safe_loads(transcript_file):
+        # Only process assistant messages with tool_use
+        if event.get("type") != "assistant":
+            continue
+
+        # Filter by timestamp if provided
+        timestamp_str = event.get("timestamp")
+        if timestamp_str and (from_time or to_time):
+            try:
+                event_time = datetime.fromisoformat(
+                    timestamp_str.replace("Z", "+00:00")
+                )
+                if from_time and event_time < from_time:
+                    continue
+                if to_time and event_time > to_time:
+                    continue
+            except (ValueError, TypeError):
+                pass  # If we can't parse timestamp, include the event
+
+        message = event.get("message", {})
+        content = message.get("content", [])
+        usage = message.get("usage", {})
+
+        if not content or not usage:
+            continue
+
+        # Find tool_use blocks in content
+        tools_in_message = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                tool_name = block.get("name", "unknown")
+                tools_in_message.append(tool_name)
+
+        if not tools_in_message:
+            continue
+
+        # Get token counts from usage
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_creation = usage.get("cache_creation_input_tokens", 0)
+
+        # Attribute tokens to tools (split evenly if multiple tools in one message)
+        num_tools = len(tools_in_message)
+        per_tool_total = (input_tokens + output_tokens + cache_read + cache_creation) // num_tools
+
+        for tool_name in tools_in_message:
+            if tool_name not in tool_stats:
+                tool_stats[tool_name] = {
+                    "call_count": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_creation_tokens": 0,
+                    "per_call_totals": [],
+                }
+
+            tool_stats[tool_name]["call_count"] += 1
+            tool_stats[tool_name]["input_tokens"] += input_tokens // num_tools
+            tool_stats[tool_name]["output_tokens"] += output_tokens // num_tools
+            tool_stats[tool_name]["cache_read_tokens"] += cache_read // num_tools
+            tool_stats[tool_name]["cache_creation_tokens"] += (
+                cache_creation // num_tools
+            )
+            tool_stats[tool_name]["per_call_totals"].append(per_tool_total)
+
+    return tool_stats
+
+
+def calculate_percentile(sorted_values: list[int], percentile: float) -> float:
+    """Calculate percentile from sorted values using linear interpolation."""
+    if not sorted_values:
+        return 0.0
+    n = len(sorted_values)
+    if n == 1:
+        return float(sorted_values[0])
+
+    # Use linear interpolation (same as numpy's default)
+    k = (n - 1) * percentile / 100
+    f = int(k)
+    c = f + 1 if f + 1 < n else f
+    return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
+
+
+def compute_call_stats(per_call_totals: list[int]) -> ToolCallStats | None:
+    """Compute per-call statistics from a list of token totals."""
+    if not per_call_totals:
+        return None
+
+    sorted_vals = sorted(per_call_totals)
+    return ToolCallStats(
+        median=calculate_percentile(sorted_vals, 50),
+        p75=calculate_percentile(sorted_vals, 75),
+        p90=calculate_percentile(sorted_vals, 90),
+        p99=calculate_percentile(sorted_vals, 99),
+        min=sorted_vals[0],
+        max=sorted_vals[-1],
+    )
+
+
+@router.get("/stats/tool-usage", response_model=ToolUsageResponse)
+def get_tool_usage_stats(
+    from_time: datetime | None = Query(None, alias="from", description="Start time"),
+    to_time: datetime | None = Query(None, alias="to", description="End time"),
+    user: User = Depends(get_current_user),
+) -> ToolUsageResponse:
+    """
+    Get aggregated token usage statistics by tool.
+
+    Parses session transcripts to correlate tool calls with token usage.
+    """
+    # Default to last 7 days
+    if to_time is None:
+        to_time = datetime.now(timezone.utc)
+    if from_time is None:
+        from_time = to_time - timedelta(days=7)
+
+    with make_session() as db_session:
+        from sqlalchemy import or_
+
+        # Get sessions that overlap with the time range:
+        # - started before to_time AND (ended after from_time OR still ongoing)
+        sessions = (
+            db_session.query(Session)
+            .filter(
+                Session.user_id == user.id,
+                Session.started_at <= to_time,
+                or_(
+                    Session.ended_at.is_(None),
+                    Session.ended_at >= from_time,
+                ),
+            )
+            .all()
+        )
+
+        # Aggregate tool usage across all sessions
+        aggregated: dict[str, dict] = {}
+
+        for session in sessions:
+            if not session.transcript_path:
+                continue
+
+            session_stats = extract_tool_usage_from_transcript(
+                session.transcript_path, from_time, to_time
+            )
+
+            for tool_name, stats in session_stats.items():
+                if tool_name not in aggregated:
+                    aggregated[tool_name] = {
+                        "call_count": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "per_call_totals": [],
+                    }
+
+                aggregated[tool_name]["call_count"] += stats["call_count"]
+                aggregated[tool_name]["input_tokens"] += stats["input_tokens"]
+                aggregated[tool_name]["output_tokens"] += stats["output_tokens"]
+                aggregated[tool_name]["cache_read_tokens"] += stats["cache_read_tokens"]
+                aggregated[tool_name]["cache_creation_tokens"] += stats[
+                    "cache_creation_tokens"
+                ]
+                aggregated[tool_name]["per_call_totals"].extend(
+                    stats.get("per_call_totals", [])
+                )
+
+        # Convert to response format
+        tools = [
+            ToolUsageStats(
+                tool_name=name,
+                call_count=stats["call_count"],
+                input_tokens=stats["input_tokens"],
+                output_tokens=stats["output_tokens"],
+                cache_read_tokens=stats["cache_read_tokens"],
+                cache_creation_tokens=stats["cache_creation_tokens"],
+                total_tokens=(
+                    stats["input_tokens"]
+                    + stats["output_tokens"]
+                    + stats["cache_read_tokens"]
+                    + stats["cache_creation_tokens"]
+                ),
+                per_call=compute_call_stats(stats["per_call_totals"]),
+            )
+            for name, stats in aggregated.items()
+        ]
+
+        # Sort by total tokens descending
+        tools.sort(key=lambda t: t.total_tokens, reverse=True)
+
+        return ToolUsageResponse(
+            from_time=from_time.isoformat(),
+            to_time=to_time.isoformat(),
+            session_count=len(sessions),
+            tools=tools,
         )

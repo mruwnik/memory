@@ -44,6 +44,33 @@ export interface TelemetryMetricsResponse {
   data: TelemetryMetricDataPoint[]
 }
 
+export interface ToolCallStats {
+  median: number
+  p75: number
+  p90: number
+  p99: number
+  min: number
+  max: number
+}
+
+export interface ToolUsageStats {
+  tool_name: string
+  call_count: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  total_tokens: number
+  per_call: ToolCallStats | null
+}
+
+export interface ToolUsageResponse {
+  from_time: string
+  to_time: string
+  session_count: number
+  tools: ToolUsageStats[]
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type')
   if (!contentType?.includes('application/json')) {
@@ -112,8 +139,26 @@ export const useTelemetry = () => {
     return parseJsonResponse<TelemetryMetricsResponse>(response)
   }, [apiCall])
 
+  const getToolUsage = useCallback(async (
+    options: {
+      from?: Date
+      to?: Date
+    } = {}
+  ): Promise<ToolUsageResponse> => {
+    const params = new URLSearchParams()
+    if (options.from) params.set('from', options.from.toISOString())
+    if (options.to) params.set('to', options.to.toISOString())
+
+    const response = await apiCall(`/sessions/stats/tool-usage?${params}`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tool usage: ${response.status}`)
+    }
+    return parseJsonResponse<ToolUsageResponse>(response)
+  }, [apiCall])
+
   return {
     getRawEvents,
     getMetrics,
+    getToolUsage,
   }
 }

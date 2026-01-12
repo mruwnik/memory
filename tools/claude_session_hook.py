@@ -83,11 +83,32 @@ def normalize_event(raw):
     }
 
 
+def is_real_user_message(event):
+    """Check if event is a real user message (not a tool_result)."""
+    if event.get("type") != "user":
+        return False
+
+    message = event.get("message", {})
+    content = message.get("content", [])
+
+    # tool_result events have content like [{"type": "tool_result", ...}]
+    if isinstance(content, list) and content:
+        first_block = content[0] if content else {}
+        if isinstance(first_block, dict) and first_block.get("type") == "tool_result":
+            return False
+
+    return True
+
+
 def find_current_turn(events):
-    """Find events from the last user message onwards (the current turn)."""
+    """Find events from the last real user message onwards (the current turn).
+
+    Skips tool_result messages which also have type="user" but are part of
+    the tool execution flow, not a new user turn.
+    """
     last_user_idx = -1
     for i in range(len(events) - 1, -1, -1):
-        if events[i].get("type") == "user":
+        if is_real_user_message(events[i]):
             last_user_idx = i
             break
 
