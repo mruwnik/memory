@@ -6,6 +6,7 @@ from celery.schedules import crontab
 from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
+    CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_METRICS,
     COLLECT_SYSTEM_METRICS,
     REINGEST_MISSING_CHUNKS,
@@ -90,6 +91,10 @@ app.conf.beat_schedule.update({
     "verify-orphans": {
         "task": VERIFY_ORPHANS,
         "schedule": settings.VERIFICATION_SYNC_INTERVAL,
+    },
+    "cleanup-old-claude-sessions": {
+        "task": CLEANUP_OLD_CLAUDE_SESSIONS,
+        "schedule": crontab(hour=3, minute=30),  # Daily at 3:30 AM
     },
 })
 

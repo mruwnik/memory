@@ -92,6 +92,12 @@ from memory.common.db.models.metrics import (
 from memory.common.db.models.telemetry import (
     TelemetryEvent,
 )
+from memory.common.db.models.sessions import (
+    Project,
+    ProjectPayload,
+    Session,
+    SessionPayload,
+)
 from memory.common.db.models.jobs import (
     PendingJob,
     PendingJobPayload,
@@ -204,6 +210,11 @@ __all__ = [
     "MetricEvent",
     # Telemetry
     "TelemetryEvent",
+    # Sessions
+    "Project",
+    "ProjectPayload",
+    "Session",
+    "SessionPayload",
     # Jobs
     "PendingJob",
     "PendingJobPayload",

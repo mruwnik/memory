@@ -83,6 +83,9 @@ PROFILES_FOLDER = os.getenv("PROFILES_FOLDER", "profiles")
 DISCORD_STORAGE_DIR = pathlib.Path(
     os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
 )
+SESSIONS_STORAGE_DIR = pathlib.Path(
+    os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
+)
 # Directories requiring encryption during backup (contain sensitive user data).
 # CHUNK_STORAGE_DIR is intentionally excluded: chunks are derived data that can be
 # regenerated, and not backed up at all (see storage_dirs below).
@@ -296,4 +299,7 @@ MAX_VERIFICATION_FAILURES = int(os.getenv("MAX_VERIFICATION_FAILURES", 3))
 VERIFICATION_SYNC_INTERVAL = int(
     os.getenv("VERIFICATION_SYNC_INTERVAL", 60 * 60 * 6)
 )  # 6 hours
+
+# Session retention settings
+SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 30))
 

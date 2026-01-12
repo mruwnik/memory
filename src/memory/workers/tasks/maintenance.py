@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any
 
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from memory.common.celery_app import (
     CLEAN_COLLECTION,
     CLEANUP_EXPIRED_OAUTH_STATES,
     CLEANUP_EXPIRED_SESSIONS,
+    CLEANUP_OLD_CLAUDE_SESSIONS,
     REINGEST_MISSING_CHUNKS,
     REINGEST_CHUNK,
     REINGEST_ITEM,
@@ -22,7 +23,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk, Project, Session, SourceItem
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
@@ -375,7 +376,6 @@ def cleanup_expired_oauth_states(max_age_hours: int = 1):
 def cleanup_expired_sessions():
     """Clean up expired user sessions from the database."""
     from memory.common.db.models import UserSession
-    from datetime import timezone
 
     logger.info("Cleaning up expired user sessions")
 
@@ -395,3 +395,72 @@ def cleanup_expired_sessions():
 
     logger.info(f"Deleted {deleted} expired user sessions")
     return {"deleted": deleted}
+
+
+@app.task(name=CLEANUP_OLD_CLAUDE_SESSIONS)
+def cleanup_old_claude_sessions(max_age_days: int | None = None):
+    """Clean up old coding sessions.
+
+    Deletes old sessions and their transcript files to maintain storage limits.
+    Also cleans up orphaned projects (projects with no remaining sessions).
+    """
+    if max_age_days is None:
+        max_age_days = settings.SESSION_RETENTION_DAYS
+
+    logger.info(f"Cleaning up sessions older than {max_age_days} days")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    deleted_sessions = 0
+    deleted_files = 0
+    deleted_projects = 0
+
+    with make_session() as db_session:
+        # Find old sessions
+        old_sessions = (
+            db_session.query(Session)
+            .filter(Session.started_at < cutoff)
+            .all()
+        )
+
+        for coding_session in old_sessions:
+            # Delete transcript file if it exists
+            if not coding_session.transcript_path:
+                db_session.delete(coding_session)
+                deleted_sessions += 1
+                continue
+
+            transcript_file = settings.SESSIONS_STORAGE_DIR / coding_session.transcript_path
+            if transcript_file.exists():
+                try:
+                    transcript_file.unlink()
+                    deleted_files += 1
+                except OSError as e:
+                    logger.warning(f"Failed to delete transcript file {transcript_file}: {e}")
+
+            db_session.delete(coding_session)
+            deleted_sessions += 1
+
+        db_session.commit()
+
+        # Clean up orphaned projects (no remaining sessions)
+        orphaned_projects = (
+            db_session.query(Project)
+            .filter(~Project.sessions.any())
+            .all()
+        )
+
+        for project in orphaned_projects:
+            db_session.delete(project)
+            deleted_projects += 1
+
+        db_session.commit()
+
+    logger.info(
+        f"Deleted {deleted_sessions} old sessions ({deleted_files} files) and "
+        f"{deleted_projects} orphaned projects"
+    )
+    return {
+        "deleted_sessions": deleted_sessions,
+        "deleted_files": deleted_files,
+        "deleted_projects": deleted_projects,
+    }

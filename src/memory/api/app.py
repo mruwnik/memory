@@ -36,6 +36,7 @@ from memory.api.telemetry import router as telemetry_router
 from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.source_items import router as source_items_router
+from memory.api.sessions import router as sessions_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
@@ -204,6 +205,7 @@ app.include_router(telemetry_router)
 app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)
+app.include_router(sessions_router)
 
 
 # Add health check to MCP server instead of main app

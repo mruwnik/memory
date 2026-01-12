@@ -54,7 +54,7 @@ class TelemetryEvent(Base):
     # Numeric value (for counters/gauges)
     value = Column(Float, nullable=True)
 
-    # Session tracking
+    # Session tracking - stores session UUID as string
     session_id = Column(String(100), nullable=True, index=True)
 
     # Common dimensions extracted for efficient querying
