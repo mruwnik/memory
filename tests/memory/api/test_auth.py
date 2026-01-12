@@ -189,7 +189,7 @@ def test_get_session_user_uses_api_key_auth_for_bot_tokens():
     db = MagicMock()
     bot = MagicMock()
     bot.api_key = "bot_test123"
-    db.query.return_value.all.return_value = [bot]
+    db.query.return_value.filter.return_value.all.return_value = [bot]
 
     result = auth.get_session_user(request, db)
 
