@@ -55,6 +55,8 @@ def _sync_milestone(
         existing.description = milestone_data["description"]
         existing.state = milestone_data["state"]
         existing.due_on = milestone_data["due_on"]
+        existing.open_issues = milestone_data.get("open_issues", 0)
+        existing.closed_issues = milestone_data.get("closed_issues", 0)
         existing.github_updated_at = milestone_data["github_updated_at"]
         existing.closed_at = milestone_data["closed_at"]
         return existing
@@ -68,6 +70,8 @@ def _sync_milestone(
         description=milestone_data["description"],
         state=milestone_data["state"],
         due_on=milestone_data["due_on"],
+        open_issues=milestone_data.get("open_issues", 0),
+        closed_issues=milestone_data.get("closed_issues", 0),
         github_created_at=milestone_data["github_created_at"],
         github_updated_at=milestone_data["github_updated_at"],
         closed_at=milestone_data["closed_at"],

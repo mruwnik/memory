@@ -524,6 +524,8 @@ class IssuesMixin:
         createdAt
         updatedAt
         closedAt
+        issues(first: 0, states: [OPEN]) { totalCount }
+        closedIssues: issues(first: 0, states: [CLOSED]) { totalCount }
     """
 
     def fetch_milestones(
@@ -622,6 +624,8 @@ class IssuesMixin:
         """Parse GraphQL milestone response into GithubMilestoneData."""
         # GraphQL id is the node ID (string), we need databaseId for github_id
         # But milestones don't expose databaseId in GraphQL, so we use 0
+        open_issues = self._extract_nested(ms, "issues", "totalCount", default=0)
+        closed_issues = self._extract_nested(ms, "closedIssues", "totalCount", default=0)
         return GithubMilestoneData(
             github_id=0,  # GraphQL doesn't expose databaseId for milestones
             number=ms["number"],
@@ -629,6 +633,8 @@ class IssuesMixin:
             description=ms.get("description"),
             state=ms["state"].lower(),  # GraphQL returns OPEN/CLOSED
             due_on=parse_github_date(ms.get("dueOn")),
+            open_issues=open_issues,
+            closed_issues=closed_issues,
             github_created_at=parse_github_date(ms["createdAt"]),  # type: ignore
             github_updated_at=parse_github_date(ms["updatedAt"]),  # type: ignore
             closed_at=parse_github_date(ms.get("closedAt")),

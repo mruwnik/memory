@@ -90,6 +90,8 @@ class GithubMilestoneData(TypedDict):
     description: str | None
     state: str
     due_on: datetime | None
+    open_issues: int
+    closed_issues: int
     github_created_at: datetime
     github_updated_at: datetime
     closed_at: datetime | None

@@ -63,6 +63,11 @@ const Dashboard = ({ onLogout }) => {
                         <p className="text-gray-600 text-base">Schedule meetings with availability polls</p>
                     </Link>
 
+                    <Link to="/ui/projects" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Projects</h3>
+                        <p className="text-gray-600 text-base">View milestone progress across GitHub repositories</p>
+                    </Link>
+
                     <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg" onClick={async () => console.log(await listNotes())}>
                         <h3 className="text-slate-800 text-xl mb-2 font-semibold">Notes</h3>
                         <p className="text-gray-600 text-base">Create and manage your notes</p>
