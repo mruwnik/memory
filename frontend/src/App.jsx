@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, Metrics, Telemetry, Jobs } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, Metrics, Telemetry, Jobs, Projects } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 
 // AuthWrapper handles redirects based on auth state
@@ -142,6 +142,14 @@ const AuthWrapper = () => {
       <Route path="/ui/jobs" element={
         isAuthenticated ? (
           <Jobs />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/projects" element={
+        isAuthenticated ? (
+          <Projects />
         ) : (
           <Navigate to="/ui/login" replace />
         )

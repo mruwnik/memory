@@ -297,6 +297,10 @@ class GithubMilestone(Base):
     state = Column(Text, nullable=False)  # 'open' or 'closed'
     due_on = Column(DateTime(timezone=True), nullable=True)
 
+    # Issue counts (populated during sync)
+    open_issues = Column(Integer, nullable=False, server_default="0")
+    closed_issues = Column(Integer, nullable=False, server_default="0")
+
     # Timestamps from GitHub
     github_created_at = Column(DateTime(timezone=True), nullable=True)
     github_updated_at = Column(DateTime(timezone=True), nullable=True)
@@ -319,6 +323,34 @@ class GithubMilestone(Base):
         Index("github_milestones_repo_idx", "repo_id"),
         Index("github_milestones_due_idx", "due_on"),
     )
+
+    def as_payload(self) -> dict:
+        """Serialize for API response."""
+        return {
+            "id": self.id,
+            "repo_id": self.repo_id,
+            "github_id": self.github_id,
+            "number": self.number,
+            "title": self.title,
+            "description": self.description,
+            "state": self.state,
+            "due_on": self.due_on.isoformat() if self.due_on else None,
+            "open_issues": self.open_issues,
+            "closed_issues": self.closed_issues,
+            "total_issues": (self.open_issues or 0) + (self.closed_issues or 0),
+            "progress_percent": (
+                round(100 * (self.closed_issues or 0) / max(1, (self.open_issues or 0) + (self.closed_issues or 0)))
+            ),
+            "github_created_at": (
+                self.github_created_at.isoformat() if self.github_created_at else None
+            ),
+            "github_updated_at": (
+                self.github_updated_at.isoformat() if self.github_updated_at else None
+            ),
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 
 class GithubProject(Base):
