@@ -42,7 +42,9 @@ def _get_current_user(session: Session) -> dict:
     # Add email accounts
     email_accounts = (
         session.query(EmailAccount)
-        .filter(EmailAccount.user_id == user_session.user.id, EmailAccount.active.is_(True))
+        .filter(
+            EmailAccount.user_id == user_session.user.id, EmailAccount.active.is_(True)
+        )
         .all()
     )
     user_info["email_accounts"] = [
@@ -134,50 +136,6 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
 
 
 @meta_mcp.tool()
-async def get_all_tags() -> list[str]:
-    """Get all unique tags used across the entire knowledge base.
-
-    Returns sorted list of tags from both observations and content.
-    """
-    with make_session() as session:
-        tags_query = session.query(func.unnest(SourceItem.tags)).distinct()
-        return sorted({row[0] for row in tags_query if row[0] is not None})
-
-
-@meta_mcp.tool()
-@visible_when(require_scopes("observe"), has_items(AgentObservation))
-async def get_all_subjects() -> list[str]:
-    """Get all unique subjects from observations about the user.
-
-    Returns sorted list of subject identifiers used in observations.
-    """
-    with make_session() as session:
-        return sorted(
-            r.subject for r in session.query(AgentObservation.subject).distinct()
-        )
-
-
-@meta_mcp.tool()
-@visible_when(require_scopes("observe"), has_items(AgentObservation))
-async def get_all_observation_types() -> list[str]:
-    """Get all observation types that have been used.
-
-    Standard types are belief, preference, behavior, contradiction, general, but there can be more.
-    """
-    with make_session() as session:
-        return sorted(
-            {
-                r.observation_type
-                for r in session.query(AgentObservation.observation_type).distinct()
-                if r.observation_type is not None
-            }
-        )
-
-
-# --- Utility tools ---
-
-
-@meta_mcp.tool()
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
     logger.info("get_current_time tool called")
@@ -185,7 +143,7 @@ async def get_current_time() -> dict:
 
 
 @meta_mcp.tool()
-async def get_authenticated_user() -> dict:
+async def get_user() -> dict:
     """Get information about the authenticated user."""
     with make_session() as session:
         return _get_current_user(session)

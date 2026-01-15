@@ -15,7 +15,7 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.api.search.search import search
+from memory.api.search.search import search as search_base
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
 from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
@@ -172,7 +172,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
 
 @core_mcp.tool(description=_build_search_description())
 @visible_when(require_scopes("read"))
-async def search_knowledge_base(
+async def search(
     query: str,
     filters: SearchFilters = {},
     modalities: set[str] = set(),
@@ -193,7 +193,7 @@ async def search_knowledge_base(
     search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
 
     upload_data = extract.extract_text(query, skip_summary=True)
-    results = await search(
+    results = await search_base(
         upload_data,
         modalities=modalities,
         filters=search_filters,
@@ -490,7 +490,7 @@ def fetch_file(filename: str) -> dict:
 
 @core_mcp.tool()
 @visible_when(require_scopes("read"))
-async def get_source_item(id: int, include_content: bool = True) -> dict:
+async def get_item(id: int, include_content: bool = True) -> dict:
     """
     Get full details of a source item by ID.
     Use after search to drill down into specific results.

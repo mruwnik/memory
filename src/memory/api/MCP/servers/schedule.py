@@ -34,7 +34,7 @@ def get_current_user() -> dict:
 
 @schedule_mcp.tool()
 @visible_when(require_scopes("schedule"))
-async def schedule_message(
+async def message(
     scheduled_time: str,
     message: str,
     model: str | None = None,
@@ -117,7 +117,7 @@ async def schedule_message(
 
 @schedule_mcp.tool()
 @visible_when(require_scopes("schedule"))
-async def list_scheduled_llm_calls(
+async def list_calls(
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -166,7 +166,7 @@ async def list_scheduled_llm_calls(
 
 @schedule_mcp.tool()
 @visible_when(require_scopes("schedule"))
-async def get_scheduled_call(scheduled_call_id: str) -> dict[str, Any]:
+async def get_call(scheduled_call_id: str) -> dict[str, Any]:
     """
     Get details of a specific scheduled LLM call.
 
@@ -206,7 +206,7 @@ async def get_scheduled_call(scheduled_call_id: str) -> dict[str, Any]:
 
 @schedule_mcp.tool()
 @visible_when(require_scopes("schedule"))
-async def cancel_scheduled_llm_call(scheduled_call_id: str) -> dict[str, Any]:
+async def cancel(scheduled_call_id: str) -> dict[str, Any]:
     """
     Cancel a scheduled LLM call.
 

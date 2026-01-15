@@ -96,7 +96,7 @@ def _load_attachment(path: str) -> EmailAttachmentData | None:
 
 @email_mcp.tool()
 @visible_when(require_scopes("email"), has_send_accounts)
-async def send_email_message(
+async def send(
     to: list[str],
     subject: str,
     body: str,

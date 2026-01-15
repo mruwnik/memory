@@ -17,12 +17,12 @@ from memory.common.tasks import get_tasks, complete_task, task_to_dict
 
 logger = logging.getLogger(__name__)
 
-organizer_mcp = FastMCP("memory-organizer")
+organizer_mcp = FastMCP("org")
 
 
 @organizer_mcp.tool()
 @visible_when(require_scopes("organizer"), has_items(CalendarEvent))
-async def get_upcoming_events(
+async def get_upcoming(
     start_date: str | None = None,
     end_date: str | None = None,
     days: int = 7,
@@ -218,43 +218,3 @@ async def update_task(
         session.commit()
         session.refresh(task)
         return task_to_dict(task)
-
-
-@organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(Task))
-async def complete_task_by_id(task_id: int) -> dict:
-    """
-    Mark a task as complete.
-    Use when the user says they finished a task or want to check it off.
-
-    Args:
-        task_id: ID of the task to complete
-
-    Returns: The completed task with updated status and completed_at timestamp.
-    """
-    with make_session() as session:
-        task = complete_task(session, task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
-        return task_to_dict(task)
-
-
-@organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(Task))
-async def delete_task(task_id: int) -> dict:
-    """
-    Delete a task permanently.
-    Use when the user wants to remove a task entirely.
-
-    Args:
-        task_id: ID of the task to delete
-
-    Returns: Confirmation of deletion with task_id.
-    """
-    with make_session() as session:
-        task = session.get(Task, task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
-        session.delete(task)
-        session.commit()
-        return {"deleted": True, "task_id": task_id}
