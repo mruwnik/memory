@@ -1,9 +1,6 @@
 import { Link } from 'react-router-dom'
-import { useMCP } from '@/hooks/useMCP'
 
 const Dashboard = ({ onLogout }) => {
-    const { listNotes } = useMCP()
-
     return (
         <div className="min-h-screen flex flex-col">
             <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm">
@@ -36,10 +33,10 @@ const Dashboard = ({ onLogout }) => {
                             <p className="text-gray-600 text-base">Manage email, GitHub, RSS feeds, and Google Drive</p>
                         </Link>
 
-                        <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg" onClick={async () => console.log(await listNotes())}>
+                        <Link to="/ui/notes" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
                             <h3 className="text-slate-800 text-xl mb-2 font-semibold">Notes</h3>
-                            <p className="text-gray-600 text-base">Create and manage your notes</p>
-                        </div>
+                            <p className="text-gray-600 text-base">Browse and view your notes</p>
+                        </Link>
                     </div>
                 </section>
 

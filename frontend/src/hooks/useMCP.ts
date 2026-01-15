@@ -135,6 +135,14 @@ export const useMCP = () => {
     return await mcpCall('core_fetch_file', { filename })
   }, [mcpCall])
 
+  const saveNote = useCallback(async (filename: string, content: string, subject?: string) => {
+    return await mcpCall('core_create_note', {
+      filename,
+      content,
+      subject: subject || filename.split('/').pop()?.replace('.md', '') || 'Note',
+    })
+  }, [mcpCall])
+
   const getTags = useCallback(async () => {
     return await mcpCall('meta_get_all_tags')
   }, [mcpCall])
@@ -170,6 +178,7 @@ export const useMCP = () => {
     mcpCall,
     fetchFile,
     listNotes,
+    saveNote,
     searchKnowledgeBase,
     getTags,
     getSubjects,
