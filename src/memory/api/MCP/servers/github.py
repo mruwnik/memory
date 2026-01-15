@@ -246,6 +246,7 @@ async def upsert_issue(
     milestone: str | int | None = None,
     project: str | None = None,
     project_fields: dict[str, str] | None = None,
+    deadline: str | None = None,
 ) -> dict:
     """
     Create or update a GitHub issue with optional project integration.
@@ -261,6 +262,7 @@ async def upsert_issue(
         milestone: Milestone title (string) or number (int) to assign
         project: Project name to add issue to (e.g., "My Project Board")
         project_fields: Dict of project field values (e.g., {"Status": "In Progress", "Priority": "High"})
+        deadline: Due date in ISO format (YYYY-MM-DD). Sets the "Due Date" project field.
 
     Returns:
         Dict with issue details including number, url, and any project updates made
@@ -321,6 +323,11 @@ async def upsert_issue(
                 milestone_node_id,
             )
             action = "updated"
+
+        # Merge deadline into project_fields before building result
+        if deadline:
+            project_fields = dict(project_fields) if project_fields else {}
+            project_fields["Due Date"] = deadline
 
         result: dict[str, Any] = {
             "action": action,

@@ -184,6 +184,20 @@ def safe_loads(file: Path, start=0, end=None):
     return items
 
 
+def count_transcript_events(transcript_path: str) -> int:
+    """Count total events in a transcript file."""
+    transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
+    if not transcript_file.exists():
+        return 0
+
+    count = 0
+    with open(transcript_file) as f:
+        for line in f:
+            if line.strip():
+                count += 1
+    return count
+
+
 def get_or_create_project(
     db_session, user_id: int, directory: str, source: str | None = None
 ) -> Project:
@@ -504,10 +518,11 @@ def get_session_transcript(
             )
 
         events = read_transcript(session.transcript_path, offset, limit)
+        total = count_transcript_events(session.transcript_path)
 
         return TranscriptResponse(
             session_id=str(session.id),
-            total_events=len(events),
+            total_events=total,
             offset=offset,
             limit=limit,
             events=events,

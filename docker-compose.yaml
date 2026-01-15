@@ -183,6 +183,31 @@ services:
           cpus: "0.5"
           memory: 512M
 
+  # ------------------------------------------------------------ Docker socket proxy
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    networks: [kbnet]
+    environment:
+      # Read-only access to containers (list + logs)
+      CONTAINERS: 1
+      # Block all write operations
+      POST: 0
+      IMAGES: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      EXEC: 0
+      SWARM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt: ["no-new-privileges=true"]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
   # ------------------------------------------------------------ API / gateway
   api:
     build:
@@ -193,7 +218,8 @@ services:
         SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
     restart: unless-stopped
     networks: [kbnet]
-    depends_on: [postgres, redis, qdrant]
+    security_opt: ["no-new-privileges=true"]
+    depends_on: [postgres, redis, qdrant, docker-proxy]
     environment:
       <<: *env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -205,6 +231,7 @@ services:
       ENABLE_BM25_SEARCH: true
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+      DOCKER_HOST: tcp://docker-proxy:2375
     secrets: [postgres_password, openai_key, anthropic_key]
     volumes:
       - ./memory_files:/app/memory_files:rw

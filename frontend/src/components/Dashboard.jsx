@@ -58,6 +58,11 @@ const Dashboard = ({ onLogout }) => {
                         <p className="text-gray-600 text-base">View background job status and retry failed jobs</p>
                     </Link>
 
+                    <Link to="/ui/logs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Docker Logs</h3>
+                        <p className="text-gray-600 text-base">View API and worker container logs</p>
+                    </Link>
+
                     <Link to="/ui/polls" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
                         <h3 className="text-slate-800 text-xl mb-2 font-semibold">Polls</h3>
                         <p className="text-gray-600 text-base">Schedule meetings with availability polls</p>

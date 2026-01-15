@@ -40,6 +40,24 @@ def build_github_url(repo_path: str, number: int | None, kind: str) -> str:
     return f"https://github.com/{repo_path}/{url_type}/{number}"
 
 
+def extract_deadline(item: GithubItem) -> str | None:
+    """Extract deadline from issue's project fields or milestone.
+
+    Priority:
+    1. Explicit "Due Date" project field (stored as "EquiStamp.Due Date")
+    2. Milestone due_on date as fallback
+    """
+    if item.project_fields:
+        deadline = item.project_fields.get("EquiStamp.Due Date")
+        if deadline:
+            return deadline
+
+    if item.milestone_rel and item.milestone_rel.due_on:
+        return item.milestone_rel.due_on.date().isoformat()
+
+    return None
+
+
 def serialize_issue(item: GithubItem, include_content: bool = False) -> dict[str, Any]:
     """Serialize a GithubItem to a dict for API response."""
     result = {
@@ -57,6 +75,7 @@ def serialize_issue(item: GithubItem, include_content: bool = False) -> dict[str
         "project_status": item.project_status,
         "project_priority": item.project_priority,
         "project_fields": item.project_fields,
+        "deadline": extract_deadline(item),
         "comment_count": item.comment_count,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "closed_at": item.closed_at.isoformat() if item.closed_at else None,

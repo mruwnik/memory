@@ -696,3 +696,89 @@ def test_serialize_issue_with_content(db_session, sample_issues):
 
     assert "content" in result
     assert result["content"] == issue.content
+
+
+# =============================================================================
+# Tests for deadline extraction
+# =============================================================================
+
+
+def test_serialize_issue_deadline_from_project_fields(db_session, sample_issues):
+    """Test deadline is extracted from project_fields."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
+
+    issue = sample_issues[0]
+    issue.project_fields = {
+        "EquiStamp.Due Date": "2026-03-15",
+        "EquiStamp.Status": "In Progress",
+    }
+    db_session.commit()
+
+    result = serialize_issue(issue)
+
+    assert result["deadline"] == "2026-03-15"
+
+
+def test_serialize_issue_no_deadline(db_session, sample_issues):
+    """Test deadline is None when not set in project_fields."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
+
+    issue = sample_issues[4]  # Has project_fields=None
+    result = serialize_issue(issue)
+
+    assert result["deadline"] is None
+
+
+def test_serialize_issue_deadline_without_due_date_field(db_session, sample_issues):
+    """Test deadline is None when project_fields exists but no Due Date."""
+    from memory.api.MCP.servers.github_helpers import serialize_issue
+
+    issue = sample_issues[0]  # Has project_fields but no Due Date
+    result = serialize_issue(issue)
+
+    assert result["deadline"] is None
+
+
+def test_extract_deadline_from_project_fields():
+    """Test extract_deadline helper with project_fields."""
+    from memory.api.MCP.servers.github_helpers import extract_deadline
+    from unittest.mock import MagicMock
+
+    item = MagicMock()
+    item.project_fields = {"EquiStamp.Due Date": "2026-02-28"}
+    item.milestone_rel = None
+
+    assert extract_deadline(item) == "2026-02-28"
+
+
+def test_extract_deadline_from_milestone():
+    """Test extract_deadline falls back to milestone due_on."""
+    from memory.api.MCP.servers.github_helpers import extract_deadline
+    from unittest.mock import MagicMock
+    from datetime import datetime, timezone
+
+    milestone = MagicMock()
+    milestone.due_on = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    item = MagicMock()
+    item.project_fields = {}
+    item.milestone_rel = milestone
+
+    assert extract_deadline(item) == "2026-04-15"
+
+
+def test_extract_deadline_project_field_takes_priority():
+    """Test project_fields Due Date takes priority over milestone."""
+    from memory.api.MCP.servers.github_helpers import extract_deadline
+    from unittest.mock import MagicMock
+    from datetime import datetime, timezone
+
+    milestone = MagicMock()
+    milestone.due_on = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    item = MagicMock()
+    item.project_fields = {"EquiStamp.Due Date": "2026-03-01"}
+    item.milestone_rel = milestone
+
+    # Project field should win
+    assert extract_deadline(item) == "2026-03-01"
