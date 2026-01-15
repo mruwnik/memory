@@ -22,62 +22,84 @@ const Dashboard = ({ onLogout }) => {
                     <p className="text-gray-600 text-base">You are successfully authenticated.</p>
                 </div>
 
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6 mt-8">
-                    <Link to="/ui/search" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Search</h3>
-                        <p className="text-gray-600 text-base">Search through your knowledge base</p>
-                    </Link>
+                {/* Knowledge & Content */}
+                <section className="mt-8">
+                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">Knowledge & Content</h2>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
+                        <Link to="/ui/search" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Search</h3>
+                            <p className="text-gray-600 text-base">Search through your knowledge base</p>
+                        </Link>
 
-                    <Link to="/ui/sources" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Sources</h3>
-                        <p className="text-gray-600 text-base">Manage email, GitHub, RSS feeds, and Google Drive</p>
-                    </Link>
+                        <Link to="/ui/sources" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Sources</h3>
+                            <p className="text-gray-600 text-base">Manage email, GitHub, RSS feeds, and Google Drive</p>
+                        </Link>
 
-                    <Link to="/ui/calendar" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Calendar</h3>
-                        <p className="text-gray-600 text-base">View upcoming events from your calendars</p>
-                    </Link>
-
-                    <Link to="/ui/tasks" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Tasks</h3>
-                        <p className="text-gray-600 text-base">Manage your todos and tasks</p>
-                    </Link>
-
-                    <Link to="/ui/metrics" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Metrics</h3>
-                        <p className="text-gray-600 text-base">System health, task performance, and API usage</p>
-                    </Link>
-
-                    <Link to="/ui/telemetry" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Telemetry</h3>
-                        <p className="text-gray-600 text-base">Claude Code usage, tokens, costs, and sessions</p>
-                    </Link>
-
-                    <Link to="/ui/jobs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Jobs</h3>
-                        <p className="text-gray-600 text-base">View background job status and retry failed jobs</p>
-                    </Link>
-
-                    <Link to="/ui/logs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Docker Logs</h3>
-                        <p className="text-gray-600 text-base">View API and worker container logs</p>
-                    </Link>
-
-                    <Link to="/ui/polls" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Polls</h3>
-                        <p className="text-gray-600 text-base">Schedule meetings with availability polls</p>
-                    </Link>
-
-                    <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg" onClick={async () => console.log(await listNotes())}>
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">Notes</h3>
-                        <p className="text-gray-600 text-base">Create and manage your notes</p>
+                        <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg" onClick={async () => console.log(await listNotes())}>
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Notes</h3>
+                            <p className="text-gray-600 text-base">Create and manage your notes</p>
+                        </div>
                     </div>
+                </section>
 
-                    <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg">
-                        <h3 className="text-slate-800 text-xl mb-2 font-semibold">AI Assistant</h3>
-                        <p className="text-gray-600 text-base">Chat with your memory-enhanced AI</p>
+                {/* Productivity */}
+                <section className="mt-8">
+                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">Productivity</h2>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
+                        <Link to="/ui/calendar" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Calendar</h3>
+                            <p className="text-gray-600 text-base">View upcoming events from your calendars</p>
+                        </Link>
+
+                        <Link to="/ui/tasks" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Tasks</h3>
+                            <p className="text-gray-600 text-base">Manage your todos and tasks</p>
+                        </Link>
+
+                        <Link to="/ui/polls" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Polls</h3>
+                            <p className="text-gray-600 text-base">Schedule meetings with availability polls</p>
+                        </Link>
                     </div>
-                </div>
+                </section>
+
+                {/* AI */}
+                <section className="mt-8">
+                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">AI</h2>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
+                        <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">AI Assistant</h3>
+                            <p className="text-gray-600 text-base">Chat with your memory-enhanced AI</p>
+                        </div>
+                    </div>
+                </section>
+
+                {/* System Operations */}
+                <section className="mt-8">
+                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">System Operations</h2>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
+                        <Link to="/ui/metrics" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Metrics</h3>
+                            <p className="text-gray-600 text-base">System health, task performance, and API usage</p>
+                        </Link>
+
+                        <Link to="/ui/telemetry" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Telemetry</h3>
+                            <p className="text-gray-600 text-base">Claude Code usage, tokens, costs, and sessions</p>
+                        </Link>
+
+                        <Link to="/ui/jobs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Jobs</h3>
+                            <p className="text-gray-600 text-base">View background job status and retry failed jobs</p>
+                        </Link>
+
+                        <Link to="/ui/logs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Docker Logs</h3>
+                            <p className="text-gray-600 text-base">View API and worker container logs</p>
+                        </Link>
+                    </div>
+                </section>
             </main>
         </div>
     )
