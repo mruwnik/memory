@@ -82,6 +82,7 @@ from memory.common.db.models.users import (
     OAuthClientInformation,
     OAuthState,
     OAuthRefreshToken,
+    generate_ssh_keypair,
 )
 from memory.common.db.models.scheduled_calls import (
     ScheduledLLMCall,
@@ -115,6 +116,10 @@ from memory.common.db.models.polls import (
     PollStatus,
     AvailabilityLevel,
     SlotAggregation,
+)
+from memory.common.db.models.claude_config import (
+    ClaudeConfigSnapshot,
+    ClaudeConfigSnapshotPayload,
 )
 
 Payload = (
@@ -231,6 +236,11 @@ __all__ = [
     "PollStatus",
     "AvailabilityLevel",
     "SlotAggregation",
+    # Claude Config Snapshots
+    "ClaudeConfigSnapshot",
+    "ClaudeConfigSnapshotPayload",
+    # SSH key generation
+    "generate_ssh_keypair",
     # Payloads
     "Payload",
 ]

@@ -86,6 +86,14 @@ DISCORD_STORAGE_DIR = pathlib.Path(
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
+SNAPSHOT_STORAGE_DIR = pathlib.Path(
+    os.getenv("SNAPSHOT_STORAGE_DIR", FILE_STORAGE_DIR / "snapshots")
+)
+# Host path for snapshots (used by orchestrator which runs on host, not in container)
+# In Docker, FILE_STORAGE_DIR is /app/memory_files but host path may differ
+HOST_STORAGE_DIR = pathlib.Path(
+    os.getenv("HOST_STORAGE_DIR", pathlib.Path(__file__).parent.parent.parent.parent)
+)
 # Directories requiring encryption during backup (contain sensitive user data).
 # CHUNK_STORAGE_DIR is intentionally excluded: chunks are derived data that can be
 # regenerated, and not backed up at all (see storage_dirs below).
@@ -152,9 +160,13 @@ GOOGLE_DRIVE_SYNC_INTERVAL = int(
 CALENDAR_SYNC_INTERVAL = int(os.getenv("CALENDAR_SYNC_INTERVAL", 60 * 60))  # 1 hour
 
 # Metrics collection settings
-METRICS_COLLECTION_INTERVAL = int(os.getenv("METRICS_COLLECTION_INTERVAL", 60))  # 60 seconds
+METRICS_COLLECTION_INTERVAL = int(
+    os.getenv("METRICS_COLLECTION_INTERVAL", 60)
+)  # 60 seconds
 METRICS_CLEANUP_HOUR = int(os.getenv("METRICS_CLEANUP_HOUR", 3))  # 3 AM
-METRICS_SUMMARY_REFRESH_MINUTE = int(os.getenv("METRICS_SUMMARY_REFRESH_MINUTE", 0))  # :00
+METRICS_SUMMARY_REFRESH_MINUTE = int(
+    os.getenv("METRICS_SUMMARY_REFRESH_MINUTE", 0)
+)  # :00
 
 CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 * 24))
 
@@ -303,3 +315,12 @@ VERIFICATION_SYNC_INTERVAL = int(
 # Session retention settings
 SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 30))
 
+# SSH key encryption secret for encrypting private keys at rest
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+# This should be unique per deployment - if the same secret is used across
+# deployments, encrypted keys will be portable between them.
+SSH_KEY_ENCRYPTION_SECRET = os.getenv("SSH_KEY_ENCRYPTION_SECRET", "")
+
+# Memory stack identifier - used for network naming with Claude orchestrator
+# Set to "prod" or "dev" to separate environments
+MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")

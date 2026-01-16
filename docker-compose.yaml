@@ -3,6 +3,11 @@ networks:
   kbnet:
     # internal overlay – NOT exposed
     driver: bridge
+  memory-api:
+    # Network for Claude containers to access the API
+    # Created externally; orchestrator connects Claude containers to it
+    name: memory-api-${MEMORY_STACK:-prod}
+    external: true
 
 # --------------------------------------------------------------------- secrets
 secrets:
@@ -183,31 +188,6 @@ services:
           cpus: "0.5"
           memory: 512M
 
-  # ------------------------------------------------------------ Docker socket proxy
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy:latest
-    restart: unless-stopped
-    networks: [kbnet]
-    environment:
-      # Read-only access to containers (list + logs)
-      CONTAINERS: 1
-      # Block all write operations
-      POST: 0
-      IMAGES: 0
-      NETWORKS: 0
-      VOLUMES: 0
-      EXEC: 0
-      SWARM: 0
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    security_opt: ["no-new-privileges=true"]
-    cap_drop: [ALL]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.25"
-          memory: 64M
-
   # ------------------------------------------------------------ API / gateway
   api:
     build:
@@ -217,9 +197,16 @@ services:
         SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
         SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
     restart: unless-stopped
-    networks: [kbnet]
+    # Add docker group for orchestrator socket access (GID varies by host)
+    group_add:
+      - ${DOCKER_GID:-992}
+    networks:
+      kbnet:
+      memory-api:
+        aliases:
+          - memory-api-${MEMORY_STACK:-prod} # Alias for Claude containers to find us
     security_opt: ["no-new-privileges=true"]
-    depends_on: [postgres, redis, qdrant, docker-proxy]
+    depends_on: [postgres, redis, qdrant]
     environment:
       <<: *env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -231,10 +218,16 @@ services:
       ENABLE_BM25_SEARCH: true
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
-      DOCKER_HOST: tcp://docker-proxy:2375
+      SSH_KEY_ENCRYPTION_SECRET: ${SSH_KEY_ENCRYPTION_SECRET}
+      # Claude session orchestrator (Unix socket)
+      ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
+      MEMORY_STACK: ${MEMORY_STACK:-prod}
+      HOST_STORAGE_DIR: ${PWD}/memory_files
     secrets: [postgres_password, openai_key, anthropic_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
+      # Socket for Claude session orchestrator
+      - /var/run/claude-sessions:/var/run/claude-sessions:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s

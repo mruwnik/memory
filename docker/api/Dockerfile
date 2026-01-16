@@ -3,12 +3,14 @@ FROM python:3.12-slim AS backend-base
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies and runtime tools
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     python3-dev \
     curl \
+    tmux \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python requirements

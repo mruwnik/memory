@@ -1,8 +1,13 @@
+import base64
 import secrets
 import uuid
 from typing import cast
 
 import bcrypt
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import (
     ARRAY,
     Boolean,
@@ -11,13 +16,55 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
 )
 from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import func
 
+from memory.common import settings
 from memory.common.db.models.base import Base
+
+
+def get_ssh_key_encryption_key() -> bytes:
+    """Derive encryption key for SSH private keys from settings.
+
+    Uses PBKDF2 to derive a Fernet-compatible key from the configured secret.
+    The secret should be set via SSH_KEY_ENCRYPTION_SECRET environment variable.
+    """
+    secret = settings.SSH_KEY_ENCRYPTION_SECRET
+    if not secret:
+        raise ValueError(
+            "SSH_KEY_ENCRYPTION_SECRET must be set to encrypt SSH private keys. "
+            "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+
+    # Use a fixed salt - the key derivation is deterministic so we can decrypt
+    # In production, the secret should be unique per deployment
+    salt = b"memory-ssh-key-encryption-salt-v1"
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=480000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(secret.encode()))
+    return key
+
+
+def encrypt_ssh_private_key(private_key: str) -> bytes:
+    """Encrypt an SSH private key for storage."""
+    key = get_ssh_key_encryption_key()
+    f = Fernet(key)
+    return f.encrypt(private_key.encode())
+
+
+def decrypt_ssh_private_key(encrypted_key: bytes) -> str:
+    """Decrypt an SSH private key from storage."""
+    key = get_ssh_key_encryption_key()
+    f = Fernet(key)
+    return f.decrypt(encrypted_key).decode()
 
 
 def hash_password(password: str) -> str:
@@ -65,6 +112,27 @@ class User(Base):
     # MCP tool scopes - controls which tools this user can access
     # Example: ["read", "observe", "github"] or ["*"] for full access
     scopes = Column(ARRAY(String), nullable=False, default=["read"])
+
+    # SSH keys for container Git operations
+    # Public key stored as plaintext (safe to expose)
+    ssh_public_key = Column(String, nullable=True)
+    # Private key encrypted at rest using Fernet with SSH_KEY_ENCRYPTION_SECRET
+    ssh_private_key_encrypted = Column(LargeBinary, nullable=True)
+
+    @property
+    def ssh_private_key(self) -> str | None:
+        """Decrypt and return the SSH private key."""
+        if self.ssh_private_key_encrypted is None:
+            return None
+        return decrypt_ssh_private_key(self.ssh_private_key_encrypted)
+
+    @ssh_private_key.setter
+    def ssh_private_key(self, value: str | None) -> None:
+        """Encrypt and store the SSH private key."""
+        if value is None:
+            self.ssh_private_key_encrypted = None
+        else:
+            self.ssh_private_key_encrypted = encrypt_ssh_private_key(value)
 
     # Relationship to sessions
     sessions = relationship(
@@ -309,3 +377,24 @@ def purge_oauth(session: Session):
         session.delete(oauth_state)
     for oauth_client in session.query(OAuthClientInformation).all():
         session.delete(oauth_client)
+
+
+def generate_ssh_keypair(user: User) -> None:
+    """Generate ED25519 keypair for user.
+
+    The user can add their public key to GitHub/GitLab for git access from containers.
+    Note: Caller is responsible for committing the session.
+    """
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+
+    user.ssh_private_key = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.OpenSSH,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+    user.ssh_public_key = public_key.public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode()

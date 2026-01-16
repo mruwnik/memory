@@ -1,0 +1,39 @@
+[Unit]
+Description=Claude Session Orchestrator
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+
+# Run as root (needs docker socket access)
+User=root
+Group=docker
+
+# Working directory
+WorkingDirectory=/opt/claude-orchestrator
+
+# Environment
+Environment=ORCHESTRATOR_SOCKET=/var/run/claude-sessions/orchestrator.sock
+Environment=CLAUDE_IMAGE=claude-cloud:latest
+Environment=CLAUDE_MEMORY_LIMIT=4g
+Environment=CLAUDE_CPU_LIMIT=2
+Environment=CLAUDE_LOG_DIR=/var/log/claude-sessions
+
+# Use virtual environment
+ExecStart=/opt/claude-orchestrator/venv/bin/python /opt/claude-orchestrator/orchestrator.py
+
+# Graceful shutdown
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=30
+
+# Security hardening (what we can do while still having docker access)
+ProtectSystem=strict
+ReadWritePaths=/var/run/claude-sessions /var/run/docker.sock /var/log/claude-sessions
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

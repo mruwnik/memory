@@ -62,6 +62,7 @@ def _get_current_user(session: Session) -> dict:
         "scopes": access_token.scopes,
         "client_id": access_token.client_id,
         "user": user_info,
+        "public_key": user_session.user.public_key,
     }
 
 

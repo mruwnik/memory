@@ -1,6 +1,10 @@
 import { Link } from 'react-router-dom'
 
-const Dashboard = ({ onLogout }) => {
+interface DashboardProps {
+    onLogout: () => void;
+}
+
+const Dashboard = ({ onLogout }: DashboardProps) => {
     return (
         <div className="min-h-screen flex flex-col">
             <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm">
@@ -65,10 +69,15 @@ const Dashboard = ({ onLogout }) => {
                 <section className="mt-8">
                     <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">AI</h2>
                     <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
-                        <div className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">AI Assistant</h3>
-                            <p className="text-gray-600 text-base">Chat with your memory-enhanced AI</p>
-                        </div>
+                        <Link to="/ui/claude" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Sessions</h3>
+                            <p className="text-gray-600 text-base">Spawn and manage Claude Code containers</p>
+                        </Link>
+
+                        <Link to="/ui/snapshots" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Snapshots</h3>
+                            <p className="text-gray-600 text-base">Manage Claude Code config snapshots</p>
+                        </Link>
                     </div>
                 </section>
 

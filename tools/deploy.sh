@@ -31,6 +31,7 @@ usage() {
     echo "  restart           Restart docker services"
     echo "  deploy [branch]   Pull + restart"
     echo "  run <command>     Run command on server (with venv activated)"
+    echo "  orchestrator      Setup/update the Claude session orchestrator"
     exit 1
 }
 
@@ -64,6 +65,7 @@ sync_code() {
         "$PROJECT_DIR/tools" \
         "$PROJECT_DIR/db" \
         "$PROJECT_DIR/docker" \
+        "$PROJECT_DIR/orchestrator" \
         "$PROJECT_DIR/frontend" \
         "$PROJECT_DIR/requirements" \
         "$PROJECT_DIR/setup.py" \
@@ -109,6 +111,20 @@ run_remote() {
     ssh "$REMOTE_HOST" "cd $REMOTE_DIR && source venv/bin/activate && $*"
 }
 
+setup_orchestrator() {
+    echo -e "${GREEN}Setting up Claude session orchestrator on $REMOTE_HOST...${NC}"
+
+    # Sync orchestrator files first
+    rsync -avz \
+        "$PROJECT_DIR/orchestrator/" \
+        "$REMOTE_HOST:$REMOTE_DIR/orchestrator/"
+
+    # Run setup script
+    ssh -t "$REMOTE_HOST" "sudo bash $REMOTE_DIR/orchestrator/setup.sh"
+
+    echo -e "${GREEN}Orchestrator setup complete!${NC}"
+}
+
 # Main
 case "${1:-}" in
     sync)
@@ -126,6 +142,9 @@ case "${1:-}" in
     run)
         shift
         run_remote "$@"
+        ;;
+    orchestrator)
+        setup_orchestrator
         ;;
     *)
         usage

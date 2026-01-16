@@ -217,6 +217,19 @@ info "Setting service defaults..."
 [ -z "$(get_env_value 'REDIS_HOST')" ] && set_env_value "REDIS_HOST" "localhost"
 [ -z "$(get_env_value 'FILE_STORAGE_DIR')" ] && set_env_value "FILE_STORAGE_DIR" "$PROJECT_DIR/memory_files"
 
+# Docker group GID - needed for orchestrator socket access
+if [ -z "$(get_env_value 'DOCKER_GID')" ]; then
+    docker_gid=$(getent group docker 2>/dev/null | cut -d: -f3)
+    if [ -n "$docker_gid" ]; then
+        set_env_value "DOCKER_GID" "$docker_gid"
+        success "DOCKER_GID set to $docker_gid"
+    else
+        warn "Docker group not found - DOCKER_GID not set (needed for Claude sessions)"
+    fi
+else
+    success "DOCKER_GID already configured: $(get_env_value 'DOCKER_GID')"
+fi
+
 # API port - only write to .env if user wants non-default
 if [ -n "$(get_env_value 'API_PORT')" ]; then
     success "API_PORT already configured: $(get_env_value 'API_PORT')"
