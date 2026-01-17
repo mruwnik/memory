@@ -1,20 +1,19 @@
 import { Link } from 'react-router-dom'
+import UserMenu from './common/UserMenu'
+import type { AuthUser } from '../hooks/useAuth'
 
 interface DashboardProps {
     onLogout: () => void;
+    user: AuthUser | null;
+    hasScope: (scope: string) => boolean;
 }
 
-const Dashboard = ({ onLogout }: DashboardProps) => {
+const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
     return (
         <div className="min-h-screen flex flex-col">
             <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm">
                 <h1 className="text-primary text-2xl font-semibold">Memory App</h1>
-                <button
-                    onClick={onLogout}
-                    className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm cursor-pointer transition-all hover:bg-slate-100 hover:text-slate-800"
-                >
-                    Logout
-                </button>
+                {user && <UserMenu user={user} onLogout={onLogout} hasScope={hasScope} />}
             </header>
 
             <main className="flex-1 p-8 mx-auto w-full max-w-6xl">
@@ -104,6 +103,18 @@ const Dashboard = ({ onLogout }: DashboardProps) => {
                             <h3 className="text-slate-800 text-xl mb-2 font-semibold">Docker Logs</h3>
                             <p className="text-gray-600 text-base">View API and worker container logs</p>
                         </Link>
+
+                        <Link to="/ui/sources?tab=secrets" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Secrets</h3>
+                            <p className="text-gray-600 text-base">Manage encrypted API keys and tokens</p>
+                        </Link>
+
+                        {hasScope('admin:users') && (
+                            <Link to="/ui/users" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">User Management</h3>
+                                <p className="text-gray-600 text-base">Manage users, permissions, and API keys</p>
+                            </Link>
+                        )}
                     </div>
                 </section>
             </main>

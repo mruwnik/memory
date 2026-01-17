@@ -63,6 +63,7 @@ export interface OrchestratorStatus {
 export interface SpawnRequest {
   snapshot_id: number
   repo_url?: string
+  github_token?: string
   use_happy?: boolean
   allowed_tools?: string[]
   custom_env?: Record<string, string>

@@ -319,7 +319,14 @@ SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 30))
 # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
 # This should be unique per deployment - if the same secret is used across
 # deployments, encrypted keys will be portable between them.
-SSH_KEY_ENCRYPTION_SECRET = os.getenv("SSH_KEY_ENCRYPTION_SECRET", "")
+SECRETS_ENCRYPTION_KEY = os.getenv("SECRETS_ENCRYPTION_KEY", "")
+
+# Salt for secrets encryption key derivation
+# Must remain constant for a deployment to decrypt existing secrets
+# Change only when rotating ALL secrets
+SECRETS_ENCRYPTION_SALT = os.getenv(
+    "SECRETS_ENCRYPTION_SALT", "memory-secrets-encryption-salt-v1"
+).encode()
 
 # Memory stack identifier - used for network naming with Claude orchestrator
 # Set to "prod" or "dev" to separate environments

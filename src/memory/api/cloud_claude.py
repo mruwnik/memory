@@ -35,6 +35,7 @@ from memory.api.orchestrator_client import (
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, User
+from memory.common.db.models.secrets import extract as extract_secret
 
 # Log directory on host where orchestrator writes session logs
 LOG_DIR = Path("/var/log/claude-sessions")
@@ -51,6 +52,7 @@ RESERVED_ENV_VARS = {
     "CLAUDE_ALLOWED_TOOLS",
     "CLAUDE_CONFIG",
     "SSH_PRIVATE_KEY",
+    "GITHUB_TOKEN",
     "GIT_REPO_URL",
     "HAPPY_ACCESS_KEY",
     "HAPPY_MACHINE_ID",
@@ -88,6 +90,7 @@ class SpawnRequest(BaseModel):
 
     snapshot_id: int
     repo_url: str | None = None  # Git remote URL to set up in workspace
+    github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
     use_happy: bool = False  # Run with Happy instead of Claude CLI
     allowed_tools: list[str] | None = (
         None  # Tools to pre-approve (no permission prompts)
@@ -194,12 +197,18 @@ async def spawn_session(
                 )
             env[key] = value
 
+    # Resolve github_token: either a literal PAT or a secret name
+    github_token = None
+    if request.github_token:
+        github_token = extract_secret(db, user.id, request.github_token)
+
     try:
         result = await client.create_session(
             session_id=session_id,
             snapshot_path=str(host_snapshot_path),
             memory_stack=settings.MEMORY_STACK,
             ssh_private_key=user.ssh_private_key,
+            github_token=github_token,
             git_repo_url=request.repo_url,
             image=image,
             env=env,
@@ -383,7 +392,12 @@ async def send_ws_json(
 async def stream_docker_logs(websocket: WebSocket, container_name: str) -> None:
     """Stream docker logs to WebSocket until container exits or disconnect."""
     process = await asyncio.create_subprocess_exec(
-        "docker", "logs", "-f", "--tail", "100", container_name,
+        "docker",
+        "logs",
+        "-f",
+        "--tail",
+        "100",
+        container_name,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
@@ -401,23 +415,26 @@ async def stream_docker_logs(websocket: WebSocket, container_name: str) -> None:
                 )
                 if line:
                     await send_ws_json(
-                        websocket, "log",
-                        line.decode("utf-8", errors="replace").rstrip("\n")
+                        websocket,
+                        "log",
+                        line.decode("utf-8", errors="replace").rstrip("\n"),
                     )
                 else:
                     # EOF - check if process exited
                     if process.returncode is not None:
                         await send_ws_json(
-                            websocket, "status",
-                            f"Container exited with code {process.returncode}"
+                            websocket,
+                            "status",
+                            f"Container exited with code {process.returncode}",
                         )
                         break
                     # EOF but process may still be running - wait and recheck
                     await asyncio.sleep(0.1)
                     if process.returncode is not None:
                         await send_ws_json(
-                            websocket, "status",
-                            f"Container exited with code {process.returncode}"
+                            websocket,
+                            "status",
+                            f"Container exited with code {process.returncode}",
                         )
                         break
             except asyncio.TimeoutError:

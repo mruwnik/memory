@@ -3,13 +3,14 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 from memory.api.cloud_claude import (
     get_user_id_from_session,
     make_session_id,
     user_owns_session,
 )
+from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.db.models.users import HumanUser
 
 
 # Tests for session ID generation and parsing
@@ -56,27 +57,22 @@ def test_user_owns_session():
     assert user_owns_session(user, "invalid") is False
 
 
-# Tests for SSH key encryption (in users.py)
+# Tests for SSH key encryption (in users.py, using secrets module)
 
 
 def test_ssh_key_encryption_roundtrip():
     """Test that SSH keys can be encrypted and decrypted."""
-    from memory.common.db.models.users import (
-        decrypt_ssh_private_key,
-        encrypt_ssh_private_key,
-    )
-
     test_key = """-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACBbeW91cl9rZXlfaGVyZV0AAAAA
 -----END OPENSSH PRIVATE KEY-----"""
 
     with patch(
-        "memory.common.settings.SSH_KEY_ENCRYPTION_SECRET",
+        "memory.common.settings.SECRETS_ENCRYPTION_KEY",
         "test-secret-key-32-chars-minimum!",
     ):
-        encrypted = encrypt_ssh_private_key(test_key)
-        decrypted = decrypt_ssh_private_key(encrypted)
+        encrypted = encrypt_value(test_key)
+        decrypted = decrypt_value(encrypted)
 
     assert decrypted == test_key
     assert encrypted != test_key.encode()
@@ -84,21 +80,17 @@ QyNTUxOQAAACBbeW91cl9rZXlfaGVyZV0AAAAA
 
 def test_ssh_key_encryption_requires_secret():
     """Test that encryption fails without a secret."""
-    from memory.common.db.models.users import encrypt_ssh_private_key
-
-    with patch("memory.common.settings.SSH_KEY_ENCRYPTION_SECRET", ""):
+    with patch("memory.common.settings.SECRETS_ENCRYPTION_KEY", ""):
         with pytest.raises(ValueError) as exc_info:
-            encrypt_ssh_private_key("test key")
+            encrypt_value("test key")
 
-    assert "SSH_KEY_ENCRYPTION_SECRET must be set" in str(exc_info.value)
+    assert "SECRETS_ENCRYPTION_KEY must be set" in str(exc_info.value)
 
 
 def test_ssh_key_user_property(db_session):
     """Test that User.ssh_private_key property encrypts/decrypts."""
-    from memory.common.db.models.users import HumanUser
-
     with patch(
-        "memory.common.settings.SSH_KEY_ENCRYPTION_SECRET",
+        "memory.common.settings.SECRETS_ENCRYPTION_KEY",
         "test-secret-key-32-chars-minimum!",
     ):
         user = HumanUser.create_with_password(
@@ -121,10 +113,8 @@ def test_ssh_key_user_property(db_session):
 
 def test_ssh_key_user_property_none(db_session):
     """Test that None ssh_private_key is handled correctly."""
-    from memory.common.db.models.users import HumanUser
-
     with patch(
-        "memory.common.settings.SSH_KEY_ENCRYPTION_SECRET",
+        "memory.common.settings.SECRETS_ENCRYPTION_KEY",
         "test-secret-key-32-chars-minimum!",
     ):
         user = HumanUser.create_with_password(

@@ -9,6 +9,7 @@ const COMMON_TOOLS = [
 ]
 const ALLOWED_TOOLS_STORAGE_KEY = 'claude_session_allowed_tools'
 const CUSTOM_ENV_STORAGE_KEY = 'claude_session_custom_env'
+const GITHUB_TOKEN_STORAGE_KEY = 'claude_session_github_token'
 
 interface LogMessage {
   type: 'log' | 'error' | 'status' | 'ping'
@@ -71,6 +72,9 @@ const ClaudeSessions = () => {
   })
   const [customEnvText, setCustomEnvText] = useState<string>(() => {
     return localStorage.getItem(CUSTOM_ENV_STORAGE_KEY) || ''
+  })
+  const [githubToken, setGithubToken] = useState<string>(() => {
+    return localStorage.getItem(GITHUB_TOKEN_STORAGE_KEY) || ''
   })
 
   // Load data
@@ -220,6 +224,11 @@ const ClaudeSessions = () => {
     localStorage.setItem(CUSTOM_ENV_STORAGE_KEY, customEnvText)
   }, [customEnvText])
 
+  // Persist github token to localStorage
+  useEffect(() => {
+    localStorage.setItem(GITHUB_TOKEN_STORAGE_KEY, githubToken)
+  }, [githubToken])
+
   // Parse KEY=VALUE text into Record<string, string>
   const parseEnvText = (text: string): Record<string, string> => {
     const env: Record<string, string> = {}
@@ -281,6 +290,7 @@ const ClaudeSessions = () => {
       const newSession = await spawnSession({
         snapshot_id: selectedSnapshotId,
         repo_url: selectedRepoUrl || undefined,
+        github_token: githubToken || undefined,
         use_happy: useHappy || undefined,
         allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
         custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
@@ -474,6 +484,21 @@ const ClaudeSessions = () => {
                       ))}
                     </select>
                     <p className="text-xs text-slate-500 mt-1">The repo will be cloned into the workspace</p>
+                  </div>
+
+                  {/* GitHub Token */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">GitHub Token (optional)</label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      placeholder="ghp_... or secret name"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      PAT for HTTPS clone, or a secret name. Cached in localStorage.
+                    </p>
                   </div>
 
                   {/* Happy toggle - only show if snapshot has Happy config */}

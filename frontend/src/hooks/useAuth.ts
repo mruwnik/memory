@@ -23,9 +23,18 @@ const deleteCookie = (name: string) => {
 
 const getClientId = () => localStorage.getItem('oauth_client_id')
 
+export interface AuthUser {
+  id: number
+  name: string
+  email: string
+  user_type: 'human' | 'bot'
+  scopes: string[]
+}
+
 export const useAuth = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<AuthUser | null>(null)
 
   // Check if user has valid authentication
   const checkAuth = useCallback(async () => {
@@ -42,6 +51,14 @@ export const useAuth = () => {
       const response = await apiCall('/auth/me')
 
       if (response.ok) {
+        const userData = await response.json()
+        setUser({
+          id: userData.user_id,
+          name: userData.name,
+          email: userData.email,
+          user_type: userData.user_type,
+          scopes: userData.scopes || ['read'],
+        })
         setIsAuthenticated(true)
         setIsLoading(false)
         return true
@@ -70,6 +87,7 @@ export const useAuth = () => {
     deleteCookie(SESSION_COOKIE_NAME)
     localStorage.removeItem('oauth_client_id')
     setIsAuthenticated(false)
+    setUser(null)
   }, [])
 
   // Refresh access token using refresh token
@@ -152,6 +170,12 @@ export const useAuth = () => {
     }
   }, [refreshToken])
 
+  // Check if user has a specific scope
+  const hasScope = useCallback((scope: string): boolean => {
+    if (!user?.scopes) return false
+    return user.scopes.includes('*') || user.scopes.includes(scope)
+  }, [user])
+
   useEffect(() => {
     checkAuth()
   }, [checkAuth])
@@ -159,9 +183,11 @@ export const useAuth = () => {
   return {
     isAuthenticated,
     isLoading,
+    user,
     logout,
     checkAuth,
     apiCall,
     refreshToken,
+    hasScope,
   }
 } 

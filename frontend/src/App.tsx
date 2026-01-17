@@ -5,10 +5,11 @@ import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, Metrics, NotesPage, Telemetry, Jobs, DockerLogs, Snapshots, ClaudeSessions } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
+import { UserSettings, UserManagement } from '@/components/users'
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
-  const { isAuthenticated, isLoading, logout, checkAuth } = useAuth()
+  const { isAuthenticated, isLoading, logout, checkAuth, user, hasScope } = useAuth()
   const { error, startOAuth, handleCallback, clearError } = useOAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -85,7 +86,25 @@ const AuthWrapper = () => {
       {/* Protected routes */}
       <Route path="/ui/dashboard" element={
         isAuthenticated ? (
-          <Dashboard onLogout={logout} />
+          <Dashboard onLogout={logout} user={user} hasScope={hasScope} />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/settings" element={
+        isAuthenticated ? (
+          <UserSettings />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/users" element={
+        isAuthenticated && hasScope('admin:users') ? (
+          <UserManagement />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
         ) : (
           <Navigate to="/ui/login" replace />
         )

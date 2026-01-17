@@ -74,9 +74,13 @@ class SessionConfig:
     image: str = DEFAULT_IMAGE
     memory_stack: Literal["dev", "prod"] | None = None
     env: dict[str, str] = field(default_factory=dict)
-    # Claude-specific
+    # Git authentication (alternative methods - use one based on URL scheme)
+    # - ssh_private_key: For SSH URLs (git@github.com:user/repo.git)
+    # - github_token: For HTTPS URLs (https://github.com/user/repo.git)
+    # Both can be provided; git uses whichever matches the URL scheme.
     git_repo_url: str | None = None
     ssh_private_key: str | None = None
+    github_token: str | None = None
     claude_prompt: str | None = None
     snapshot_path: str | None = None
     # Happy integration
@@ -204,6 +208,8 @@ class Orchestrator:
                 environment["GIT_REPO_URL"] = config.git_repo_url
             if config.ssh_private_key:
                 environment["SSH_PRIVATE_KEY"] = config.ssh_private_key
+            if config.github_token:
+                environment["GITHUB_TOKEN"] = config.github_token
             if config.claude_prompt:
                 environment["CLAUDE_PROMPT"] = config.claude_prompt
             if config.happy_access_key:
@@ -425,6 +431,7 @@ class Orchestrator:
                 env=data.get("env", {}),
                 git_repo_url=data.get("git_repo_url"),
                 ssh_private_key=data.get("ssh_private_key"),
+                github_token=data.get("github_token"),
                 claude_prompt=data.get("claude_prompt"),
                 snapshot_path=data.get("snapshot_path"),
                 happy_access_key=data.get("happy_access_key"),

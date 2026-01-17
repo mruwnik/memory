@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 
 // Import all panels
 import { AccountsPanel } from './panels/AccountsPanel'
@@ -11,11 +11,26 @@ import { CalendarPanel } from './panels/CalendarPanel'
 import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
+import { SecretsPanel } from './panels/SecretsPanel'
 
-type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos'
+type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'secrets'
+
+const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'secrets']
 
 const Sources = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('accounts')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const initialTab = validTabs.includes(tabParam as TabType) ? (tabParam as TabType) : 'accounts'
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab)
+
+  // Update URL when tab changes
+  useEffect(() => {
+    if (activeTab !== 'accounts') {
+      setSearchParams({ tab: activeTab })
+    } else {
+      setSearchParams({})
+    }
+  }, [activeTab, setSearchParams])
 
   const tabClass = (tab: TabType) =>
     `py-2 px-4 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
@@ -59,6 +74,9 @@ const Sources = () => {
         <button className={tabClass('photos')} onClick={() => setActiveTab('photos')}>
           Photos
         </button>
+        <button className={tabClass('secrets')} onClick={() => setActiveTab('secrets')}>
+          Secrets
+        </button>
       </div>
 
       <div className="space-y-6">
@@ -71,6 +89,7 @@ const Sources = () => {
         {activeTab === 'books' && <BooksPanel />}
         {activeTab === 'forums' && <ForumsPanel />}
         {activeTab === 'photos' && <PhotosPanel />}
+        {activeTab === 'secrets' && <SecretsPanel />}
       </div>
     </div>
   )

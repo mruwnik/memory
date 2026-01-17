@@ -181,6 +181,24 @@ from memory.common.db.models.base import Base
 T = TypeVar("T", bound=Base)
 
 
+def require_scope(scope: str):
+    """Dependency that checks if user has required scope.
+
+    Usage:
+        @router.get("/admin")
+        def admin_endpoint(user: User = require_scope("admin:users")):
+            ...
+    """
+
+    def checker(user: User = Depends(get_current_user)) -> User:
+        user_scopes = user.scopes or []
+        if "*" in user_scopes or scope in user_scopes:
+            return user
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    return Depends(checker)
+
+
 def get_user_account(db: DBSession, model: type[T], account_id: int, user: User) -> T:
     """Get an account by ID, ensuring it belongs to the user.
 

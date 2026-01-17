@@ -84,6 +84,18 @@ from memory.common.db.models.users import (
     OAuthRefreshToken,
     generate_ssh_keypair,
 )
+from memory.common.db.models.secrets import (
+    Secret,
+    extract,
+    find_secret,
+    create_secret,
+    update_secret,
+    delete_secret,
+    list_secrets,
+    rotate_all_secrets,
+    encrypt_value,
+    decrypt_value,
+)
 from memory.common.db.models.scheduled_calls import (
     ScheduledLLMCall,
 )
@@ -241,6 +253,17 @@ __all__ = [
     "ClaudeConfigSnapshotPayload",
     # SSH key generation
     "generate_ssh_keypair",
+    # Secrets
+    "Secret",
+    "extract",
+    "find_secret",
+    "create_secret",
+    "update_secret",
+    "delete_secret",
+    "list_secrets",
+    "rotate_all_secrets",
+    "encrypt_value",
+    "decrypt_value",
     # Payloads
     "Payload",
 ]

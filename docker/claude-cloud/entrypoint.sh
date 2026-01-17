@@ -15,12 +15,40 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "=== Claude session starting at $(date -Iseconds) ==="
 echo "Running as user: $(whoami) (UID $(id -u))"
 
-# Set up SSH private key if provided
+# Git Authentication Setup
+# -----------------------
+# Two authentication methods are supported:
+#   - SSH_PRIVATE_KEY: For git@github.com:user/repo.git URLs (SSH)
+#   - GITHUB_TOKEN: For https://github.com/user/repo.git URLs (HTTPS)
+#
+# Behavior:
+#   - GITHUB_TOKEN rewrites all SSH URLs to HTTPS (preferred for plugins)
+#   - SSH_PRIVATE_KEY alone: SSH URLs work as-is
+#   - Both provided: HTTPS is used (SSH URLs are rewritten)
+#
+# Security notes:
+#   - Credentials are written with mode 600 (owner read/write only)
+#   - Environment variables are cleared after writing to files
+#   - Credentials persist for the container's lifetime
+
+# Set up SSH private key if provided (for git@github.com: URLs)
 if [ -n "$SSH_PRIVATE_KEY" ]; then
     mkdir -p "$HOME_DIR/.ssh"
     echo "$SSH_PRIVATE_KEY" > "$HOME_DIR/.ssh/id_ed25519"
     chmod 600 "$HOME_DIR/.ssh/id_ed25519"
-    echo "SSH key configured"
+    echo "SSH key configured (for SSH URLs)"
+fi
+
+# Set up GitHub token for HTTPS clone if provided (for https://github.com/ URLs)
+if [ -n "$GITHUB_TOKEN" ]; then
+    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > "$HOME_DIR/.git-credentials"
+    chmod 600 "$HOME_DIR/.git-credentials"
+    git config --global credential.helper store
+    # Rewrite SSH URLs to HTTPS so all GitHub operations use the token
+    # This ensures Claude Code plugins (which may generate SSH URLs) work with HTTPS auth
+    git config --global url."https://github.com/".insteadOf "git@github.com:"
+    git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+    echo "GitHub token configured (SSH URLs will be rewritten to HTTPS)"
 fi
 
 # Set up Claude config if provided
@@ -51,7 +79,7 @@ EOF
 fi
 
 # Clear sensitive env vars after writing to files
-unset SSH_PRIVATE_KEY HAPPY_ACCESS_KEY HAPPY_MACHINE_ID 2>/dev/null || true
+unset SSH_PRIVATE_KEY GITHUB_TOKEN HAPPY_ACCESS_KEY HAPPY_MACHINE_ID 2>/dev/null || true
 
 # Unpack snapshot if provided
 if [ -f /snapshot/snapshot.tar.gz ]; then
