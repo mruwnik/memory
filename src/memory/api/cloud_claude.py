@@ -9,25 +9,56 @@ Session IDs are prefixed with user_id to enable authorization filtering:
   session_id = f"u{user_id}-{random_hex}"
 """
 
+import asyncio
 import logging
+import re
 import secrets
+from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+)
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, get_user_from_token
 from memory.api.orchestrator_client import (
     OrchestratorError,
     get_orchestrator_client,
 )
 from memory.common import settings
-from memory.common.db.connection import get_session
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, User
+
+# Log directory on host where orchestrator writes session logs
+LOG_DIR = Path("/var/log/claude-sessions")
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/claude", tags=["claude"])
+
+DISALLOWED_TOOLS = set()
+
+# Reserved env var names that cannot be overridden by custom_env
+RESERVED_ENV_VARS = {
+    "CLAUDE_EXECUTABLE",
+    "CLAUDE_ALLOWED_TOOLS",
+    "CLAUDE_CONFIG",
+    "SSH_PRIVATE_KEY",
+    "GIT_REPO_URL",
+    "HAPPY_ACCESS_KEY",
+    "HAPPY_MACHINE_ID",
+    "HOME",
+    "PATH",
+    "USER",
+    "SHELL",
+}
 
 
 def make_session_id(user_id: int) -> str:
@@ -58,6 +89,10 @@ class SpawnRequest(BaseModel):
     snapshot_id: int
     repo_url: str | None = None  # Git remote URL to set up in workspace
     use_happy: bool = False  # Run with Happy instead of Claude CLI
+    allowed_tools: list[str] | None = (
+        None  # Tools to pre-approve (no permission prompts)
+    )
+    custom_env: dict[str, str] | None = None  # Custom environment variables
 
 
 class SessionInfo(BaseModel):
@@ -130,6 +165,34 @@ async def spawn_session(
     else:
         image = "claude-cloud:latest"
         env = {}
+
+    # Add allowed tools to environment (validated against allowlist)
+    if request.allowed_tools:
+        allowed_tools = set(request.allowed_tools) - DISALLOWED_TOOLS
+        env["CLAUDE_ALLOWED_TOOLS"] = " ".join(allowed_tools)
+
+    # Add custom environment variables (with validation)
+    if request.custom_env:
+        for key, value in request.custom_env.items():
+            # Validate key format (standard env var naming)
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid env var name '{key}': must start with letter/underscore, contain only alphanumeric/underscore",
+                )
+            # Check for reserved names
+            if key in RESERVED_ENV_VARS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot override reserved env var '{key}'",
+                )
+            # Validate value (no null bytes)
+            if "\x00" in value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Env var '{key}' contains invalid null byte",
+                )
+            env[key] = value
 
     try:
         result = await client.create_session(
@@ -297,3 +360,113 @@ async def get_session_logs(
         raise HTTPException(status_code=404, detail="No logs available")
 
     return result
+
+
+# --- WebSocket log streaming helpers ---
+
+
+def is_valid_session_id(session_id: str) -> bool:
+    """Validate session_id format (defense in depth - should be u{id}-{hex})."""
+    return bool(re.match(r"^u\d+-[a-fA-F0-9]+$", session_id))
+
+
+async def send_ws_json(
+    websocket: WebSocket, msg_type: str, data: str | None = None
+) -> None:
+    """Send a JSON message with timestamp over WebSocket."""
+    msg = {"type": msg_type, "timestamp": datetime.now(timezone.utc).isoformat()}
+    if data is not None:
+        msg["data"] = data
+    await websocket.send_json(msg)
+
+
+async def stream_docker_logs(websocket: WebSocket, container_name: str) -> None:
+    """Stream docker logs to WebSocket until container exits or disconnect."""
+    process = await asyncio.create_subprocess_exec(
+        "docker", "logs", "-f", "--tail", "100", container_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    if process.stdout is None:
+        await send_ws_json(websocket, "error", "Failed to attach to container logs")
+        return
+
+    try:
+        while True:
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(),
+                    timeout=30.0,
+                )
+                if line:
+                    await send_ws_json(
+                        websocket, "log",
+                        line.decode("utf-8", errors="replace").rstrip("\n")
+                    )
+                else:
+                    # EOF - check if process exited
+                    if process.returncode is not None:
+                        await send_ws_json(
+                            websocket, "status",
+                            f"Container exited with code {process.returncode}"
+                        )
+                        break
+                    # EOF but process may still be running - wait and recheck
+                    await asyncio.sleep(0.1)
+                    if process.returncode is not None:
+                        await send_ws_json(
+                            websocket, "status",
+                            f"Container exited with code {process.returncode}"
+                        )
+                        break
+            except asyncio.TimeoutError:
+                await send_ws_json(websocket, "ping")
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+
+
+@router.websocket("/{session_id}/logs/stream")
+async def stream_session_logs(
+    websocket: WebSocket,
+    session_id: str,
+    token: str = Query(..., description="Authentication token"),
+):
+    """Stream logs for a Claude session in real-time via WebSocket.
+
+    Connect with: ws://host/claude/{session_id}/logs/stream?token=<auth_token>
+
+    Messages are JSON with type: "log" | "error" | "status" | "ping"
+    """
+    if not is_valid_session_id(session_id):
+        await websocket.close(code=4004, reason="Invalid session ID format")
+        return
+
+    # Authenticate and authorize
+    with make_session() as db:
+        user = get_user_from_token(token, db)
+        if not user:
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        if not user_owns_session(user, session_id):
+            await websocket.close(code=4004, reason="Session not found")
+            return
+
+    await websocket.accept()
+
+    try:
+        await send_ws_json(websocket, "status", f"Connected to {session_id}")
+        await stream_docker_logs(websocket, f"claude-{session_id}")
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        logger.error(f"Error streaming logs for {session_id}: {e}")
+        try:
+            await send_ws_json(websocket, "error", str(e))
+        except Exception:
+            pass

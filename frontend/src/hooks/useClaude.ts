@@ -1,5 +1,33 @@
 import { useCallback } from 'react'
-import { useAuth } from './useAuth'
+import { useAuth, SERVER_URL, SESSION_COOKIE_NAME } from './useAuth'
+
+// Get auth token from cookies for WebSocket authentication
+const getAuthToken = (): string | null => {
+  const value = `; ${document.cookie}`
+  // Try access_token first, then session_id
+  for (const name of ['access_token', SESSION_COOKIE_NAME]) {
+    const parts = value.split(`; ${name}=`)
+    if (parts.length === 2) {
+      const token = parts.pop()?.split(';').shift()
+      if (token) return token
+    }
+  }
+  return null
+}
+
+// Build WebSocket URL for log streaming
+// Note: Token in query param is necessary because WebSocket doesn't support
+// custom headers during handshake. The token may be logged in browser history
+// and server logs. Session tokens have limited lifetime (SESSION_VALID_FOR days).
+export const getLogStreamUrl = (sessionId: string): string | null => {
+  const token = getAuthToken()
+  if (!token) return null
+
+  // Convert http(s):// to ws(s)://
+  const baseUrl = SERVER_URL || window.location.origin
+  const wsUrl = baseUrl.replace(/^http/, 'ws')
+  return `${wsUrl}/claude/${sessionId}/logs/stream?token=${encodeURIComponent(token)}`
+}
 
 export interface ClaudeSession {
   session_id: string
@@ -36,6 +64,8 @@ export interface SpawnRequest {
   snapshot_id: number
   repo_url?: string
   use_happy?: boolean
+  allowed_tools?: string[]
+  custom_env?: Record<string, string>
 }
 
 export interface GithubRepoBasic {
@@ -43,6 +73,12 @@ export interface GithubRepoBasic {
   owner: string
   name: string
   repo_path: string
+}
+
+export interface SessionLogs {
+  session_id: string
+  source: 'file' | 'container'
+  logs: string
 }
 
 export const useClaude = () => {
@@ -117,6 +153,16 @@ export const useClaude = () => {
     return repos
   }, [apiCall])
 
+  // Session logs
+  const getSessionLogs = useCallback(
+    async (sessionId: string, tail: number = 200): Promise<SessionLogs> => {
+      const response = await apiCall(`/claude/${sessionId}/logs?tail=${tail}`)
+      if (!response.ok) throw new Error('Failed to get session logs')
+      return response.json()
+    },
+    [apiCall]
+  )
+
   return {
     listSessions,
     getSession,
@@ -126,5 +172,6 @@ export const useClaude = () => {
     getOrchestratorStatus,
     listSnapshots,
     listUserRepos,
+    getSessionLogs,
   }
 }

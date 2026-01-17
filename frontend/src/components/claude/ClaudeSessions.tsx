@@ -1,6 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, GithubRepoBasic, AttachInfo } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, GithubRepoBasic, AttachInfo, getLogStreamUrl } from '../../hooks/useClaude'
+
+const COMMON_TOOLS = [
+  'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
+  'Task', 'WebFetch', 'WebSearch', 'NotebookEdit',
+  'TodoWrite', 'AskUserQuestion', "MCPSearch"
+]
+const ALLOWED_TOOLS_STORAGE_KEY = 'claude_session_allowed_tools'
+const CUSTOM_ENV_STORAGE_KEY = 'claude_session_custom_env'
+
+interface LogMessage {
+  type: 'log' | 'error' | 'status' | 'ping'
+  data: string
+  timestamp: string
+}
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'bg-green-100 text-green-700',
@@ -28,6 +42,14 @@ const ClaudeSessions = () => {
   const [repos, setRepos] = useState<GithubRepoBasic[]>([])
   const [orchestratorAvailable, setOrchestratorAvailable] = useState<boolean | null>(null)
 
+  // Log streaming state
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [wsConnected, setWsConnected] = useState(false)
+  const [wsError, setWsError] = useState<string | null>(null)
+  const [logsAutoScroll, setLogsAutoScroll] = useState(true)
+  const logsEndRef = useRef<HTMLDivElement>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
   // UI State
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -39,6 +61,17 @@ const ClaudeSessions = () => {
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<number | null>(null)
   const [selectedRepoUrl, setSelectedRepoUrl] = useState<string>('')
   const [useHappy, setUseHappy] = useState<boolean>(false)
+  const [allowedTools, setAllowedTools] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(ALLOWED_TOOLS_STORAGE_KEY)
+      return saved ? JSON.parse(saved) : COMMON_TOOLS
+    } catch {
+      return COMMON_TOOLS
+    }
+  })
+  const [customEnvText, setCustomEnvText] = useState<string>(() => {
+    return localStorage.getItem(CUSTOM_ENV_STORAGE_KEY) || ''
+  })
 
   // Load data
   const loadSessions = useCallback(async () => {
@@ -100,6 +133,118 @@ const ClaudeSessions = () => {
       .catch(() => setAttachInfo(null))
   }, [selectedSession, getAttachInfo])
 
+  // WebSocket connection for real-time log streaming
+  useEffect(() => {
+    if (!selectedSession) {
+      setLogLines([])
+      setWsConnected(false)
+      setWsError(null)
+      return
+    }
+
+    const wsUrl = getLogStreamUrl(selectedSession.session_id)
+    if (!wsUrl) {
+      setWsError('No authentication token available')
+      return
+    }
+
+    // Close existing connection
+    if (wsRef.current) {
+      wsRef.current.close()
+    }
+
+    setLogLines([])
+    setWsError(null)
+
+    const ws = new WebSocket(wsUrl)
+    wsRef.current = ws
+
+    ws.onopen = () => {
+      setWsConnected(true)
+      setWsError(null)
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: LogMessage = JSON.parse(event.data)
+        // Limit buffer to prevent memory leak on long-running sessions
+        const appendLine = (prev: string[], line: string) => {
+          const next = [...prev, line]
+          return next.length > 10000 ? next.slice(-5000) : next
+        }
+        if (msg.type === 'log') {
+          setLogLines((prev) => appendLine(prev, msg.data))
+        } else if (msg.type === 'error') {
+          setWsError(msg.data)
+        } else if (msg.type === 'status') {
+          setLogLines((prev) => appendLine(prev, `[${msg.type}] ${msg.data}`))
+        }
+        // Ignore 'ping' messages
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e)
+      }
+    }
+
+    ws.onerror = () => {
+      setWsError('WebSocket connection error')
+      setWsConnected(false)
+    }
+
+    ws.onclose = (event) => {
+      setWsConnected(false)
+      if (event.code !== 1000) {
+        setWsError(event.reason || 'Connection closed')
+      }
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [selectedSession])
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    if (logsAutoScroll && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logLines, logsAutoScroll])
+
+  // Persist allowed tools to localStorage
+  useEffect(() => {
+    localStorage.setItem(ALLOWED_TOOLS_STORAGE_KEY, JSON.stringify(allowedTools))
+  }, [allowedTools])
+
+  // Persist custom env to localStorage
+  useEffect(() => {
+    localStorage.setItem(CUSTOM_ENV_STORAGE_KEY, customEnvText)
+  }, [customEnvText])
+
+  // Parse KEY=VALUE text into Record<string, string>
+  const parseEnvText = (text: string): Record<string, string> => {
+    const env: Record<string, string> = {}
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const eqIndex = trimmed.indexOf('=')
+      if (eqIndex > 0) {
+        const key = trimmed.slice(0, eqIndex).trim()
+        const value = trimmed.slice(eqIndex + 1).trim()
+        if (key) env[key] = value
+      }
+    }
+    return env
+  }
+
+  // Toggle tool in allowed list
+  const toggleTool = (tool: string) => {
+    setAllowedTools(prev =>
+      prev.includes(tool)
+        ? prev.filter(t => t !== tool)
+        : [...prev, tool]
+    )
+  }
+
   // Handlers
   const handleSelectSession = (session: ClaudeSession) => {
     setSelectedSession(session)
@@ -130,10 +275,15 @@ const ClaudeSessions = () => {
     }
     setSpawning(true)
     try {
+      // Parse custom environment variables
+      const customEnv = parseEnvText(customEnvText)
+
       const newSession = await spawnSession({
         snapshot_id: selectedSnapshotId,
         repo_url: selectedRepoUrl || undefined,
         use_happy: useHappy || undefined,
+        allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
+        custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
       })
       await loadSessions()
       setSelectedSession(newSession)
@@ -343,6 +493,46 @@ const ClaudeSessions = () => {
                     </div>
                   )}
 
+                  {/* Pre-approved Tools */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Pre-approved Tools
+                    </label>
+                    <p className="text-xs text-slate-500 mb-3">
+                      These tools won't require permission prompts. MCP tools always require permission.
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {COMMON_TOOLS.map(tool => (
+                        <label key={tool} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={allowedTools.includes(tool)}
+                            onChange={() => toggleTool(tool)}
+                            className="w-4 h-4 text-primary border-slate-300 rounded"
+                          />
+                          {tool}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom Environment Variables */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Custom Environment Variables
+                    </label>
+                    <p className="text-xs text-slate-500 mb-2">
+                      One per line: KEY=value. Lines starting with # are ignored.
+                    </p>
+                    <textarea
+                      value={customEnvText}
+                      onChange={(e) => setCustomEnvText(e.target.value)}
+                      placeholder="MY_VAR=some_value&#10;ANOTHER_VAR=123"
+                      rows={3}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+
                   {/* Actions */}
                   <div className="flex gap-3">
                     <button
@@ -364,54 +554,14 @@ const ClaudeSessions = () => {
             </div>
           ) : selectedSession ? (
             // Selected session details
-            <div className="max-w-2xl">
-              <div className="flex items-center gap-3 mb-6">
+            <div className="h-full flex flex-col">
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-4">
                 <h2 className="text-xl font-semibold text-slate-800">Session Details</h2>
                 <span className={`text-sm px-3 py-1 rounded ${getStatusColor(selectedSession.status)}`}>
                   {selectedSession.status || 'unknown'}
                 </span>
-              </div>
-
-              <div className="bg-white rounded-lg border border-slate-200 divide-y divide-slate-200">
-                <div className="p-4">
-                  <div className="text-sm text-slate-500 mb-1">Session ID</div>
-                  <div className="font-mono text-slate-800">{selectedSession.session_id}</div>
-                </div>
-                <div className="p-4">
-                  <div className="text-sm text-slate-500 mb-1">Container</div>
-                  <div className="font-mono text-slate-800">{selectedSession.container_name || 'N/A'}</div>
-                </div>
-                {attachInfo && (
-                  <>
-                    <div className="p-4">
-                      <div className="text-sm text-slate-500 mb-2">Connect to Session</div>
-                      <p className="text-sm text-slate-600 mb-3">
-                        SSH into the server and run one of these commands:
-                      </p>
-                      <div className="space-y-3">
-                        <div>
-                          <div className="text-xs text-slate-500 mb-1">Attach to Claude (interactive)</div>
-                          <code className="block bg-slate-900 text-green-400 px-3 py-2 rounded text-sm font-mono">
-                            {attachInfo.attach_cmd}
-                          </code>
-                        </div>
-                        <div>
-                          <div className="text-xs text-slate-500 mb-1">Open shell alongside</div>
-                          <code className="block bg-slate-900 text-green-400 px-3 py-2 rounded text-sm font-mono">
-                            {attachInfo.exec_cmd}
-                          </code>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-3">
-                        Detach without killing: <kbd className="bg-slate-100 px-1 rounded">Ctrl+P</kbd> then{' '}
-                        <kbd className="bg-slate-100 px-1 rounded">Ctrl+Q</kbd>
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="mt-6">
+                <div className="flex-1" />
                 <button
                   onClick={() => handleKillSession(selectedSession.session_id)}
                   disabled={killingId === selectedSession.session_id}
@@ -419,6 +569,91 @@ const ClaudeSessions = () => {
                 >
                   {killingId === selectedSession.session_id ? 'Killing...' : 'Kill Session'}
                 </button>
+              </div>
+
+              {/* Session info row */}
+              <div className="flex gap-4 mb-4">
+                <div className="bg-white rounded-lg border border-slate-200 px-4 py-3 flex-1">
+                  <div className="text-xs text-slate-500 mb-1">Session ID</div>
+                  <div className="font-mono text-sm text-slate-800">{selectedSession.session_id}</div>
+                </div>
+                <div className="bg-white rounded-lg border border-slate-200 px-4 py-3 flex-1">
+                  <div className="text-xs text-slate-500 mb-1">Container</div>
+                  <div className="font-mono text-sm text-slate-800">{selectedSession.container_name || 'N/A'}</div>
+                </div>
+              </div>
+
+              {/* Attach commands (collapsible) */}
+              {attachInfo && (
+                <details className="mb-4 bg-white rounded-lg border border-slate-200">
+                  <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50">
+                    Connect Commands
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Attach to Claude (interactive)</div>
+                      <code className="block bg-slate-900 text-green-400 px-3 py-2 rounded text-sm font-mono">
+                        {attachInfo.attach_cmd}
+                      </code>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Open shell alongside</div>
+                      <code className="block bg-slate-900 text-green-400 px-3 py-2 rounded text-sm font-mono">
+                        {attachInfo.exec_cmd}
+                      </code>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Detach without killing: <kbd className="bg-slate-100 px-1 rounded">Ctrl+P</kbd> then{' '}
+                      <kbd className="bg-slate-100 px-1 rounded">Ctrl+Q</kbd>
+                    </p>
+                  </div>
+                </details>
+              )}
+
+              {/* Live logs */}
+              <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                    <span>Live Output</span>
+                    {wsConnected ? (
+                      <span className="flex items-center gap-1 text-xs text-green-600">
+                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        Connected
+                      </span>
+                    ) : wsError ? (
+                      <span className="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded">
+                        {wsError}
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-600 rounded">
+                        Connecting...
+                      </span>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={logsAutoScroll}
+                      onChange={(e) => setLogsAutoScroll(e.target.checked)}
+                      className="w-3 h-3"
+                    />
+                    Auto-scroll
+                  </label>
+                </div>
+                <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden flex flex-col min-h-[400px]">
+                  <div className="flex-1 overflow-y-auto p-4 font-mono text-sm">
+                    {logLines.length > 0 ? (
+                      <pre className="text-slate-300 whitespace-pre-wrap break-words">
+                        {logLines.join('\n')}
+                      </pre>
+                    ) : (
+                      <div className="text-slate-500 italic">
+                        {wsConnected ? 'Waiting for output...' : 'Connecting to session...'}
+                      </div>
+                    )}
+                    <div ref={logsEndRef} />
+                  </div>
+                </div>
               </div>
             </div>
           ) : (

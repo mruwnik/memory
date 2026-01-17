@@ -39,6 +39,10 @@ WHITELIST = {
     "/admin/statics/",  # SQLAdmin static resources
     "/google-drive/callback",  # Google OAuth callback
     "/polls/respond",  # Public poll response endpoints
+    # Claude WebSocket log streaming - auth via token query param
+    # NOTE: This pattern depends on session_id format from cloud_claude.make_session_id()
+    # which generates IDs like "u{user_id}-{hex}". If that format changes, update this.
+    "/claude/u",
 }
 
 
@@ -145,6 +149,30 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
     return user
+
+
+def get_user_from_token(token: str, db: DBSession | scoped_session) -> User | None:
+    """Authenticate user from a token string.
+
+    Supports both session tokens (UUIDs) and API keys.
+    Useful for WebSocket authentication where tokens are passed via query params.
+    """
+    if not token:
+        return None
+
+    # Check if this is an API key
+    if token.startswith("bot_") or token.startswith("user_"):
+        return authenticate_by_api_key(token, db)
+
+    # Otherwise treat as session token
+    session = db.get(UserSession, token)
+    if not session:
+        return None
+
+    now = datetime.now(timezone.utc)
+    if session.expires_at.replace(tzinfo=timezone.utc) < now:
+        return None
+    return session.user
 
 
 from typing import TypeVar

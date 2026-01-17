@@ -98,6 +98,19 @@ fi
 # Default executable
 : "${CLAUDE_EXECUTABLE:=claude}"
 
+# Build claude args for allowed tools
+# Validate and escape: only allow alphanumeric, underscore, hyphen, and space
+CLAUDE_ARGS=""
+if [ -n "$CLAUDE_ALLOWED_TOOLS" ]; then
+    # Reject any tools containing shell metacharacters
+    if echo "$CLAUDE_ALLOWED_TOOLS" | grep -qE '[^a-zA-Z0-9_ -]'; then
+        echo "ERROR: CLAUDE_ALLOWED_TOOLS contains invalid characters" >&2
+        exit 1
+    fi
+    # Use printf %q for proper shell escaping
+    CLAUDE_ARGS="--allowedTools $(printf '%q' "$CLAUDE_ALLOWED_TOOLS")"
+fi
+
 # Use tmux to provide a PTY so claude runs interactively
 # docker attach will connect directly to the tmux session with claude running
-exec tmux new-session -s claude "$CLAUDE_EXECUTABLE $*"
+exec tmux new-session -s claude "$CLAUDE_EXECUTABLE $CLAUDE_ARGS $*"
