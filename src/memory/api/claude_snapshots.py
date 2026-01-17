@@ -93,6 +93,8 @@ def extract_folders_from_tar(tar: tarfile.TarFile) -> dict[str, list[str]]:
 
     Returns dict mapping folder names to list of unique top-level items in each folder.
     Stops after MAX_TAR_MEMBERS to prevent zip bomb DoS.
+
+    Expects new format: .claude/skills/, .claude/agents/, etc.
     """
     folders: dict[str, set[str]] = {
         "skills": set(),
@@ -110,10 +112,11 @@ def extract_folders_from_tar(tar: tarfile.TarFile) -> dict[str, list[str]]:
             continue
 
         parts = member.name.split("/")
-        if len(parts) < 2:
+        # Expect .claude/folder/name format
+        if len(parts) < 3 or parts[0] != ".claude":
             continue
 
-        folder, name = parts[0], parts[1]
+        folder, name = parts[1], parts[2]
         if folder in folders and name and not name.startswith("."):
             folders[folder].add(name)
 
@@ -121,9 +124,9 @@ def extract_folders_from_tar(tar: tarfile.TarFile) -> dict[str, list[str]]:
 
 
 def extract_mcp_servers_from_tar(tar: tarfile.TarFile) -> list[str]:
-    """Extract MCP server names from claude.json in tarball."""
+    """Extract MCP server names from .claude.json in tarball."""
     try:
-        member = tar.getmember("claude.json")
+        member = tar.getmember(".claude.json")
     except KeyError:
         return []
 
@@ -151,14 +154,14 @@ def extract_happy_config_from_tar(tar: tarfile.TarFile) -> bool:
 
 
 def extract_credentials_from_tar(tar: tarfile.TarFile) -> dict[str, str | None]:
-    """Extract Claude account info from .credentials.json in tarball."""
+    """Extract Claude account info from .claude/.credentials.json in tarball."""
     info: dict[str, str | None] = {
         "claude_account_email": None,
         "subscription_type": None,
     }
 
     try:
-        member = tar.getmember(".credentials.json")
+        member = tar.getmember(".claude/.credentials.json")
     except KeyError:
         return info
 

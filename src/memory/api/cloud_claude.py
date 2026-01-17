@@ -50,12 +50,10 @@ DISALLOWED_TOOLS = set()
 RESERVED_ENV_VARS = {
     "CLAUDE_EXECUTABLE",
     "CLAUDE_ALLOWED_TOOLS",
-    "CLAUDE_CONFIG",
     "SSH_PRIVATE_KEY",
     "GITHUB_TOKEN",
     "GIT_REPO_URL",
-    "HAPPY_ACCESS_KEY",
-    "HAPPY_MACHINE_ID",
+    "SYSTEM_ID",
     "HOME",
     "PATH",
     "USER",
@@ -168,6 +166,9 @@ async def spawn_session(
     else:
         image = "claude-cloud:latest"
         env = {}
+
+    # Always set SYSTEM_ID for Happy machineId (used by entrypoint)
+    env["SYSTEM_ID"] = settings.APP_NAME
 
     # Add allowed tools to environment (validated against allowlist)
     if request.allowed_tools:

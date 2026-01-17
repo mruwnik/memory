@@ -218,7 +218,7 @@ services:
       ENABLE_BM25_SEARCH: true
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
-      SSH_KEY_ENCRYPTION_SECRET: ${SSH_KEY_ENCRYPTION_SECRET}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
       # Claude session orchestrator (Unix socket)
       ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
       MEMORY_STACK: ${MEMORY_STACK:-prod}

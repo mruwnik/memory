@@ -125,10 +125,11 @@ class OrchestratorClient:
         ssh_private_key: str | None = None,
         github_token: str | None = None,
         snapshot_path: str | None = None,
-        happy_access_key: str | None = None,
-        happy_machine_id: str | None = None,
     ) -> SessionInfo:
-        """Create a new Claude session container."""
+        """Create a new Claude session container.
+
+        Note: SYSTEM_ID and other custom env vars should be passed via the `env` dict.
+        """
         response = await self._call(
             "create",
             session_id=session_id,
@@ -139,8 +140,6 @@ class OrchestratorClient:
             ssh_private_key=ssh_private_key,
             github_token=github_token,
             snapshot_path=snapshot_path,
-            happy_access_key=happy_access_key,
-            happy_machine_id=happy_machine_id,
         )
 
         if response.get("status") == "error":

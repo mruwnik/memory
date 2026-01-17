@@ -83,9 +83,6 @@ class SessionConfig:
     github_token: str | None = None
     claude_prompt: str | None = None
     snapshot_path: str | None = None
-    # Happy integration
-    happy_access_key: str | None = None
-    happy_machine_id: str | None = None
 
 
 class Orchestrator:
@@ -212,10 +209,6 @@ class Orchestrator:
                 environment["GITHUB_TOKEN"] = config.github_token
             if config.claude_prompt:
                 environment["CLAUDE_PROMPT"] = config.claude_prompt
-            if config.happy_access_key:
-                environment["HAPPY_ACCESS_KEY"] = config.happy_access_key
-            if config.happy_machine_id:
-                environment["HAPPY_MACHINE_ID"] = config.happy_machine_id
 
             # Build volume mounts
             volumes = {}
@@ -434,8 +427,6 @@ class Orchestrator:
                 github_token=data.get("github_token"),
                 claude_prompt=data.get("claude_prompt"),
                 snapshot_path=data.get("snapshot_path"),
-                happy_access_key=data.get("happy_access_key"),
-                happy_machine_id=data.get("happy_machine_id"),
             )
             return self.create_session(config)
 

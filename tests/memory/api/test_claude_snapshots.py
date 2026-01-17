@@ -150,6 +150,7 @@ def test_extract_snapshot_summary_empty_tarball():
         "hooks": [],
         "commands": [],
         "mcp_servers": [],
+        "has_happy": False,
     }
 
 
@@ -157,9 +158,9 @@ def test_extract_snapshot_summary_with_skills():
     """Test extracting skills from snapshot."""
     content = create_test_tarball(
         {
-            "skills/skill1/config.json": "{}",
-            "skills/skill2/config.json": "{}",
-            "skills/.hidden/config.json": "{}",  # Should be ignored
+            ".claude/skills/skill1/config.json": "{}",
+            ".claude/skills/skill2/config.json": "{}",
+            ".claude/skills/.hidden/config.json": "{}",  # Should be ignored
         }
     )
     summary = extract_snapshot_summary(content)
@@ -168,14 +169,14 @@ def test_extract_snapshot_summary_with_skills():
 
 
 def test_extract_snapshot_summary_with_mcp_servers():
-    """Test extracting MCP servers from claude.json."""
+    """Test extracting MCP servers from .claude.json."""
     claude_config = {
         "mcpServers": {
             "memory": {"command": "memory-server"},
             "github": {"command": "github-server"},
         }
     }
-    content = create_test_tarball({"claude.json": json.dumps(claude_config)})
+    content = create_test_tarball({".claude.json": json.dumps(claude_config)})
     summary = extract_snapshot_summary(content)
 
     assert sorted(summary["mcp_servers"]) == ["github", "memory"]
@@ -210,6 +211,7 @@ def test_extract_snapshot_summary_handles_invalid_tarball():
         "hooks": [],
         "commands": [],
         "mcp_servers": [],
+        "has_happy": False,
     }
 
 
@@ -224,7 +226,7 @@ def test_extract_account_info_with_credentials():
             "subscription_type": "pro",
         }
     }
-    content = create_test_tarball({".credentials.json": json.dumps(credentials)})
+    content = create_test_tarball({".claude/.credentials.json": json.dumps(credentials)})
     info = extract_account_info(content)
 
     assert info["claude_account_email"] == "user@example.com"
@@ -242,7 +244,7 @@ def test_extract_account_info_no_credentials():
 
 def test_extract_account_info_invalid_json():
     """Test extracting account info with invalid JSON."""
-    content = create_test_tarball({".credentials.json": "not valid json"})
+    content = create_test_tarball({".claude/.credentials.json": "not valid json"})
     info = extract_account_info(content)
 
     assert info["claude_account_email"] is None
