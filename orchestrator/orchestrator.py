@@ -37,6 +37,9 @@ CONTAINER_CPU_LIMIT = int(os.environ.get("CLAUDE_CPU_LIMIT", "2"))
 LOG_DIR = Path(os.environ.get("CLAUDE_LOG_DIR", "/var/log/claude-sessions"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# Tmux session name used inside containers (must match entrypoint.sh)
+TMUX_SESSION_NAME = "claude"
+
 
 IMAGES = {
     "claude-cloud": {
@@ -81,6 +84,7 @@ class SessionConfig:
     git_repo_url: str | None = None
     ssh_private_key: str | None = None
     github_token: str | None = None
+    github_token_write: str | None = None  # Write token for differ (push, PR creation)
     claude_prompt: str | None = None
     snapshot_path: str | None = None
 
@@ -207,6 +211,8 @@ class Orchestrator:
                 environment["SSH_PRIVATE_KEY"] = config.ssh_private_key
             if config.github_token:
                 environment["GITHUB_TOKEN"] = config.github_token
+            if config.github_token_write:
+                environment["GITHUB_TOKEN_WRITE"] = config.github_token_write
             if config.claude_prompt:
                 environment["CLAUDE_PROMPT"] = config.claude_prompt
 
@@ -365,6 +371,142 @@ class Orchestrator:
                 "error": "No logs available - container not found and no log file exists",
             }
 
+    def capture_screen(self, session_id: str) -> dict[str, Any]:
+        """Capture current tmux screen content for a session."""
+        container_name = f"claude-{session_id}"
+        try:
+            container = self.docker.containers.get(container_name)
+            if container.status != "running":
+                return {
+                    "session_id": session_id,
+                    "status": "not_running",
+                    "error": f"Container status: {container.status}",
+                }
+
+            # Run tmux capture-pane inside the container (as claude user who owns the session)
+            exit_code, output = container.exec_run(
+                ["tmux", "capture-pane", "-t", TMUX_SESSION_NAME, "-p"],
+                demux=False,
+                user="claude",
+            )
+
+            if exit_code == 0:
+                return {
+                    "session_id": session_id,
+                    "status": "ok",
+                    "screen": output.decode("utf-8", errors="replace"),
+                }
+            else:
+                error_msg = output.decode("utf-8", errors="replace").strip()
+                # Distinguish tmux not ready from other errors
+                if "no server running" in error_msg or "session not found" in error_msg:
+                    return {
+                        "session_id": session_id,
+                        "status": "tmux_not_ready",
+                        "error": error_msg,
+                    }
+                return {
+                    "session_id": session_id,
+                    "status": "error",
+                    "error": error_msg,
+                }
+
+        except NotFound:
+            return {
+                "session_id": session_id,
+                "status": "not_found",
+                "error": "Container not found",
+            }
+
+    def send_keys(self, session_id: str, keys: str) -> dict[str, Any]:
+        """Send keystrokes to a tmux session.
+
+        Supports special key sequences:
+        - Regular text is sent literally (using tmux send-keys -l)
+        - If keys ends with literal newline char (\\n), the text before it is sent
+          literally, then Enter key is sent separately
+        - Special sequences (sent as tmux key names, not literal):
+          ^C (Ctrl+C), ^D (Ctrl+D), ^Z (Ctrl+Z), ^L (Ctrl+L), ^\\ (Ctrl+\\)
+        """
+        container_name = f"claude-{session_id}"
+        try:
+            container = self.docker.containers.get(container_name)
+            if container.status != "running":
+                return {
+                    "session_id": session_id,
+                    "status": "not_running",
+                    "error": f"Container status: {container.status}",
+                }
+
+            # Map of special key sequences to tmux key names
+            # These are sent as tmux key names (without -l flag)
+            special_keys = {
+                "^C": "C-c",  # Ctrl+C (interrupt)
+                "^D": "C-d",  # Ctrl+D (EOF)
+                "^Z": "C-z",  # Ctrl+Z (suspend)
+                "^L": "C-l",  # Ctrl+L (clear)
+                "^\\": "C-\\",  # Ctrl+\ (quit)
+            }
+
+            # Check if this is a special key sequence
+            if keys in special_keys:
+                exit_code, output = container.exec_run(
+                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, special_keys[keys]],
+                    demux=False,
+                    user="claude",
+                )
+            # Send keys to tmux - use -l for literal text, then send Enter separately
+            # This ensures special key names like "Enter" are interpreted correctly
+            # Run as claude user who owns the tmux session
+            elif keys.endswith("\n"):
+                text = keys[:-1]
+                if text:
+                    # Send text literally (no key name interpretation)
+                    exit_code, output = container.exec_run(
+                        ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", text],
+                        demux=False,
+                        user="claude",
+                    )
+                    if exit_code != 0:
+                        error_msg = output.decode("utf-8", errors="replace").strip()
+                        logger.warning(
+                            f"send_keys text failed for {session_id}: {error_msg}"
+                        )
+                        return {
+                            "session_id": session_id,
+                            "status": "error",
+                            "error": error_msg,
+                        }
+                # Send Enter key (interpreted as key name)
+                exit_code, output = container.exec_run(
+                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "Enter"],
+                    demux=False,
+                    user="claude",
+                )
+            else:
+                # No newline, just send as literal text
+                exit_code, output = container.exec_run(
+                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", keys],
+                    demux=False,
+                    user="claude",
+                )
+
+            if exit_code == 0:
+                return {"session_id": session_id, "status": "ok"}
+            else:
+                return {
+                    "session_id": session_id,
+                    "status": "error",
+                    "error": output.decode("utf-8", errors="replace").strip(),
+                }
+
+        except NotFound:
+            return {
+                "session_id": session_id,
+                "status": "not_found",
+                "error": "Container not found",
+            }
+
     def _stop_container(self, container_name: str) -> bool:
         """Stop and remove a container. Returns True if successful."""
         try:
@@ -425,6 +567,7 @@ class Orchestrator:
                 git_repo_url=data.get("git_repo_url"),
                 ssh_private_key=data.get("ssh_private_key"),
                 github_token=data.get("github_token"),
+                github_token_write=data.get("github_token_write"),
                 claude_prompt=data.get("claude_prompt"),
                 snapshot_path=data.get("snapshot_path"),
             )
@@ -444,6 +587,12 @@ class Orchestrator:
 
         elif action == "logs":
             return self.get_logs(data["session_id"], tail=data.get("tail", 100))
+
+        elif action == "capture_screen":
+            return self.capture_screen(data["session_id"])
+
+        elif action == "send_keys":
+            return self.send_keys(data["session_id"], data.get("keys", ""))
 
         elif action == "ping":
             return {"status": "pong"}

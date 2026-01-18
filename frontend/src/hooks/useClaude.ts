@@ -64,9 +64,11 @@ export interface SpawnRequest {
   snapshot_id: number
   repo_url?: string
   github_token?: string
+  github_token_write?: string
   use_happy?: boolean
   allowed_tools?: string[]
   custom_env?: Record<string, string>
+  initial_prompt?: string
 }
 
 export interface GithubRepoBasic {

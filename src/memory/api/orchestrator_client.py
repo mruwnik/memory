@@ -124,6 +124,7 @@ class OrchestratorClient:
         git_repo_url: str | None = None,
         ssh_private_key: str | None = None,
         github_token: str | None = None,
+        github_token_write: str | None = None,
         snapshot_path: str | None = None,
     ) -> SessionInfo:
         """Create a new Claude session container.
@@ -139,6 +140,7 @@ class OrchestratorClient:
             git_repo_url=git_repo_url,
             ssh_private_key=ssh_private_key,
             github_token=github_token,
+            github_token_write=github_token_write,
             snapshot_path=snapshot_path,
         )
 
@@ -218,6 +220,38 @@ class OrchestratorClient:
             "session_id": response.get("session_id", session_id),
             "source": response.get("source", "unknown"),
             "logs": response.get("logs", ""),
+        }
+
+    async def capture_screen(self, session_id: str) -> dict[str, str]:
+        """Capture current tmux screen content for a session.
+
+        Returns:
+            Dict with keys:
+            - status: "ok" | "not_found" | "not_running" | "tmux_not_ready" | "error"
+            - screen: Terminal content (only if status == "ok")
+            - error: Error message (if status != "ok")
+        """
+        response = await self._call("capture_screen", session_id=session_id)
+        return {
+            "status": response.get("status", "error"),
+            "screen": response.get("screen", ""),
+            "error": response.get("error", ""),
+        }
+
+    async def send_keys(self, session_id: str, keys: str) -> dict[str, str]:
+        """Send keystrokes to a tmux session.
+
+        Args:
+            session_id: The session to send keys to
+            keys: The keys to send (passed to tmux send-keys)
+
+        Returns:
+            Dict with status: "ok" | "not_found" | "not_running" | "error"
+        """
+        response = await self._call("send_keys", session_id=session_id, keys=keys)
+        return {
+            "status": response.get("status", "error"),
+            "error": response.get("error", ""),
         }
 
 

@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, get_user_from_token
 from memory.api.orchestrator_client import (
+    OrchestratorClient,
     OrchestratorError,
     get_orchestrator_client,
 )
@@ -50,6 +51,7 @@ DISALLOWED_TOOLS = set()
 RESERVED_ENV_VARS = {
     "CLAUDE_EXECUTABLE",
     "CLAUDE_ALLOWED_TOOLS",
+    "CLAUDE_INITIAL_PROMPT",
     "SSH_PRIVATE_KEY",
     "GITHUB_TOKEN",
     "GIT_REPO_URL",
@@ -89,11 +91,13 @@ class SpawnRequest(BaseModel):
     snapshot_id: int
     repo_url: str | None = None  # Git remote URL to set up in workspace
     github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
+    github_token_write: str | None = None  # Write token for differ (push, PR creation)
     use_happy: bool = False  # Run with Happy instead of Claude CLI
     allowed_tools: list[str] | None = (
         None  # Tools to pre-approve (no permission prompts)
     )
     custom_env: dict[str, str] | None = None  # Custom environment variables
+    initial_prompt: str | None = None  # Prompt to start Claude with immediately
 
 
 class SessionInfo(BaseModel):
@@ -175,6 +179,10 @@ async def spawn_session(
         allowed_tools = set(request.allowed_tools) - DISALLOWED_TOOLS
         env["CLAUDE_ALLOWED_TOOLS"] = " ".join(allowed_tools)
 
+    # Add initial prompt if provided
+    if request.initial_prompt:
+        env["CLAUDE_INITIAL_PROMPT"] = request.initial_prompt
+
     # Add custom environment variables (with validation)
     if request.custom_env:
         for key, value in request.custom_env.items():
@@ -198,10 +206,14 @@ async def spawn_session(
                 )
             env[key] = value
 
-    # Resolve github_token: either a literal PAT or a secret name
+    # Resolve github tokens: either literal PATs or secret names
     github_token = None
     if request.github_token:
         github_token = extract_secret(db, user.id, request.github_token)
+
+    github_token_write = None
+    if request.github_token_write:
+        github_token_write = extract_secret(db, user.id, request.github_token_write)
 
     try:
         result = await client.create_session(
@@ -210,6 +222,7 @@ async def spawn_session(
             memory_stack=settings.MEMORY_STACK,
             ssh_private_key=user.ssh_private_key,
             github_token=github_token,
+            github_token_write=github_token_write,
             git_repo_url=request.repo_url,
             image=image,
             env=env,
@@ -390,63 +403,101 @@ async def send_ws_json(
     await websocket.send_json(msg)
 
 
-async def stream_docker_logs(websocket: WebSocket, container_name: str) -> None:
-    """Stream docker logs to WebSocket until container exits or disconnect."""
-    process = await asyncio.create_subprocess_exec(
-        "docker",
-        "logs",
-        "-f",
-        "--tail",
-        "100",
-        container_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+# Screen capture loop backoff constants
+SCREEN_BACKOFF_UNCHANGED_THRESHOLD = 4  # Start slowing after this many unchanged polls
+SCREEN_BACKOFF_MULTIPLIER = 1.5  # Multiply interval by this on each idle poll
 
-    if process.stdout is None:
-        await send_ws_json(websocket, "error", "Failed to attach to container logs")
-        return
 
-    try:
-        while True:
-            try:
-                line = await asyncio.wait_for(
-                    process.stdout.readline(),
-                    timeout=30.0,
-                )
-                if line:
-                    await send_ws_json(
-                        websocket,
-                        "log",
-                        line.decode("utf-8", errors="replace").rstrip("\n"),
-                    )
-                else:
-                    # EOF - check if process exited
-                    if process.returncode is not None:
+async def screen_capture_loop(
+    websocket: WebSocket,
+    session_id: str,
+    client: "OrchestratorClient",
+    base_interval: float = 0.5,
+    max_interval: float = 2.0,
+) -> None:
+    """Stream tmux screen captures to WebSocket until container exits.
+
+    Uses adaptive backoff: polls faster when screen is changing, slower when idle.
+    This reduces server load during long-running commands while maintaining
+    responsiveness during interactive use.
+    """
+    last_screen = ""
+    consecutive_errors = 0
+    max_errors = 5
+    consecutive_unchanged = 0
+    interval = base_interval
+
+    while True:
+        try:
+            result = await client.capture_screen(session_id)
+        except OrchestratorError as e:
+            await send_ws_json(websocket, "error", str(e))
+            break
+
+        status = result["status"]
+
+        if status == "ok":
+            consecutive_errors = 0
+            screen = result["screen"]
+            # Only send if screen changed (avoid noise)
+            if screen and screen != last_screen:
+                await send_ws_json(websocket, "screen", screen)
+                last_screen = screen
+                # Reset to fast polling when content changes
+                consecutive_unchanged = 0
+                interval = base_interval
+            else:
+                # Adaptive backoff: slow down polling when screen is idle
+                consecutive_unchanged += 1
+                if consecutive_unchanged >= SCREEN_BACKOFF_UNCHANGED_THRESHOLD:
+                    interval = min(interval * SCREEN_BACKOFF_MULTIPLIER, max_interval)
+        elif status in ("not_found", "not_running"):
+            await send_ws_json(websocket, "status", "Container exited")
+            break
+        elif status == "tmux_not_ready":
+            # Tmux may not be ready yet, wait and retry
+            consecutive_errors += 1
+            if consecutive_errors >= max_errors:
+                await send_ws_json(websocket, "status", "Tmux session not available")
+                break
+        else:
+            # Generic error
+            await send_ws_json(websocket, "error", result.get("error", "Unknown error"))
+            consecutive_errors += 1
+            if consecutive_errors >= max_errors:
+                break
+
+        await asyncio.sleep(interval)
+
+
+async def input_handler_loop(
+    websocket: WebSocket,
+    session_id: str,
+    client: "OrchestratorClient",
+) -> None:
+    """Receive input from WebSocket and send to tmux session."""
+    while True:
+        try:
+            message = await websocket.receive_json()
+        except Exception as e:
+            # Connection closed or error - log the exception type for debugging
+            logger.debug(f"WebSocket receive ended for {session_id}: {type(e).__name__}")
+            break
+
+        logger.debug(f"Received WebSocket message type: {message.get('type')}")
+        msg_type = message.get("type")
+        if msg_type == "input":
+            keys = message.get("keys", "")
+            if keys:
+                try:
+                    result = await client.send_keys(session_id, keys)
+                    logger.debug(f"send_keys result: {result.get('status')}")
+                    if result["status"] != "ok":
                         await send_ws_json(
-                            websocket,
-                            "status",
-                            f"Container exited with code {process.returncode}",
+                            websocket, "error", result.get("error", "Failed to send input")
                         )
-                        break
-                    # EOF but process may still be running - wait and recheck
-                    await asyncio.sleep(0.1)
-                    if process.returncode is not None:
-                        await send_ws_json(
-                            websocket,
-                            "status",
-                            f"Container exited with code {process.returncode}",
-                        )
-                        break
-            except asyncio.TimeoutError:
-                await send_ws_json(websocket, "ping")
-    finally:
-        if process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                process.kill()
+                except OrchestratorError as e:
+                    await send_ws_json(websocket, "error", str(e))
 
 
 @router.websocket("/{session_id}/logs/stream")
@@ -455,11 +506,20 @@ async def stream_session_logs(
     session_id: str,
     token: str = Query(..., description="Authentication token"),
 ):
-    """Stream logs for a Claude session in real-time via WebSocket.
+    """Bidirectional terminal session via WebSocket.
+
+    Captures the tmux pane content periodically (every 0.5s) and sends it
+    when changed. Also receives input from client and sends to tmux.
 
     Connect with: ws://host/claude/{session_id}/logs/stream?token=<auth_token>
 
-    Messages are JSON with type: "log" | "error" | "status" | "ping"
+    Server -> Client messages (JSON):
+    - screen: Full terminal content (only sent when changed)
+    - status: Connection/session state changes
+    - error: Error messages
+
+    Client -> Server messages (JSON):
+    - {"type": "input", "keys": "..."}: Send keystrokes to tmux
     """
     if not is_valid_session_id(session_id):
         await websocket.close(code=4004, reason="Invalid session ID format")
@@ -476,14 +536,38 @@ async def stream_session_logs(
             return
 
     await websocket.accept()
+    client = get_orchestrator_client()
 
     try:
         await send_ws_json(websocket, "status", f"Connected to {session_id}")
-        await stream_docker_logs(websocket, f"claude-{session_id}")
+
+        # Run screen capture and input handling concurrently
+        screen_task = asyncio.create_task(
+            screen_capture_loop(websocket, session_id, client)
+        )
+        input_task = asyncio.create_task(
+            input_handler_loop(websocket, session_id, client)
+        )
+
+        # Wait for either task to complete (usually screen_task on container exit,
+        # or input_task on disconnect)
+        done, pending = await asyncio.wait(
+            [screen_task, input_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # Cancel remaining tasks
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session {session_id}")
     except Exception as e:
-        logger.error(f"Error streaming logs for {session_id}: {e}")
+        logger.error(f"Error in terminal session for {session_id}: {e}")
         try:
             await send_ws_json(websocket, "error", str(e))
         except Exception:

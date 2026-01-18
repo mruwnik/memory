@@ -7,11 +7,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     jq \
+    openssl \
     python3 \
     python3-pip \
     openssh-client \
     ca-certificates \
     tmux \
+    openjdk-21-jdk-headless \
+    rlwrap \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20.x
@@ -20,11 +23,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/bin/python
 
-# Create non-root user for Claude Code (required for --dangerously-skip-permissions)
-# Using UID 10000 to avoid conflicts with host users (1000 is often taken by ec2-user, etc.)
-RUN useradd -m -s /bin/bash -u 10000 claude \
+# Install Clojure (needed to build differ)
+RUN curl -fsSL https://download.clojure.org/install/linux-install-1.11.1.1435.sh | bash
+
+# Create users:
+# - claude (UID 10000): runs Claude Code
+# - differ (UID 10001): runs differ MCP server (isolated from claude)
+# Both share a 'workspace' group for /workspace access
+# differ also has its own group for private files (SQLite DB with GitHub token)
+#
+# Permissions model:
+# - /workspace: differ owns (creates repo), claude has group write via workspace group
+#   setgid bit (2775) ensures new files inherit workspace group
+# - /home/claude: claude-only (mode 700), contains .claude config and credentials
+# - differ's home: contains SQLite DB with GitHub token, inaccessible to claude
+# - /var/log/claude: mounted from host, UID 10000 matches orchestrator's chown
+RUN groupadd -g 10000 workspace \
+    && groupadd -g 10001 differ \
+    && useradd -m -s /bin/bash -u 10000 -g workspace claude \
+    && useradd -m -s /bin/bash -u 10001 -g differ -G workspace differ \
     && mkdir -p /home/claude/.claude /home/claude/.ssh /workspace /var/log/claude \
-    && chown -R claude:claude /home/claude /workspace /var/log/claude
+    && chown -R claude:workspace /home/claude /var/log/claude \
+    && chmod 700 /home/claude \
+    && chown -R differ:workspace /workspace \
+    && chmod 2775 /workspace
 
 # Install Claude Code CLI as claude user
 USER claude
@@ -37,10 +59,25 @@ RUN ssh-keyscan github.com gitlab.com bitbucket.org >> /home/claude/.ssh/known_h
 # Git config
 RUN git config --global init.defaultBranch main
 
+# Install differ for code review and PR management
+# Owned by differ user - claude cannot read differ's database (contains GitHub token)
+# NOTE: Differ is cloned at build time. To update differ, you must rebuild the image.
+# The orchestrator detects Dockerfile changes and rebuilds automatically on restart.
 USER root
+RUN mkdir -p /opt/differ && chown differ:differ /opt/differ
+
+USER differ
+WORKDIR /opt/differ
+RUN git clone --depth 1 https://github.com/mruwnik/differ.git . \
+    && npm install \
+    && npm run build
+
+USER root
+WORKDIR /
+
 COPY docker/claude-cloud/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
 
-USER claude
+# Entrypoint runs as root to switch between users
 WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]

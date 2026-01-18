@@ -9,10 +9,17 @@ const COMMON_TOOLS = [
 ]
 const ALLOWED_TOOLS_STORAGE_KEY = 'claude_session_allowed_tools'
 const CUSTOM_ENV_STORAGE_KEY = 'claude_session_custom_env'
+// SECURITY NOTE: GitHub tokens stored in localStorage are accessible to any JS on this origin.
+// This is acceptable for this single-user application where:
+// - The user explicitly enters their own tokens
+// - No third-party scripts are loaded
+// - Tokens can also reference server-side secrets by name instead of literal PATs
+// For multi-user or public deployments, use server-side session storage instead.
 const GITHUB_TOKEN_STORAGE_KEY = 'claude_session_github_token'
+const GITHUB_TOKEN_WRITE_STORAGE_KEY = 'claude_session_github_token_write'
 
-interface LogMessage {
-  type: 'log' | 'error' | 'status' | 'ping'
+interface ScreenMessage {
+  type: 'screen' | 'error' | 'status'
   data: string
   timestamp: string
 }
@@ -43,13 +50,12 @@ const ClaudeSessions = () => {
   const [repos, setRepos] = useState<GithubRepoBasic[]>([])
   const [orchestratorAvailable, setOrchestratorAvailable] = useState<boolean | null>(null)
 
-  // Log streaming state
-  const [logLines, setLogLines] = useState<string[]>([])
+  // Screen streaming state
+  const [screenContent, setScreenContent] = useState<string>('')
   const [wsConnected, setWsConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
-  const [logsAutoScroll, setLogsAutoScroll] = useState(true)
-  const logsEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const [terminalInput, setTerminalInput] = useState<string>('')
 
   // UI State
   const [loading, setLoading] = useState(true)
@@ -76,6 +82,10 @@ const ClaudeSessions = () => {
   const [githubToken, setGithubToken] = useState<string>(() => {
     return localStorage.getItem(GITHUB_TOKEN_STORAGE_KEY) || ''
   })
+  const [githubTokenWrite, setGithubTokenWrite] = useState<string>(() => {
+    return localStorage.getItem(GITHUB_TOKEN_WRITE_STORAGE_KEY) || ''
+  })
+  const [initialPrompt, setInitialPrompt] = useState<string>('')
 
   // Load data
   const loadSessions = useCallback(async () => {
@@ -137,10 +147,10 @@ const ClaudeSessions = () => {
       .catch(() => setAttachInfo(null))
   }, [selectedSession, getAttachInfo])
 
-  // WebSocket connection for real-time log streaming
+  // WebSocket connection for real-time screen streaming
   useEffect(() => {
     if (!selectedSession) {
-      setLogLines([])
+      setScreenContent('')
       setWsConnected(false)
       setWsError(null)
       return
@@ -157,7 +167,7 @@ const ClaudeSessions = () => {
       wsRef.current.close()
     }
 
-    setLogLines([])
+    setScreenContent('')
     setWsError(null)
 
     const ws = new WebSocket(wsUrl)
@@ -170,20 +180,15 @@ const ClaudeSessions = () => {
 
     ws.onmessage = (event) => {
       try {
-        const msg: LogMessage = JSON.parse(event.data)
-        // Limit buffer to prevent memory leak on long-running sessions
-        const appendLine = (prev: string[], line: string) => {
-          const next = [...prev, line]
-          return next.length > 10000 ? next.slice(-5000) : next
-        }
-        if (msg.type === 'log') {
-          setLogLines((prev) => appendLine(prev, msg.data))
+        const msg: ScreenMessage = JSON.parse(event.data)
+        if (msg.type === 'screen') {
+          setScreenContent(msg.data)
         } else if (msg.type === 'error') {
           setWsError(msg.data)
         } else if (msg.type === 'status') {
-          setLogLines((prev) => appendLine(prev, `[${msg.type}] ${msg.data}`))
+          // Show status messages briefly in screen content
+          setScreenContent((prev) => prev || `[${msg.type}] ${msg.data}`)
         }
-        // Ignore 'ping' messages
       } catch (e) {
         console.error('Failed to parse WebSocket message:', e)
       }
@@ -207,13 +212,6 @@ const ClaudeSessions = () => {
     }
   }, [selectedSession])
 
-  // Auto-scroll logs to bottom
-  useEffect(() => {
-    if (logsAutoScroll && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [logLines, logsAutoScroll])
-
   // Persist allowed tools to localStorage
   useEffect(() => {
     localStorage.setItem(ALLOWED_TOOLS_STORAGE_KEY, JSON.stringify(allowedTools))
@@ -224,10 +222,14 @@ const ClaudeSessions = () => {
     localStorage.setItem(CUSTOM_ENV_STORAGE_KEY, customEnvText)
   }, [customEnvText])
 
-  // Persist github token to localStorage
+  // Persist github tokens to localStorage
   useEffect(() => {
     localStorage.setItem(GITHUB_TOKEN_STORAGE_KEY, githubToken)
   }, [githubToken])
+
+  useEffect(() => {
+    localStorage.setItem(GITHUB_TOKEN_WRITE_STORAGE_KEY, githubTokenWrite)
+  }, [githubTokenWrite])
 
   // Parse KEY=VALUE text into Record<string, string>
   const parseEnvText = (text: string): Record<string, string> => {
@@ -291,9 +293,11 @@ const ClaudeSessions = () => {
         snapshot_id: selectedSnapshotId,
         repo_url: selectedRepoUrl || undefined,
         github_token: githubToken || undefined,
+        github_token_write: githubTokenWrite || undefined,
         use_happy: useHappy || undefined,
         allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
         custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
+        initial_prompt: initialPrompt || undefined,
       })
       await loadSessions()
       setSelectedSession(newSession)
@@ -301,6 +305,7 @@ const ClaudeSessions = () => {
       // Reset form
       setSelectedRepoUrl('')
       setUseHappy(false)
+      setInitialPrompt('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to spawn session')
     } finally {
@@ -312,6 +317,19 @@ const ClaudeSessions = () => {
     setSelectedSession(null)
     setAttachInfo(null)
     setShowNewSession(true)
+  }
+
+  const handleSendInput = () => {
+    if (!terminalInput || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return
+    }
+    // Send input with newline (Enter key)
+    const payload = JSON.stringify({
+      type: 'input',
+      keys: terminalInput + '\n'
+    })
+    wsRef.current.send(payload)
+    setTerminalInput('')
   }
 
   // Render helpers
@@ -501,6 +519,21 @@ const ClaudeSessions = () => {
                     </p>
                   </div>
 
+                  {/* GitHub Token Write */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">GitHub Write Token (optional)</label>
+                    <input
+                      type="password"
+                      value={githubTokenWrite}
+                      onChange={(e) => setGithubTokenWrite(e.target.value)}
+                      placeholder="ghp_... or secret name"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Write token for differ (push, PR creation). Cached in localStorage.
+                    </p>
+                  </div>
+
                   {/* Happy toggle - only show if snapshot has Happy config */}
                   {selectedSnapshotHasHappy() && (
                     <div className="flex items-center gap-3">
@@ -556,6 +589,23 @@ const ClaudeSessions = () => {
                       rows={3}
                       className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
+                  </div>
+
+                  {/* Initial Prompt */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Initial Prompt (optional)
+                    </label>
+                    <textarea
+                      value={initialPrompt}
+                      onChange={(e) => setInitialPrompt(e.target.value)}
+                      placeholder="Start Claude with this prompt..."
+                      rows={3}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      If provided, Claude will start processing this prompt immediately.
+                    </p>
                   </div>
 
                   {/* Actions */}
@@ -635,11 +685,11 @@ const ClaudeSessions = () => {
                 </details>
               )}
 
-              {/* Live logs */}
+              {/* Terminal screen */}
               <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center mb-2">
                   <div className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                    <span>Live Output</span>
+                    <span>Terminal</span>
                     {wsConnected ? (
                       <span className="flex items-center gap-1 text-xs text-green-600">
                         <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -655,28 +705,41 @@ const ClaudeSessions = () => {
                       </span>
                     )}
                   </div>
-                  <label className="flex items-center gap-2 text-xs text-slate-500">
-                    <input
-                      type="checkbox"
-                      checked={logsAutoScroll}
-                      onChange={(e) => setLogsAutoScroll(e.target.checked)}
-                      className="w-3 h-3"
-                    />
-                    Auto-scroll
-                  </label>
                 </div>
                 <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden flex flex-col min-h-[400px]">
-                  <div className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-                    {logLines.length > 0 ? (
-                      <pre className="text-slate-300 whitespace-pre-wrap break-words">
-                        {logLines.join('\n')}
+                  <div className="flex-1 overflow-auto p-4 font-mono text-sm">
+                    {screenContent ? (
+                      <pre className="text-slate-300 whitespace-pre">
+                        {screenContent}
                       </pre>
                     ) : (
                       <div className="text-slate-500 italic">
-                        {wsConnected ? 'Waiting for output...' : 'Connecting to session...'}
+                        {wsConnected ? 'Waiting for screen capture...' : 'Connecting to session...'}
                       </div>
                     )}
-                    <div ref={logsEndRef} />
+                  </div>
+                  {/* Terminal input */}
+                  <div className="border-t border-slate-700 p-2 flex gap-2">
+                    <input
+                      type="text"
+                      value={terminalInput}
+                      onChange={(e) => setTerminalInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleSendInput()
+                        }
+                      }}
+                      placeholder={wsConnected ? 'Type command and press Enter...' : 'Connecting...'}
+                      disabled={!wsConnected}
+                      className="flex-1 bg-slate-800 text-slate-200 px-3 py-2 rounded text-sm font-mono border border-slate-600 focus:border-primary focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                    <button
+                      onClick={handleSendInput}
+                      disabled={!wsConnected || !terminalInput}
+                      className="bg-primary text-white px-4 py-2 rounded text-sm font-medium hover:bg-primary/90 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                    >
+                      Send
+                    </button>
                   </div>
                 </div>
               </div>
