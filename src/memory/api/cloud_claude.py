@@ -13,7 +13,6 @@ import asyncio
 import logging
 import re
 import secrets
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -24,18 +23,23 @@ from fastapi import (
     WebSocketDisconnect,
     Query,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, get_user_from_token
 from memory.api.orchestrator_client import (
-    OrchestratorClient,
     OrchestratorError,
     get_orchestrator_client,
 )
+from memory.api.tmux_session import (
+    input_handler_loop,
+    screen_capture_loop,
+    send_ws_json,
+)
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models import ClaudeConfigSnapshot, User
+from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
+from memory.api.claude_environments import mark_environment_used
 from memory.common.db.models.secrets import extract as extract_secret
 
 # Log directory on host where orchestrator writes session logs
@@ -63,9 +67,24 @@ RESERVED_ENV_VARS = {
 }
 
 
-def make_session_id(user_id: int) -> str:
-    """Generate a session ID that includes user ownership."""
-    return f"u{user_id}-{secrets.token_hex(6)}"
+def make_session_id(
+    user_id: int,
+    *,
+    environment_id: int | None = None,
+    snapshot_id: int | None = None,
+) -> str:
+    """Generate a session ID that includes user ownership and source info.
+
+    Format: u{user_id}-{source}-{random_hex}
+    Where source is e{env_id} for environments or s{snap_id} for snapshots.
+    """
+    if environment_id is not None:
+        source = f"e{environment_id}"
+    elif snapshot_id is not None:
+        source = f"s{snapshot_id}"
+    else:
+        source = "x"  # Unknown source (shouldn't happen)
+    return f"u{user_id}-{source}-{secrets.token_hex(6)}"
 
 
 def get_user_id_from_session(session_id: str) -> int | None:
@@ -79,6 +98,17 @@ def get_user_id_from_session(session_id: str) -> int | None:
         return None
 
 
+def get_environment_id_from_session(session_id: str) -> int | None:
+    """Extract environment ID from session ID, or None if not an environment session."""
+    try:
+        parts = session_id.split("-")
+        if len(parts) >= 2 and parts[1].startswith("e"):
+            return int(parts[1][1:])  # Remove 'e' prefix
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
 def user_owns_session(user: User, session_id: str) -> bool:
     """Check if a session belongs to a user."""
     owner_id = get_user_id_from_session(session_id)
@@ -86,9 +116,15 @@ def user_owns_session(user: User, session_id: str) -> bool:
 
 
 class SpawnRequest(BaseModel):
-    """Request to spawn a new Claude Code session."""
+    """Request to spawn a new Claude Code session.
 
-    snapshot_id: int
+    Must provide either snapshot_id OR environment_id (mutually exclusive).
+    - snapshot_id: Start fresh from a static snapshot (extracted each time)
+    - environment_id: Use persistent environment (Docker volume, state persists)
+    """
+
+    snapshot_id: int | None = None  # Static snapshot to extract
+    environment_id: int | None = None  # Persistent environment to use
     repo_url: str | None = None  # Git remote URL to set up in workspace
     github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
     github_token_write: str | None = None  # Write token for differ (push, PR creation)
@@ -99,6 +135,15 @@ class SpawnRequest(BaseModel):
     custom_env: dict[str, str] | None = None  # Custom environment variables
     initial_prompt: str | None = None  # Prompt to start Claude with immediately
 
+    @model_validator(mode="after")
+    def check_source_mutual_exclusivity(self) -> "SpawnRequest":
+        """Ensure exactly one of snapshot_id or environment_id is provided."""
+        if self.snapshot_id and self.environment_id:
+            raise ValueError("Cannot specify both snapshot_id and environment_id")
+        if not self.snapshot_id and not self.environment_id:
+            raise ValueError("Must specify either snapshot_id or environment_id")
+        return self
+
 
 class SessionInfo(BaseModel):
     """Info about a running Claude session."""
@@ -107,6 +152,7 @@ class SessionInfo(BaseModel):
     container_id: str | None = None
     container_name: str | None = None
     status: str | None = None
+    environment_id: int | None = None  # Extracted from session_id for filtering
 
 
 class OrchestratorStatus(BaseModel):
@@ -135,32 +181,62 @@ async def spawn_session(
 ) -> SessionInfo:
     """Spawn a new Claude Code container session.
 
+    Must provide either snapshot_id OR environment_id (mutually exclusive).
+
     Returns:
         SessionInfo with session_id that can be used to find/kill the container.
         The container_name will be `claude-{session_id}`.
     """
-    # Validate snapshot exists and belongs to user
-    snapshot = (
-        db.query(ClaudeConfigSnapshot)
-        .filter(
-            ClaudeConfigSnapshot.id == request.snapshot_id,
-            ClaudeConfigSnapshot.user_id == user.id,
+    # Note: mutual exclusivity of snapshot_id/environment_id is validated by
+    # SpawnRequest.check_source_mutual_exclusivity (returns 422 on violation)
+
+    # Variables for orchestrator call
+    host_snapshot_path: str | None = None
+    environment_volume: str | None = None
+    environment: ClaudeEnvironment | None = None
+
+    if request.snapshot_id:
+        # Static snapshot mode: extract fresh each time
+        snapshot = (
+            db.query(ClaudeConfigSnapshot)
+            .filter(
+                ClaudeConfigSnapshot.id == request.snapshot_id,
+                ClaudeConfigSnapshot.user_id == user.id,
+            )
+            .first()
         )
-        .first()
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Snapshot not found")
+
+        snapshot_path = settings.SNAPSHOT_STORAGE_DIR / snapshot.filename
+        if not snapshot_path.exists():
+            raise HTTPException(status_code=500, detail="Snapshot file not found")
+
+        # Orchestrator runs on host, needs host path (not container path)
+        # Container: /app/memory_files/... -> Host: <HOST_STORAGE_DIR>/...
+        relative_path = snapshot_path.relative_to(settings.FILE_STORAGE_DIR)
+        host_snapshot_path = str(settings.HOST_STORAGE_DIR / relative_path)
+
+    else:
+        # Environment mode: use persistent Docker volume
+        environment = (
+            db.query(ClaudeEnvironment)
+            .filter(
+                ClaudeEnvironment.id == request.environment_id,
+                ClaudeEnvironment.user_id == user.id,
+            )
+            .first()
+        )
+        if not environment:
+            raise HTTPException(status_code=404, detail="Environment not found")
+
+        environment_volume = environment.volume_name
+
+    session_id = make_session_id(
+        user.id,
+        environment_id=request.environment_id,
+        snapshot_id=request.snapshot_id,
     )
-    if not snapshot:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-
-    snapshot_path = settings.SNAPSHOT_STORAGE_DIR / snapshot.filename
-    if not snapshot_path.exists():
-        raise HTTPException(status_code=500, detail="Snapshot file not found")
-
-    # Orchestrator runs on host, needs host path (not container path)
-    # Container: /app/memory_files/... -> Host: <HOST_STORAGE_DIR>/...
-    relative_path = snapshot_path.relative_to(settings.FILE_STORAGE_DIR)
-    host_snapshot_path = settings.HOST_STORAGE_DIR / relative_path
-
-    session_id = make_session_id(user.id)
     client = get_orchestrator_client()
 
     # Use Happy image and executable if requested
@@ -218,7 +294,8 @@ async def spawn_session(
     try:
         result = await client.create_session(
             session_id=session_id,
-            snapshot_path=str(host_snapshot_path),
+            snapshot_path=host_snapshot_path,
+            environment_volume=environment_volume,
             memory_stack=settings.MEMORY_STACK,
             ssh_private_key=user.ssh_private_key,
             github_token=github_token,
@@ -231,11 +308,16 @@ async def spawn_session(
         logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
+    # Update environment usage stats if using an environment
+    if environment:
+        mark_environment_used(environment, db)
+
     return SessionInfo(
         session_id=result.session_id,
         container_id=result.container_id,
         container_name=result.container_name,
         status=result.status,
+        environment_id=request.environment_id,
     )
 
 
@@ -252,13 +334,14 @@ async def list_sessions(
         logger.error(f"Failed to list sessions: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
-    # Filter to only sessions owned by this user
+    # Filter to only sessions owned by this user, extract environment_id from session_id
     return [
         SessionInfo(
             session_id=s.session_id,
             container_id=s.container_id,
             container_name=s.container_name,
             status=s.status,
+            environment_id=get_environment_id_from_session(s.session_id),
         )
         for s in sessions
         if user_owns_session(user, s.session_id)
@@ -291,6 +374,7 @@ async def get_session_info(
         container_id=session.container_id,
         container_name=session.container_name,
         status=session.status,
+        environment_id=get_environment_id_from_session(session.session_id),
     )
 
 
@@ -389,115 +473,17 @@ async def get_session_logs(
 
 
 def is_valid_session_id(session_id: str) -> bool:
-    """Validate session_id format (defense in depth - should be u{id}-{hex})."""
-    return bool(re.match(r"^u\d+-[a-fA-F0-9]+$", session_id))
+    """Validate session_id format (defense in depth).
 
-
-async def send_ws_json(
-    websocket: WebSocket, msg_type: str, data: str | None = None
-) -> None:
-    """Send a JSON message with timestamp over WebSocket."""
-    msg = {"type": msg_type, "timestamp": datetime.now(timezone.utc).isoformat()}
-    if data is not None:
-        msg["data"] = data
-    await websocket.send_json(msg)
-
-
-# Screen capture loop backoff constants
-SCREEN_BACKOFF_UNCHANGED_THRESHOLD = 4  # Start slowing after this many unchanged polls
-SCREEN_BACKOFF_MULTIPLIER = 1.5  # Multiply interval by this on each idle poll
-
-
-async def screen_capture_loop(
-    websocket: WebSocket,
-    session_id: str,
-    client: "OrchestratorClient",
-    base_interval: float = 0.5,
-    max_interval: float = 2.0,
-) -> None:
-    """Stream tmux screen captures to WebSocket until container exits.
-
-    Uses adaptive backoff: polls faster when screen is changing, slower when idle.
-    This reduces server load during long-running commands while maintaining
-    responsiveness during interactive use.
+    Formats:
+    - Legacy: u{user_id}-{hex} (backward compat for old sessions)
+    - New: u{user_id}-{source}-{hex} where source is:
+      - e{env_id} for environment-based sessions
+      - s{snap_id} for snapshot-based sessions
+      - x for sessions without snapshot/environment
     """
-    last_screen = ""
-    consecutive_errors = 0
-    max_errors = 5
-    consecutive_unchanged = 0
-    interval = base_interval
-
-    while True:
-        try:
-            result = await client.capture_screen(session_id)
-        except OrchestratorError as e:
-            await send_ws_json(websocket, "error", str(e))
-            break
-
-        status = result["status"]
-
-        if status == "ok":
-            consecutive_errors = 0
-            screen = result["screen"]
-            # Only send if screen changed (avoid noise)
-            if screen and screen != last_screen:
-                await send_ws_json(websocket, "screen", screen)
-                last_screen = screen
-                # Reset to fast polling when content changes
-                consecutive_unchanged = 0
-                interval = base_interval
-            else:
-                # Adaptive backoff: slow down polling when screen is idle
-                consecutive_unchanged += 1
-                if consecutive_unchanged >= SCREEN_BACKOFF_UNCHANGED_THRESHOLD:
-                    interval = min(interval * SCREEN_BACKOFF_MULTIPLIER, max_interval)
-        elif status in ("not_found", "not_running"):
-            await send_ws_json(websocket, "status", "Container exited")
-            break
-        elif status == "tmux_not_ready":
-            # Tmux may not be ready yet, wait and retry
-            consecutive_errors += 1
-            if consecutive_errors >= max_errors:
-                await send_ws_json(websocket, "status", "Tmux session not available")
-                break
-        else:
-            # Generic error
-            await send_ws_json(websocket, "error", result.get("error", "Unknown error"))
-            consecutive_errors += 1
-            if consecutive_errors >= max_errors:
-                break
-
-        await asyncio.sleep(interval)
-
-
-async def input_handler_loop(
-    websocket: WebSocket,
-    session_id: str,
-    client: "OrchestratorClient",
-) -> None:
-    """Receive input from WebSocket and send to tmux session."""
-    while True:
-        try:
-            message = await websocket.receive_json()
-        except Exception as e:
-            # Connection closed or error - log the exception type for debugging
-            logger.debug(f"WebSocket receive ended for {session_id}: {type(e).__name__}")
-            break
-
-        logger.debug(f"Received WebSocket message type: {message.get('type')}")
-        msg_type = message.get("type")
-        if msg_type == "input":
-            keys = message.get("keys", "")
-            if keys:
-                try:
-                    result = await client.send_keys(session_id, keys)
-                    logger.debug(f"send_keys result: {result.get('status')}")
-                    if result["status"] != "ok":
-                        await send_ws_json(
-                            websocket, "error", result.get("error", "Failed to send input")
-                        )
-                except OrchestratorError as e:
-                    await send_ws_json(websocket, "error", str(e))
+    # Matches: u123-abc123 (legacy) or u123-e456-abc123 or u123-s789-abc123 or u123-x-abc123
+    return bool(re.match(r"^u\d+-(e\d+-|s\d+-|x-)?[a-fA-F0-9]+$", session_id))
 
 
 @router.websocket("/{session_id}/logs/stream")
@@ -541,12 +527,20 @@ async def stream_session_logs(
     try:
         await send_ws_json(websocket, "status", f"Connected to {session_id}")
 
+        # Shared state for adaptive polling - input handler updates last_input_time
+        # and sets input_event to wake up the capture loop immediately
+        input_event = asyncio.Event()
+        activity_state = {
+            "last_input_time": 0.0,
+            "input_event": input_event,
+        }
+
         # Run screen capture and input handling concurrently
         screen_task = asyncio.create_task(
-            screen_capture_loop(websocket, session_id, client)
+            screen_capture_loop(websocket, session_id, client, activity_state)
         )
         input_task = asyncio.create_task(
-            input_handler_loop(websocket, session_id, client)
+            input_handler_loop(websocket, session_id, client, activity_state)
         )
 
         # Wait for either task to complete (usually screen_task on container exit,

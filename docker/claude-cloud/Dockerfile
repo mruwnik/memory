@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     tmux \
     openjdk-21-jdk-headless \
     rlwrap \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20.x
@@ -48,10 +49,12 @@ RUN groupadd -g 10000 workspace \
     && chown -R differ:workspace /workspace \
     && chmod 2775 /workspace
 
-# Install Claude Code CLI as claude user
+# Install Claude Code CLI to default location (/home/claude/.local)
+# For snapshot instances: snapshot captures full .local/ including auth state
+# For volume instances: entrypoint reinstalls if missing
 USER claude
-ENV PATH="/home/claude/.local/bin:${PATH}"
 RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/home/claude/.local/bin:${PATH}"
 
 # SSH known hosts for git
 RUN ssh-keyscan github.com gitlab.com bitbucket.org >> /home/claude/.ssh/known_hosts 2>/dev/null
@@ -63,20 +66,24 @@ RUN git config --global init.defaultBranch main
 # Owned by differ user - claude cannot read differ's database (contains GitHub token)
 # NOTE: Differ is cloned at build time. To update differ, you must rebuild the image.
 # The orchestrator detects Dockerfile changes and rebuilds automatically on restart.
+# Change DIFFER_VERSION to bust the cache and pull fresh code.
+ARG DIFFER_VERSION=2025-01-18-2
 USER root
 RUN mkdir -p /opt/differ && chown differ:differ /opt/differ
 
 USER differ
 WORKDIR /opt/differ
-RUN git clone --depth 1 https://github.com/mruwnik/differ.git . \
+RUN echo "Differ version: $DIFFER_VERSION" && git clone --depth 1 https://github.com/mruwnik/differ.git . \
     && npm install \
     && npm run build
 
 USER root
+RUN mkdir -p /var/log/claude && chown claude:workspace /var/log/claude
 WORKDIR /
 
 COPY docker/claude-cloud/entrypoint.sh /entrypoint.sh
-RUN chmod 755 /entrypoint.sh
+COPY docker/claude-cloud/verify-setup.sh /verify-setup.sh
+RUN chmod 755 /entrypoint.sh /verify-setup.sh
 
 # Entrypoint runs as root to switch between users
 WORKDIR /workspace

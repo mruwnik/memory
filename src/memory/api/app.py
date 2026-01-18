@@ -39,6 +39,7 @@ from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
 from memory.api.docker_logs import router as docker_logs_router
 from memory.api.claude_snapshots import router as claude_snapshots_router
+from memory.api.claude_environments import router as claude_environments_router
 from memory.api.cloud_claude import router as cloud_claude_router
 from memory.api.secrets import router as secrets_router
 from memory.api.users import router as users_router
@@ -213,6 +214,7 @@ app.include_router(source_items_router)
 app.include_router(sessions_router)
 app.include_router(docker_logs_router)
 app.include_router(claude_snapshots_router)
+app.include_router(claude_environments_router)
 app.include_router(cloud_claude_router)
 app.include_router(secrets_router)
 app.include_router(users_router)

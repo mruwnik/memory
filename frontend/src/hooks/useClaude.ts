@@ -34,6 +34,7 @@ export interface ClaudeSession {
   container_id: string | null
   container_name: string | null
   status: string | null
+  environment_id: number | null
 }
 
 export interface Snapshot {
@@ -46,6 +47,28 @@ export interface Snapshot {
   filename: string
   size: number
   created_at: string | null
+}
+
+export interface Environment {
+  id: number
+  name: string
+  volume_name: string
+  description: string | null
+  initialized_from_snapshot_id: number | null
+  size_bytes: number | null
+  last_used_at: string | null
+  created_at: string | null
+  session_count: number
+}
+
+export interface CreateEnvironmentRequest {
+  name: string
+  description?: string
+  snapshot_id?: number // Optional: initialize from this snapshot
+}
+
+export interface ResetEnvironmentRequest {
+  snapshot_id?: number // Optional: reinitialize from this snapshot
 }
 
 export interface AttachInfo {
@@ -61,7 +84,8 @@ export interface OrchestratorStatus {
 }
 
 export interface SpawnRequest {
-  snapshot_id: number
+  snapshot_id?: number // Static snapshot (mutually exclusive with environment_id)
+  environment_id?: number // Persistent environment (mutually exclusive with snapshot_id)
   repo_url?: string
   github_token?: string
   github_token_write?: string
@@ -166,15 +190,75 @@ export const useClaude = () => {
     [apiCall]
   )
 
+  // Environments (persistent Docker volumes)
+  const listEnvironments = useCallback(async (): Promise<Environment[]> => {
+    const response = await apiCall('/claude/environments/list')
+    if (!response.ok) throw new Error('Failed to list environments')
+    return response.json()
+  }, [apiCall])
+
+  const getEnvironment = useCallback(async (envId: number): Promise<Environment> => {
+    const response = await apiCall(`/claude/environments/${envId}`)
+    if (!response.ok) throw new Error('Failed to get environment')
+    return response.json()
+  }, [apiCall])
+
+  const createEnvironment = useCallback(
+    async (request: CreateEnvironmentRequest): Promise<Environment> => {
+      const response = await apiCall('/claude/environments/create', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to create environment')
+      }
+      return response.json()
+    },
+    [apiCall]
+  )
+
+  const deleteEnvironment = useCallback(async (envId: number): Promise<void> => {
+    const response = await apiCall(`/claude/environments/${envId}`, { method: 'DELETE' })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to delete environment')
+    }
+  }, [apiCall])
+
+  const resetEnvironment = useCallback(
+    async (envId: number, request: ResetEnvironmentRequest = {}): Promise<Environment> => {
+      const response = await apiCall(`/claude/environments/${envId}/reset`, {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to reset environment')
+      }
+      return response.json()
+    },
+    [apiCall]
+  )
+
   return {
+    // Sessions
     listSessions,
     getSession,
     spawnSession,
     killSession,
     getAttachInfo,
     getOrchestratorStatus,
-    listSnapshots,
-    listUserRepos,
     getSessionLogs,
+    // Snapshots
+    listSnapshots,
+    // Environments
+    listEnvironments,
+    getEnvironment,
+    createEnvironment,
+    deleteEnvironment,
+    resetEnvironment,
+    // Repos
+    listUserRepos,
   }
 }

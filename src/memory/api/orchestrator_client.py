@@ -38,6 +38,7 @@ class SessionInfo:
     status: str | None = None
     memory_stack: str | None = None
     network: str | None = None
+    environment_id: int | None = None  # Tracks which environment this session uses
 
 
 class OrchestratorClient:
@@ -126,10 +127,16 @@ class OrchestratorClient:
         github_token: str | None = None,
         github_token_write: str | None = None,
         snapshot_path: str | None = None,
+        environment_volume: str | None = None,
     ) -> SessionInfo:
         """Create a new Claude session container.
 
         Note: SYSTEM_ID and other custom env vars should be passed via the `env` dict.
+
+        Args:
+            environment_volume: If set, mounts this Docker volume at /home/claude
+                               instead of extracting snapshot. Mutually exclusive
+                               with snapshot_path.
         """
         response = await self._call(
             "create",
@@ -142,6 +149,7 @@ class OrchestratorClient:
             github_token=github_token,
             github_token_write=github_token_write,
             snapshot_path=snapshot_path,
+            environment_volume=environment_volume,
         )
 
         if response.get("status") == "error":
@@ -222,37 +230,123 @@ class OrchestratorClient:
             "logs": response.get("logs", ""),
         }
 
-    async def capture_screen(self, session_id: str) -> dict[str, str]:
+    async def capture_screen(self, session_id: str) -> dict[str, str | int]:
         """Capture current tmux screen content for a session.
 
         Returns:
             Dict with keys:
             - status: "ok" | "not_found" | "not_running" | "tmux_not_ready" | "error"
             - screen: Terminal content (only if status == "ok")
+            - cols: Terminal width (only if status == "ok")
+            - rows: Terminal height (only if status == "ok")
             - error: Error message (if status != "ok")
         """
         response = await self._call("capture_screen", session_id=session_id)
-        return {
+        logger.debug(f"capture_screen response keys: {list(response.keys())}, cols={response.get('cols')}, rows={response.get('rows')}")
+        result: dict[str, str | int] = {
             "status": response.get("status", "error"),
             "screen": response.get("screen", ""),
             "error": response.get("error", ""),
         }
+        # Include terminal dimensions if provided
+        if "cols" in response:
+            result["cols"] = response["cols"]
+        if "rows" in response:
+            result["rows"] = response["rows"]
+        logger.debug(f"capture_screen returning: cols={result.get('cols')}, rows={result.get('rows')}")
+        return result
 
-    async def send_keys(self, session_id: str, keys: str) -> dict[str, str]:
+    async def send_keys(
+        self, session_id: str, keys: str, literal: bool = True
+    ) -> dict[str, str]:
         """Send keystrokes to a tmux session.
 
         Args:
             session_id: The session to send keys to
             keys: The keys to send (passed to tmux send-keys)
+            literal: If True, send as literal text. If False, send as tmux key name.
 
         Returns:
             Dict with status: "ok" | "not_found" | "not_running" | "error"
         """
-        response = await self._call("send_keys", session_id=session_id, keys=keys)
+        response = await self._call(
+            "send_keys", session_id=session_id, keys=keys, literal=literal
+        )
         return {
             "status": response.get("status", "error"),
             "error": response.get("error", ""),
         }
+
+    async def resize_terminal(
+        self, session_id: str, cols: int, rows: int
+    ) -> dict[str, str]:
+        """Resize the tmux terminal for a session.
+
+        Args:
+            session_id: The session to resize
+            cols: Number of columns
+            rows: Number of rows
+
+        Returns:
+            Dict with status: "ok" | "not_found" | "not_running" | "error"
+        """
+        response = await self._call(
+            "resize_terminal", session_id=session_id, cols=cols, rows=rows
+        )
+        return {
+            "status": response.get("status", "error"),
+            "error": response.get("error", ""),
+        }
+
+    # -------------------------------------------------------------------------
+    # Environment Volume Management
+    # -------------------------------------------------------------------------
+
+    async def create_environment_volume(self, volume_name: str) -> dict[str, Any]:
+        """Create a Docker named volume for a persistent environment.
+
+        Returns:
+            Dict with status: "created" | "error"
+        """
+        return await self._call("create_environment_volume", volume_name=volume_name)
+
+    async def delete_environment_volume(self, volume_name: str) -> dict[str, Any]:
+        """Delete an environment volume.
+
+        Returns:
+            Dict with status: "deleted" | "not_found" | "error"
+        """
+        return await self._call("delete_environment_volume", volume_name=volume_name)
+
+    async def initialize_environment(
+        self, volume_name: str, snapshot_path: str
+    ) -> dict[str, Any]:
+        """Create a volume and initialize it from a snapshot.
+
+        Returns:
+            Dict with status: "initialized" | "error"
+        """
+        return await self._call(
+            "initialize_environment",
+            volume_name=volume_name,
+            snapshot_path=snapshot_path,
+        )
+
+    async def reset_environment_volume(
+        self, volume_name: str, snapshot_path: str | None = None
+    ) -> dict[str, Any]:
+        """Reset an environment volume by deleting and recreating it.
+
+        If snapshot_path is provided, reinitializes from that snapshot.
+
+        Returns:
+            Dict with status: "created" | "initialized" | "error"
+        """
+        return await self._call(
+            "reset_environment_volume",
+            volume_name=volume_name,
+            snapshot_path=snapshot_path,
+        )
 
 
 # Singleton client instance

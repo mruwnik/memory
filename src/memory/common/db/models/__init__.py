@@ -132,6 +132,8 @@ from memory.common.db.models.polls import (
 from memory.common.db.models.claude_config import (
     ClaudeConfigSnapshot,
     ClaudeConfigSnapshotPayload,
+    ClaudeEnvironment,
+    ClaudeEnvironmentPayload,
 )
 
 Payload = (
@@ -251,6 +253,9 @@ __all__ = [
     # Claude Config Snapshots
     "ClaudeConfigSnapshot",
     "ClaudeConfigSnapshotPayload",
+    # Claude Environments
+    "ClaudeEnvironment",
+    "ClaudeEnvironmentPayload",
     # SSH key generation
     "generate_ssh_keypair",
     # Secrets

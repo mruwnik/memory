@@ -74,8 +74,8 @@ const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
                         </Link>
 
                         <Link to="/ui/snapshots" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Snapshots</h3>
-                            <p className="text-gray-600 text-base">Manage Claude Code config snapshots</p>
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Configurations</h3>
+                            <p className="text-gray-600 text-base">Manage Claude Code configurations</p>
                         </Link>
                     </div>
                 </section>

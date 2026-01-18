@@ -22,9 +22,89 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import hashlib
+import re
+import time
 
 import docker
 from docker.errors import APIError, ImageNotFound, NotFound
+
+
+# Docker volume name validation pattern
+# Docker volume names: [a-zA-Z0-9][a-zA-Z0-9_.-]* and max 255 chars
+VOLUME_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+VOLUME_NAME_MAX_LENGTH = 255
+
+# Allowed base directories for snapshot paths (defense-in-depth)
+# The orchestrator runs on the host, so these are host paths
+ALLOWED_SNAPSHOT_DIRS = [
+    Path("/home/ec2-user/memory/memory_files/snapshots"),
+    Path("/home/ec2-user/chris/memory_files/snapshots"),
+    Path(
+        "/app/memory_files/snapshots"
+    ),  # Docker path (shouldn't be used but just in case)
+]
+
+
+def validate_snapshot_path(path: str) -> tuple[bool, str]:
+    """Validate a snapshot path for security.
+
+    Checks that:
+    1. Path exists and is a regular file
+    2. Path is within allowed directories (no path traversal)
+    3. Path has expected extension
+
+    Returns:
+        Tuple of (is_valid, error_message). error_message is empty if valid.
+    """
+    if not path:
+        return False, "Snapshot path cannot be empty"
+
+    snapshot_path = Path(path)
+
+    # Check file exists
+    if not snapshot_path.exists():
+        return False, f"Snapshot file does not exist: {path}"
+
+    # Check it's a regular file (not symlink, device, directory, etc.)
+    if not snapshot_path.is_file():
+        return False, f"Snapshot path is not a regular file: {path}"
+
+    # Resolve to absolute path to detect path traversal
+    resolved = snapshot_path.resolve()
+
+    # Check path is within allowed directories
+    in_allowed_dir = any(
+        resolved.is_relative_to(allowed_dir)
+        for allowed_dir in ALLOWED_SNAPSHOT_DIRS
+        if allowed_dir.exists()
+    )
+    if not in_allowed_dir:
+        return False, f"Snapshot path not in allowed directory: {path}"
+
+    # Check extension (should be .tar.gz or .tgz)
+    if not (path.endswith(".tar.gz") or path.endswith(".tgz")):
+        return False, f"Snapshot must be a .tar.gz or .tgz file: {path}"
+
+    return True, ""
+
+
+def validate_volume_name(name: str) -> tuple[bool, str]:
+    """Validate a Docker volume name.
+
+    Returns:
+        Tuple of (is_valid, error_message). error_message is empty if valid.
+    """
+    if not name:
+        return False, "Volume name cannot be empty"
+    if len(name) > VOLUME_NAME_MAX_LENGTH:
+        return False, f"Volume name exceeds {VOLUME_NAME_MAX_LENGTH} characters"
+    if not VOLUME_NAME_PATTERN.match(name):
+        return (
+            False,
+            "Volume name must start with alphanumeric and contain only alphanumeric, underscore, dot, or dash",
+        )
+    return True, ""
+
 
 # Configuration
 SOCKET_PATH = Path(
@@ -38,7 +118,11 @@ LOG_DIR = Path(os.environ.get("CLAUDE_LOG_DIR", "/var/log/claude-sessions"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Tmux session name used inside containers (must match entrypoint.sh)
+# IMPORTANT: Must be alphanumeric/underscore/dash only - used in shell scripts
 TMUX_SESSION_NAME = "claude"
+assert re.match(r"^[a-zA-Z0-9_-]+$", TMUX_SESSION_NAME), (
+    f"TMUX_SESSION_NAME must be alphanumeric/underscore/dash only: {TMUX_SESSION_NAME}"
+)
 
 
 IMAGES = {
@@ -87,6 +171,9 @@ class SessionConfig:
     github_token_write: str | None = None  # Write token for differ (push, PR creation)
     claude_prompt: str | None = None
     snapshot_path: str | None = None
+    # Environment volume (for persistent environments)
+    # If set, mounts this Docker volume at /home/claude instead of extracting snapshot
+    environment_volume: str | None = None
 
 
 class Orchestrator:
@@ -218,7 +305,17 @@ class Orchestrator:
 
             # Build volume mounts
             volumes = {}
-            if config.snapshot_path:
+
+            # Environment volume OR snapshot (mutually exclusive)
+            if config.environment_volume:
+                # Mount persistent environment volume at /home/claude
+                # This is a named volume, not a bind mount
+                volumes[config.environment_volume] = {
+                    "bind": "/home/claude",
+                    "mode": "rw",
+                }
+            elif config.snapshot_path:
+                # Mount snapshot for extraction (existing behavior)
                 volumes[config.snapshot_path] = {
                     "bind": "/snapshot/snapshot.tar.gz",
                     "mode": "ro",
@@ -384,22 +481,63 @@ class Orchestrator:
                 }
 
             # Run tmux capture-pane inside the container (as claude user who owns the session)
+            # Use -e to preserve ANSI escape sequences for terminal rendering
             exit_code, output = container.exec_run(
-                ["tmux", "capture-pane", "-t", TMUX_SESSION_NAME, "-p"],
+                ["tmux", "capture-pane", "-t", TMUX_SESSION_NAME, "-p", "-e"],
                 demux=False,
                 user="claude",
             )
 
             if exit_code == 0:
+                # Also get tmux window dimensions
+                cols, rows = 80, 24  # defaults
+                try:
+                    size_exit, size_output = container.exec_run(
+                        [
+                            "tmux",
+                            "display-message",
+                            "-t",
+                            TMUX_SESSION_NAME,
+                            "-p",
+                            "#{window_width} #{window_height}",
+                        ],
+                        demux=False,
+                        user="claude",
+                    )
+                    logger.debug(
+                        f"tmux size query: exit={size_exit}, output={size_output!r}"
+                    )
+                    if size_exit == 0:
+                        parts = size_output.decode().strip().split()
+                        if len(parts) == 2:
+                            cols, rows = int(parts[0]), int(parts[1])
+                            logger.debug(f"Parsed tmux size: cols={cols}, rows={rows}")
+                except Exception as e:
+                    logger.debug(f"Failed to get tmux size: {e}")
+
+                logger.info(f"capture_screen returning cols={cols}, rows={rows}")
                 return {
                     "session_id": session_id,
                     "status": "ok",
                     "screen": output.decode("utf-8", errors="replace"),
+                    "cols": cols,
+                    "rows": rows,
                 }
             else:
                 error_msg = output.decode("utf-8", errors="replace").strip()
                 # Distinguish tmux not ready from other errors
-                if "no server running" in error_msg or "session not found" in error_msg:
+                # Various tmux error messages when session/server doesn't exist yet:
+                # - "no server running on /tmp/tmux-..."
+                # - "session not found: claude"
+                # - "error connecting to /tmp/tmux-10000/default (No such file or directory)"
+                error_lower = error_msg.lower()
+                tmux_not_ready = (
+                    "no server running" in error_lower
+                    or "session not found" in error_lower
+                    or "error connecting to" in error_lower
+                    or "no such file or directory" in error_lower
+                )
+                if tmux_not_ready:
                     return {
                         "session_id": session_id,
                         "status": "tmux_not_ready",
@@ -418,15 +556,16 @@ class Orchestrator:
                 "error": "Container not found",
             }
 
-    def send_keys(self, session_id: str, keys: str) -> dict[str, Any]:
+    def send_keys(
+        self, session_id: str, keys: str, literal: bool = True
+    ) -> dict[str, Any]:
         """Send keystrokes to a tmux session.
 
-        Supports special key sequences:
-        - Regular text is sent literally (using tmux send-keys -l)
-        - If keys ends with literal newline char (\\n), the text before it is sent
-          literally, then Enter key is sent separately
-        - Special sequences (sent as tmux key names, not literal):
-          ^C (Ctrl+C), ^D (Ctrl+D), ^Z (Ctrl+Z), ^L (Ctrl+L), ^\\ (Ctrl+\\)
+        Args:
+            session_id: The session identifier
+            keys: The keys to send - either literal text or tmux key names
+            literal: If True, send as literal text (using -l flag).
+                     If False, send as tmux key names (e.g., "C-c", "Enter", "Up")
         """
         container_name = f"claude-{session_id}"
         try:
@@ -438,58 +577,18 @@ class Orchestrator:
                     "error": f"Container status: {container.status}",
                 }
 
-            # Map of special key sequences to tmux key names
-            # These are sent as tmux key names (without -l flag)
-            special_keys = {
-                "^C": "C-c",  # Ctrl+C (interrupt)
-                "^D": "C-d",  # Ctrl+D (EOF)
-                "^Z": "C-z",  # Ctrl+Z (suspend)
-                "^L": "C-l",  # Ctrl+L (clear)
-                "^\\": "C-\\",  # Ctrl+\ (quit)
-            }
-
-            # Check if this is a special key sequence
-            if keys in special_keys:
-                exit_code, output = container.exec_run(
-                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, special_keys[keys]],
-                    demux=False,
-                    user="claude",
-                )
-            # Send keys to tmux - use -l for literal text, then send Enter separately
-            # This ensures special key names like "Enter" are interpreted correctly
-            # Run as claude user who owns the tmux session
-            elif keys.endswith("\n"):
-                text = keys[:-1]
-                if text:
-                    # Send text literally (no key name interpretation)
-                    exit_code, output = container.exec_run(
-                        ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", text],
-                        demux=False,
-                        user="claude",
-                    )
-                    if exit_code != 0:
-                        error_msg = output.decode("utf-8", errors="replace").strip()
-                        logger.warning(
-                            f"send_keys text failed for {session_id}: {error_msg}"
-                        )
-                        return {
-                            "session_id": session_id,
-                            "status": "error",
-                            "error": error_msg,
-                        }
-                # Send Enter key (interpreted as key name)
-                exit_code, output = container.exec_run(
-                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "Enter"],
-                    demux=False,
-                    user="claude",
-                )
+            # Build tmux command based on literal flag
+            # Use debug level to avoid logging sensitive keystrokes (passwords, etc.)
+            logger.debug(f"send_keys: keys={keys!r}, literal={literal}")
+            if literal:
+                # Send as literal text (no key name interpretation)
+                cmd = ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", keys]
             else:
-                # No newline, just send as literal text
-                exit_code, output = container.exec_run(
-                    ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", keys],
-                    demux=False,
-                    user="claude",
-                )
+                # Send as tmux key name (e.g., "C-c", "Enter", "Up")
+                cmd = ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, keys]
+            logger.debug(f"send_keys: cmd={cmd}")
+
+            exit_code, output = container.exec_run(cmd, demux=False, user="claude")
 
             if exit_code == 0:
                 return {"session_id": session_id, "status": "ok"}
@@ -506,6 +605,197 @@ class Orchestrator:
                 "status": "not_found",
                 "error": "Container not found",
             }
+
+    def resize_terminal(self, session_id: str, cols: int, rows: int) -> dict[str, Any]:
+        """Resize the tmux terminal for a session.
+
+        Args:
+            session_id: The session identifier
+            cols: Number of columns
+            rows: Number of rows
+        """
+        container_name = f"claude-{session_id}"
+        try:
+            container = self.docker.containers.get(container_name)
+            if container.status != "running":
+                return {
+                    "session_id": session_id,
+                    "status": "not_running",
+                    "error": f"Container status: {container.status}",
+                }
+
+            # Resize tmux window to match terminal size
+            # Multiple approaches since tmux resize without attached client is tricky:
+            # 1. Set window-size to manual and aggressive-resize
+            # 2. Resize the window/pane
+            # 3. Set COLUMNS/LINES environment and send SIGWINCH
+            resize_script = f"""
+                # Enable aggressive resize and manual window sizing
+                tmux set-option -g aggressive-resize on 2>/dev/null || true
+                tmux set-option -t {TMUX_SESSION_NAME} window-size manual 2>/dev/null || true
+
+                # Try to resize the window and pane
+                tmux resize-window -t {TMUX_SESSION_NAME}:0 -x {cols} -y {rows} 2>/dev/null || true
+                tmux resize-pane -t {TMUX_SESSION_NAME}:0 -x {cols} -y {rows} 2>/dev/null || true
+
+                # Also try setting size via control mode (attach phantom client with size)
+                tmux set-option -t {TMUX_SESSION_NAME} default-size {cols}x{rows} 2>/dev/null || true
+
+                # Force refresh
+                tmux refresh-client -t {TMUX_SESSION_NAME} 2>/dev/null || true
+            """
+            exit_code, output = container.exec_run(
+                ["bash", "-c", resize_script],
+                demux=False,
+                user="claude",
+            )
+
+            # Don't fail hard on resize errors - it's not critical
+            return {"session_id": session_id, "status": "ok"}
+
+        except NotFound:
+            return {
+                "session_id": session_id,
+                "status": "not_found",
+                "error": "Container not found",
+            }
+
+    # -------------------------------------------------------------------------
+    # Environment Volume Management
+    # -------------------------------------------------------------------------
+
+    def create_environment_volume(self, volume_name: str) -> dict[str, Any]:
+        """Create a Docker named volume for a persistent environment.
+
+        Sets ownership to UID 10000 (claude user in the container).
+        """
+        # Validate volume name (defense-in-depth)
+        is_valid, error_msg = validate_volume_name(volume_name)
+        if not is_valid:
+            logger.warning(
+                f"Invalid volume name rejected: {volume_name!r} - {error_msg}"
+            )
+            return {"status": "error", "error": f"Invalid volume name: {error_msg}"}
+
+        try:
+            volume = self.docker.volumes.create(
+                name=volume_name,
+                labels={
+                    "managed-by": "claude-orchestrator",
+                    "type": "environment",
+                },
+            )
+            # Set ownership of the volume root to claude user (UID 10000)
+            # This is needed so the container can write to /home/claude
+            self.docker.containers.run(
+                "alpine:latest",
+                command=["chown", "10000:10000", "/home/claude"],
+                volumes={volume_name: {"bind": "/home/claude", "mode": "rw"}},
+                remove=True,
+                detach=False,
+            )
+            logger.info(f"Created environment volume: {volume_name}")
+            return {"status": "created", "volume_name": volume.name}
+        except APIError as e:
+            logger.error(f"Failed to create volume {volume_name}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def delete_environment_volume(self, volume_name: str) -> dict[str, Any]:
+        """Delete an environment volume."""
+        # Validate volume name (defense-in-depth)
+        is_valid, error_msg = validate_volume_name(volume_name)
+        if not is_valid:
+            logger.warning(
+                f"Invalid volume name rejected: {volume_name!r} - {error_msg}"
+            )
+            return {"status": "error", "error": f"Invalid volume name: {error_msg}"}
+
+        try:
+            volume = self.docker.volumes.get(volume_name)
+            volume.remove(force=True)
+            logger.info(f"Deleted environment volume: {volume_name}")
+            return {"status": "deleted", "volume_name": volume_name}
+        except NotFound:
+            logger.debug(f"Volume not found: {volume_name}")
+            return {"status": "not_found", "volume_name": volume_name}
+        except APIError as e:
+            logger.error(f"Failed to delete volume {volume_name}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def initialize_environment(
+        self, volume_name: str, snapshot_path: str
+    ) -> dict[str, Any]:
+        """Create a volume and initialize it from a snapshot.
+
+        Runs a one-shot container to extract the snapshot into the volume.
+        """
+        # Validate snapshot path (defense-in-depth)
+        is_valid, error_msg = validate_snapshot_path(snapshot_path)
+        if not is_valid:
+            logger.warning(
+                f"Invalid snapshot path rejected: {snapshot_path!r} - {error_msg}"
+            )
+            return {"status": "error", "error": f"Invalid snapshot path: {error_msg}"}
+
+        # First create the volume
+        create_result = self.create_environment_volume(volume_name)
+        if create_result.get("status") == "error":
+            return create_result
+
+        # Run a temporary container to extract snapshot
+        # Use --no-same-owner to set ownership during extraction (avoids slow chown -R)
+        # The numeric UID/GID 10000:10000 matches the claude user in the claude-cloud container
+        # Use timestamp suffix to avoid naming collisions if retried
+        # NOTE: Must use Ubuntu (not Alpine) because BusyBox tar lacks --owner/--group
+        init_container_name = f"init-{volume_name[:20]}-{int(time.time())}"
+        try:
+            self.docker.containers.run(
+                "ubuntu:24.04",
+                command=[
+                    "sh",
+                    "-c",
+                    # Extract with ownership set to claude user (10000:10000)
+                    # --no-same-owner ignores tarball UIDs, then we set owner during extraction
+                    # This is faster than extracting then running chown -R for large snapshots
+                    "tar --no-same-owner --owner=10000 --group=10000 -xzf /snapshot/snapshot.tar.gz -C /home/claude",
+                ],
+                name=init_container_name,
+                volumes={
+                    snapshot_path: {"bind": "/snapshot/snapshot.tar.gz", "mode": "ro"},
+                    volume_name: {"bind": "/home/claude", "mode": "rw"},
+                },
+                remove=True,  # Auto-remove after completion
+                detach=False,  # Wait for completion
+            )
+            logger.info(f"Initialized volume {volume_name} from {snapshot_path}")
+            return {"status": "initialized", "volume_name": volume_name}
+        except APIError as e:
+            logger.error(f"Failed to initialize volume {volume_name}: {e}")
+            # Clean up the volume we just created
+            self.delete_environment_volume(volume_name)
+            return {"status": "error", "error": str(e)}
+
+    def reset_environment_volume(
+        self, volume_name: str, snapshot_path: str | None = None
+    ) -> dict[str, Any]:
+        """Reset an environment volume by deleting and recreating it.
+
+        If snapshot_path is provided, reinitializes from that snapshot.
+        """
+        # Delete existing volume
+        delete_result = self.delete_environment_volume(volume_name)
+        if delete_result.get("status") == "error":
+            return delete_result
+
+        # Recreate (optionally with initialization)
+        if snapshot_path:
+            return self.initialize_environment(volume_name, snapshot_path)
+        else:
+            return self.create_environment_volume(volume_name)
+
+    # -------------------------------------------------------------------------
+    # Container Management
+    # -------------------------------------------------------------------------
 
     def _stop_container(self, container_name: str) -> bool:
         """Stop and remove a container. Returns True if successful."""
@@ -570,6 +860,7 @@ class Orchestrator:
                 github_token_write=data.get("github_token_write"),
                 claude_prompt=data.get("claude_prompt"),
                 snapshot_path=data.get("snapshot_path"),
+                environment_volume=data.get("environment_volume"),
             )
             return self.create_session(config)
 
@@ -592,13 +883,41 @@ class Orchestrator:
             return self.capture_screen(data["session_id"])
 
         elif action == "send_keys":
-            return self.send_keys(data["session_id"], data.get("keys", ""))
+            return self.send_keys(
+                data["session_id"],
+                data.get("keys", ""),
+                literal=data.get("literal", True),
+            )
+
+        elif action == "resize_terminal":
+            return self.resize_terminal(
+                data["session_id"],
+                data.get("cols", 80),
+                data.get("rows", 24),
+            )
 
         elif action == "ping":
             return {"status": "pong"}
 
         elif action == "cleanup":
             return self.cleanup_dead_containers()
+
+        # Environment volume management
+        elif action == "create_environment_volume":
+            return self.create_environment_volume(data["volume_name"])
+
+        elif action == "delete_environment_volume":
+            return self.delete_environment_volume(data["volume_name"])
+
+        elif action == "initialize_environment":
+            return self.initialize_environment(
+                data["volume_name"], data["snapshot_path"]
+            )
+
+        elif action == "reset_environment_volume":
+            return self.reset_environment_volume(
+                data["volume_name"], data.get("snapshot_path")
+            )
 
         else:
             return {"status": "error", "error": f"Unknown action: {action}"}

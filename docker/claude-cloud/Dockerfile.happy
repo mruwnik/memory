@@ -4,12 +4,7 @@
 
 FROM claude-cloud:latest
 
-# Install Happy CLI (need root for global npm install)
-USER root
 RUN npm install -g happy-coder
-
-# Switch back to claude user
-USER claude
 
 # Default to Happy in remote mode
 ENV CLAUDE_EXECUTABLE="happy claude --happy-starting-mode remote"

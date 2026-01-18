@@ -32,6 +32,16 @@ usage() {
     echo "  deploy [branch]   Pull + restart"
     echo "  run <command>     Run command on server (with venv activated)"
     echo "  orchestrator      Setup/update the Claude session orchestrator"
+    echo "  session [opts]    Run a claude-cloud session (syncs + rebuilds first)"
+    echo ""
+    echo "Session options:"
+    echo "  --snapshot PATH             Path to snapshot tarball (on server)"
+    echo "  --environment NAME          Name of environment volume"
+    echo "  --repo URL                  Git repository URL to clone"
+    echo "  --github-token TOKEN        GitHub token for repo access (read)"
+    echo "  --github-token-write TOKEN  GitHub token for differ (push/PR)"
+    echo "  --cmd COMMAND               Command to run instead of claude (e.g. /verify-setup.sh)"
+    echo "  --no-rebuild                Skip image rebuild"
     exit 1
 }
 
@@ -125,6 +135,105 @@ setup_orchestrator() {
     echo -e "${GREEN}Orchestrator setup complete!${NC}"
 }
 
+run_session() {
+    local snapshot=""
+    local environment=""
+    local repo_url=""
+    local github_token=""
+    local github_token_write=""
+    local custom_cmd=""
+    local rebuild=true
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --snapshot)
+                snapshot="$2"
+                shift 2
+                ;;
+            --environment)
+                environment="$2"
+                shift 2
+                ;;
+            --repo)
+                repo_url="$2"
+                shift 2
+                ;;
+            --github-token)
+                github_token="$2"
+                shift 2
+                ;;
+            --github-token-write)
+                github_token_write="$2"
+                shift 2
+                ;;
+            --cmd)
+                custom_cmd="$2"
+                shift 2
+                ;;
+            --no-rebuild)
+                rebuild=false
+                shift
+                ;;
+            *)
+                echo -e "${RED}Unknown session option: $1${NC}"
+                usage
+                ;;
+        esac
+    done
+
+    # Sync docker/claude-cloud files
+    echo -e "${GREEN}Syncing claude-cloud docker files to $REMOTE_HOST...${NC}"
+    rsync -avz \
+        "$PROJECT_DIR/docker/claude-cloud/" \
+        "$REMOTE_HOST:$REMOTE_DIR/docker/claude-cloud/"
+
+    # Build the image if requested
+    if [[ "$rebuild" == "true" ]]; then
+        echo -e "${GREEN}Rebuilding claude-cloud image...${NC}"
+        ssh "$REMOTE_HOST" "cd $REMOTE_DIR && docker build -t claude-cloud:latest -f docker/claude-cloud/Dockerfile ."
+    fi
+
+    # Build docker run command
+    echo -e "${GREEN}Running session...${NC}"
+    local docker_cmd="docker run --rm -it"
+
+    # Add custom command if specified
+    if [[ -n "$custom_cmd" ]]; then
+        docker_cmd="$docker_cmd -e CLAUDE_EXECUTABLE='$custom_cmd'"
+    fi
+
+    if [[ -n "$snapshot" ]]; then
+        # Use unique temp file to avoid race condition with concurrent sessions
+        local temp_snapshot="/tmp/snapshot-$$.tar.gz"
+        ssh "$REMOTE_HOST" "cp '$snapshot' '$temp_snapshot'"
+        docker_cmd="$docker_cmd -v $temp_snapshot:/snapshot/snapshot.tar.gz:ro"
+        # Note: temp file cleanup is handled by the next run or system tmpfs cleanup
+    fi
+
+    if [[ -n "$environment" ]]; then
+        docker_cmd="$docker_cmd -v claude-env-$environment:/home/claude"
+    fi
+
+    if [[ -n "$repo_url" ]]; then
+        docker_cmd="$docker_cmd -e GIT_REPO_URL='$repo_url'"
+    fi
+
+    if [[ -n "$github_token" ]]; then
+        docker_cmd="$docker_cmd -e GITHUB_TOKEN='$github_token'"
+    fi
+
+    if [[ -n "$github_token_write" ]]; then
+        docker_cmd="$docker_cmd -e GITHUB_TOKEN_WRITE='$github_token_write'"
+    fi
+
+    docker_cmd="$docker_cmd claude-cloud:latest"
+
+    # Run the session
+    ssh "$REMOTE_HOST" "$docker_cmd"
+    return $?
+}
+
 # Main
 case "${1:-}" in
     sync)
@@ -145,6 +254,10 @@ case "${1:-}" in
         ;;
     orchestrator)
         setup_orchestrator
+        ;;
+    session)
+        shift
+        run_session "$@"
         ;;
     *)
         usage

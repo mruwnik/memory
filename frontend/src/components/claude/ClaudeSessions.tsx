@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, GithubRepoBasic, AttachInfo, getLogStreamUrl } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, getLogStreamUrl } from '../../hooks/useClaude'
+import XtermTerminal from './XtermTerminal'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -22,6 +23,8 @@ interface ScreenMessage {
   type: 'screen' | 'error' | 'status'
   data: string
   timestamp: string
+  cols?: number
+  rows?: number
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -39,6 +42,7 @@ const ClaudeSessions = () => {
     getAttachInfo,
     getOrchestratorStatus,
     listSnapshots,
+    listEnvironments,
     listUserRepos,
   } = useClaude()
 
@@ -47,15 +51,16 @@ const ClaudeSessions = () => {
   const [selectedSession, setSelectedSession] = useState<ClaudeSession | null>(null)
   const [attachInfo, setAttachInfo] = useState<AttachInfo | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [environments, setEnvironments] = useState<Environment[]>([])
   const [repos, setRepos] = useState<GithubRepoBasic[]>([])
   const [orchestratorAvailable, setOrchestratorAvailable] = useState<boolean | null>(null)
 
   // Screen streaming state
   const [screenContent, setScreenContent] = useState<string>('')
+  const [tmuxSize, setTmuxSize] = useState<{ cols: number; rows: number } | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
-  const [terminalInput, setTerminalInput] = useState<string>('')
 
   // UI State
   const [loading, setLoading] = useState(true)
@@ -64,8 +69,9 @@ const ClaudeSessions = () => {
   const [killingId, setKillingId] = useState<string | null>(null)
   const [spawning, setSpawning] = useState(false)
 
-  // New session form
-  const [selectedSnapshotId, setSelectedSnapshotId] = useState<number | null>(null)
+  // New session form - config source can be a snapshot or an environment
+  type ConfigSelection = { type: 'snapshot'; id: number } | { type: 'environment'; id: number } | null
+  const [selectedConfig, setSelectedConfig] = useState<ConfigSelection>(null)
   const [selectedRepoUrl, setSelectedRepoUrl] = useState<string>('')
   const [useHappy, setUseHappy] = useState<boolean>(false)
   const [allowedTools, setAllowedTools] = useState<string[]>(() => {
@@ -105,18 +111,23 @@ const ClaudeSessions = () => {
   const loadInitialData = useCallback(async () => {
     setLoading(true)
     try {
-      const [sessionsData, snapshotsData, reposData, status] = await Promise.all([
+      const [sessionsData, snapshotsData, environmentsData, reposData, status] = await Promise.all([
         listSessions(),
         listSnapshots(),
+        listEnvironments(),
         listUserRepos(),
         getOrchestratorStatus(),
       ])
       setSessions(sessionsData)
       setSnapshots(snapshotsData)
+      setEnvironments(environmentsData)
       setRepos(reposData)
       setOrchestratorAvailable(status.available)
-      if (snapshotsData.length > 0) {
-        setSelectedSnapshotId(snapshotsData[0].id)
+      // Default to first environment if available, otherwise first snapshot
+      if (environmentsData.length > 0) {
+        setSelectedConfig({ type: 'environment', id: environmentsData[0].id })
+      } else if (snapshotsData.length > 0) {
+        setSelectedConfig({ type: 'snapshot', id: snapshotsData[0].id })
       }
       setError(null)
     } catch (e) {
@@ -124,7 +135,7 @@ const ClaudeSessions = () => {
     } finally {
       setLoading(false)
     }
-  }, [listSessions, listSnapshots, listUserRepos, getOrchestratorStatus])
+  }, [listSessions, listSnapshots, listEnvironments, listUserRepos, getOrchestratorStatus])
 
   useEffect(() => {
     loadInitialData()
@@ -168,6 +179,7 @@ const ClaudeSessions = () => {
     }
 
     setScreenContent('')
+    setTmuxSize(null)
     setWsError(null)
 
     const ws = new WebSocket(wsUrl)
@@ -183,12 +195,13 @@ const ClaudeSessions = () => {
         const msg: ScreenMessage = JSON.parse(event.data)
         if (msg.type === 'screen') {
           setScreenContent(msg.data)
+          if (msg.cols && msg.rows) {
+            setTmuxSize({ cols: msg.cols, rows: msg.rows })
+          }
         } else if (msg.type === 'error') {
           setWsError(msg.data)
-        } else if (msg.type === 'status') {
-          // Show status messages briefly in screen content
-          setScreenContent((prev) => prev || `[${msg.type}] ${msg.data}`)
         }
+        // Ignore 'status', 'log', 'logs', 'phase' messages - terminal handles display
       } catch (e) {
         console.error('Failed to parse WebSocket message:', e)
       }
@@ -280,8 +293,8 @@ const ClaudeSessions = () => {
   }
 
   const handleSpawnSession = async () => {
-    if (!selectedSnapshotId) {
-      setError('Please select a snapshot')
+    if (!selectedConfig) {
+      setError('Please select a snapshot or environment')
       return
     }
     setSpawning(true)
@@ -290,7 +303,8 @@ const ClaudeSessions = () => {
       const customEnv = parseEnvText(customEnvText)
 
       const newSession = await spawnSession({
-        snapshot_id: selectedSnapshotId,
+        snapshot_id: selectedConfig.type === 'snapshot' ? selectedConfig.id : undefined,
+        environment_id: selectedConfig.type === 'environment' ? selectedConfig.id : undefined,
         repo_url: selectedRepoUrl || undefined,
         github_token: githubToken || undefined,
         github_token_write: githubTokenWrite || undefined,
@@ -319,29 +333,19 @@ const ClaudeSessions = () => {
     setShowNewSession(true)
   }
 
-  const handleSendInput = () => {
-    if (!terminalInput || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return
-    }
-    // Send input with newline (Enter key)
-    const payload = JSON.stringify({
-      type: 'input',
-      keys: terminalInput + '\n'
-    })
-    wsRef.current.send(payload)
-    setTerminalInput('')
-  }
-
   // Render helpers
   const getStatusColor = (status: string | null) => {
     if (!status) return 'bg-slate-100 text-slate-600'
     return STATUS_COLORS[status.toLowerCase()] || 'bg-slate-100 text-slate-600'
   }
 
-  // Check if selected snapshot has Happy config
-  const selectedSnapshotHasHappy = (): boolean => {
-    if (!selectedSnapshotId) return false
-    const snapshot = snapshots.find((s) => s.id === selectedSnapshotId)
+  // Check if Happy option should be shown
+  // - Environments: always show (user is responsible for ensuring Happy works)
+  // - Snapshots: only show if has_happy detected in snapshot summary
+  const selectedConfigHasHappy = (): boolean => {
+    if (!selectedConfig) return false
+    if (selectedConfig.type === 'environment') return true
+    const snapshot = snapshots.find((s) => s.id === selectedConfig.id)
     if (!snapshot?.summary) return false
     try {
       const summary = JSON.parse(snapshot.summary)
@@ -457,9 +461,9 @@ const ClaudeSessions = () => {
             <div className="max-w-xl">
               <h2 className="text-xl font-semibold text-slate-800 mb-6">Start New Session</h2>
 
-              {snapshots.length === 0 ? (
+              {snapshots.length === 0 && environments.length === 0 ? (
                 <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg">
-                  <p className="font-medium">No snapshots available</p>
+                  <p className="font-medium">No snapshots or environments available</p>
                   <p className="text-sm mt-1">
                     Create a snapshot first using the CLI tool:
                     <code className="block bg-yellow-100 px-2 py-1 rounded mt-2 text-xs">
@@ -469,21 +473,48 @@ const ClaudeSessions = () => {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Snapshot selection */}
+                  {/* Config source selection (grouped: environments + snapshots) */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Config Snapshot *</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Configuration *</label>
                     <select
-                      value={selectedSnapshotId ?? ''}
-                      onChange={(e) => setSelectedSnapshotId(Number(e.target.value))}
+                      value={selectedConfig ? `${selectedConfig.type}:${selectedConfig.id}` : ''}
+                      onChange={(e) => {
+                        const [type, id] = e.target.value.split(':')
+                        if (type === 'environment' || type === 'snapshot') {
+                          setSelectedConfig({ type, id: Number(id) })
+                        }
+                      }}
                       className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     >
-                      {snapshots.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                          {s.subscription_type && ` (${s.subscription_type})`}
-                        </option>
-                      ))}
+                      {environments.length > 0 && (
+                        <optgroup label="Environments (persistent)">
+                          {environments.map((e) => {
+                            const activeCount = sessions.filter((s) => s.environment_id === e.id).length
+                            return (
+                              <option key={`env-${e.id}`} value={`environment:${e.id}`}>
+                                {e.name}
+                                {activeCount > 0 && ` (${activeCount} active)`}
+                              </option>
+                            )
+                          })}
+                        </optgroup>
+                      )}
+                      {snapshots.length > 0 && (
+                        <optgroup label="Snapshots (fresh each time)">
+                          {snapshots.map((s) => (
+                            <option key={`snap-${s.id}`} value={`snapshot:${s.id}`}>
+                              {s.name}
+                              {s.subscription_type && ` (${s.subscription_type})`}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {selectedConfig?.type === 'environment'
+                        ? 'Environment: State persists across sessions'
+                        : 'Snapshot: Fresh extraction each time'}
+                    </p>
                   </div>
 
                   {/* Repo selection */}
@@ -535,7 +566,7 @@ const ClaudeSessions = () => {
                   </div>
 
                   {/* Happy toggle - only show if snapshot has Happy config */}
-                  {selectedSnapshotHasHappy() && (
+                  {selectedConfigHasHappy() && (
                     <div className="flex items-center gap-3">
                       <input
                         type="checkbox"
@@ -612,7 +643,7 @@ const ClaudeSessions = () => {
                   <div className="flex gap-3">
                     <button
                       onClick={handleSpawnSession}
-                      disabled={spawning || !selectedSnapshotId}
+                      disabled={spawning || !selectedConfig}
                       className="bg-primary text-white py-2 px-6 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:bg-slate-300 disabled:cursor-not-allowed"
                     >
                       {spawning ? 'Starting...' : 'Start Session'}
@@ -706,41 +737,13 @@ const ClaudeSessions = () => {
                     )}
                   </div>
                 </div>
-                <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden flex flex-col min-h-[400px]">
-                  <div className="flex-1 overflow-auto p-4 font-mono text-sm">
-                    {screenContent ? (
-                      <pre className="text-slate-300 whitespace-pre">
-                        {screenContent}
-                      </pre>
-                    ) : (
-                      <div className="text-slate-500 italic">
-                        {wsConnected ? 'Waiting for screen capture...' : 'Connecting to session...'}
-                      </div>
-                    )}
-                  </div>
-                  {/* Terminal input */}
-                  <div className="border-t border-slate-700 p-2 flex gap-2">
-                    <input
-                      type="text"
-                      value={terminalInput}
-                      onChange={(e) => setTerminalInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleSendInput()
-                        }
-                      }}
-                      placeholder={wsConnected ? 'Type command and press Enter...' : 'Connecting...'}
-                      disabled={!wsConnected}
-                      className="flex-1 bg-slate-800 text-slate-200 px-3 py-2 rounded text-sm font-mono border border-slate-600 focus:border-primary focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
-                    <button
-                      onClick={handleSendInput}
-                      disabled={!wsConnected || !terminalInput}
-                      className="bg-primary text-white px-4 py-2 rounded text-sm font-medium hover:bg-primary/90 disabled:bg-slate-600 disabled:cursor-not-allowed"
-                    >
-                      Send
-                    </button>
-                  </div>
+                <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden min-h-[400px]">
+                  <XtermTerminal
+                    wsRef={wsRef}
+                    screenContent={screenContent}
+                    connected={wsConnected}
+                    tmuxSize={tmuxSize}
+                  />
                 </div>
               </div>
             </div>

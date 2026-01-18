@@ -89,3 +89,76 @@ class ClaudeConfigSnapshot(Base):
             size=self.size,
             created_at=self.created_at.isoformat() if self.created_at else None,
         )
+
+
+class ClaudeEnvironmentPayload(TypedDict):
+    id: Annotated[int, "Environment ID"]
+    name: Annotated[str, "Environment name"]
+    volume_name: Annotated[str, "Docker volume name"]
+    description: Annotated[str | None, "User description"]
+    initialized_from_snapshot_id: Annotated[int | None, "Snapshot used for initialization"]
+    size_bytes: Annotated[int | None, "Last known size in bytes"]
+    last_used_at: Annotated[str | None, "ISO timestamp of last use"]
+    created_at: Annotated[str | None, "ISO timestamp of creation"]
+    session_count: Annotated[int, "Number of sessions that have used this environment"]
+
+
+class ClaudeEnvironment(Base):
+    """
+    A persistent environment for Claude Code sessions.
+
+    Unlike snapshots (immutable config tarballs), environments are Docker volumes
+    that persist state across container restarts. Multiple sessions can use the
+    same environment, accumulating changes over time.
+    """
+
+    __tablename__ = "claude_environments"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    # User who owns this environment
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user = relationship("User", backref="claude_environments", lazy="select")
+
+    # Environment metadata
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    volume_name = Column(Text, nullable=False, unique=True)
+
+    # Initialization source (optional - tracks what snapshot was used to init)
+    initialized_from_snapshot_id = Column(
+        BigInteger,
+        ForeignKey("claude_config_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    initialized_from_snapshot = relationship("ClaudeConfigSnapshot", lazy="select")
+
+    # Usage tracking
+    size_bytes = Column(BigInteger, nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    session_count = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("volume_name", name="unique_environment_volume"),
+        Index("idx_environments_user", "user_id"),
+        # Note: No explicit index on volume_name needed - the unique constraint creates one
+    )
+
+    def as_payload(self) -> ClaudeEnvironmentPayload:
+        return ClaudeEnvironmentPayload(
+            id=self.id,
+            name=self.name,
+            volume_name=self.volume_name,
+            description=self.description,
+            initialized_from_snapshot_id=self.initialized_from_snapshot_id,
+            size_bytes=self.size_bytes,
+            last_used_at=self.last_used_at.isoformat() if self.last_used_at else None,
+            created_at=self.created_at.isoformat() if self.created_at else None,
+            session_count=self.session_count,
+        )

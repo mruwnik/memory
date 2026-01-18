@@ -58,8 +58,8 @@ def upgrade() -> None:
     from memory.common.db.models.users import User, generate_ssh_keypair
     from memory.common import settings
 
-    if not settings.SSH_KEY_ENCRYPTION_SECRET:
-        print("WARNING: SSH_KEY_ENCRYPTION_SECRET not set, skipping SSH key generation")
+    if not settings.SECRETS_ENCRYPTION_KEY:
+        print("WARNING: SECRETS_ENCRYPTION_KEY not set, skipping SSH key generation")
         return
 
     bind = op.get_bind()

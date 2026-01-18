@@ -1,11 +1,16 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, Metrics, NotesPage, Telemetry, Jobs, DockerLogs, Snapshots, ClaudeSessions } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
+
+// Lazy load heavy components (recharts ~300KB, xterm ~400KB)
+const Metrics = lazy(() => import('@/components/metrics/Metrics'))
+const Telemetry = lazy(() => import('@/components/telemetry/Telemetry'))
+const ClaudeSessions = lazy(() => import('@/components/claude/ClaudeSessions'))
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
@@ -144,7 +149,7 @@ const AuthWrapper = () => {
 
       <Route path="/ui/metrics" element={
         isAuthenticated ? (
-          <Metrics />
+          <Suspense fallback={<Loading />}><Metrics /></Suspense>
         ) : (
           <Navigate to="/ui/login" replace />
         )
@@ -160,7 +165,7 @@ const AuthWrapper = () => {
 
       <Route path="/ui/telemetry" element={
         isAuthenticated ? (
-          <Telemetry />
+          <Suspense fallback={<Loading />}><Telemetry /></Suspense>
         ) : (
           <Navigate to="/ui/login" replace />
         )
@@ -184,7 +189,7 @@ const AuthWrapper = () => {
 
       <Route path="/ui/snapshots" element={
         isAuthenticated ? (
-          <Snapshots />
+          <ConfigSources />
         ) : (
           <Navigate to="/ui/login" replace />
         )
@@ -192,7 +197,7 @@ const AuthWrapper = () => {
 
       <Route path="/ui/claude" element={
         isAuthenticated ? (
-          <ClaudeSessions />
+          <Suspense fallback={<Loading />}><ClaudeSessions /></Suspense>
         ) : (
           <Navigate to="/ui/login" replace />
         )
