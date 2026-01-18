@@ -93,6 +93,7 @@ export interface SpawnRequest {
   allowed_tools?: string[]
   custom_env?: Record<string, string>
   initial_prompt?: string
+  run_id?: string // Custom run ID for branch naming (defaults to session_id)
 }
 
 export interface GithubRepoBasic {

@@ -92,6 +92,7 @@ const ClaudeSessions = () => {
     return localStorage.getItem(GITHUB_TOKEN_WRITE_STORAGE_KEY) || ''
   })
   const [initialPrompt, setInitialPrompt] = useState<string>('')
+  const [runId, setRunId] = useState<string>('')
 
   // Load data
   const loadSessions = useCallback(async () => {
@@ -312,6 +313,7 @@ const ClaudeSessions = () => {
         allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
         custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
         initial_prompt: initialPrompt || undefined,
+        run_id: runId || undefined,
       })
       await loadSessions()
       setSelectedSession(newSession)
@@ -320,6 +322,7 @@ const ClaudeSessions = () => {
       setSelectedRepoUrl('')
       setUseHappy(false)
       setInitialPrompt('')
+      setRunId('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to spawn session')
     } finally {
@@ -534,6 +537,26 @@ const ClaudeSessions = () => {
                     </select>
                     <p className="text-xs text-slate-500 mt-1">The repo will be cloned into the workspace</p>
                   </div>
+
+                  {/* Branch ID (only shown when repo selected) */}
+                  {selectedRepoUrl && (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">
+                        Branch ID (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={runId}
+                        onChange={(e) => setRunId(e.target.value)}
+                        placeholder="my-feature"
+                        pattern="[a-zA-Z0-9_-]+"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">
+                        Git branch will be <code className="bg-slate-100 px-1 rounded">claude/{runId || '<session-id>'}</code>. Leave blank for auto-generated ID.
+                      </p>
+                    </div>
+                  )}
 
                   {/* GitHub Token */}
                   <div>

@@ -56,8 +56,10 @@ RESERVED_ENV_VARS = {
     "CLAUDE_EXECUTABLE",
     "CLAUDE_ALLOWED_TOOLS",
     "CLAUDE_INITIAL_PROMPT",
+    "CLAUDE_RUN_ID",
     "SSH_PRIVATE_KEY",
     "GITHUB_TOKEN",
+    "GITHUB_TOKEN_WRITE",
     "GIT_REPO_URL",
     "SYSTEM_ID",
     "HOME",
@@ -134,6 +136,7 @@ class SpawnRequest(BaseModel):
     )
     custom_env: dict[str, str] | None = None  # Custom environment variables
     initial_prompt: str | None = None  # Prompt to start Claude with immediately
+    run_id: str | None = None  # Custom run ID for branch naming (defaults to session_id)
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
@@ -258,6 +261,10 @@ async def spawn_session(
     # Add initial prompt if provided
     if request.initial_prompt:
         env["CLAUDE_INITIAL_PROMPT"] = request.initial_prompt
+
+    # Set run ID for branch naming (used by entrypoint to create claude/<run_id> branch)
+    # Default to session_id if not provided
+    env["CLAUDE_RUN_ID"] = request.run_id or session_id
 
     # Add custom environment variables (with validation)
     if request.custom_env:

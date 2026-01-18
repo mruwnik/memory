@@ -22,6 +22,7 @@ fi
 #   CLAUDE_EXECUTABLE  - Claude binary (default: claude)
 #   CLAUDE_ALLOWED_TOOLS - Space-separated list of allowed tools
 #   CLAUDE_INITIAL_PROMPT - Initial prompt to start Claude with
+#   CLAUDE_RUN_ID        - Unique ID for this run (used for branch name claude/<id>)
 #
 
 readonly LOG_DIR="/var/log/claude"
@@ -117,7 +118,9 @@ start_differ_server() {
     touch /var/log/claude/differ.log
     chown differ:differ /var/log/claude/differ.log
 
-    su - differ -c "cd /opt/differ && DIFFER_PORT=8576 nohup node target/server.js >> /var/log/claude/differ.log 2>&1 &"
+    # Allow pushing to claude/* branches on any repo
+    local push_whitelist='{"*": ["claude/*"]}'
+    su - differ -c "cd /opt/differ && DIFFER_PORT=8576 PUSH_WHITELIST='$push_whitelist' nohup node target/server.js >> /var/log/claude/differ.log 2>&1 &"
 
     # Wait for server to be ready (up to 15 seconds)
     local ready=false
@@ -226,6 +229,20 @@ extract_repo_name() {
     fi
 }
 
+generate_run_id() {
+    # Use CLAUDE_RUN_ID if provided, otherwise generate unique fallback
+    if [[ -n "${CLAUDE_RUN_ID:-}" ]]; then
+        # Validate: only allow safe characters
+        if [[ "$CLAUDE_RUN_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "$CLAUDE_RUN_ID"
+            return
+        fi
+        log "Warning: CLAUDE_RUN_ID contains invalid characters, generating fallback"
+    fi
+    # Fallback: timestamp + random suffix (e.g., 20240115-143052-a7b3)
+    echo "$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | xxd -p | head -c4)"
+}
+
 setup_git_repo() {
     [[ -n "${GIT_REPO_URL:-}" ]] || return 0
 
@@ -253,6 +270,13 @@ setup_git_repo() {
         if [[ -n "$branch" ]]; then
             git checkout -q "$branch" 2>/dev/null || true
             log "Checked out: $branch"
+
+            # Create claude/<run_id> branch for this session
+            local run_id
+            run_id=$(generate_run_id)
+            local claude_branch="claude/$run_id"
+            git checkout -q -b "$claude_branch"
+            log "Created branch: $claude_branch"
         fi
     else
         log "Warning: git fetch failed"
@@ -310,14 +334,30 @@ install_claude_if_missing() {
     fi
 
     log "Claude CLI not found, installing..."
-    curl -fsSL https://claude.ai/install.sh | bash
+    local install_log="$LOG_DIR/claude-install.log"
+
+    if ! curl -fsSL https://claude.ai/install.sh > /tmp/install-claude.sh 2>> "$install_log"; then
+        log "ERROR: Failed to download install script"
+        cat "$install_log" >> "$LOG_DIR/session.log" 2>/dev/null || true
+        exit 1
+    fi
+
+    if ! bash /tmp/install-claude.sh >> "$install_log" 2>&1; then
+        log "ERROR: Install script failed. See $install_log for details"
+        tail -50 "$install_log" >> "$LOG_DIR/session.log" 2>/dev/null || true
+        exit 1
+    fi
+    rm -f /tmp/install-claude.sh
+
     # Refresh PATH to pick up new install
     export PATH="$HOME/.local/bin:$PATH"
 
     if command -v claude &>/dev/null; then
         log "Claude CLI installed: $(which claude)"
     else
-        log "ERROR: Claude CLI installation failed"
+        log "ERROR: Claude CLI installation failed - not found in PATH after install"
+        log "PATH=$PATH"
+        ls -la "$HOME/.local/bin/" >> "$LOG_DIR/session.log" 2>/dev/null || true
         exit 1
     fi
 }
@@ -347,6 +387,14 @@ if [[ "$(id -u)" -eq 0 ]]; then
     setup_differ
 
     chown claude:workspace "$LOG_DIR/session.log"
+
+    # Fix ownership of /home/claude (needed when using environment volumes)
+    # The volume root may be owned correctly, but subdirectories from snapshots may not be
+    if [[ -d /home/claude ]]; then
+        log "[root] Fixing /home/claude ownership..."
+        chown -R claude:workspace /home/claude
+    fi
+
     export HOME=/home/claude
     export PATH="/home/claude/.local/bin:${PATH}"
     cd /workspace
