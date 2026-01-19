@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import Meeting, BlogPost, SourceItem, JobType
+from memory.common.db.models import Meeting, BlogPost, JobType
 
 
 @pytest.fixture

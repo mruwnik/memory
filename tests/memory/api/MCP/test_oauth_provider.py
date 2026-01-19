@@ -7,8 +7,6 @@ from unittest.mock import Mock, patch, MagicMock
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
     make_token,
-    create_expiration,
-    ACCESS_TOKEN_LIFETIME,
 )
 from memory.common.db.models.users import (
     OAuthClientInformation,

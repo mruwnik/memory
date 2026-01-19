@@ -1,8 +1,7 @@
 """Tests for Google Drive OAuth API endpoints."""
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
-import pytest
 
 from memory.api.google_drive import (
     AVAILABLE_GOOGLE_SCOPES,

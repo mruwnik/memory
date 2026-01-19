@@ -1,7 +1,6 @@
 """Tests for GitHub Sources API endpoints."""
 
 import pytest
-from datetime import datetime, timezone
 
 from memory.common.db.models import User
 from memory.common.db.models.sources import GithubAccount, GithubRepo

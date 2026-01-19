@@ -1,13 +1,12 @@
 """Tests for common task utilities."""
 
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from memory.common.tasks import (
     task_to_dict,
     get_tasks,
     complete_task,
-    TaskDict,
 )
 from memory.common.db.models import Task
 

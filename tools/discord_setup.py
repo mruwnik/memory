@@ -1,7 +1,6 @@
 import click
 import requests
 
-from memory.common import settings
 
 
 def make_invite(client_id: str | int) -> str:
@@ -52,7 +51,7 @@ def create_channels():
 def add_bot_user(bot_token: str):
     """Add a Discord bot user to the system by fetching bot info from Discord API."""
     from memory.common.db.connection import make_session
-    from memory.common.db.models import DiscordUser, DiscordServer, DiscordBotUser
+    from memory.common.db.models import DiscordUser, DiscordBotUser
 
     # Fetch bot information from Discord API
     try:

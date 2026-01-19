@@ -289,7 +289,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                     from memory.parsers.google_drive import parse_google_date
                     modified_at = parse_google_date(file_metadata.get("modifiedTime"))
                     if modified_at and modified_at <= since:
-                        logger.info(f"Document not modified since last sync, skipping")
+                        logger.info("Document not modified since last sync, skipping")
                         folder.last_sync_at = now
                         session.commit()
                         return {

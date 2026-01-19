@@ -2,7 +2,7 @@
 
 import sys
 import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 # Mock FastMCP - this creates a decorator factory that passes through the function unchanged
 class MockFastMCP:

@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

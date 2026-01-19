@@ -14,7 +14,6 @@ from memory.common.db.models import (
     Task,
 )
 from memory.workers.tasks.meetings import (
-    process_meeting,
     reprocess_meeting,
     reextract_meeting,
     prepare_meeting_for_reingest,

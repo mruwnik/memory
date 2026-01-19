@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 
 from memory.common.db.models import GoogleDoc
 from memory.workers.tasks.google_drive import (

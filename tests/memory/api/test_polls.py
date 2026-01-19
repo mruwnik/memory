@@ -4,12 +4,11 @@ Authenticated poll management is done via MCP tools and tested separately.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import AvailabilityPoll, PollResponse, PollAvailability, User, PollStatus
+from memory.common.db.models import AvailabilityPoll, PollResponse, PollAvailability, PollStatus
 
 
 # Note: app_client, client, and user fixtures are defined in conftest.py

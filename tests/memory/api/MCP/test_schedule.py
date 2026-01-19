@@ -1,7 +1,6 @@
 """Tests for MCP schedule server."""
 
 import pytest
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from memory.api.MCP.servers.schedule import (

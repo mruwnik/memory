@@ -11,7 +11,6 @@ from memory.common.llms.base import (
     ToolUseContent,
     ToolResultContent,
     LLMSettings,
-    StreamEvent,
 )
 from memory.common.llms.tools import ToolDefinition
 

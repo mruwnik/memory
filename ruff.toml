@@ -1,0 +1,12 @@
+# Ruff configuration
+
+[lint]
+# Ignore E402 (module level import not at top of file) as this is often intentional
+# for imports that depend on earlier setup code (logging, settings, etc.)
+ignore = ["E402"]
+
+[lint.per-file-ignores]
+# Alembic migrations import models for metadata registration but don't use them directly
+"db/migrations/env.py" = ["F401"]
+# Test files may have unused variables for assertions
+"tests/**/*.py" = ["F841"]

@@ -1,6 +1,5 @@
 import base64
 import pathlib
-import textwrap
 from datetime import datetime
 from typing import cast
 from unittest.mock import MagicMock, patch

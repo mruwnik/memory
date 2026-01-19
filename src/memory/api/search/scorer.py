@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 from PIL import Image
 
 from memory.common.db.models.source_item import Chunk
-from memory.common import llms, settings, tokens
+from memory.common import llms, settings
 
 logger = logging.getLogger(__name__)
 

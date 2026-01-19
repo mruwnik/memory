@@ -167,7 +167,7 @@ class IssuesMixin:
         # Build label filter
         label_filter = ""
         if labels:
-            label_list = ", ".join(f'"{l}"' for l in labels)
+            label_list = ", ".join(f'"{label}"' for label in labels)
             label_filter = f", labels: [{label_list}]"
 
         cursor = None
