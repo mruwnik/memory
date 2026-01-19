@@ -1,0 +1,8 @@
+{
+  "include": ["src", "tests", "tools", "db"],
+  "exclude": ["**/node_modules", "**/__pycache__", ".git"],
+  "reportMissingImports": false,
+  "reportGeneralTypeIssues": false,
+  "reportOptionalMemberAccess": false,
+  "pythonVersion": "3.11"
+}
