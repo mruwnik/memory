@@ -299,6 +299,12 @@ class AvailableRepoResponse(BaseModel):
     html_url: str | None
 
 
+class AvailableReposPageResponse(BaseModel):
+    repos: list[AvailableRepoResponse]
+    has_more: bool
+    total_fetched: int
+
+
 class AvailableProjectResponse(BaseModel):
     number: int
     title: str
@@ -312,17 +318,24 @@ class AvailableProjectResponse(BaseModel):
 @router.get("/accounts/{account_id}/available-repos")
 def list_available_repos(
     account_id: int,
-    limit: int = 10000,
+    offset: int = 0,
+    limit: int = 200,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-) -> list[AvailableRepoResponse]:
+) -> AvailableReposPageResponse:
     """List repositories available from GitHub for this account.
+
+    Supports pagination via offset/limit parameters.
 
     Args:
         account_id: GitHub account ID.
-        limit: Maximum number of repos to return (default 10000).
+        offset: Number of repos to skip (default 0).
+        limit: Maximum number of repos to return (default 200, max 500).
     """
     account = get_user_account(db, GithubAccount, account_id, user)
+
+    # Cap limit to prevent excessive API calls
+    limit = min(limit, 500)
 
     try:
         credentials = GithubCredentials(
@@ -334,10 +347,25 @@ def list_available_repos(
         )
         client = GithubClient(credentials)
 
+        # Fetch offset + limit + 1 repos to determine if there are more
         repos = []
-        for repo in client.list_repos(max_repos=limit):
-            repos.append(AvailableRepoResponse(**repo))
-        return repos
+        total_fetched = 0
+        for repo in client.list_repos(max_repos=offset + limit + 1):
+            total_fetched += 1
+            if total_fetched > offset:
+                repos.append(AvailableRepoResponse(**repo))
+            if len(repos) > limit:
+                break
+
+        has_more = len(repos) > limit
+        if has_more:
+            repos = repos[:limit]
+
+        return AvailableReposPageResponse(
+            repos=repos,
+            has_more=has_more,
+            total_fetched=offset + len(repos),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

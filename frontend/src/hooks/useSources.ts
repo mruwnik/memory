@@ -193,6 +193,12 @@ export interface AvailableRepo {
   html_url: string | null
 }
 
+interface AvailableReposPage {
+  repos: AvailableRepo[]
+  has_more: boolean
+  total_fetched: number
+}
+
 export interface AvailableProject {
   number: number
   title: string
@@ -524,9 +530,21 @@ export const useSources = () => {
   }, [apiCall])
 
   const listAvailableRepos = useCallback(async (accountId: number): Promise<AvailableRepo[]> => {
-    const response = await apiCall(`/github/accounts/${accountId}/available-repos`)
-    if (!response.ok) throw new Error('Failed to fetch available repos')
-    return response.json()
+    const allRepos: AvailableRepo[] = []
+    let offset = 0
+    const limit = 200
+
+    while (true) {
+      const response = await apiCall(`/github/accounts/${accountId}/available-repos?offset=${offset}&limit=${limit}`)
+      if (!response.ok) throw new Error('Failed to fetch available repos')
+      const page: AvailableReposPage = await response.json()
+      allRepos.push(...page.repos)
+
+      if (!page.has_more) break
+      offset += page.repos.length
+    }
+
+    return allRepos
   }, [apiCall])
 
   // === GitHub Repos ===

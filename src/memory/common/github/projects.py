@@ -428,7 +428,7 @@ class ProjectsMixin:
         self,
         per_page: int = 100,
         sort: str = "updated",
-        max_repos: int = 10000,
+        max_repos: int | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """List repositories accessible to the authenticated user/app.
 
@@ -452,9 +452,8 @@ class ProjectsMixin:
 
         page = 1
         repos_yielded = 0
-        max_pages = (max_repos // per_page) + 1
 
-        while page <= max_pages:
+        while True:
             params["page"] = page
             response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
@@ -467,7 +466,7 @@ class ProjectsMixin:
                 break
 
             for repo in repos:
-                if repos_yielded >= max_repos:
+                if max_repos is not None and repos_yielded >= max_repos:
                     return
                 yield {
                     "owner": repo["owner"]["login"],
