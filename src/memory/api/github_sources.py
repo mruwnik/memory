@@ -312,7 +312,7 @@ class AvailableProjectResponse(BaseModel):
 @router.get("/accounts/{account_id}/available-repos")
 def list_available_repos(
     account_id: int,
-    limit: int = 200,
+    limit: int = 10000,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AvailableRepoResponse]:
@@ -320,12 +320,9 @@ def list_available_repos(
 
     Args:
         account_id: GitHub account ID.
-        limit: Maximum number of repos to return (default 200, max 500).
+        limit: Maximum number of repos to return (default 10000).
     """
     account = get_user_account(db, GithubAccount, account_id, user)
-
-    # Cap limit to prevent excessive API calls
-    limit = min(limit, 500)
 
     try:
         credentials = GithubCredentials(

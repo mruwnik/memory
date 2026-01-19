@@ -428,7 +428,7 @@ class ProjectsMixin:
         self,
         per_page: int = 100,
         sort: str = "updated",
-        max_repos: int = 500,
+        max_repos: int = 10000,
     ) -> Generator[dict[str, Any], None, None]:
         """List repositories accessible to the authenticated user/app.
 
