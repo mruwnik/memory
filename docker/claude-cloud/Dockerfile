@@ -67,7 +67,7 @@ RUN git config --global init.defaultBranch main
 # NOTE: Differ is cloned at build time. To update differ, you must rebuild the image.
 # The orchestrator detects Dockerfile changes and rebuilds automatically on restart.
 # Change DIFFER_VERSION to bust the cache and pull fresh code.
-ARG DIFFER_VERSION=2025-01-18-2
+ARG DIFFER_VERSION=2025-01-19
 USER root
 RUN mkdir -p /opt/differ && chown differ:differ /opt/differ
 
