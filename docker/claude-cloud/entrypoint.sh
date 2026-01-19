@@ -192,6 +192,19 @@ insert_differ_credentials() {
 
 setup_differ() {
     log "Setting up differ..."
+    # Allow differ user to access repos owned by other users (claude)
+    su - differ -c "git config --global --add safe.directory '*'"
+
+    # Configure git credentials for differ user (for push operations)
+    if [[ -n "${GITHUB_TOKEN_WRITE:-}" ]]; then
+        local differ_creds="/home/differ/.git-credentials"
+        echo "https://x-access-token:${GITHUB_TOKEN_WRITE}@github.com" > "$differ_creds"
+        chown differ:differ "$differ_creds"
+        chmod 600 "$differ_creds"
+        su - differ -c "git config --global credential.helper store"
+        log "Git credentials configured for differ user"
+    fi
+
     start_differ_server || return 1
     register_differ_credentials
     insert_differ_credentials
