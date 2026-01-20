@@ -12,7 +12,6 @@ from memory.api.search.query_analysis import (
     _get_modality_domains,
     _is_valid_sql_identifier,
     analyze_query,
-    MAX_DOMAINS_TO_LIST,
 )
 
 

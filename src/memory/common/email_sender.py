@@ -455,7 +455,7 @@ def get_user_email_accounts(
     """
     query = session.query(EmailAccount).filter(EmailAccount.user_id == user_id)
     if send_enabled_only:
-        query = query.filter(EmailAccount.send_enabled == True)
+        query = query.filter(EmailAccount.send_enabled.is_(True))
     return query.all()
 
 
@@ -479,7 +479,7 @@ def get_account_by_address(
         .filter(
             EmailAccount.user_id == user_id,
             EmailAccount.email_address == email_address,
-            EmailAccount.send_enabled == True,
+            EmailAccount.send_enabled.is_(True),
         )
         .first()
     )

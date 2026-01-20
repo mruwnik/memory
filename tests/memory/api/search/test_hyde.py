@@ -3,12 +3,11 @@ Tests for HyDE (Hypothetical Document Embeddings) query expansion.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from memory.api.search import hyde
-from memory.common.llms import Message
 
 
 @pytest.fixture(autouse=True)

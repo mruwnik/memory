@@ -175,8 +175,8 @@ def get_user_from_token(token: str, db: DBSession | scoped_session) -> User | No
     return session.user
 
 
-from typing import TypeVar
-from memory.common.db.models.base import Base
+from typing import TypeVar  # noqa: E402
+from memory.common.db.models.base import Base  # noqa: E402
 
 T = TypeVar("T", bound=Base)
 

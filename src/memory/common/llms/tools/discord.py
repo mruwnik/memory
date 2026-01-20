@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Literal, cast
 from memory.discord.messages import (
     upsert_scheduled_message,
-    comm_channel_prompt,
     previous_messages,
 )
 from sqlalchemy import BigInteger
@@ -154,7 +153,7 @@ def make_message_scheduler(
         description=textwrap.dedent("""
             Use this to schedule a message to be sent to yourself.
 
-            At the specified date and time, your message will be sent to you, along with the most 
+            At the specified date and time, your message will be sent to you, along with the most
             recent messages {channel_type}.
 
             Normally you will be called with any incoming messages. But sometimes you might want to be

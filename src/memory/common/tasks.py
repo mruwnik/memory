@@ -92,17 +92,7 @@ def get_tasks(
     if due_after:
         query = query.filter(Task.due_date >= due_after)
 
-    # Order by due_date (nulls last), then by priority
-    # Priority order: urgent > high > medium > low > null
-    priority_order = """
-        CASE priority
-            WHEN 'urgent' THEN 1
-            WHEN 'high' THEN 2
-            WHEN 'medium' THEN 3
-            WHEN 'low' THEN 4
-            ELSE 5
-        END
-    """
+    # Order by due_date (nulls last), then by priority (urgent > high > medium > low > null)
     query = query.order_by(
         Task.due_date.asc().nullslast(),
         Task.priority.desc().nullslast(),

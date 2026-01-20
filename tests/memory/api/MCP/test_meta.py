@@ -15,7 +15,6 @@ from memory.api.MCP.servers.meta import (
     from_annotation,
     get_schema,
     format_market,
-    search_markets,
 )
 
 
@@ -27,7 +26,6 @@ from memory.api.MCP.servers.meta import (
 @patch("memory.api.MCP.servers.meta.qdrant")
 async def test_get_metadata_schemas_returns_schemas(mock_qdrant, mock_get_schema):
     """Get metadata schemas returns collection schemas with sizes."""
-    from memory.common.db.models import SourceItem
 
     mock_client = MagicMock()
     mock_qdrant.get_qdrant_client.return_value = mock_client

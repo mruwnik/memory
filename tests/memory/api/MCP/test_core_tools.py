@@ -4,7 +4,7 @@ import base64
 import pytest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from PIL import Image
 
 from memory.api.MCP.servers.core import (
@@ -167,7 +167,6 @@ async def test_search_knowledge_base_empty_modalities_searches_all(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search with empty modalities searches all available."""
-    from memory.api.MCP.servers.core import ALL_COLLECTIONS
 
     mock_extract.extract_text.return_value = "extracted text"
     mock_search.return_value = []

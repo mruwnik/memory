@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
-import pytest
 
 from memory.workers.tasks.metrics import (
     collect_open_files,

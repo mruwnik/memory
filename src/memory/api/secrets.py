@@ -9,15 +9,15 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from memory.common.db.connection import get_session
-from memory.common.db.models import User
-from memory.common.db.models.secrets import (
+from memory.common.db.connection import get_session  # noqa: E402
+from memory.common.db.models import User  # noqa: E402
+from memory.common.db.models.secrets import (  # noqa: E402
     Secret,
     create_secret,
     find_secret,
     validate_symbol_name,
 )
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user  # noqa: E402
 
 router = APIRouter(prefix="/secrets", tags=["secrets"])
 

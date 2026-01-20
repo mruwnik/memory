@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
-from sqlalchemy.orm import Session, relationship, validates
+from cryptography.fernet import Fernet  # noqa: E402
+from cryptography.hazmat.primitives import hashes  # noqa: E402
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC  # noqa: E402
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint  # noqa: E402
+from sqlalchemy.orm import Session, relationship, validates  # noqa: E402
 
-from memory.common import settings
-from memory.common.db.models.base import Base
+from memory.common import settings  # noqa: E402
+from memory.common.db.models.base import Base  # noqa: E402
 
 # Clojure symbol pattern: starts with letter or special char, followed by
 # letters, digits, or special chars. No spaces or most punctuation.

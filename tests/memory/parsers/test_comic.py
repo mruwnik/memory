@@ -27,8 +27,8 @@ MOCK_SMBC_HTML = """
         </head>
         <body>
             <div id="cc-comicbody">
-                <img title="I don't know why either, but it was fun to draw." 
-                    src="https://www.smbc-comics.com/comics/1746375102-20250504.webp" 
+                <img title="I don't know why either, but it was fun to draw."
+                    src="https://www.smbc-comics.com/comics/1746375102-20250504.webp"
                     id="cc-comic" />
             </div>
             <div id="permalink">
@@ -109,8 +109,8 @@ MOCK_XKCD_HTML = """
 <div id="ctitle">Unstoppable Force and Immovable Object</div>
 
 <div id="comic">
-<img src="//imgs.xkcd.com/comics/unstoppable_force_and_immovable_object.png" 
-     title="Unstoppable force-carrying particles can&#39;t interact with immovable matter by definition." 
+<img src="//imgs.xkcd.com/comics/unstoppable_force_and_immovable_object.png"
+     title="Unstoppable force-carrying particles can&#39;t interact with immovable matter by definition."
      alt="Unstoppable Force and Immovable Object" />
 </div>
 

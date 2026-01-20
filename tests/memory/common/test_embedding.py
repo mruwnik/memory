@@ -13,7 +13,7 @@ from memory.common.embedding import (
     embed_by_model,
 )
 from memory.common.extract import DataChunk, MulitmodalChunk
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk
 
 
 @pytest.fixture

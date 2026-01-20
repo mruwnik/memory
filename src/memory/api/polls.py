@@ -61,8 +61,8 @@ def get_poll_by_slug_or_404(slug: str, db: DBSession) -> AvailabilityPoll:
 
 
 def add_availabilities(
-    response_id: int, 
-    slots: list[AvailabilitySlot], 
+    response_id: int,
+    slots: list[AvailabilitySlot],
     db: DBSession,
 ) -> None:
     """Add availability records for a response."""
@@ -307,16 +307,16 @@ def get_response_by_token(
 ) -> dict:
     """Get a response by its edit token (for pre-populating edit form)."""
     poll = get_poll_by_slug_or_404(slug, db)
-    
+
     response = (
         db.query(PollResponse)
         .filter(PollResponse.poll_id == poll.id, PollResponse.edit_token == x_edit_token)
         .first()
     )
-    
+
     if not response:
         raise HTTPException(status_code=404, detail="Response not found")
-    
+
     return {
         "response_id": response.id,
         "respondent_name": response.respondent_name,

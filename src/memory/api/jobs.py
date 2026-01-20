@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
-from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
+from memory.common.db.models import PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
 from memory.common.jobs import retry_failed_job, reingest_job
 

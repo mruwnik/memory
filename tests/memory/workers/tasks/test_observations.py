@@ -4,7 +4,6 @@ Tests for observation syncing tasks.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from memory.workers.tasks import observations
 

@@ -4,12 +4,11 @@ Authenticated poll management is done via MCP tools and tested separately.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import AvailabilityPoll, PollResponse, PollAvailability, User, PollStatus
+from memory.common.db.models import AvailabilityPoll, PollResponse, PollAvailability, PollStatus
 
 
 # Note: app_client, client, and user fixtures are defined in conftest.py
@@ -316,7 +315,7 @@ def test_get_poll_results_public(client: TestClient, sample_poll, db_session):
     assert "aggregated" in data
     assert "best_slots" in data
     assert len(data["aggregated"]) >= 1
-    
+
     # Check aggregation correctness
     slot_agg = next(
         (s for s in data["aggregated"] if s["slot_start"] == slot_start.isoformat().replace("+00:00", "Z")),
@@ -403,7 +402,7 @@ def test_poll_response_edit_token_generated(db_session, sample_poll):
     )
     db_session.add(response)
     db_session.commit()
-    
+
     assert response.edit_token is not None
     assert len(response.edit_token) == 32  # 16 bytes hex = 32 chars
 
@@ -416,7 +415,7 @@ def test_poll_availability_cascade_delete(db_session, sample_poll):
     )
     db_session.add(response)
     db_session.flush()
-    
+
     avail = PollAvailability(
         response_id=response.id,
         slot_start=datetime(2026, 2, 2, 10, 0, tzinfo=timezone.utc),
@@ -425,10 +424,10 @@ def test_poll_availability_cascade_delete(db_session, sample_poll):
     )
     db_session.add(avail)
     db_session.commit()
-    
+
     avail_id = avail.id
     db_session.delete(response)
     db_session.commit()
-    
+
     # Availability should be deleted
     assert db_session.get(PollAvailability, avail_id) is None

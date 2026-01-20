@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, Mock
-import json
+from unittest.mock import patch, Mock
 import pytest
 from PIL import Image as PILImage
 

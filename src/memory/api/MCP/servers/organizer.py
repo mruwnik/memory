@@ -13,7 +13,7 @@ from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.calendar import get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent, Task
-from memory.common.tasks import get_tasks, complete_task, task_to_dict
+from memory.common.tasks import get_tasks, task_to_dict
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,6 @@
 
 import json
 import logging
-from urllib.parse import urlparse
 from typing import Any, AsyncIterator, Iterator
 
 import anthropic

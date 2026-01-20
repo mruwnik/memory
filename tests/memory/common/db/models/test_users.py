@@ -2,7 +2,6 @@ import pytest
 from memory.common.db.models.users import (
     hash_password,
     verify_password,
-    User,
     HumanUser,
     BotUser,
     DiscordBotUser,

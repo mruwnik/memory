@@ -5,10 +5,9 @@ Tests for photo processing tasks.
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, mock_open
+from unittest.mock import MagicMock, patch
 
 import pytest
-from PIL import Image
 
 from memory.workers.tasks import photo
 

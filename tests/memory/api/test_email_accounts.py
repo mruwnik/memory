@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 from memory.api import email_accounts
 from memory.common.db.models import EmailAccount, GoogleAccount, User
