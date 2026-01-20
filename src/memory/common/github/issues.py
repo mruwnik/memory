@@ -1,8 +1,9 @@
 """GitHub issue and PR fetching mixin."""
 
+from __future__ import annotations
 import logging
 from datetime import datetime
-from typing import Any, Generator
+from typing import Any, Generator, TYPE_CHECKING
 
 from .types import (
     GITHUB_API_URL,
@@ -17,10 +18,13 @@ from .types import (
     parse_github_date,
 )
 
+if TYPE_CHECKING:
+    from .core import GithubClientCore
+
 logger = logging.getLogger(__name__)
 
 
-class IssuesMixin:
+class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
     """Mixin providing issue and PR fetching methods."""
 
     # GraphQL fragment for fetching project item field VALUES (actual data)
