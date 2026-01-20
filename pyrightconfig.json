@@ -8,7 +8,17 @@
     ".venv",
     "venv"
   ],
+  "ignore": [
+    "db/migrations"
+  ],
   "reportMissingImports": true,
   "reportMissingTypeStubs": false,
-  "reportGeneralTypeIssues": true
+  "reportGeneralTypeIssues": true,
+  "executionEnvironments": [
+    {
+      "root": "db/migrations",
+      "reportMissingImports": false,
+      "reportGeneralTypeIssues": false
+    }
+  ]
 }
