@@ -12,6 +12,7 @@ import inspect
 import time
 import traceback
 import logging
+from collections.abc import Mapping
 from typing import Any, Callable, Sequence, cast
 
 from sqlalchemy import or_
@@ -325,7 +326,9 @@ def extract_task_params(
     return {k: v for k, v in all_params.items() if k in param_names}
 
 
-def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
+def safe_task_execution(
+    func: Callable[..., Mapping[str, Any]],
+) -> Callable[..., Mapping[str, Any]]:
     """
     Decorator for safe task execution with comprehensive error handling and metrics.
 
@@ -358,7 +361,7 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
     from functools import wraps
 
     @wraps(func)
-    def wrapper(*args, **kwargs) -> dict:
+    def wrapper(*args, **kwargs) -> Mapping[str, Any]:
         start_time = time.perf_counter()
         status = "success"
 

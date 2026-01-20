@@ -169,6 +169,9 @@ class Chunk(Base):
     )
     search_vector: Mapped[Any | None] = mapped_column(TSVECTOR)  # Full-text search index
 
+    # Populated by backref from SourceItem.chunks relationship
+    source: SourceItem
+
     vector: list[float] = []
     item_metadata: dict[str, Any] = {}
     images: list[Image.Image] = []

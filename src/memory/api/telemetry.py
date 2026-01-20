@@ -94,6 +94,7 @@ def get_raw_events(
         to_time = datetime.now(timezone.utc)
         from_time = to_time - timedelta(hours=24)
     elif from_time is None:
+        assert to_time is not None  # to_time must exist if we're in this branch
         from_time = to_time - timedelta(hours=24)
     elif to_time is None:
         to_time = datetime.now(timezone.utc)
@@ -181,6 +182,7 @@ def get_aggregated_metrics(
         to_time = datetime.now(timezone.utc)
         from_time = to_time - timedelta(days=7)
     elif from_time is None:
+        assert to_time is not None  # to_time must exist if we're in this branch
         from_time = to_time - timedelta(days=7)
     elif to_time is None:
         to_time = datetime.now(timezone.utc)

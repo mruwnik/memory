@@ -3,7 +3,8 @@
 import io
 import logging
 from dataclasses import dataclass
-from typing import Callable, Literal
+from collections.abc import Awaitable
+from typing import Callable, Literal, cast
 
 import discord
 
@@ -62,7 +63,7 @@ class CommandContext:
     display_name: str
 
 
-CommandHandler = Callable[..., CommandResponse]
+CommandHandler = Callable[..., Awaitable[CommandResponse]]
 
 
 async def respond(
@@ -90,11 +91,17 @@ def with_object_context(
     server = interaction.guild
     channel = interaction.channel
     target_user = user or interaction.user
+    bot_user = bot.user
+    if not bot_user:
+        raise CommandError("Bot user not available")
     with make_session() as session:
         objects = DiscordObjects(
-            bot=ensure_user(session, bot.user),
+            bot=ensure_user(session, cast(discord.abc.User, bot_user)),
             server=server and ensure_server(session, server),
-            channel=channel and _ensure_channel(session, channel, server and server.id),
+            channel=channel
+            and _ensure_channel(
+                session, cast(discord.abc.Messageable, channel), server and server.id
+            ),
             user=ensure_user(session, target_user),
         )
         return handler(objects)
@@ -390,7 +397,7 @@ def create_list_group(
             interaction.guild_id,
             interaction.channel_id,
             (user or interaction.user).id,
-            bot.user.id,
+            bot.user.id if bot.user else None,
         ]
         with make_session() as session:
             mcp_servers = (
@@ -422,7 +429,7 @@ def register_slash_commands(bot: discord.Client) -> None:
     if not hasattr(bot, "tree"):
         raise RuntimeError("Bot instance does not support app commands")
 
-    tree = bot.tree
+    tree = cast(discord.app_commands.CommandTree, getattr(bot, "tree"))
     name = bot.user and bot.user.name.replace("-", "_").lower()
 
     # Create main command group
@@ -495,7 +502,11 @@ def _build_context(
     elif scope == "channel":
         if interaction.channel is None or not hasattr(interaction.channel, "id"):
             raise CommandError("Unable to determine channel for this interaction.")
-        target = _ensure_channel(session, interaction.channel, interaction.guild_id)
+        target = _ensure_channel(
+            session,
+            cast(discord.abc.Messageable, interaction.channel),
+            interaction.guild_id,
+        )
         display_name = f"channel **#{target.name}**"
 
     elif scope == "user":

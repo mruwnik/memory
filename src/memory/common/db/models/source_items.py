@@ -341,6 +341,9 @@ class DiscordMessage(SourceItem):
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)  # List of image URLs
 
+    # Transient attribute for context during processing (not persisted)
+    messages_before: list[str]
+
     channel: Mapped[DiscordChannel | None] = relationship("DiscordChannel", foreign_keys=[channel_id])
     server: Mapped[DiscordServer | None] = relationship("DiscordServer", foreign_keys=[server_id])
     from_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[from_id])

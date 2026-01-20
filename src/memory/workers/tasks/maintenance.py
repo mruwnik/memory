@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Sequence, Any
+from typing import Sequence, Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
@@ -99,7 +99,7 @@ def reingest_chunk(chunk_id: str, collection: str):
         session.commit()
 
 
-def get_item_class(item_type: str):
+def get_item_class(item_type: str) -> type[SourceItem]:
     class_ = SourceItem.registry._class_registry.get(item_type)
     if not class_:
         available_types = ", ".join(sorted(SourceItem.registry._class_registry.keys()))
@@ -108,7 +108,7 @@ def get_item_class(item_type: str):
         )
     if not hasattr(class_, "chunks"):
         raise ValueError(f"Item type {item_type} does not have chunks")
-    return class_
+    return cast(type[SourceItem], class_)
 
 
 @app.task(name=REINGEST_ITEM)

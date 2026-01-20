@@ -63,14 +63,15 @@ app.state.limiter = limiter
 # Rate limit exception handler
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    retry_after = getattr(exc, "retry_after", None)
     return JSONResponse(
         status_code=429,
         content={
             "error": "Rate limit exceeded",
             "detail": str(exc.detail),
-            "retry_after": exc.retry_after,
+            "retry_after": retry_after,
         },
-        headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else {},
+        headers={"Retry-After": str(retry_after)} if retry_after else {},
     )
 
 
