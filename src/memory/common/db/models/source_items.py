@@ -611,7 +611,7 @@ class BookSection(SourceItem):
     # Parent-child relationships for nested sections
     parent_section_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("book_section.id"))
 
-    book: Mapped[Book] = relationship("Book", backref="sections")
+    book: Mapped[Book] = relationship("Book", back_populates="sections")
     parent: Mapped[BookSection | None] = relationship(
         "BookSection",
         remote_side=[id],

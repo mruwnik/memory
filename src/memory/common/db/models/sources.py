@@ -37,8 +37,7 @@ class Book(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
-    # Created via backref from BookSection.book
-    sections: Mapped[list[BookSection]]
+    sections: Mapped[list["BookSection"]] = relationship("BookSection", back_populates="book")
     isbn: Mapped[str | None] = mapped_column(Text, unique=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     author: Mapped[str | None] = mapped_column(Text)
