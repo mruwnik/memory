@@ -1,3 +1,11 @@
+[tool.pyright]
+# Configure pyright for src layout
+pythonVersion = "3.11"
+include = ["src", "tests", "tools"]
+exclude = ["db/migrations"]
+reportMissingImports = true
+reportMissingTypeStubs = false
+
 [tool.ruff]
 # General ruff settings
 
