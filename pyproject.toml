@@ -1,17 +1,22 @@
 [tool.ruff]
+# General ruff settings
+
+[tool.ruff.lint]
 # Allow imports after logger setup and type definitions
-lint.select = ["E", "F", "W"]
-lint.ignore = [
+select = ["E", "F", "W"]
+ignore = [
     "E402",  # Module level import not at top of file - intentional pattern in this codebase
     "E501",  # Line too long - codebase doesn't enforce strict line length
 ]
 
-# Exclude test files from certain checks
-lint.per-file-ignores."tests/**/*.py" = [
+[tool.ruff.lint.per-file-ignores]
+# Test files often have intentional patterns that trigger these rules
+"tests/**/*.py" = [
     "F811",  # Redefinition - common pattern with pytest patches
     "F841",  # Unused variable - sometimes intentional for assertions
     "F402",  # Import shadowed by loop variable - common with 'call' variable in tests
 ]
-lint.per-file-ignores."db/migrations/**/*.py" = [
+# Migration files import models for side effects
+"db/migrations/**/*.py" = [
     "F401",  # Unused imports - intentional for model registration
 ]
