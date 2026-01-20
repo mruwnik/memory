@@ -7,7 +7,6 @@ from memory.discord.messages import (
     upsert_scheduled_message,
     previous_messages,
 )
-from sqlalchemy import BigInteger
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     DiscordServer,

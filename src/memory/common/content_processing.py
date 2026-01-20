@@ -18,13 +18,13 @@ from typing import Any, Callable, Sequence, TypeVar, cast
 from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
-
-# TypeVar for model classes (any SQLAlchemy model)
-T = TypeVar("T")
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
+
+# TypeVar for model classes (any SQLAlchemy model)
+T = TypeVar("T")
 
 
 def clear_item_chunks(item: SourceItem, session) -> int:
