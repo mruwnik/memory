@@ -1,0 +1,14 @@
+{
+  "pythonVersion": "3.11",
+  "include": ["src", "tests", "tools"],
+  "exclude": [
+    "db/migrations",
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv",
+    "venv"
+  ],
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportGeneralTypeIssues": true
+}
