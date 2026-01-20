@@ -9,11 +9,11 @@ from PIL import Image
 
 from memory.api.MCP.servers.core import (
     RawObservation,
-    search_knowledge_base,
+    search,
     observe,
     search_observations,
     fetch_file,
-    get_source_item,
+    get_item,
     list_items,
     count_items,
     filter_observation_source_ids,
@@ -23,14 +23,14 @@ from memory.api.search.types import SearchFilters
 from memory.common import extract
 
 
-# ====== search_knowledge_base tests ======
+# ====== search tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_basic_query(
+async def test_search_basic_query(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Basic search with query returns results."""
@@ -40,7 +40,7 @@ async def test_search_knowledge_base_basic_query(
     mock_search.return_value = [mock_result]
     mock_filter_ids.return_value = None
 
-    results = await search_knowledge_base.fn(query="test query")
+    results = await search.fn(query="test query")
 
     assert len(results) == 1
     assert results[0]["id"] == 1
@@ -52,7 +52,7 @@ async def test_search_knowledge_base_basic_query(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_with_modalities(
+async def test_search_with_modalities(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search filters by specified modalities."""
@@ -60,7 +60,7 @@ async def test_search_knowledge_base_with_modalities(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", modalities={"mail", "blog"})
+    await search.fn(query="test", modalities={"mail", "blog"})
 
     call_kwargs = mock_search.call_args[1]
     assert "mail" in call_kwargs["modalities"]
@@ -71,7 +71,7 @@ async def test_search_knowledge_base_with_modalities(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_excludes_observation_modalities(
+async def test_search_excludes_observation_modalities(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search excludes observation modalities even if specified."""
@@ -79,7 +79,7 @@ async def test_search_knowledge_base_excludes_observation_modalities(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", modalities={"semantic", "temporal"})
+    await search.fn(query="test", modalities={"semantic", "temporal"})
 
     call_kwargs = mock_search.call_args[1]
     assert "semantic" not in call_kwargs["modalities"]
@@ -90,7 +90,7 @@ async def test_search_knowledge_base_excludes_observation_modalities(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_limit_enforced(
+async def test_search_limit_enforced(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search enforces max limit of 100."""
@@ -98,7 +98,7 @@ async def test_search_knowledge_base_limit_enforced(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", limit=500)
+    await search.fn(query="test", limit=500)
 
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["config"].limit == 100
@@ -108,7 +108,7 @@ async def test_search_knowledge_base_limit_enforced(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_with_filters(
+async def test_search_with_filters(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search applies filters from filters parameter."""
@@ -117,7 +117,7 @@ async def test_search_knowledge_base_with_filters(
     mock_filter_ids.return_value = [1, 2, 3]
 
     filters = {"tags": ["important"], "min_size": 1000}
-    await search_knowledge_base.fn(query="test", filters=filters)
+    await search.fn(query="test", filters=filters)
 
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["filters"]["source_ids"] == [1, 2, 3]
@@ -127,7 +127,7 @@ async def test_search_knowledge_base_with_filters(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_previews_config(
+async def test_search_previews_config(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search passes previews config correctly."""
@@ -135,7 +135,7 @@ async def test_search_knowledge_base_previews_config(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", previews=True)
+    await search.fn(query="test", previews=True)
 
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["config"].previews is True
@@ -145,7 +145,7 @@ async def test_search_knowledge_base_previews_config(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_use_scores_config(
+async def test_search_use_scores_config(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search passes useScores config correctly."""
@@ -153,7 +153,7 @@ async def test_search_knowledge_base_use_scores_config(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", use_scores=True)
+    await search.fn(query="test", use_scores=True)
 
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["config"].useScores is True
@@ -163,7 +163,7 @@ async def test_search_knowledge_base_use_scores_config(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_empty_modalities_searches_all(
+async def test_search_empty_modalities_searches_all(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search with empty modalities searches all available."""
@@ -172,7 +172,7 @@ async def test_search_knowledge_base_empty_modalities_searches_all(
     mock_search.return_value = []
     mock_filter_ids.return_value = None
 
-    await search_knowledge_base.fn(query="test", modalities=set())
+    await search.fn(query="test", modalities=set())
 
     call_kwargs = mock_search.call_args[1]
     # Should include all collections minus observation collections
@@ -183,7 +183,7 @@ async def test_search_knowledge_base_empty_modalities_searches_all(
 @patch("memory.api.MCP.servers.core.search")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_knowledge_base_returns_serialized_results(
+async def test_search_returns_serialized_results(
     mock_filter_ids, mock_extract, mock_search
 ):
     """Search returns model_dump() of results."""
@@ -195,7 +195,7 @@ async def test_search_knowledge_base_returns_serialized_results(
     mock_search.return_value = [mock_result1, mock_result2]
     mock_filter_ids.return_value = None
 
-    results = await search_knowledge_base.fn(query="test")
+    results = await search.fn(query="test")
 
     assert len(results) == 2
     assert results[0]["id"] == 1
@@ -884,12 +884,12 @@ def test_filter_source_ids_by_modalities(mock_make_session):
     assert result == [1]
 
 
-# ====== get_source_item tests ======
+# ====== get_item tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_source_item_returns_full_details(mock_make_session):
+async def test_get_item_returns_full_details(mock_make_session):
     """Get source item returns full item details with content."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -908,7 +908,7 @@ async def test_get_source_item_returns_full_details(mock_make_session):
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_source_item.fn(id=123, include_content=True)
+    result = await get_item.fn(id=123, include_content=True)
 
     assert result["id"] == 123
     assert result["modality"] == "blog"
@@ -920,7 +920,7 @@ async def test_get_source_item_returns_full_details(mock_make_session):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_source_item_without_content(mock_make_session):
+async def test_get_item_without_content(mock_make_session):
     """Get source item without content when requested."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -939,7 +939,7 @@ async def test_get_source_item_without_content(mock_make_session):
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_source_item.fn(id=123, include_content=False)
+    result = await get_item.fn(id=123, include_content=False)
 
     assert "content" not in result
     assert result["id"] == 123
@@ -947,19 +947,19 @@ async def test_get_source_item_without_content(mock_make_session):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_source_item_not_found(mock_make_session):
+async def test_get_item_not_found(mock_make_session):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
     mock_session.query.return_value.filter.return_value.first.return_value = None
 
     with pytest.raises(ValueError, match="Item 999 not found"):
-        await get_source_item.fn(id=999)
+        await get_item.fn(id=999)
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_source_item_handles_null_inserted_at(mock_make_session):
+async def test_get_item_handles_null_inserted_at(mock_make_session):
     """Get source item handles None inserted_at."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -977,7 +977,7 @@ async def test_get_source_item_handles_null_inserted_at(mock_make_session):
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_source_item.fn(id=123, include_content=False)
+    result = await get_item.fn(id=123, include_content=False)
 
     assert result["inserted_at"] is None
 

@@ -6,11 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from memory.api.MCP.servers.meta import (
     get_metadata_schemas,
-    get_all_tags,
-    get_all_subjects,
-    get_all_observation_types,
     get_current_time,
-    get_authenticated_user,
+    get_user,
     get_forecasts,
     from_annotation,
     get_schema,
@@ -71,179 +68,6 @@ async def test_get_metadata_schemas_excludes_empty_collections(mock_qdrant):
     assert result == {}
 
 
-# ====== get_all_tags tests ======
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_tags_returns_sorted_tags(mock_make_session):
-    """Get all tags returns sorted unique tags."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_session.query.return_value.distinct.return_value = [
-        ("python",),
-        ("javascript",),
-        ("ai",),
-        ("python",),  # duplicate should be handled by distinct
-    ]
-
-    result = await get_all_tags.fn()
-
-    assert result == ["ai", "javascript", "python"]
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_tags_filters_null_values(mock_make_session):
-    """Get all tags filters out None values."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_session.query.return_value.distinct.return_value = [
-        ("python",),
-        (None,),
-        ("ai",),
-        (None,),
-    ]
-
-    result = await get_all_tags.fn()
-
-    assert result == ["ai", "python"]
-    assert None not in result
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_tags_empty_when_no_tags(mock_make_session):
-    """Get all tags returns empty list when no tags exist."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_session.query.return_value.distinct.return_value = []
-
-    result = await get_all_tags.fn()
-
-    assert result == []
-
-
-# ====== get_all_subjects tests ======
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_subjects_returns_sorted_subjects(mock_make_session):
-    """Get all subjects returns sorted unique subjects."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs1 = MagicMock()
-    mock_obs1.subject = "user_preferences"
-    mock_obs2 = MagicMock()
-    mock_obs2.subject = "coding_style"
-    mock_obs3 = MagicMock()
-    mock_obs3.subject = "ai_beliefs"
-
-    mock_session.query.return_value.distinct.return_value = [
-        mock_obs1,
-        mock_obs2,
-        mock_obs3,
-    ]
-
-    result = await get_all_subjects.fn()
-
-    assert result == ["ai_beliefs", "coding_style", "user_preferences"]
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_subjects_empty_when_no_observations(mock_make_session):
-    """Get all subjects returns empty list when no observations."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_session.query.return_value.distinct.return_value = []
-
-    result = await get_all_subjects.fn()
-
-    assert result == []
-
-
-# ====== get_all_observation_types tests ======
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_observation_types_returns_standard_types(mock_make_session):
-    """Get all observation types returns sorted unique types."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs1 = MagicMock()
-    mock_obs1.observation_type = "belief"
-    mock_obs2 = MagicMock()
-    mock_obs2.observation_type = "preference"
-    mock_obs3 = MagicMock()
-    mock_obs3.observation_type = "behavior"
-
-    mock_session.query.return_value.distinct.return_value = [
-        mock_obs1,
-        mock_obs2,
-        mock_obs3,
-    ]
-
-    result = await get_all_observation_types.fn()
-
-    assert result == ["behavior", "belief", "preference"]
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_observation_types_filters_null(mock_make_session):
-    """Get all observation types filters None values."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs1 = MagicMock()
-    mock_obs1.observation_type = "belief"
-    mock_obs2 = MagicMock()
-    mock_obs2.observation_type = None
-
-    mock_session.query.return_value.distinct.return_value = [mock_obs1, mock_obs2]
-
-    result = await get_all_observation_types.fn()
-
-    assert result == ["belief"]
-    assert None not in result
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_all_observation_types_handles_custom_types(mock_make_session):
-    """Get all observation types includes custom types."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs1 = MagicMock()
-    mock_obs1.observation_type = "belief"
-    mock_obs2 = MagicMock()
-    mock_obs2.observation_type = "custom_type"
-    mock_obs3 = MagicMock()
-    mock_obs3.observation_type = "another_custom"
-
-    mock_session.query.return_value.distinct.return_value = [
-        mock_obs1,
-        mock_obs2,
-        mock_obs3,
-    ]
-
-    result = await get_all_observation_types.fn()
-
-    assert "belief" in result
-    assert "custom_type" in result
-    assert "another_custom" in result
-
-
 # ====== get_current_time tests ======
 
 
@@ -276,16 +100,14 @@ async def test_get_current_time_iso_format():
     assert parsed.tzinfo is not None  # Should have timezone info
 
 
-# ====== get_authenticated_user tests ======
+# ====== get_user tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.meta.get_access_token")
 @patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_authenticated_user_returns_user_info(
-    mock_make_session, mock_get_token
-):
-    """Get authenticated user returns full user info with email accounts."""
+async def test_get_user_returns_user_info(mock_make_session, mock_get_token):
+    """Get user returns full user info with email accounts."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
@@ -316,7 +138,7 @@ async def test_get_authenticated_user_returns_user_info(
         mock_email_account
     ]
 
-    result = await get_authenticated_user.fn()
+    result = await get_user.fn()
 
     assert result["authenticated"] is True
     assert result["token_type"] == "Bearer"
@@ -331,11 +153,11 @@ async def test_get_authenticated_user_returns_user_info(
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.meta.get_access_token")
 @patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_authenticated_user_no_token(mock_make_session, mock_get_token):
-    """Get authenticated user returns unauthenticated when no token."""
+async def test_get_user_no_token(mock_make_session, mock_get_token):
+    """Get user returns unauthenticated when no token."""
     mock_get_token.return_value = None
 
-    result = await get_authenticated_user.fn()
+    result = await get_user.fn()
 
     assert result["authenticated"] is False
 
@@ -343,10 +165,8 @@ async def test_get_authenticated_user_no_token(mock_make_session, mock_get_token
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.meta.get_access_token")
 @patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_authenticated_user_invalid_session(
-    mock_make_session, mock_get_token
-):
-    """Get authenticated user returns error when session not found."""
+async def test_get_user_invalid_session(mock_make_session, mock_get_token):
+    """Get user returns error when session not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
@@ -356,7 +176,7 @@ async def test_get_authenticated_user_invalid_session(
 
     mock_session.get.return_value = None  # Session not found
 
-    result = await get_authenticated_user.fn()
+    result = await get_user.fn()
 
     assert result["authenticated"] is False
     assert "error" in result
@@ -365,10 +185,8 @@ async def test_get_authenticated_user_invalid_session(
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.meta.get_access_token")
 @patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_authenticated_user_no_email_accounts(
-    mock_make_session, mock_get_token
-):
-    """Get authenticated user works with no email accounts."""
+async def test_get_user_no_email_accounts(mock_make_session, mock_get_token):
+    """Get user works with no email accounts."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
@@ -391,7 +209,7 @@ async def test_get_authenticated_user_no_email_accounts(
 
     mock_session.query.return_value.filter.return_value.all.return_value = []
 
-    result = await get_authenticated_user.fn()
+    result = await get_user.fn()
 
     assert result["authenticated"] is True
     assert result["user"]["email_accounts"] == []
