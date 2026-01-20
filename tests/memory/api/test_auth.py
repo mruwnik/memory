@@ -258,3 +258,138 @@ def test_get_user_account_raises_404_when_user_does_not_own_account():
     # Returns same error to avoid leaking info about account existence
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Account not found"
+
+
+# --- Tests for new API key authentication ---
+
+
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_by_api_key_uses_new_system_first(mock_authenticate_new):
+    """Test that authenticate_by_api_key tries the new api_keys table first."""
+    db = MagicMock()
+    mock_user = MagicMock()
+    mock_key = MagicMock()
+    mock_authenticate_new.return_value = (mock_user, mock_key)
+
+    result = auth.authenticate_by_api_key("key_test123", db)
+
+    assert result is mock_user
+    mock_authenticate_new.assert_called_once_with(db, "key_test123")
+
+
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_by_api_key_falls_back_to_legacy(mock_authenticate_new):
+    """Test that authenticate_by_api_key falls back to legacy api_key column."""
+    db = MagicMock()
+    mock_authenticate_new.return_value = (None, None)
+
+    # Set up legacy bot user
+    legacy_bot = MagicMock()
+    legacy_bot.api_key = "bot_legacy123"
+    db.query.return_value.filter.return_value.all.return_value = [legacy_bot]
+
+    result = auth.authenticate_by_api_key("bot_legacy123", db)
+
+    assert result is legacy_bot
+
+
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_by_api_key_respects_allowed_key_types(mock_authenticate_new):
+    """Test that authenticate_by_api_key respects allowed_key_types filter."""
+    from memory.common.db.models import ApiKeyType
+
+    db = MagicMock()
+    mock_user = MagicMock()
+    mock_key = MagicMock()
+    mock_key.key_type = ApiKeyType.DISCORD  # Key is Discord type
+
+    mock_authenticate_new.return_value = (mock_user, mock_key)
+
+    # Should reject because Discord is not in allowed types
+    result = auth.authenticate_by_api_key(
+        "key_test123", db, allowed_key_types=[ApiKeyType.INTERNAL, ApiKeyType.MCP]
+    )
+
+    assert result is None
+
+
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_by_api_key_accepts_allowed_key_type(mock_authenticate_new):
+    """Test that authenticate_by_api_key accepts key when type is allowed."""
+    from memory.common.db.models import ApiKeyType
+
+    db = MagicMock()
+    mock_user = MagicMock()
+    mock_key = MagicMock()
+    mock_key.key_type = ApiKeyType.MCP
+
+    mock_authenticate_new.return_value = (mock_user, mock_key)
+
+    result = auth.authenticate_by_api_key(
+        "key_test123", db, allowed_key_types=[ApiKeyType.INTERNAL, ApiKeyType.MCP]
+    )
+
+    assert result is mock_user
+
+
+def test_get_session_user_handles_new_key_prefix():
+    """Test that get_session_user recognizes the new key_ prefix."""
+    request = SimpleNamespace(
+        headers={"Authorization": "Bearer key_test123"},
+        cookies={},
+    )
+    db = MagicMock()
+
+    with patch("memory.api.auth.authenticate_by_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock()
+        auth.get_session_user(request, db)
+
+        mock_auth.assert_called_once_with("key_test123", db, None)
+
+
+def test_get_user_from_token_handles_new_key_prefix():
+    """Test that get_user_from_token recognizes the new key_ prefix."""
+    db = MagicMock()
+
+    with patch("memory.api.auth.authenticate_by_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock()
+        auth.get_user_from_token("key_test123", db)
+
+        mock_auth.assert_called_once_with("key_test123", db, None)
+
+
+@patch("memory.api.auth.hash_api_key")
+@patch("memory.api.auth.ApiKey")
+def test_get_api_key_scopes_returns_key_scopes(mock_api_key_class, mock_hash):
+    """Test that get_api_key_scopes returns key-specific scopes."""
+    db = MagicMock()
+    mock_hash.return_value = "hashed_key"
+
+    mock_key = MagicMock()
+    mock_key.is_valid.return_value = True
+    mock_key.get_effective_scopes.return_value = ["read", "observe"]
+
+    db.query.return_value.filter.return_value.first.return_value = mock_key
+
+    result = auth.get_api_key_scopes("key_test123", db)
+
+    assert result == ["read", "observe"]
+
+
+@patch("memory.api.auth.hash_api_key")
+@patch("memory.api.auth.ApiKey")
+def test_get_api_key_scopes_returns_none_for_invalid_key(mock_api_key_class, mock_hash):
+    """Test that get_api_key_scopes returns None for invalid keys."""
+    db = MagicMock()
+    mock_hash.return_value = "hashed_key"
+
+    mock_key = MagicMock()
+    mock_key.is_valid.return_value = False
+
+    db.query.return_value.filter.return_value.first.return_value = mock_key
+    # No legacy users
+    db.query.return_value.filter.return_value.all.return_value = []
+
+    result = auth.get_api_key_scopes("key_invalid", db)
+
+    assert result is None

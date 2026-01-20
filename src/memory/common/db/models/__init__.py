@@ -83,6 +83,12 @@ from memory.common.db.models.users import (
     OAuthState,
     OAuthRefreshToken,
     generate_ssh_keypair,
+    ApiKey,
+    ApiKeyType,
+    hash_api_key,
+    generate_api_key,
+    find_api_key_by_hash,
+    authenticate_with_api_key,
 )
 from memory.common.db.models.secrets import (
     Secret,
@@ -223,6 +229,13 @@ __all__ = [
     "OAuthClientInformation",
     "OAuthState",
     "OAuthRefreshToken",
+    # API Keys
+    "ApiKey",
+    "ApiKeyType",
+    "hash_api_key",
+    "generate_api_key",
+    "find_api_key_by_hash",
+    "authenticate_with_api_key",
     # Scheduled Calls
     "ScheduledLLMCall",
     # Metrics

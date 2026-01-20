@@ -16,6 +16,8 @@ from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
+    ApiKey,
+    ApiKeyType,
     EmailAccount,
     SourceItem,
     UserSession,
@@ -144,10 +146,67 @@ async def get_current_time() -> dict:
 
 
 @meta_mcp.tool()
-async def get_user() -> dict:
-    """Get information about the authenticated user."""
+async def get_user(
+    generate_one_time_key: bool = False,
+    key_name: str | None = None,
+    key_type: str = "mcp",
+) -> dict:
+    """Get information about the authenticated user.
+
+    Args:
+        generate_one_time_key: If True, generates a one-time API key that can be
+            used for a single authentication. This is useful for MCP clients that
+            need to make one-off API calls.
+        key_name: Optional name for the generated key (for identification).
+        key_type: Type of key to generate. One of: internal, mcp, discord, google,
+            github, external. Default is "mcp".
+
+    Returns:
+        User information dict. If generate_one_time_key is True, also includes
+        "one_time_key" field with the plaintext key (only shown once).
+    """
     with make_session() as session:
-        return _get_current_user(session)
+        result = _get_current_user(session)
+
+        if not result.get("authenticated"):
+            return result
+
+        if generate_one_time_key:
+            # Get the user from the session
+            access_token = get_access_token()
+            if not access_token:
+                return result
+
+            user_session = session.get(UserSession, access_token.token)
+            if not user_session or not user_session.user:
+                return result
+
+            # Map string key_type to ApiKeyType enum
+            key_type_map = {
+                "internal": ApiKeyType.INTERNAL,
+                "mcp": ApiKeyType.MCP,
+                "discord": ApiKeyType.DISCORD,
+                "google": ApiKeyType.GOOGLE,
+                "github": ApiKeyType.GITHUB,
+                "external": ApiKeyType.EXTERNAL,
+            }
+            api_key_type = key_type_map.get(key_type.lower(), ApiKeyType.MCP)
+
+            # Create one-time key
+            api_key, plaintext_key = ApiKey.create(
+                user_id=user_session.user.id,
+                key_type=api_key_type,
+                name=key_name or "One-time MCP key",
+                is_one_time=True,
+                prefix="key",
+            )
+            session.add(api_key)
+            session.commit()
+
+            result["one_time_key"] = plaintext_key
+            result["one_time_key_info"] = api_key.serialize()
+
+        return result
 
 
 # --- Forecasting tools ---

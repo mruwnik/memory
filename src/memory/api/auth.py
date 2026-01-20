@@ -11,11 +11,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import (
+    ApiKey,
+    ApiKeyType,
     BotUser,
     MCPServer,
     HumanUser,
     User,
     UserSession,
+    authenticate_with_api_key,
+    hash_api_key,
 )
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
@@ -96,24 +100,54 @@ def get_user_session(
 def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | None:
     """Authenticate a bot by API key.
 
-    Uses constant-time comparison to prevent timing attacks.
+    DEPRECATED: Use authenticate_by_api_key_new instead.
+    This function is kept for backwards compatibility with legacy api_key column.
     """
-    # Get all bot users and compare with constant-time function
-    # This prevents timing attacks on API key discovery
-    bots = db.query(BotUser).all()
+    # First try the new api_keys table
+    user, _ = authenticate_with_api_key(db, api_key)
+    if user and isinstance(user, BotUser):
+        return user
+
+    # Fall back to legacy api_key column for backwards compatibility
+    bots = db.query(BotUser).filter(BotUser.api_key.isnot(None)).all()
     for bot in bots:
         if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
             return bot
     return None
 
 
-def authenticate_by_api_key(api_key: str, db: DBSession | scoped_session) -> User | None:
+def authenticate_by_api_key(
+    api_key: str,
+    db: DBSession | scoped_session,
+    allowed_key_types: list[ApiKeyType] | None = None,
+) -> User | None:
     """Authenticate any user by API key.
 
-    Supports both bot users (bot_* keys) and human users (user_* keys).
-    Uses constant-time comparison to prevent timing attacks.
+    Supports both the new api_keys table and legacy api_key column.
+    For new keys, uses efficient hash-based lookup (O(1)).
+    For legacy keys, falls back to iteration with constant-time comparison.
+
+    Args:
+        api_key: The plaintext API key
+        db: Database session
+        allowed_key_types: Optional list of allowed key types. If specified,
+            only keys of these types will be accepted. If None, all types allowed.
+
+    Returns:
+        The authenticated User, or None if authentication failed.
     """
-    # Query all users with API keys and compare with constant-time function
+    # First try the new api_keys table (efficient O(1) lookup by hash)
+    user, key_obj = authenticate_with_api_key(db, api_key)
+    if user and key_obj:
+        # Check if key type is allowed
+        if allowed_key_types is not None and key_obj.key_type not in allowed_key_types:
+            logger.warning(
+                f"API key type {key_obj.key_type} not allowed for this endpoint"
+            )
+            return None
+        return user
+
+    # Fall back to legacy api_key column for backwards compatibility
     users = db.query(User).filter(User.api_key.isnot(None)).all()
     for user in users:
         if user.api_key and secrets.compare_digest(user.api_key, api_key):
@@ -121,20 +155,64 @@ def authenticate_by_api_key(api_key: str, db: DBSession | scoped_session) -> Use
     return None
 
 
-def get_session_user(request: Request, db: DBSession | scoped_session) -> User | None:
+def get_api_key_scopes(
+    api_key: str, db: DBSession | scoped_session
+) -> list[str] | None:
+    """Get the effective scopes for an API key.
+
+    Returns None if the key is not found or invalid.
+    For new api_keys, returns key-specific scopes or user scopes.
+    For legacy keys, returns user scopes.
+    """
+    # Try new api_keys table first
+    key_hash = hash_api_key(api_key)
+    key_obj = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+
+    if key_obj and key_obj.is_valid():
+        return key_obj.get_effective_scopes()
+
+    # Fall back to legacy api_key column
+    users = db.query(User).filter(User.api_key.isnot(None)).all()
+    for user in users:
+        if user.api_key and secrets.compare_digest(user.api_key, api_key):
+            return list(user.scopes or ["read"])
+
+    return None
+
+
+def get_session_user(
+    request: Request,
+    db: DBSession | scoped_session,
+    allowed_key_types: list[ApiKeyType] | None = None,
+) -> User | None:
     """Get user from session ID or API key if valid.
 
-    Supports two authentication methods:
+    Supports multiple authentication methods:
     - Session tokens (UUIDs from UserSession table)
-    - API keys (prefixed with 'bot_' for BotUser accounts)
+    - New API keys (key_* prefix, looked up by hash)
+    - Legacy API keys (bot_* or user_* prefix)
+
+    Args:
+        request: The FastAPI request
+        db: Database session
+        allowed_key_types: Optional list of allowed key types for API key auth.
+            If specified, only API keys of these types will be accepted.
+            Session tokens are always accepted regardless of this parameter.
+
+    Returns:
+        The authenticated User, or None if authentication failed.
     """
     token = get_token(request)
     if not token:
         return None
 
-    # Check if this is an API key (for bot or human users with API keys)
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this is an API key (new or legacy format)
+    if (
+        token.startswith("key_")
+        or token.startswith("bot_")
+        or token.startswith("user_")
+    ):
+        return authenticate_by_api_key(token, db, allowed_key_types)
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
@@ -151,18 +229,31 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def get_user_from_token(token: str, db: DBSession | scoped_session) -> User | None:
+def get_user_from_token(
+    token: str,
+    db: DBSession | scoped_session,
+    allowed_key_types: list[ApiKeyType] | None = None,
+) -> User | None:
     """Authenticate user from a token string.
 
     Supports both session tokens (UUIDs) and API keys.
     Useful for WebSocket authentication where tokens are passed via query params.
+
+    Args:
+        token: The authentication token
+        db: Database session
+        allowed_key_types: Optional list of allowed key types for API key auth.
     """
     if not token:
         return None
 
-    # Check if this is an API key
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this is an API key (new or legacy format)
+    if (
+        token.startswith("key_")
+        or token.startswith("bot_")
+        or token.startswith("user_")
+    ):
+        return authenticate_by_api_key(token, db, allowed_key_types)
 
     # Otherwise treat as session token
     session = db.get(UserSession, token)
@@ -195,6 +286,33 @@ def require_scope(scope: str):
         if "*" in user_scopes or scope in user_scopes:
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    return Depends(checker)
+
+
+def require_key_types(*key_types: ApiKeyType):
+    """Dependency that restricts authentication to specific API key types.
+
+    Session tokens are always accepted. This only restricts API key authentication.
+
+    Usage:
+        @router.get("/internal")
+        def internal_endpoint(user: User = require_key_types(ApiKeyType.INTERNAL)):
+            ...
+
+        @router.get("/mcp")
+        def mcp_endpoint(user: User = require_key_types(ApiKeyType.MCP, ApiKeyType.INTERNAL)):
+            ...
+    """
+    allowed_types = list(key_types)
+
+    def checker(
+        request: Request, db: DBSession = Depends(get_session)
+    ) -> User:
+        user = get_session_user(request, db, allowed_key_types=allowed_types)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        return user
 
     return Depends(checker)
 

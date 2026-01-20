@@ -1,5 +1,8 @@
+import enum
+import hashlib
 import secrets
 import uuid
+from datetime import datetime, timezone
 from typing import cast
 
 import bcrypt
@@ -11,6 +14,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -22,6 +26,43 @@ from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
+
+
+class ApiKeyType(enum.Enum):
+    """Types of API keys for different use cases."""
+
+    INTERNAL = "internal"  # Internal server-to-server communication
+    MCP = "mcp"  # MCP client access
+    DISCORD = "discord"  # Discord bot integration
+    GOOGLE = "google"  # Google service integration
+    GITHUB = "github"  # GitHub integration
+    EXTERNAL = "external"  # External third-party access
+
+
+def hash_api_key(key: str) -> str:
+    """Hash an API key using SHA-256 for secure storage and lookup.
+
+    We use SHA-256 (not bcrypt) because:
+    1. API keys are already high-entropy random tokens (not user passwords)
+    2. We need to look up keys by hash in the database (O(1) vs O(n))
+    3. SHA-256 is deterministic, enabling efficient database indexing
+
+    Returns the hex-encoded hash.
+    """
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def generate_api_key(prefix: str = "key") -> tuple[str, str]:
+    """Generate a new API key and its hash.
+
+    Returns (plaintext_key, key_hash) tuple.
+    The plaintext key is shown once to the user, the hash is stored.
+    """
+    # Generate 32 bytes = 64 hex chars of randomness
+    random_part = secrets.token_hex(32)
+    plaintext_key = f"{prefix}_{random_part}"
+    key_hash = hash_api_key(plaintext_key)
+    return plaintext_key, key_hash
 
 
 def hash_password(password: str) -> str:
@@ -91,6 +132,11 @@ class User(Base):
         else:
             self.ssh_private_key_encrypted = encrypt_value(value)
 
+    @property
+    def public_key(self) -> str | None:
+        """Alias for ssh_public_key for API compatibility."""
+        return self.ssh_public_key
+
     # Relationship to sessions
     sessions = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan"
@@ -100,6 +146,7 @@ class User(Base):
     )
     discord_users = relationship("DiscordUser", back_populates="system_user")
     secrets = relationship("Secret", back_populates="user", cascade="all, delete-orphan")
+    api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
 
     __mapper_args__ = {
         "polymorphic_on": user_type,
@@ -118,6 +165,156 @@ class User(Base):
                 for discord_user in self.discord_users
             },
         }
+
+
+class ApiKey(Base):
+    """API key for user authentication.
+
+    Supports multiple keys per user with different types, expiration, and scopes.
+    Keys are stored as SHA-256 hashes for efficient lookup.
+    """
+
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Key storage: we store a hash for secure lookup, and a prefix for identification
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+    key_prefix = Column(String(16), nullable=False)  # e.g., "key_abc123..." for display
+
+    # Key metadata
+    name = Column(String, nullable=True)  # Optional human-readable name
+    key_type = Column(
+        Enum(ApiKeyType, name="api_key_type"),
+        nullable=False,
+        default=ApiKeyType.INTERNAL,
+    )
+
+    # Scopes override: if set, uses these instead of user's scopes
+    # If None, inherits user's scopes
+    scopes = Column(ARRAY(String), nullable=True)
+
+    # Expiration and one-time use
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    is_one_time = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Usage tracking
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+
+    # Relationship
+    user = relationship("User", back_populates="api_keys")
+
+    def is_valid(self) -> bool:
+        """Check if this key is currently valid for authentication."""
+        if not self.is_active:
+            return False
+
+        if self.expires_at is not None:
+            now = datetime.now(timezone.utc)
+            if self.expires_at.replace(tzinfo=timezone.utc) < now:
+                return False
+
+        return True
+
+    def get_effective_scopes(self) -> list[str]:
+        """Get the effective scopes for this key.
+
+        Returns key-specific scopes if set, otherwise user's scopes.
+        """
+        if self.scopes is not None:
+            return list(self.scopes)
+        return list(self.user.scopes or ["read"])
+
+    def mark_used(self) -> None:
+        """Mark the key as used. For one-time keys, deactivates the key."""
+        self.last_used_at = datetime.now(timezone.utc)
+        self.use_count = (self.use_count or 0) + 1
+
+        if self.is_one_time:
+            self.is_active = False
+
+    def serialize(self) -> dict:
+        """Serialize API key metadata (never includes the actual key)."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "key_prefix": self.key_prefix,
+            "name": self.name,
+            "key_type": self.key_type.value if self.key_type else None,
+            "scopes": self.scopes,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "is_one_time": self.is_one_time,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+            "use_count": self.use_count,
+        }
+
+    @classmethod
+    def create(
+        cls,
+        user_id: int,
+        key_type: ApiKeyType = ApiKeyType.INTERNAL,
+        name: str | None = None,
+        scopes: list[str] | None = None,
+        expires_at: datetime | None = None,
+        is_one_time: bool = False,
+        prefix: str = "key",
+    ) -> tuple["ApiKey", str]:
+        """Create a new API key.
+
+        Returns (ApiKey instance, plaintext_key) tuple.
+        The plaintext key is only available at creation time.
+        """
+        plaintext_key, key_hash = generate_api_key(prefix)
+
+        # Store the first 12 characters as prefix for identification
+        key_prefix = plaintext_key[:12] + "..."
+
+        api_key = cls(
+            user_id=user_id,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            name=name,
+            key_type=key_type,
+            scopes=scopes,
+            expires_at=expires_at,
+            is_one_time=is_one_time,
+        )
+
+        return api_key, plaintext_key
+
+
+def find_api_key_by_hash(session: Session, key_hash: str) -> ApiKey | None:
+    """Find an API key by its hash."""
+    return session.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+
+
+def authenticate_with_api_key(
+    session: Session, plaintext_key: str
+) -> tuple[User | None, ApiKey | None]:
+    """Authenticate using an API key.
+
+    Returns (user, api_key) tuple if valid, (None, None) otherwise.
+    Also marks the key as used and deactivates one-time keys.
+    """
+    key_hash = hash_api_key(plaintext_key)
+    api_key = find_api_key_by_hash(session, key_hash)
+
+    if api_key is None:
+        return None, None
+
+    if not api_key.is_valid():
+        return None, None
+
+    # Mark as used (this deactivates one-time keys)
+    api_key.mark_used()
+
+    return api_key.user, api_key
 
 
 class HumanUser(User):
