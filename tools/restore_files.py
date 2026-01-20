@@ -24,7 +24,6 @@ from pathlib import Path
 import boto3
 from cryptography.fernet import Fernet
 
-from memory.common import settings
 
 
 def get_cipher(password: str) -> Fernet:

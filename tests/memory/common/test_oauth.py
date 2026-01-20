@@ -1,7 +1,6 @@
 """Tests for OAuth 2.0 flow handling."""
 
 import pytest
-from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp

@@ -151,7 +151,7 @@ async def test_list_books_without_sections(mock_make_session):
     query_mock.limit.return_value = query_mock
     query_mock.all.return_value = [mock_book]
 
-    result = await list_books.fn(sections=False)
+    await list_books.fn(sections=False)
 
     # Verify as_payload called with sections=False
     mock_book.as_payload.assert_called_once_with(sections=False)

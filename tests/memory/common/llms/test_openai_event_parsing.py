@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import Mock
 
 from memory.common.llms.openai_provider import OpenAIProvider
-from memory.common.llms.base import StreamEvent
 
 
 @pytest.fixture

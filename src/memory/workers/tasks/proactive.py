@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from croniter import croniter
-from sqlalchemy import or_
 
 from memory.common import settings
 from memory.common.celery_app import app
@@ -38,7 +37,6 @@ def is_cron_due(cron_expr: str, last_run: datetime | None, now: datetime) -> boo
         prev_run = cron.get_prev(datetime)
         # Get the one before that to determine the interval
         cron.get_prev(datetime)
-        prev_prev_run = cron.get_current(datetime)
 
         # If we haven't run since the last scheduled time, we should run
         if last_run is None:

@@ -9,8 +9,6 @@ import logging
 import re
 from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
-
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -19,6 +17,8 @@ from sqlalchemy.orm import Session, relationship, validates
 
 from memory.common import settings
 from memory.common.db.models.base import Base
+
+logger = logging.getLogger(__name__)
 
 # Clojure symbol pattern: starts with letter or special char, followed by
 # letters, digits, or special chars. No spaces or most punctuation.

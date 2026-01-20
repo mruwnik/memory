@@ -11,7 +11,6 @@ from typing import Optional
 
 import voyageai
 
-from memory.common import settings
 from memory.common.db.models import Chunk
 
 logger = logging.getLogger(__name__)

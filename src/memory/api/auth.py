@@ -1,7 +1,7 @@
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session as DBSession
@@ -17,8 +17,11 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
+from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
+
+T = TypeVar("T", bound=Base)
 
 logger = logging.getLogger(__name__)
 
@@ -173,12 +176,6 @@ def get_user_from_token(token: str, db: DBSession | scoped_session) -> User | No
     if session.expires_at.replace(tzinfo=timezone.utc) < now:
         return None
     return session.user
-
-
-from typing import TypeVar
-from memory.common.db.models.base import Base
-
-T = TypeVar("T", bound=Base)
 
 
 def require_scope(scope: str):

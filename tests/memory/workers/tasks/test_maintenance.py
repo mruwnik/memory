@@ -730,8 +730,8 @@ def test_update_metadata_for_item_success(db_session, qdrant, item_type):
 
     # Verify set_payload was called for each chunk with merged tags
     assert mock_set_payload.call_count == 3
-    for call in mock_set_payload.call_args_list:
-        args, kwargs = call
+    for mock_call in mock_set_payload.call_args_list:
+        args, kwargs = mock_call
         client, collection, chunk_id, updated_payload = args
 
         # Check that tags were merged (existing + new)

@@ -2,7 +2,7 @@
 
 import sys
 import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 # Mock FastMCP - this creates a decorator factory that passes through the function unchanged
 class MockFastMCP:
@@ -40,9 +40,9 @@ _mock_base.mcp = MagicMock()
 _mock_base.mcp.tool = lambda: lambda f: f
 sys.modules["memory.api.MCP.base"] = _mock_base
 
-from memory.common.db.models import Person
-from memory.common.db import connection as db_connection
-from memory.common.content_processing import create_content_hash
+from memory.common.db.models import Person  # noqa: E402
+from memory.common.db import connection as db_connection  # noqa: E402
+from memory.common.content_processing import create_content_hash  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -226,7 +226,7 @@ async def test_update_person_info_with_merge_params(db_session, sample_people):
     with patch("memory.api.MCP.people.make_session", return_value=db_session):
         with patch("memory.api.MCP.people.celery_app") as mock_celery:
             mock_celery.send_task.return_value = mock_task
-            result = await update_person_info(
+            await update_person_info(
                 identifier="alice_chen",
                 aliases=["@alice_new"],
                 contact_info={"slack": "@alice"},

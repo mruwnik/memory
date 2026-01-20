@@ -3,7 +3,7 @@
 import pytest
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from memory.common.llms.tools.discord import (
     handle_update_summary_call,
@@ -18,7 +18,6 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordUser,
     DiscordMessage,
-    BotUser,
     DiscordBotUser,
     HumanUser,
     ScheduledLLMCall,

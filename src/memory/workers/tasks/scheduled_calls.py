@@ -9,7 +9,7 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall, DiscordBotUser
+from memory.common.db.models import ScheduledLLMCall
 from memory.discord.messages import call_llm, send_discord_response
 from memory.common.content_processing import safe_task_execution
 

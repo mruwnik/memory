@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import Mock
 
 from memory.common.llms.anthropic_provider import AnthropicProvider
-from memory.common.llms.base import StreamEvent
 
 
 @pytest.fixture

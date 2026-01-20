@@ -2,7 +2,6 @@
 
 from types import SimpleNamespace
 
-import pytest
 from memory.common.db.models import DiscordServer, DiscordChannel, DiscordUser
 
 

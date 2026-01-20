@@ -153,7 +153,8 @@ def test_generate_temporal_text_days_of_week(weekday: int, day_name: str):
 @pytest.mark.parametrize("confidence", [0.0, 0.1, 0.5, 0.99, 1.0])
 def test_generate_temporal_text_confidence_values(confidence: float):
     test_date = datetime(2024, 1, 15, 10, 30)
-    result = generate_temporal_text(
+    # Test that function completes without error for various confidence values
+    generate_temporal_text(
         subject="subject",
         content="content",
         created_at=test_date,

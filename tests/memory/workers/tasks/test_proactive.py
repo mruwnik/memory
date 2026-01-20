@@ -1,8 +1,8 @@
 """Tests for proactive check-in tasks."""
 
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 from memory.common.db.models import (
     DiscordBotUser,
@@ -223,7 +223,7 @@ def test_evaluate_proactive_checkins_skips_no_cron(
     mock_make_session.return_value.__enter__ = Mock(return_value=db_session)
     mock_make_session.return_value.__exit__ = Mock(return_value=False)
 
-    result = proactive.evaluate_proactive_checkins()
+    proactive.evaluate_proactive_checkins()
 
     for call in mock_execute.delay.call_args_list:
         entity_type, entity_id = call[0]

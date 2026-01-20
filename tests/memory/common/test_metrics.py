@@ -2,10 +2,8 @@
 
 import asyncio
 import queue
-import threading
-import time
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, Mock, patch
+from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 

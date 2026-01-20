@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
-import pytest
 
 from memory.workers.tasks.metrics import (
     collect_open_files,
@@ -139,7 +138,7 @@ def test_collect_system_metrics_system_error():
     with (
         patch("psutil.Process", return_value=mock_process),
         patch("psutil.cpu_percent", side_effect=Exception("System error")),
-        patch("memory.workers.tasks.metrics.record_gauge") as mock_gauge,
+        patch("memory.workers.tasks.metrics.record_gauge"),
     ):
         result = collect_system_metrics()
 

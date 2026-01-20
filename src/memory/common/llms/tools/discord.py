@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Literal, cast
 from memory.discord.messages import (
     upsert_scheduled_message,
-    comm_channel_prompt,
     previous_messages,
 )
 from sqlalchemy import BigInteger

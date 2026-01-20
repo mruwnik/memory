@@ -3,7 +3,23 @@ import pathlib
 from datetime import datetime
 from typing import Any, Iterable, TypedDict, cast
 
+import memory.common.settings as settings
+from memory.common import jobs as job_utils
+from memory.common.celery_app import REPROCESS_BOOK, SYNC_BOOK, app
+from memory.common.content_processing import (
+    check_content_exists,
+    clear_item_chunks,
+    create_content_hash,
+    embed_source_item,
+    push_to_qdrant,
+    safe_task_execution,
+)
+from memory.common.db.connection import make_session
+from memory.common.db.models import Book, BookSection
+from memory.parsers.ebook import Ebook, Section, parse_ebook
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class BookProcessingResult(TypedDict, total=False):
@@ -17,23 +33,6 @@ class BookProcessingResult(TypedDict, total=False):
     sections_embedded: int
     sections_processed: int
     error: str
-
-import memory.common.settings as settings
-from memory.common.celery_app import SYNC_BOOK, REPROCESS_BOOK, app
-from memory.common.db.connection import make_session
-from memory.common.db.models import Book, BookSection
-from memory.common import jobs as job_utils
-from memory.parsers.ebook import Ebook, Section, parse_ebook
-from memory.common.content_processing import (
-    check_content_exists,
-    clear_item_chunks,
-    create_content_hash,
-    embed_source_item,
-    push_to_qdrant,
-    safe_task_execution,
-)
-
-logger = logging.getLogger(__name__)
 
 
 # Minimum section length to embed (avoid noise from very short sections)

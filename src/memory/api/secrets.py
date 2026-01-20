@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
+from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.secrets import (
@@ -17,7 +16,8 @@ from memory.common.db.models.secrets import (
     find_secret,
     validate_symbol_name,
 )
-from memory.api.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/secrets", tags=["secrets"])
 
