@@ -137,8 +137,9 @@ def execute_scheduled_call(self, scheduled_call_id: str):
         except Exception as discord_error:
             logger.error(f"Failed to send to Discord: {discord_error}")
             # Don't mark as failed since the LLM call succeeded
-            scheduled_call.data = scheduled_call.data or {}
-            scheduled_call.data["discord_error"] = str(discord_error)
+            data = scheduled_call.data or {}
+            data["discord_error"] = str(discord_error)
+            scheduled_call.data = data
             session.commit()
 
         return {
@@ -211,7 +212,7 @@ def run_scheduled_calls():
 
         # Now dispatch tasks for queued calls
         for call_id in call_ids:
-            execute_scheduled_call.delay(call_id)
+            execute_scheduled_call.delay(call_id)  # type: ignore[attr-defined]
 
         return {
             "calls": call_ids,

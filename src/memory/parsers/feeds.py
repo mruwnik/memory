@@ -267,17 +267,18 @@ class HTMLListParser(FeedParser):
             re.search(pattern, url, re.IGNORECASE) for pattern in self.skip_patterns
         )
 
-    def extract_title(self, entry: Any) -> str | None:
+    def extract_title(self, entry: Any) -> str:
         """Extract title from HTML entry."""
         if self.title_selector:
-            return extract_title(entry, self.title_selector)
+            return extract_title(entry, self.title_selector) or ""
+        return ""
 
-    def extract_description(self, entry: Any) -> str | None:
+    def extract_description(self, entry: Any) -> str:
         """Extract description from HTML entry."""
         if not self.description_selector:
-            return None
+            return ""
         desc = entry.select_one(self.description_selector)
-        return desc and desc.get_text(strip=True)
+        return desc.get_text(strip=True) if desc else ""
 
     def extract_url(self, entry: Any) -> str:
         """Extract URL from HTML entry."""

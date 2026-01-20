@@ -5,7 +5,7 @@ Database models for tracking people.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Annotated, Any, Sequence
+from typing import Annotated, Any, Sequence
 
 import yaml
 from sqlalchemy import (
@@ -50,12 +50,6 @@ class Person(SourceItem):
     contact_info: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default="{}", nullable=False
     )
-
-    # Type declarations for inherited fields from SourceItem (which uses old Column style)
-    # These don't create new columns, just help pyright understand the types
-    if TYPE_CHECKING:
-        tags: list[str]
-        content: str | None
 
     __mapper_args__ = {
         "polymorphic_identity": "person",

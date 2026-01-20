@@ -184,7 +184,7 @@ class DiscordBotUser(BotUser):
     }
 
     @classmethod
-    def create_with_api_key(
+    def create_with_api_key(  # type: ignore[override]
         cls,
         discord_users: list[DiscordUser],
         name: str,

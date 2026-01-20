@@ -59,7 +59,7 @@ def verify_orphans(
 
         for (source_type, key), group_items in groups.items():
             item_ids = [item.id for item in group_items]
-            task = verify_source_batch.delay(source_type, key, item_ids)
+            task = verify_source_batch.delay(source_type, key, item_ids)  # type: ignore[attr-defined]
             dispatched.append(
                 {
                     "source_type": source_type,

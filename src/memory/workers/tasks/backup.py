@@ -176,7 +176,7 @@ def backup_all_to_s3():
             logger.info("Starting S3 backup...")
 
             for dir_name in settings.storage_dirs:
-                backup_to_s3.delay((settings.FILE_STORAGE_DIR / dir_name).as_posix())
+                backup_to_s3.delay((settings.FILE_STORAGE_DIR / dir_name).as_posix())  # type: ignore[attr-defined]
 
             return {
                 "status": "success",

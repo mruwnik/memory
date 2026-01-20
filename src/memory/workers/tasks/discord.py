@@ -345,7 +345,7 @@ def add_discord_message(
                 "message_id": message_id,
             }
         if should_process(discord_message):
-            process_discord_message.delay(discord_message.id)
+            process_discord_message.delay(discord_message.id)  # type: ignore[attr-defined]
 
         return result
 

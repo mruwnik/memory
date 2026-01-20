@@ -196,6 +196,7 @@ def test_expand_recurring_event_daily(recurring_event):
     first_start, first_end = occurrences[0]
     assert first_start.day == 15
     assert first_start.hour == 9
+    assert first_end is not None
     assert first_end.hour == 9
     assert first_end.minute == 15
 
@@ -223,6 +224,7 @@ def test_expand_recurring_event_preserves_duration(recurring_event):
     occurrences = expand_recurring_event(recurring_event, start, end)
 
     for occ_start, occ_end in occurrences:
+        assert occ_end is not None
         duration = occ_end - occ_start
         assert duration == timedelta(minutes=15)
 
@@ -288,6 +290,8 @@ def test_event_to_dict_basic(simple_event):
     assert result["calendar_name"] == "Work"
     assert result["all_day"] is False
     assert result["recurrence_rule"] is None
+    assert result["start_time"] is not None
+    assert result["end_time"] is not None
     assert "2024-01-15" in result["start_time"]
     assert "2024-01-15" in result["end_time"]
 
@@ -307,6 +311,8 @@ def test_event_to_dict_with_override_times(simple_event):
 
     result = event_to_dict(simple_event, override_start, override_end)
 
+    assert result["start_time"] is not None
+    assert result["end_time"] is not None
     assert "2024-02-15" in result["start_time"]
     assert "2024-02-15" in result["end_time"]
 

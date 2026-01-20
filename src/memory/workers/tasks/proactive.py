@@ -169,7 +169,7 @@ def evaluate_proactive_checkins() -> dict[str, Any]:
                     logger.info(
                         f"Proactive check-in due for {entity_type} {entity.id}"
                     )
-                    execute_proactive_checkin.delay(entity_type, entity.id)
+                    execute_proactive_checkin.delay(entity_type, entity.id)  # type: ignore[attr-defined]
                     dispatched.append({"type": entity_type, "id": entity.id})
 
     return {

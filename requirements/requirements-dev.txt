@@ -7,3 +7,5 @@ isort==5.13.2
 testcontainers[qdrant]==4.10.0
 click==8.1.7
 croniter==2.0.1
+ruff==0.11.10
+pyright==1.1.408

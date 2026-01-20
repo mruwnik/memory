@@ -11,6 +11,7 @@ from typing import Any
 
 import mcp.types as mt
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.tool import ToolResult
 
 from memory.common.metrics import record_metric
 
@@ -45,8 +46,8 @@ class MetricsMiddleware(Middleware):
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
-        call_next: CallNext[mt.CallToolRequestParams, mt.CallToolResult],
-    ) -> mt.CallToolResult:
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
         """Record metrics for tool execution."""
         tool_name = context.message.name
         base_name = self._get_base_tool_name(tool_name)

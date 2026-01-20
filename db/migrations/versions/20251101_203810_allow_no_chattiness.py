@@ -25,7 +25,7 @@ def upgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=True,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )
     op.drop_column("discord_channels", "track_messages")
     op.alter_column(
@@ -33,7 +33,7 @@ def upgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=True,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )
     op.drop_index("discord_servers_active_idx", table_name="discord_servers")
     op.create_index(
@@ -48,7 +48,7 @@ def upgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=True,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )
     op.drop_column("discord_users", "track_messages")
 
@@ -69,7 +69,7 @@ def downgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=False,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )
     op.add_column(
         "discord_servers",
@@ -93,7 +93,7 @@ def downgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=False,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )
     op.add_column(
         "discord_channels",
@@ -110,5 +110,5 @@ def downgrade() -> None:
         "chattiness_threshold",
         existing_type=sa.INTEGER(),
         nullable=False,
-        existing_server_default=sa.text("50"),
+        existing_server_default=sa.text("50"),  # type: ignore[arg-type]
     )

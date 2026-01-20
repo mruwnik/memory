@@ -252,7 +252,7 @@ async def _run_llm_analysis(
 
         for i, (name, _) in enumerate(tasks):
             result = results[i]
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.warning(f"{name} failed: {result}")
                 continue
 
@@ -424,12 +424,12 @@ async def _run_searches(
             return_exceptions=True,
         )
 
-        embedding_scores = results[0] if not isinstance(results[0], Exception) else {}
-        if isinstance(results[0], Exception):
+        embedding_scores = results[0] if not isinstance(results[0], BaseException) else {}
+        if isinstance(results[0], BaseException):
             logger.warning(f"Embedding search failed: {results[0]}")
 
-        bm25_scores = results[1] if not isinstance(results[1], Exception) else {}
-        if isinstance(results[1], Exception):
+        bm25_scores = results[1] if not isinstance(results[1], BaseException) else {}
+        if isinstance(results[1], BaseException):
             logger.warning(f"BM25 search failed: {results[1]}")
     else:
         embedding_scores = await embedding_task

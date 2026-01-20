@@ -119,6 +119,7 @@ def test_start_job(db_session, sample_job):
     job = job_utils.start_job(db_session, sample_job.id)
     db_session.commit()
 
+    assert job is not None
     assert job.status == JobStatus.PROCESSING.value
     assert job.attempts == 1
 
@@ -152,6 +153,7 @@ def test_complete_job(db_session, sample_job):
     )
     db_session.commit()
 
+    assert job is not None
     assert job.status == JobStatus.COMPLETE.value
     assert job.result_id == 42
     assert job.result_type == "Meeting"
@@ -163,6 +165,7 @@ def test_complete_job_without_result(db_session, sample_job):
     job = job_utils.complete_job(db_session, sample_job.id)
     db_session.commit()
 
+    assert job is not None
     assert job.status == JobStatus.COMPLETE.value
     assert job.result_id is None
     assert job.result_type is None
@@ -181,6 +184,7 @@ def test_fail_job(db_session, sample_job):
     job = job_utils.fail_job(db_session, sample_job.id, error_msg)
     db_session.commit()
 
+    assert job is not None
     assert job.status == JobStatus.FAILED.value
     assert job.error_message == error_msg
     assert job.completed_at is not None

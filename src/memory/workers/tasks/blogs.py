@@ -125,7 +125,7 @@ def sync_article_feed(feed_id: int) -> dict:
                     continue
 
                 feed_tags = cast(list[str] | None, feed.tags) or []
-                task_ids.append(sync_webpage.delay(feed_item.url, feed_tags).id)
+                task_ids.append(sync_webpage.delay(feed_item.url, feed_tags).id)  # type: ignore[attr-defined]
                 new_articles += 1
 
                 logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")
@@ -165,7 +165,7 @@ def sync_all_article_feeds() -> list[dict]:
                 "feed_id": feed.id,
                 "feed_title": feed.title,
                 "feed_url": feed.url,
-                "task_id": sync_article_feed.delay(feed.id).id,
+                "task_id": sync_article_feed.delay(feed.id).id,  # type: ignore[attr-defined]
             }
             for feed in active_feeds
         ]
@@ -264,7 +264,7 @@ def sync_website_archive(
             if existing:
                 continue
 
-            task_ids.append(sync_webpage.delay(feed_item.url, list(tags)).id)
+            task_ids.append(sync_webpage.delay(feed_item.url, list(tags)).id)  # type: ignore[attr-defined]
             new_articles += 1
 
             logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")

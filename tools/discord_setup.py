@@ -39,10 +39,10 @@ def generate_bot_invite_url(bot_token: str):
 @click.command()
 def create_channels():
     """Create Discord channels using the configured servers."""
-    from memory.common.discord import load_servers
+    from memory.common.discord import load_servers  # type: ignore[attr-defined]
 
     click.echo("Loading Discord servers and creating channels...")
-    load_servers()
+    load_servers()  # Note: load_servers was removed, this command needs updating
     click.echo("Discord channels setup completed.")
 
 

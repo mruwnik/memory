@@ -547,7 +547,7 @@ class Comic(SourceItem):
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    title: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)  # type: ignore[assignment]
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
     published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     volume: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -692,7 +692,7 @@ class BlogPost(SourceItem):
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
     url: Mapped[str | None] = mapped_column(Text, unique=True)
-    title: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)  # type: ignore[assignment]
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
     published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -756,7 +756,7 @@ class ForumPost(SourceItem):
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
     url: Mapped[str | None] = mapped_column(Text, unique=True)
-    title: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)  # type: ignore[assignment]
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     authors: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -882,7 +882,7 @@ class GithubItem(SourceItem):
     parent_number: Mapped[int | None] = mapped_column(Integer)
     commit_sha: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str | None] = mapped_column(Text)
-    title: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)  # type: ignore[assignment]
     labels: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     author: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1294,7 +1294,7 @@ class GoogleDoc(SourceItem):
     )  # For change detection
 
     # Document metadata
-    title: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)  # type: ignore[assignment]
     original_mime_type: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # e.g., "application/vnd.google-apps.document"
@@ -1618,7 +1618,7 @@ class Meeting(SourceItem):
     )
 
     # Core metadata
-    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)  # type: ignore[assignment]
     meeting_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_tool: Mapped[str | None] = mapped_column(Text, nullable=True)  # "fireflies", "granola", etc.

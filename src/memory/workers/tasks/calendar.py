@@ -480,7 +480,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
             for event_data in events:
                 try:
                     serialized = _serialize_event_data(event_data)
-                    task = sync_calendar_event.delay(account.id, serialized)
+                    task = sync_calendar_event.delay(account.id, serialized)  # type: ignore[attr-defined]
                     task_ids.append(task.id)
                 except Exception as e:
                     logger.error(f"Error queuing event {event_data.get('title')}: {e}")
@@ -518,7 +518,7 @@ def sync_all_calendars(force_full: bool = False) -> list[dict[str, Any]]:
                 "account_id": account.id,
                 "account_name": account.name,
                 "calendar_type": account.calendar_type,
-                "task_id": sync_calendar_account.delay(
+                "task_id": sync_calendar_account.delay(  # type: ignore[attr-defined]
                     account.id, force_full=force_full
                 ).id,
             }

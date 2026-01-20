@@ -12,6 +12,7 @@ from memory.workers.tasks.calendar import (
     _parse_google_event,
     _create_calendar_event,
     _serialize_event_data,
+    EventData,
 )
 from memory.common.db import connection as db_connection
 
@@ -168,8 +169,16 @@ def test_create_event_hash_basic(mock_event_data):
 
 def test_create_event_hash_different_events():
     """Test that different events have different hashes."""
-    event1 = {"title": "Event 1", "start_time": "2024-01-15T10:00:00Z", "description": ""}
-    event2 = {"title": "Event 2", "start_time": "2024-01-15T10:00:00Z", "description": ""}
+    event1 = EventData(
+        title="Event 1",
+        start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+        description="",
+    )
+    event2 = EventData(
+        title="Event 2",
+        start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+        description="",
+    )
 
     hash1 = _create_event_hash(event1)
     hash2 = _create_event_hash(event2)
@@ -188,11 +197,11 @@ def test_serialize_event_data(mock_event_data):
 
 def test_serialize_event_data_none_end_time():
     """Test serialization with None end_time."""
-    event = {
-        "title": "Open Event",
-        "start_time": datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-        "end_time": None,
-    }
+    event = EventData(
+        title="Open Event",
+        start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+        end_time=None,
+    )
     serialized = _serialize_event_data(event)
     assert serialized["end_time"] is None
 
@@ -216,13 +225,14 @@ def test_parse_google_event_regular():
     result = _parse_google_event(google_event, "Work Calendar")
 
     assert result["title"] == "Team Sync"
-    assert result["external_id"] == "google-event-123"
-    assert result["calendar_name"] == "Work Calendar"
-    assert result["all_day"] is False
-    assert result["location"] == "Zoom"
-    assert result["meeting_link"] == "https://meet.google.com/abc-123"
-    assert "alice@example.com" in result["attendees"]
-    assert "bob@example.com" in result["attendees"]
+    assert result.get("external_id") == "google-event-123"
+    assert result.get("calendar_name") == "Work Calendar"
+    assert result.get("all_day") is False
+    assert result.get("location") == "Zoom"
+    assert result.get("meeting_link") == "https://meet.google.com/abc-123"
+    attendees = result.get("attendees", [])
+    assert "alice@example.com" in attendees
+    assert "bob@example.com" in attendees
 
 
 def test_parse_google_event_all_day():
@@ -237,7 +247,7 @@ def test_parse_google_event_all_day():
     result = _parse_google_event(google_event, "Holidays")
 
     assert result["title"] == "Company Holiday"
-    assert result["all_day"] is True
+    assert result.get("all_day") is True
     assert result["start_time"].date().isoformat() == "2024-12-25"
 
 
@@ -258,7 +268,7 @@ def test_parse_google_event_with_conference_data():
 
     result = _parse_google_event(google_event, "Work")
 
-    assert result["meeting_link"] == "https://zoom.us/j/123456"
+    assert result.get("meeting_link") == "https://zoom.us/j/123456"
 
 
 def test_parse_google_event_no_description():
@@ -272,9 +282,9 @@ def test_parse_google_event_no_description():
 
     result = _parse_google_event(google_event, "Work")
 
-    assert result["description"] == ""
-    assert result["attendees"] == []
-    assert result["meeting_link"] is None
+    assert result.get("description") == ""
+    assert result.get("attendees") == []
+    assert result.get("meeting_link") is None
 
 
 def test_parse_google_event_with_recurrence():
@@ -289,7 +299,7 @@ def test_parse_google_event_with_recurrence():
 
     result = _parse_google_event(google_event, "Work")
 
-    assert result["recurrence_rule"] == "RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
+    assert result.get("recurrence_rule") == "RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
 
 
 # =============================================================================
@@ -394,16 +404,16 @@ def test_sync_calendar_event_update_existing(
 
 def test_sync_calendar_event_without_external_id(caldav_account, db_session, qdrant):
     """Test syncing event without external_id creates new each time."""
-    event_data = {
-        "title": "Ad-hoc Meeting",
-        "start_time": datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-        "end_time": datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc),
-        "all_day": False,
-        "description": "",
-        "location": None,
-        "external_id": None,  # No external ID
-        "calendar_name": "Work",
-    }
+    event_data = EventData(
+        title="Ad-hoc Meeting",
+        start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+        end_time=datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc),
+        all_day=False,
+        description="",
+        location=None,
+        external_id=None,  # No external ID
+        calendar_name="Work",
+    )
     serialized = _serialize_event_data(event_data)
 
     result = calendar.sync_calendar_event(caldav_account.id, serialized)

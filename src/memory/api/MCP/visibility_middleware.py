@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 import mcp.types as mt
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.tool import Tool
+from fastmcp.tools.tool import Tool, ToolResult
 
 from memory.api.MCP.visibility import get_visibility_checker
 from memory.common.db.connection import DBSession, make_session
@@ -108,8 +108,8 @@ class VisibilityMiddleware(Middleware):
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
-        call_next: CallNext[mt.CallToolRequestParams, mt.CallToolResult],
-    ) -> mt.CallToolResult:
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
         """Check visibility before allowing tool execution.
 
         This is a defense-in-depth check. Tools shouldn't be visible to users
@@ -133,14 +133,13 @@ class VisibilityMiddleware(Middleware):
                 f"Visibility checker failed during tool call for {tool_name}: {e}",
                 exc_info=True,
             )
-            return mt.CallToolResult(
+            return ToolResult(
                 content=[
                     mt.TextContent(
                         type="text",
                         text=f"Access check failed for {tool_name}",
                     )
                 ],
-                isError=True,
             )
 
         if not allowed:
@@ -148,14 +147,13 @@ class VisibilityMiddleware(Middleware):
                 f"Access denied for tool {tool_name} "
                 f"(user: {user_info.get('user', {}).get('user_id', 'anonymous')})"
             )
-            return mt.CallToolResult(
+            return ToolResult(
                 content=[
                     mt.TextContent(
                         type="text",
                         text=f"Access denied: you don't have permission to use {tool_name}",
                     )
                 ],
-                isError=True,
             )
 
         return await call_next(context)

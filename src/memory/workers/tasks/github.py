@@ -271,9 +271,9 @@ def _update_existing_item(
                 existing.pr_data.changed_files_count = pr_data_dict.get(
                     "changed_files_count"
                 )
-                existing.pr_data.files = pr_data_dict.get("files")
-                existing.pr_data.reviews = pr_data_dict.get("reviews")
-                existing.pr_data.review_comments = pr_data_dict.get("review_comments")
+                existing.pr_data.files = pr_data_dict.get("files")  # type: ignore[assignment]
+                existing.pr_data.reviews = pr_data_dict.get("reviews")  # type: ignore[assignment]
+                existing.pr_data.review_comments = pr_data_dict.get("review_comments")  # type: ignore[assignment]
                 existing.pr_data.diff = pr_data_dict.get("diff")
             else:
                 # Create new pr_data
@@ -518,7 +518,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(issue_data)
-                task_id = sync_github_item.delay(repo.id, serialized)
+                task_id = sync_github_item.delay(repo.id, serialized)  # type: ignore[attr-defined]
                 task_ids.append(task_id.id)
                 issues_synced += 1
 
@@ -532,7 +532,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(pr_data)
-                task_id = sync_github_item.delay(repo.id, serialized)
+                task_id = sync_github_item.delay(repo.id, serialized)  # type: ignore[attr-defined]
                 task_ids.append(task_id.id)
                 prs_synced += 1
 
@@ -572,7 +572,7 @@ def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
             {
                 "repo_id": repo.id,
                 "repo_path": repo.repo_path,
-                "task_id": sync_github_repo.delay(repo.id, force_full=force_full).id,
+                "task_id": sync_github_repo.delay(repo.id, force_full=force_full).id,  # type: ignore[attr-defined]
             }
             for repo in active_repos
         ]

@@ -282,7 +282,7 @@ class MessageCollector(commands.Bot):
                 )
 
                 # Queue the message for processing
-                add_discord_message.delay(
+                add_discord_message.delay(  # type: ignore[attr-defined]
                     message_id=message.id,
                     channel_id=message.channel.id,
                     author_id=message.author.id,
@@ -302,7 +302,7 @@ class MessageCollector(commands.Bot):
         """Queue message edit for database update"""
         try:
             edit_time = after.edited_at or datetime.now(timezone.utc)
-            edit_discord_message.delay(
+            edit_discord_message.delay(  # type: ignore[attr-defined]
                 message_id=after.id,
                 content=after.content,
                 edited_at=edit_time.isoformat(),
@@ -358,7 +358,7 @@ class MessageCollector(commands.Bot):
 
         return result
 
-    async def get_user(self, user_identifier: int | str) -> discord.User | None:
+    async def get_user(self, user_identifier: int | str) -> discord.User | None:  # type: ignore[override]
         """Get a Discord user by ID or username"""
         if isinstance(user_identifier, int):
             # Direct user ID lookup
