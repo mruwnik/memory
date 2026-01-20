@@ -9,10 +9,8 @@ from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_typ
 import aiohttp
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
@@ -22,7 +20,6 @@ from memory.common.db.models import (
     SourceItem,
     UserSession,
 )
-from memory.common.db.models.source_items import AgentObservation
 
 logger = logging.getLogger(__name__)
 

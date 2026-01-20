@@ -1,9 +1,6 @@
 """Tests for the ApiKey model and related functionality."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
-
-import pytest
 
 from memory.common.db.models.users import (
     ApiKey,
@@ -12,7 +9,6 @@ from memory.common.db.models.users import (
     generate_api_key,
     find_api_key_by_hash,
     authenticate_with_api_key,
-    BotUser,
     HumanUser,
 )
 
