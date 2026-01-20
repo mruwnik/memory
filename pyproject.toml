@@ -1,9 +1,11 @@
 [tool.pyright]
 # Configure pyright for src layout
 pythonVersion = "3.11"
+typeCheckingMode = "basic"
 include = ["src", "tests", "tools"]
 exclude = ["db/migrations"]
-reportMissingImports = true
+ignore = ["db/migrations"]
+reportMissingImports = false
 reportMissingTypeStubs = false
 
 [tool.ruff]

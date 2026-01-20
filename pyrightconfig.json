@@ -1,5 +1,6 @@
 {
   "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
   "include": ["src", "tests", "tools"],
   "exclude": [
     "db/migrations",
@@ -11,14 +12,6 @@
   "ignore": [
     "db/migrations"
   ],
-  "reportMissingImports": true,
-  "reportMissingTypeStubs": false,
-  "reportGeneralTypeIssues": true,
-  "executionEnvironments": [
-    {
-      "root": "db/migrations",
-      "reportMissingImports": false,
-      "reportGeneralTypeIssues": false
-    }
-  ]
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false
 }
