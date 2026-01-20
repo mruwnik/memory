@@ -108,8 +108,9 @@ def sync_person(
         result = process_content_item(person, session)
 
     # Save profile note outside transaction (git operations are slow)
-    if result.get("status") == "processed":
-        _save_profile_note(result.get("person_id"), save_to_file)
+    person_id = result.get("person_id")
+    if result.get("status") == "processed" and isinstance(person_id, int):
+        _save_profile_note(person_id, save_to_file)
 
     return result
 
@@ -178,8 +179,9 @@ def update_person(
         result = process_content_item(person, session)
 
     # Save profile note outside transaction (git operations are slow)
-    if result.get("status") == "processed":
-        _save_profile_note(result.get("person_id"), save_to_file)
+    person_id = result.get("person_id")
+    if result.get("status") == "processed" and isinstance(person_id, int):
+        _save_profile_note(person_id, save_to_file)
 
     return result
 

@@ -93,7 +93,7 @@ async def screen_capture_loop(
                 await send_ws_json(websocket, "phase", "running")
 
             consecutive_errors = 0
-            screen = result["screen"]
+            screen = str(result["screen"])
             cols = result.get("cols", 80)
             rows = result.get("rows", 24)
             logger.debug(

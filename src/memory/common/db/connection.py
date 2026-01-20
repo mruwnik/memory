@@ -63,7 +63,7 @@ def get_session() -> Generator[Session, None, None]:
 
 
 @contextmanager
-def make_session():
+def make_session() -> Generator[scoped_session[Session], None, None]:
     """
     Context manager for database sessions.
 

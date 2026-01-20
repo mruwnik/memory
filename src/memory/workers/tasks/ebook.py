@@ -243,10 +243,9 @@ def execute_book_processing(
             book.language = language  # type: ignore
         if edition:
             book.edition = edition  # type: ignore
-        if isinstance(series, dict):
-            series = series.get("name")
-        if series:
-            book.series = series  # type: ignore
+        series_name = series.get("name") if isinstance(series, dict) else series
+        if series_name:
+            book.series = series_name  # type: ignore
         if series_number:
             book.series_number = series_number  # type: ignore
 
@@ -330,23 +329,24 @@ def sync_book(
 
         # Check for existing book (idempotency)
         logger.info(f"Checking for existing book: {ebook.relative_path.as_posix()}")
-        existing_book = check_content_exists(
+        existing_item = check_content_exists(
             session, Book, file_path=ebook.relative_path.as_posix()
         )
-        if existing_book:
+        if existing_item:
+            existing_book = cast(Book, existing_item)
             logger.info(f"Book already exists: {existing_book.title}")
             if job_id:
                 job_utils.complete_job(
                     session, job_id, result_id=existing_book.id, result_type="Book"
                 )
                 session.commit()
-            return {
-                "status": "already_exists",
-                "book_id": existing_book.id,
-                "title": existing_book.title,
-                "author": existing_book.author,
-                "sections_processed": 0,
-            }
+            return BookProcessingResult(
+                status="already_exists",
+                book_id=existing_book.id,
+                title=existing_book.title or "",
+                author=existing_book.author or "",
+                sections_processed=0,
+            )
 
         # Create new book record
         logger.info("Creating book record")
@@ -411,6 +411,12 @@ def reprocess_book(
             return {"status": "error", "error": error}
 
         # Re-parse the ebook from the original file
+        if not book.file_path:
+            error = f"Book {item_id} has no file_path"
+            if job_id:
+                job_utils.fail_job(session, job_id, error)
+                session.commit()
+            return {"status": "error", "error": error}
         ebook = validate_and_parse_book(book.file_path)
 
         return execute_book_processing(

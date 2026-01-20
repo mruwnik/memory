@@ -128,7 +128,7 @@ def list_issues(
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
         if assignee:
-            query = query.filter(GithubItem.assignees.any(assignee))
+            query = query.filter(GithubItem.assignees.contains([assignee]))
         if author:
             query = query.filter(GithubItem.author == author)
         if state:
@@ -807,7 +807,7 @@ def _set_project_field(
         try:
             num_value = float(field_value)
             success = client.update_project_field_value(
-                project_id, item_id, field_id, num_value, "number"
+                project_id, item_id, field_id, str(num_value), "number"
             )
         except ValueError:
             return f"Invalid number '{field_value}' for field '{field_name}'"

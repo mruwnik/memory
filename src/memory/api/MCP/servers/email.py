@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 email_mcp = FastMCP("memory-email")
 
 
-async def has_send_accounts(user_info: dict, session: DBSession) -> bool:
+async def has_send_accounts(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show email tools if user has send-enabled accounts."""
     token = user_info.get("token")
-    if not token:
+    if not token or session is None:
         return False
 
     def _check(session: DBSession) -> bool:

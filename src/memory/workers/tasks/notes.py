@@ -2,6 +2,7 @@ import logging
 import pathlib
 import contextlib
 import subprocess
+from typing import cast
 
 from memory.common import settings
 from memory.common.db.connection import make_session
@@ -97,7 +98,8 @@ def sync_note(
     with make_session() as session:
         existing_note = check_content_exists(session, Note, sha256=sha256)
         if existing_note:
-            logger.info(f"Note already exists: {existing_note.subject}")
+            existing_as_note = cast(Note, existing_note)
+            logger.info(f"Note already exists: {existing_as_note.subject}")
             return create_task_result(existing_note, "already_exists")
 
         note = session.query(Note).filter(Note.filename == filename).one_or_none()

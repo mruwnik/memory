@@ -37,7 +37,8 @@ def extract_exif_data(image_path: Path) -> dict:
     exif_data = {}
     try:
         with Image.open(image_path) as img:
-            exif = img._getexif()
+            # _getexif is a private method not in type stubs
+            exif = getattr(img, "_getexif", lambda: None)()
             if exif:
                 for tag_id, value in exif.items():
                     tag = TAGS.get(tag_id, tag_id)
@@ -143,7 +144,11 @@ def execute_photo_processing(
         session.commit()
         logger.info(f"Successfully processed photo: {photo.filename}")
 
-        return result
+        return PhotoProcessingResult(
+            status=str(result.get("status", "")),
+            photo_id=photo_id,
+            error="",
+        )
 
     except Exception as e:
         logger.exception(f"Failed to process photo {photo_id}: {e}")
@@ -153,7 +158,7 @@ def execute_photo_processing(
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
             session.commit()
-        return {"status": "error", "error": str(e), "photo_id": photo_id}
+        return PhotoProcessingResult(status="error", error=str(e), photo_id=photo_id)
 
 
 def validate_and_parse_photo(file_path: str) -> tuple[Path, bytes, dict]:

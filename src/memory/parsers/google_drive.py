@@ -320,7 +320,7 @@ class GoogleDriveClient:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             text_parts = []
             for page in doc:
-                text_parts.append(page.get_text())
+                text_parts.append(page.get_text())  # type: ignore[union-attr]
             doc.close()
             return "\n\n".join(text_parts)
         except Exception as e:

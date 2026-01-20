@@ -13,11 +13,14 @@ import time
 import traceback
 import logging
 from collections.abc import Mapping
-from typing import Any, Callable, Sequence, cast
+from typing import Any, Callable, Sequence, TypeVar, cast
 
 from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
+
+# TypeVar for model classes (any SQLAlchemy model)
+T = TypeVar("T")
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
 
@@ -74,9 +77,9 @@ TASK_LOGGED_PARAMS: dict[str, list[str]] = {
 
 def check_content_exists(
     session,
-    model_class: type[SourceItem],
+    model_class: type[T],
     **kwargs: Any,
-) -> SourceItem | None:
+) -> T | None:
     """
     Check if content already exists in the database.
 

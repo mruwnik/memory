@@ -6,7 +6,7 @@ from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from fastmcp.server.auth import OAuthProvider
-from fastmcp.server.auth.auth import AccessToken as FastMCPAccessToken
+from fastmcp.server.auth.auth import AccessToken as FastMCPAccessToken  # type: ignore[reportPrivateImportUsage]
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -164,7 +164,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 # User's configured scopes define which MCP tools they can access
                 user_scopes = user_session.user.scopes if user_session.user else []
                 # Also include OAuth scopes (read, write) for FastMCP endpoint auth
-                scopes = list(set(user_scopes or []) | {"read", "write"})
+                scopes: list[str] = list(set(user_scopes or []) | {"read", "write"})
 
                 # Get client_id from oauth_state if available
                 if user_session.oauth_state_id and user_session.oauth_state:

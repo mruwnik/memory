@@ -132,7 +132,7 @@ def create_or_update_channel(
 
 def create_or_update_user(
     session: Session | scoped_session, user: discord.User | discord.Member
-) -> DiscordUser:
+) -> DiscordUser | None:
     """Get or create DiscordUser record (pure DB operation)"""
     if not user:
         return None
@@ -168,7 +168,7 @@ def determine_message_metadata(
         message_type = "reply"
         reply_to_id = message.reference.message_id
 
-    if hasattr(message.channel, "parent") and message.channel.parent:
+    if hasattr(message.channel, "parent") and message.channel.parent:  # type: ignore[union-attr]
         thread_id = message.channel.id
 
     return message_type, reply_to_id, thread_id
@@ -377,7 +377,7 @@ class MessageCollector(commands.Bot):
                         or member.display_name == user_identifier
                         or f"{member.name}#{member.discriminator}" == user_identifier
                     ):
-                        return member
+                        return member  # type: ignore[return-value]
             return None
 
     async def get_channel_by_name(
@@ -487,7 +487,7 @@ class MessageCollector(commands.Bot):
             with make_session() as session:
                 processed_message = process_mentions(session, message)
 
-            await channel.send(processed_message)
+            await channel.send(processed_message)  # type: ignore[union-attr]
             logger.info(f"Sent message to channel {channel_identifier}")
             return True
 
@@ -502,7 +502,7 @@ class MessageCollector(commands.Bot):
             if not channel:
                 return False
 
-            async with channel.typing():
+            async with channel.typing():  # type: ignore[union-attr]
                 pass
             return True
 
@@ -521,7 +521,7 @@ class MessageCollector(commands.Bot):
             if not channel:
                 return False
 
-            message = await channel.fetch_message(message_id)
+            message = await channel.fetch_message(message_id)  # type: ignore[union-attr]
             await message.add_reaction(emoji)
             logger.info(f"Added reaction {emoji} to message {message_id}")
             return True

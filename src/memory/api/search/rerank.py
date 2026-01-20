@@ -73,7 +73,7 @@ async def rerank_chunks(
         return chunks
 
     try:
-        vo = voyageai.Client()
+        vo = voyageai.Client()  # type: ignore[reportPrivateImportUsage]
         result = await asyncio.to_thread(
             vo.rerank,
             query=query,

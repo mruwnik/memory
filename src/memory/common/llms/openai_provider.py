@@ -134,7 +134,11 @@ class OpenAIProvider(BaseLLMProvider):
                 elif isinstance(item, ToolUseContent):
                     tool_calls_list.append(self._convert_tool_use_content(item))
                 else:
-                    content_parts.append(self._convert_message_content(item))
+                    converted = self._convert_message_content(item)
+                    if isinstance(converted, list):
+                        content_parts.extend(converted)
+                    else:
+                        content_parts.append(converted)
 
             if content_parts or tool_calls_list:
                 msg_dict: dict[str, Any] = {"role": message.role.value}

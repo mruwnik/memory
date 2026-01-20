@@ -109,7 +109,7 @@ def embed_chunks(
         try:
             if model == settings.MIXED_EMBEDDING_MODEL:
                 return vo.multimodal_embed(
-                    chunks,
+                    chunks,  # type: ignore[arg-type]
                     model=model,
                     input_type=input_type,
                 ).embeddings

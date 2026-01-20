@@ -458,7 +458,7 @@ def list_accounts(
                 for folder in account.folders
             ],
         )
-        for account in user.google_accounts
+        for account in user.google_accounts  # type: ignore[attr-defined]
     ]
 
 

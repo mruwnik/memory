@@ -213,14 +213,14 @@ async def list_people(
         query = session.query(Person)
 
         if tags:
-            query = query.filter(Person.tags.op("&&")(sql_cast(tags, ARRAY(Text))))
+            query = query.filter(Person.tags.op("&&")(sql_cast(tags, ARRAY(Text))))  # type: ignore[union-attr]
 
         if search:
             search_term = f"%{search.lower()}%"
             query = query.filter(
-                (Person.display_name.ilike(search_term))
-                | (Person.content.ilike(search_term))
-                | (Person.identifier.ilike(search_term))
+                (Person.display_name.ilike(search_term))  # type: ignore[union-attr]
+                | (Person.content.ilike(search_term))  # type: ignore[union-attr]
+                | (Person.identifier.ilike(search_term))  # type: ignore[union-attr]
             )
 
         query = query.order_by(Person.display_name).offset(offset).limit(limit)

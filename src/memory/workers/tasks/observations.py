@@ -1,4 +1,5 @@
 import logging
+from typing import cast
 
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentObservation
@@ -49,7 +50,8 @@ def sync_observation(
             session, AgentObservation, sha256=sha256
         )
         if existing_observation:
-            logger.info(f"Observation already exists: {existing_observation.subject}")
+            existing_as_obs = cast(AgentObservation, existing_observation)
+            logger.info(f"Observation already exists: {existing_as_obs.subject}")
             return create_task_result(existing_observation, "already_exists")
 
         return process_content_item(observation, session)

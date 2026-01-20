@@ -58,7 +58,7 @@ def _get_current_user(session: DBSession) -> dict:
         "scopes": access_token.scopes,
         "client_id": access_token.client_id,
         "user": user_info,
-        "public_key": user_session.user.public_key,
+        "public_key": user_session.user.ssh_public_key,
     }
 
 

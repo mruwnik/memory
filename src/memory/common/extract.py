@@ -15,7 +15,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-MulitmodalChunk = Image.Image | str
+MulitmodalChunk = Image.Image | str | bytes
 
 TEXT_EXTENSIONS = {
     ".md",

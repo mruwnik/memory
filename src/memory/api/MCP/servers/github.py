@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 github_mcp = FastMCP("memory-github")
 
 
-async def has_github_account(user_info: dict, session: DBSession) -> bool:
+async def has_github_account(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show GitHub write tools if user has an active account."""
     token = user_info.get("token")
-    if not token:
+    if not token or session is None:
         return False
 
     def _check(session: DBSession) -> bool:

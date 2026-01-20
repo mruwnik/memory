@@ -241,7 +241,8 @@ def create_action_item_tasks(
 
         task_tags = ["meeting", "action-item"]
 
-        assignee_person = find_person_by_name(session, item.get("assignee"))
+        assignee_name = item.get("assignee")
+        assignee_person = find_person_by_name(session, assignee_name) if assignee_name else None
         if assignee_person:
             task_tags.append(f"assignee:{assignee_person.identifier}")
 
@@ -294,8 +295,9 @@ def extract_and_update_meeting(
     session.flush()
 
     try:
+        transcript = meeting.content or ""
         extracted = call_extraction_llm(
-            meeting.content, extraction_prompt, system_prompt, model
+            transcript, extraction_prompt, system_prompt, model
         )
         meeting.summary = extracted.get("summary", "")
         meeting.notes = extracted.get("notes", "")

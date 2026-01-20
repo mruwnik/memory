@@ -34,11 +34,11 @@ app.conf.beat_schedule.update({
     },
     "cleanup-old-metrics": {
         "task": CLEANUP_OLD_METRICS,
-        "schedule": crontab(hour=settings.METRICS_CLEANUP_HOUR, minute=0),
+        "schedule": crontab(hour=str(settings.METRICS_CLEANUP_HOUR), minute="0"),
     },
     "refresh-metric-summaries": {
         "task": REFRESH_METRIC_SUMMARIES,
-        "schedule": crontab(minute=settings.METRICS_SUMMARY_REFRESH_MINUTE),
+        "schedule": crontab(minute=str(settings.METRICS_SUMMARY_REFRESH_MINUTE)),
     },
     "clean-all-collections": {
         "task": CLEAN_ALL_COLLECTIONS,
@@ -94,7 +94,7 @@ app.conf.beat_schedule.update({
     },
     "cleanup-old-claude-sessions": {
         "task": CLEANUP_OLD_CLAUDE_SESSIONS,
-        "schedule": crontab(hour=3, minute=30),  # Daily at 3:30 AM
+        "schedule": crontab(hour="3", minute="30"),  # Daily at 3:30 AM
     },
 })
 

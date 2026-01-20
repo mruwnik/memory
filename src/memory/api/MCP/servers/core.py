@@ -327,7 +327,7 @@ async def search_observations(
         content=query,
         created_at=datetime.now(timezone.utc),
     )
-    results = await search(
+    results = await search_base(
         [
             extract.DataChunk(data=[query]),
             extract.DataChunk(data=[semantic_text]),
@@ -337,7 +337,7 @@ async def search_observations(
         filters=SearchFilters(
             subject=subject,
             min_confidences=min_confidences,
-            tags=tags,
+            tags=tags or [],
             observation_types=observation_types,
             source_ids=filter_observation_source_ids(tags=tags),
         ),
