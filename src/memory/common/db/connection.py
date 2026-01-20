@@ -3,11 +3,15 @@ Database connection utilities.
 """
 
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, TypeAlias
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 
 from memory.common import settings
+
+# Type alias for functions that accept either a regular Session or a scoped_session
+# This is useful because scoped_session proxies to Session but has a different type
+DBSession: TypeAlias = Session | scoped_session[Session]
 
 # Cached engine and session factory for connection pooling
 _engine = None

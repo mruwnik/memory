@@ -10,16 +10,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
 
 from memory.common.celery_app import app as celery_app
+from memory.common.db.connection import DBSession
 from memory.common.db.models import PendingJob, JobStatus, JobType
 
 logger = logging.getLogger(__name__)
 
 
 def create_job(
-    session: Session,
+    session: DBSession,
     job_type: str | JobType,
     params: dict[str, Any] | None = None,
     external_id: str | None = None,
@@ -52,13 +52,13 @@ def create_job(
     return job
 
 
-def get_job(session: Session, job_id: int) -> PendingJob | None:
+def get_job(session: DBSession, job_id: int) -> PendingJob | None:
     """Get a job by ID."""
     return session.get(PendingJob, job_id)
 
 
 def get_job_by_external_id(
-    session: Session,
+    session: DBSession,
     external_id: str,
     job_type: str | None = None,
 ) -> PendingJob | None:
@@ -80,7 +80,7 @@ def get_job_by_external_id(
 
 
 def update_job_celery_task_id(
-    session: Session,
+    session: DBSession,
     job: PendingJob,
     celery_task_id: str,
 ) -> None:
@@ -89,7 +89,7 @@ def update_job_celery_task_id(
     job.updated_at = datetime.now(timezone.utc)
 
 
-def start_job(session: Session, job_id: int) -> PendingJob | None:
+def start_job(session: DBSession, job_id: int) -> PendingJob | None:
     """
     Mark a job as processing and increment attempts.
 
@@ -109,7 +109,7 @@ def start_job(session: Session, job_id: int) -> PendingJob | None:
 
 
 def complete_job(
-    session: Session,
+    session: DBSession,
     job_id: int,
     result_id: int | None = None,
     result_type: str | None = None,
@@ -139,7 +139,7 @@ def complete_job(
 
 
 def fail_job(
-    session: Session,
+    session: DBSession,
     job_id: int,
     error_message: str,
 ) -> PendingJob | None:
@@ -163,7 +163,7 @@ def fail_job(
 
 
 def list_jobs(
-    session: Session,
+    session: DBSession,
     status: str | JobStatus | None = None,
     job_type: str | JobType | None = None,
     user_id: int | None = None,
@@ -212,7 +212,7 @@ class DispatchResult:
 
 
 def dispatch_job(
-    session: Session,
+    session: DBSession,
     job_type: str | JobType,
     task_name: str,
     task_kwargs: dict[str, Any],
@@ -316,7 +316,7 @@ def dispatch_job(
 
 
 def retry_failed_job(
-    session: Session,
+    session: DBSession,
     job: PendingJob,
 ) -> DispatchResult:
     """
@@ -404,7 +404,7 @@ def retry_failed_job(
 
 
 def reingest_job(
-    session: Session,
+    session: DBSession,
     job: PendingJob,
 ) -> DispatchResult:
     """
