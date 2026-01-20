@@ -586,7 +586,7 @@ def iterate_gmail_messages(
                 if fetch_content:
                     try:
                         raw_email = fetch_gmail_message(service, msg_id, format="raw")
-                        if raw_email:
+                        if raw_email and isinstance(raw_email, str):
                             yield (msg_id, raw_email)
                     except Exception as e:
                         logger.error(f"Error fetching Gmail message {msg_id}: {e}")

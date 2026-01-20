@@ -10,8 +10,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from googleapiclient.discovery import build
-from sqlalchemy.orm import Session
 
+from memory.common.db.connection import DBSession
 from memory.common.db.models import EmailAccount, GoogleAccount
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class GmailConfig:
 
     @classmethod
     def from_account(
-        cls, account: EmailAccount, google_account: GoogleAccount, session: Session
+        cls, account: EmailAccount, google_account: GoogleAccount, session: DBSession
     ) -> "GmailConfig":
         """Create config from accounts, refreshing credentials while session is active.
 
@@ -410,7 +410,7 @@ def send_email(
 
 
 def prepare_send_config(
-    session: Session, account: EmailAccount
+    session: DBSession, account: EmailAccount
 ) -> SmtpConfig | GmailConfig:
     """Prepare a send config from an EmailAccount, preloading all needed data.
 
@@ -441,7 +441,7 @@ def prepare_send_config(
 
 
 def get_user_email_accounts(
-    session: Session, user_id: int, send_enabled_only: bool = True
+    session: DBSession, user_id: int, send_enabled_only: bool = True
 ) -> list[EmailAccount]:
     """Get all email accounts for a user that can be used for sending.
 
@@ -455,12 +455,12 @@ def get_user_email_accounts(
     """
     query = session.query(EmailAccount).filter(EmailAccount.user_id == user_id)
     if send_enabled_only:
-        query = query.filter(EmailAccount.send_enabled == True)
+        query = query.filter(EmailAccount.send_enabled.is_(True))
     return query.all()
 
 
 def get_account_by_address(
-    session: Session, user_id: int, email_address: str
+    session: DBSession, user_id: int, email_address: str
 ) -> EmailAccount | None:
     """Get a specific email account by address for a user.
 
@@ -479,7 +479,7 @@ def get_account_by_address(
         .filter(
             EmailAccount.user_id == user_id,
             EmailAccount.email_address == email_address,
-            EmailAccount.send_enabled == True,
+            EmailAccount.send_enabled.is_(True),
         )
         .first()
     )

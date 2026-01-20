@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
 from dateutil.rrule import rrulestr
-from sqlalchemy.orm import Session
 
+from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
 
 
@@ -91,7 +91,7 @@ def event_to_dict(
 
 
 def get_events_in_range(
-    session: Session,
+    session: DBSession,
     start_date: datetime,
     end_date: datetime,
     limit: int = 200,

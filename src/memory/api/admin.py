@@ -52,7 +52,7 @@ DEFAULT_COLUMNS = (
 )
 
 
-def source_columns(model: type[SourceItem], *columns: str):
+def source_columns(model: type, *columns: str):
     return [
         getattr(model, c)
         for c in ("id",) + columns + DEFAULT_COLUMNS

@@ -9,7 +9,7 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall, DiscordBotUser
+from memory.common.db.models import ScheduledLLMCall
 from memory.discord.messages import call_llm, send_discord_response
 from memory.common.content_processing import safe_task_execution
 
@@ -32,8 +32,13 @@ def call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | N
     allowed_tools_list = cast(list[str] | None, scheduled_call.allowed_tools)
 
     bot_user = (
-        scheduled_call.user.discord_users and scheduled_call.user.discord_users[0]
+        scheduled_call.user.discord_users[0]
+        if scheduled_call.user.discord_users
+        else None
     )
+    if not bot_user:
+        logger.warning("No bot user available for scheduled call")
+        return None
 
     return call_llm(
         session=session,

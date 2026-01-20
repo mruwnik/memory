@@ -14,12 +14,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from memory.common import qdrant, settings
+from memory.common.db.connection import DBSession
 from memory.common.db.models import GithubItem, MailMessage, SourceItem
 from memory.common.db.models.sources import EmailAccount, GithubRepo
 
@@ -117,7 +117,7 @@ def verify_imap_messages(
 
 
 def verify_emails(
-    session: Session,
+    session: DBSession,
     account_id: int,
     items: Sequence[SourceItem],
 ) -> dict[int, VerificationResult]:
@@ -170,7 +170,7 @@ def get_github_batch_key(item: SourceItem) -> tuple[str, Any]:
 
 
 def verify_github_items(
-    session: Session,
+    session: DBSession,
     repo_id: int,
     items: Sequence[SourceItem],
 ) -> dict[int, VerificationResult]:
@@ -245,7 +245,7 @@ def verify_github_items(
 
 # Maps source type to (batch_key_fn, verify_fn)
 BatchKeyFn = Callable[[SourceItem], tuple[str, Any]]
-VerifyFn = Callable[[Session, int, Sequence[SourceItem]], dict[int, VerificationResult]]
+VerifyFn = Callable[[DBSession, int, Sequence[SourceItem]], dict[int, VerificationResult]]
 
 VERIFIERS: dict[str, tuple[BatchKeyFn, VerifyFn]] = {
     "mail_message": (get_email_batch_key, verify_emails),
@@ -259,7 +259,7 @@ VERIFIERS: dict[str, tuple[BatchKeyFn, VerifyFn]] = {
 
 
 def select_items_for_verification(
-    session: Session,
+    session: DBSession,
     batch_size: int = settings.VERIFICATION_BATCH_SIZE,
     source_types: list[str] | None = None,
 ) -> list[SourceItem]:
@@ -326,7 +326,7 @@ def collect_chunks_by_collection(
     return chunks_by_collection
 
 
-def delete_orphaned_item(item: SourceItem, session: Session) -> bool:
+def delete_orphaned_item(item: SourceItem, session: DBSession) -> bool:
     """
     Delete an orphaned item and its vectors from Qdrant.
 
@@ -358,7 +358,7 @@ def delete_orphaned_item(item: SourceItem, session: Session) -> bool:
 
 
 def process_verification_results(
-    session: Session,
+    session: DBSession,
     items: Sequence[SourceItem],
     results: dict[int, VerificationResult],
 ) -> BatchVerificationResult:
@@ -408,7 +408,7 @@ def process_verification_results(
 
 
 def verify_items(
-    session: Session,
+    session: DBSession,
     source_type: str,
     batch_key: Any,
     item_ids: list[int],

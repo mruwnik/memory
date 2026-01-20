@@ -3,10 +3,9 @@
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 import caldav
-from sqlalchemy.orm import Session
 from googleapiclient.discovery import build
 
 from memory.common.celery_app import (
@@ -15,7 +14,7 @@ from memory.common.celery_app import (
     SYNC_CALENDAR_EVENT,
     app,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
 from memory.parsers.google_drive import refresh_credentials
@@ -28,23 +27,20 @@ from memory.common.content_processing import (
 logger = logging.getLogger(__name__)
 
 
-class EventData(TypedDict, total=False):
-    """Structured event data for calendar sync.
+class EventData(TypedDict):
+    """Structured event data for calendar sync."""
 
-    Required fields: title, start_time
-    """
-
-    title: str  # Required
-    start_time: datetime  # Required
-    end_time: datetime | None
-    all_day: bool
-    description: str
-    location: str | None
-    external_id: str | None
-    calendar_name: str
-    recurrence_rule: str | None
-    attendees: list[str]
-    meeting_link: str | None
+    title: str
+    start_time: datetime
+    end_time: NotRequired[datetime | None]
+    all_day: NotRequired[bool]
+    description: NotRequired[str]
+    location: NotRequired[str | None]
+    external_id: NotRequired[str | None]
+    calendar_name: NotRequired[str]
+    recurrence_rule: NotRequired[str | None]
+    attendees: NotRequired[list[str]]
+    meeting_link: NotRequired[str | None]
 
 
 # -----------------------------------------------------------------------------
@@ -129,10 +125,10 @@ def _create_calendar_event(
     account_tags = cast(list[str], account.tags) or []
 
     metadata: dict[str, Any] = {}
-    if event_data.get("attendees"):
-        metadata["attendees"] = event_data["attendees"]
-    if event_data.get("meeting_link"):
-        metadata["meeting_link"] = event_data["meeting_link"]
+    if (attendees := event_data.get("attendees")):
+        metadata["attendees"] = attendees
+    if (meeting_link := event_data.get("meeting_link")):
+        metadata["meeting_link"] = meeting_link
 
     return CalendarEvent(
         modality="calendar",
@@ -163,10 +159,10 @@ def _update_existing_event(existing: CalendarEvent, event_data: EventData) -> No
     existing.recurrence_rule = event_data.get("recurrence_rule")
 
     metadata = existing.event_metadata or {}
-    if event_data.get("attendees"):
-        metadata["attendees"] = event_data["attendees"]
-    if event_data.get("meeting_link"):
-        metadata["meeting_link"] = event_data["meeting_link"]
+    if (attendees := event_data.get("attendees")):
+        metadata["attendees"] = attendees
+    if (meeting_link := event_data.get("meeting_link")):
+        metadata["meeting_link"] = meeting_link
     existing.event_metadata = metadata
 
 
@@ -324,7 +320,7 @@ def _fetch_google_calendar_events(
     calendar_ids: list[str],
     since: datetime,
     until: datetime,
-    session: Session,
+    session: DBSession,
 ) -> list[EventData]:
     """Fetch events from Google Calendar using existing GoogleAccount."""
     google_account = account.google_account

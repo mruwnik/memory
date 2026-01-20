@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from typing import TypedDict
 
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
 
+from memory.common.db.connection import DBSession
 from memory.common.db.models import Task
 
 
@@ -41,7 +41,7 @@ def task_to_dict(task: Task) -> TaskDict:
 
 
 def get_tasks(
-    session: Session,
+    session: DBSession,
     status: str | list[str] | None = None,
     priority: str | list[str] | None = None,
     include_completed: bool = False,
@@ -94,15 +94,6 @@ def get_tasks(
 
     # Order by due_date (nulls last), then by priority
     # Priority order: urgent > high > medium > low > null
-    priority_order = """
-        CASE priority
-            WHEN 'urgent' THEN 1
-            WHEN 'high' THEN 2
-            WHEN 'medium' THEN 3
-            WHEN 'low' THEN 4
-            ELSE 5
-        END
-    """
     query = query.order_by(
         Task.due_date.asc().nullslast(),
         Task.priority.desc().nullslast(),
@@ -113,7 +104,7 @@ def get_tasks(
     return [task_to_dict(t) for t in tasks]
 
 
-def complete_task(session: Session, task_id: int) -> Task | None:
+def complete_task(session: DBSession, task_id: int) -> Task | None:
     """Mark a task as complete.
 
     Args:

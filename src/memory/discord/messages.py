@@ -198,7 +198,7 @@ def comm_channel_prompt(
             {users}
             </user_notes>
         """).format(
-            users="\n".join({msg.from_user.xml_summary() for msg in messages}),
+            users="\n".join({msg.from_user.xml_summary() for msg in messages if msg.from_user}),
         )
 
     return textwrap.dedent("""
@@ -253,19 +253,28 @@ def call_llm(
     user_id = None
     if from_user and not channel:
         user_id = cast(int, from_user.id)
-    prev_messages = previous_messages(
-        session,
-        bot_user.system_user.discord_id,
-        user_id,
-        channel and channel.id,
-        max_messages=num_previous_messages,
-    )
 
     from memory.common.llms.tools.discord import make_discord_tools
     from memory.common.llms.tools.base import WebSearchTool
     from memory.common.llms.tools import MCPServer
+    from memory.common.db.models import DiscordBotUser
 
-    tools = make_discord_tools(bot_user.system_user, from_user, channel, model=model)
+    system_user = bot_user.system_user
+    tools: dict[str, Any] = {}
+    discord_id: int | None = None
+    if isinstance(system_user, DiscordBotUser):
+        discord_id = system_user.discord_id
+        tools = make_discord_tools(system_user, from_user, channel, model=model)
+
+    prev_messages: list[DiscordMessage] = []
+    if discord_id:
+        prev_messages = previous_messages(
+            session,
+            discord_id,
+            user_id,
+            channel and channel.id,
+            max_messages=num_previous_messages,
+        )
     tools |= {"web_search": WebSearchTool()}
 
     # Filter to allowed tools if specified

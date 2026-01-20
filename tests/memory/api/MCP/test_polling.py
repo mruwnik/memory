@@ -1,7 +1,7 @@
 """Tests for MCP polling server."""
 
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from memory.api.MCP.servers.polling import (

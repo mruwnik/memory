@@ -5,10 +5,8 @@ from datetime import datetime
 from typing import Literal, cast
 from memory.discord.messages import (
     upsert_scheduled_message,
-    comm_channel_prompt,
     previous_messages,
 )
-from sqlalchemy import BigInteger
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     DiscordServer,
@@ -24,7 +22,7 @@ UpdateSummaryType = Literal["server", "channel", "user"]
 
 
 def handle_update_summary_call(
-    type: UpdateSummaryType, item_id: BigInteger
+    type: UpdateSummaryType, item_id: int
 ) -> ToolHandler:
     models = {
         "server": DiscordServer,
@@ -60,7 +58,7 @@ def handle_update_summary_call(
     return handler
 
 
-def make_summary_tool(type: UpdateSummaryType, item_id: BigInteger) -> ToolDefinition:
+def make_summary_tool(type: UpdateSummaryType, item_id: int) -> ToolDefinition:
     return ToolDefinition(
         name=f"update_{type}_summary",
         description=textwrap.dedent("""
@@ -185,6 +183,8 @@ def make_prev_messages_tool(
     bot: DiscordBotUser, user_id: int | None, channel_id: int | None
 ) -> ToolDefinition:
     bot_id = bot.discord_id
+    if not bot_id:
+        raise ValueError("Bot must have a discord_id")
     if user_id:
         channel_type = "from your chat with this user"
     elif channel_id:
@@ -291,13 +291,14 @@ def make_discord_tools(
     tools = [
         make_message_scheduler(bot, author_id, channel_id, model),
         make_prev_messages_tool(bot, author_id, channel_id),
-        make_summary_tool("channel", channel_id),
     ]
-    if author:
-        tools += [make_summary_tool("user", author_id)]
-    if channel and channel.server:
+    if channel_id:
+        tools.append(make_summary_tool("channel", channel_id))
+    if author_id:
+        tools.append(make_summary_tool("user", author_id))
+    if channel and channel.server and channel.server_id:
         tools += [
-            make_summary_tool("server", cast(BigInteger, channel.server_id)),
+            make_summary_tool("server", channel.server_id),
             make_add_reaction_tool(bot, channel),
         ]
     return {tool.name: tool for tool in tools}

@@ -1,6 +1,5 @@
 import base64
 import pathlib
-import textwrap
 from datetime import datetime
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -519,7 +518,6 @@ def test_delete_email_vectors(db_session, qdrant, mock_uuid4):
         vectorize_email(mail_message)
 
     assert len(mail_message.chunks) == 1
-    chunk_id = mail_message.chunks[0].id
 
     # Now delete the vectors
     delete_email_vectors(mail_message)

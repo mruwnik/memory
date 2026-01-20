@@ -1,8 +1,8 @@
+from __future__ import annotations
 from datetime import datetime
 import uuid
-from typing import Any, Dict, cast
+from typing import Any, Dict, List, TYPE_CHECKING
 from sqlalchemy import (
-    Column,
     String,
     DateTime,
     ForeignKey,
@@ -12,54 +12,58 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.discord import DiscordChannel, DiscordUser
+    from memory.common.db.models.users import User
 
 
 class ScheduledLLMCall(Base):
     __tablename__ = "scheduled_llm_calls"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    topic = Column(Text, nullable=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    topic: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Scheduling info
-    scheduled_time = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    executed_at = Column(DateTime, nullable=True)
+    scheduled_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # LLM call configuration
-    model = Column(
+    model: Mapped[str | None] = mapped_column(
         String, nullable=True, doc='e.g., "anthropic/claude-3-5-sonnet-20241022"'
     )
-    message = Column(Text, nullable=False)
-    system_prompt = Column(Text, nullable=True)
-    allowed_tools = Column(JSON, nullable=True)  # List of allowed tool names
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    allowed_tools: Mapped[List[str] | None] = mapped_column(JSON, nullable=True)  # List of allowed tool names
 
     # Discord configuration
-    discord_channel_id = Column(
+    discord_channel_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("discord_channels.id"), nullable=True
     )
-    discord_user_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=True)
+    discord_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("discord_users.id"), nullable=True)
 
     # Execution status and results
-    status = Column(
+    status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending"
     )  # pending, executing, completed, failed, cancelled
-    response = Column(Text, nullable=True)  # LLM response content
-    error_message = Column(Text, nullable=True)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)  # LLM response content
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Additional metadata
-    data = Column(JSON, nullable=True)  # For extensibility
+    data: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # For extensibility
 
     # Celery task tracking
-    celery_task_id = Column(String, nullable=True)  # Track the Celery Beat task
+    celery_task_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Track the Celery Beat task
 
     # Relationships
-    user = relationship("User")
-    discord_channel = relationship("DiscordChannel", foreign_keys=[discord_channel_id])
-    discord_user = relationship("DiscordUser", foreign_keys=[discord_user_id])
+    user: Mapped[User] = relationship("User")
+    discord_channel: Mapped[DiscordChannel | None] = relationship("DiscordChannel", foreign_keys=[discord_channel_id])
+    discord_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[discord_user_id])
 
     def serialize(self) -> Dict[str, Any]:
         def print_datetime(dt: datetime | None) -> str | None:
@@ -71,15 +75,15 @@ class ScheduledLLMCall(Base):
             "id": self.id,
             "user_id": self.user_id,
             "topic": self.topic,
-            "scheduled_time": print_datetime(cast(datetime, self.scheduled_time)),
-            "created_at": print_datetime(cast(datetime, self.created_at)),
-            "executed_at": print_datetime(cast(datetime, self.executed_at)),
+            "scheduled_time": print_datetime(self.scheduled_time),
+            "created_at": print_datetime(self.created_at),
+            "executed_at": print_datetime(self.executed_at),
             "model": self.model,
             "message": self.message,
             "system_prompt": self.system_prompt,
             "allowed_tools": self.allowed_tools,
-            "discord_channel": self.discord_channel and self.discord_channel.name,
-            "discord_user": self.discord_user and self.discord_user.username,
+            "discord_channel": self.discord_channel.name if self.discord_channel else None,
+            "discord_user": self.discord_user.username if self.discord_user else None,
             "status": self.status,
             "response": self.response,
             "error_message": self.error_message,
@@ -88,10 +92,10 @@ class ScheduledLLMCall(Base):
         }
 
     def is_pending(self) -> bool:
-        return cast(str, self.status) == "pending"
+        return self.status == "pending"
 
     def is_completed(self) -> bool:
-        return cast(str, self.status) in ("completed", "failed", "cancelled")
+        return self.status in ("completed", "failed", "cancelled")
 
     def can_be_cancelled(self) -> bool:
-        return cast(str, self.status) in ("pending",)
+        return self.status in ("pending",)

@@ -1,7 +1,7 @@
 """Tests for Email MCP tools."""
 
 import sys
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -41,9 +41,9 @@ sys.modules["mcp.server.fastmcp.server"] = MagicMock()
 _mock_base = MagicMock()
 sys.modules["memory.api.MCP.base"] = _mock_base
 
-from memory.common.db import connection as db_connection
-from memory.common.db.models import EmailAccount, UserSession
-from memory.common.db.models.users import HumanUser
+from memory.common.db import connection as db_connection  # noqa: E402
+from memory.common.db.models import EmailAccount, UserSession  # noqa: E402
+from memory.common.db.models.users import HumanUser  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Sequence, Any
+from typing import Sequence, Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager
@@ -93,13 +93,13 @@ def reingest_chunk(chunk_id: str, collection: str):
             collection,
             [chunk_id],
             [vector],
-            [chunk.source.as_payload()],
+            [dict(chunk.source.as_payload())],
         )
         chunk.checked_at = datetime.now()
         session.commit()
 
 
-def get_item_class(item_type: str):
+def get_item_class(item_type: str) -> type[SourceItem]:
     class_ = SourceItem.registry._class_registry.get(item_type)
     if not class_:
         available_types = ", ".join(sorted(SourceItem.registry._class_registry.keys()))
@@ -108,7 +108,7 @@ def get_item_class(item_type: str):
         )
     if not hasattr(class_, "chunks"):
         raise ValueError(f"Item type {item_type} does not have chunks")
-    return class_
+    return cast(type[SourceItem], class_)
 
 
 @app.task(name=REINGEST_ITEM)
@@ -196,7 +196,8 @@ def reingest_missing_chunks(
     with make_session() as session:
         query = session.query(Chunk).filter(Chunk.checked_at < since)
         if collection:
-            query = query.filter(Chunk.source.has(SourceItem.modality == collection))
+            # Chunk.source is a backref relationship
+            query = query.filter(Chunk.source.has(SourceItem.modality == collection))  # type: ignore[union-attr]
         total_count = query.count()
 
         logger.info(
@@ -211,7 +212,7 @@ def reingest_missing_chunks(
                 .join(SourceItem, Chunk.source_id == SourceItem.id)
                 .filter(Chunk.checked_at < since)
                 .options(
-                    contains_eager(Chunk.source).load_only(
+                    contains_eager(Chunk.source).load_only(  # type: ignore[arg-type,union-attr]
                         SourceItem.id,  # type: ignore
                         SourceItem.modality,  # type: ignore
                         SourceItem.tags,  # type: ignore
@@ -284,8 +285,8 @@ def update_metadata_for_item(item_id: str, item_type: str):
             current_payloads = qdrant.get_payloads(client, collection, chunk_ids)
 
             # Get new metadata from source item
-            new_metadata = item.as_payload()
-            new_tags = set(new_metadata.get("tags", []))
+            new_metadata: dict[str, Any] = dict(item.as_payload())
+            new_tags: set[str] = set(new_metadata.get("tags", []))
 
             for chunk_id in chunk_ids:
                 if chunk_id not in current_payloads:
@@ -295,11 +296,11 @@ def update_metadata_for_item(item_id: str, item_type: str):
                     continue
 
                 current_payload = current_payloads[chunk_id]
-                current_tags = set(current_payload.get("tags", []))
+                current_tags: set[str] = set(current_payload.get("tags", []))
 
                 # Merge tags (combine existing and new tags)
-                merged_tags = list(current_tags | new_tags)
-                updated_metadata = new_metadata.copy()
+                merged_tags: list[str] = list(current_tags | new_tags)
+                updated_metadata: dict[str, Any] = dict(new_metadata)
                 updated_metadata["tags"] = merged_tags
 
                 if _payloads_equal(current_payload, updated_metadata):

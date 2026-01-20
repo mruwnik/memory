@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 from PIL import Image
 
 from memory.common.llms.anthropic_provider import AnthropicProvider
@@ -8,11 +8,8 @@ from memory.common.llms.base import (
     MessageRole,
     TextContent,
     ImageContent,
-    ToolUseContent,
-    ToolResultContent,
     ThinkingContent,
     LLMSettings,
-    StreamEvent,
 )
 from memory.common.llms.tools import ToolDefinition
 

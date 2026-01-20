@@ -12,7 +12,8 @@ import inspect
 import time
 import traceback
 import logging
-from typing import Any, Callable, Sequence, cast
+from collections.abc import Mapping
+from typing import Any, Callable, Sequence, TypeVar, cast
 
 from sqlalchemy import or_
 from memory.common import embedding, qdrant
@@ -21,6 +22,9 @@ from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
+
+# TypeVar for model classes (any SQLAlchemy model)
+T = TypeVar("T")
 
 
 def clear_item_chunks(item: SourceItem, session) -> int:
@@ -73,9 +77,9 @@ TASK_LOGGED_PARAMS: dict[str, list[str]] = {
 
 def check_content_exists(
     session,
-    model_class: type[SourceItem],
+    model_class: type[T],
     **kwargs: Any,
-) -> SourceItem | None:
+) -> T | None:
     """
     Check if content already exists in the database.
 
@@ -325,7 +329,9 @@ def extract_task_params(
     return {k: v for k, v in all_params.items() if k in param_names}
 
 
-def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
+def safe_task_execution(
+    func: Callable[..., Mapping[str, Any]],
+) -> Callable[..., Mapping[str, Any]]:
     """
     Decorator for safe task execution with comprehensive error handling and metrics.
 
@@ -358,7 +364,7 @@ def safe_task_execution(func: Callable[..., dict]) -> Callable[..., dict]:
     from functools import wraps
 
     @wraps(func)
-    def wrapper(*args, **kwargs) -> dict:
+    def wrapper(*args, **kwargs) -> Mapping[str, Any]:
         start_time = time.perf_counter()
         status = "success"
 

@@ -102,6 +102,9 @@ class SearchFilters(TypedDict):
     # ID filters
     source_ids: NotRequired[list[int] | None]
 
+    # Subject filter (for observations)
+    subject: NotRequired[str]
+
 
 class SearchConfig(BaseModel):
     limit: int = 20

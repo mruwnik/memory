@@ -14,12 +14,22 @@ from memory.common.llms.usage.usage_tracker import (
 
 
 class RedisClientProtocol(Protocol):
-    def get(self, key: str) -> Any:  # pragma: no cover - Protocol definition
+    def get(self, name: str) -> Any:  # pragma: no cover - Protocol definition
         ...
 
-    def set(
-        self, key: str, value: Any
-    ) -> Any:  # pragma: no cover - Protocol definition
+    def set(  # pragma: no cover - Protocol definition
+        self,
+        name: str,
+        value: Any,
+        ex: Any = None,
+        px: Any = None,
+        nx: bool = False,
+        xx: bool = False,
+        keepttl: bool = False,
+        get: bool = False,
+        exat: Any = None,
+        pxat: Any = None,
+    ) -> Any:
         ...
 
     def scan_iter(
@@ -31,6 +41,8 @@ class RedisClientProtocol(Protocol):
 class RedisUsageTracker(UsageTracker):
     """Tracks LLM usage for providers and models using Redis for persistence."""
 
+    _redis: RedisClientProtocol  # Always set in __init__
+
     def __init__(
         self,
         configs: dict[str, RateLimitConfig] | None = None,
@@ -41,8 +53,9 @@ class RedisUsageTracker(UsageTracker):
     ) -> None:
         super().__init__(configs=configs, default_config=default_config)
         if redis_client is None:
-            redis_client = redis.Redis.from_url(settings.REDIS_URL)
-        self._redis = redis_client
+            self._redis = redis.Redis.from_url(settings.REDIS_URL)
+        else:
+            self._redis = redis_client
         prefix = key_prefix or settings.LLM_USAGE_REDIS_PREFIX
         self._key_prefix = prefix.rstrip(":")
 

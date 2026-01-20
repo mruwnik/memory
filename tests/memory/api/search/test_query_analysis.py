@@ -12,7 +12,6 @@ from memory.api.search.query_analysis import (
     _get_modality_domains,
     _is_valid_sql_identifier,
     analyze_query,
-    MAX_DOMAINS_TO_LIST,
 )
 
 
@@ -479,7 +478,7 @@ def test_get_modality_domains_skips_invalid_table_names():
         # Mock db.execute to return empty results
         mock_db.execute.return_value = iter([])
 
-        result = _get_modality_domains(mock_db)
+        _get_modality_domains(mock_db)
 
     # Verify that only valid tables were included in the query
     call_args = mock_db.execute.call_args

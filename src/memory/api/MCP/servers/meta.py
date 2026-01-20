@@ -9,25 +9,21 @@ from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_typ
 import aiohttp
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from sqlalchemy import func
-from sqlalchemy.orm import Session
 
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common import qdrant
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     EmailAccount,
     SourceItem,
     UserSession,
 )
-from memory.common.db.models.source_items import AgentObservation
 
 logger = logging.getLogger(__name__)
 
 meta_mcp = FastMCP("memory-meta")
 
 
-def _get_current_user(session: Session) -> dict:
+def _get_current_user(session: DBSession) -> dict:
     """Get the current authenticated user from the access token."""
     access_token = get_access_token()
     if not access_token:
@@ -62,7 +58,7 @@ def _get_current_user(session: Session) -> dict:
         "scopes": access_token.scopes,
         "client_id": access_token.client_id,
         "user": user_info,
-        "public_key": user_session.user.public_key,
+        "public_key": user_session.user.ssh_public_key,
     }
 
 

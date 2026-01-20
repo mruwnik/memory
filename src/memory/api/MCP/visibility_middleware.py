@@ -17,7 +17,7 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool
 
 from memory.api.MCP.visibility import get_visibility_checker
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class VisibilityMiddleware(Middleware):
         return tool_name
 
     async def _check_visibility(
-        self, tool: Tool, user_info: dict, session=None
+        self, tool: Tool, user_info: dict, session: DBSession | None = None
     ) -> bool:
         """Check if a tool is visible to the current user.
 

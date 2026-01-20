@@ -2,19 +2,21 @@
 Database models for tracking people.
 """
 
+from __future__ import annotations
+
 import re
-from typing import Annotated, Sequence, cast
+from typing import TYPE_CHECKING, Annotated, Any, Sequence
 
 import yaml
 from sqlalchemy import (
     ARRAY,
     BigInteger,
-    Column,
     ForeignKey,
     Index,
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
 
 import memory.common.extract as extract
 from memory.common import settings
@@ -37,13 +39,23 @@ class Person(SourceItem):
 
     __tablename__ = "people"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    identifier = Column(Text, unique=True, nullable=False, index=True)
-    display_name = Column(Text, nullable=False)
-    aliases = Column(ARRAY(Text), server_default="{}", nullable=False)
-    contact_info = Column(JSONB, server_default="{}", nullable=False)
+    identifier: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), server_default="{}", nullable=False
+    )
+    contact_info: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default="{}", nullable=False
+    )
+
+    # Type declarations for inherited fields from SourceItem (which uses old Column style)
+    # These don't create new columns, just help pyright understand the types
+    if TYPE_CHECKING:
+        tags: list[str]
+        content: str | None
 
     __mapper_args__ = {
         "polymorphic_identity": "person",
@@ -58,10 +70,10 @@ class Person(SourceItem):
     def as_payload(self) -> PersonPayload:
         return PersonPayload(
             **super().as_payload(),
-            identifier=cast(str, self.identifier),
-            display_name=cast(str, self.display_name),
-            aliases=cast(list[str], self.aliases) or [],
-            contact_info=cast(dict, self.contact_info) or {},
+            identifier=self.identifier,
+            display_name=self.display_name,
+            aliases=self.aliases or [],
+            contact_info=self.contact_info or {},
         )
 
     @property
@@ -80,11 +92,11 @@ class Person(SourceItem):
         parts = [f"# {self.display_name}"]
 
         if self.aliases:
-            aliases_str = ", ".join(cast(list[str], self.aliases))
+            aliases_str = ", ".join(self.aliases)
             parts.append(f"Also known as: {aliases_str}")
 
         if self.tags:
-            tags_str = ", ".join(cast(list[str], self.tags))
+            tags_str = ", ".join(self.tags)
             parts.append(f"Tags: {tags_str}")
 
         if self.content:
@@ -99,7 +111,7 @@ class Person(SourceItem):
 
     def to_profile_markdown(self) -> str:
         """Serialize Person to markdown with YAML frontmatter."""
-        frontmatter = {
+        frontmatter: dict[str, Any] = {
             "identifier": self.identifier,
             "display_name": self.display_name,
         }

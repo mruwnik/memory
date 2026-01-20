@@ -2,13 +2,16 @@
 Database models for the Discord system.
 """
 
+from __future__ import annotations
+
 import textwrap
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     ARRAY,
     BigInteger,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -16,19 +19,29 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import relationship, object_session
+from sqlalchemy.orm import Mapped, mapped_column, relationship, object_session
 
 from memory.common.db.models.base import Base
 
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
+    from memory.common.db.models.mcp import MCPServer
+
 
 class MessageProcessor:
-    ignore_messages = Column(Boolean, nullable=True, default=False)
+    ignore_messages: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=False
+    )
 
-    allowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
-    disallowed_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+    allowed_tools: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
+    disallowed_tools: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
 
     @property
-    def mcp_servers(self) -> list:
+    def mcp_servers(self) -> list[MCPServer]:
         """Get MCP servers assigned to this entity via MCPServerAssignment."""
         from memory.common.db.models.mcp import MCPServer, MCPServerAssignment
 
@@ -41,23 +54,23 @@ class MessageProcessor:
             .join(MCPServerAssignment)
             .filter(
                 MCPServerAssignment.entity_type == self.entity_type,
-                MCPServerAssignment.entity_id == self.id,
+                MCPServerAssignment.entity_id == self.id,  # type: ignore[attr-defined]
             )
             .all()
         )
 
-    system_prompt = Column(
+    system_prompt: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         doc="System prompt for this processor. The precedence is user -> channel -> server -> default.",
     )
-    chattiness_threshold = Column(
+    chattiness_threshold: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
         doc="The threshold for the bot to continue the conversation, between 0 and 100.",
     )
 
-    summary = Column(
+    summary: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         doc=textwrap.dedent(
@@ -70,17 +83,17 @@ class MessageProcessor:
         ),
     )
 
-    proactive_cron = Column(
+    proactive_cron: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         doc="Cron schedule for proactive check-ins (e.g., '0 9 * * *' for 9am daily). None = disabled.",
     )
-    proactive_prompt = Column(
+    proactive_prompt: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         doc="Custom instructions for proactive check-ins.",
     )
-    last_proactive_at = Column(
+    last_proactive_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         doc="When the last proactive check-in was sent.",
@@ -101,7 +114,7 @@ class MessageProcessor:
 
         vals = []
         if "name" in fields:
-            vals.append(indent("name", self.name))
+            vals.append(indent("name", self.name))  # type: ignore[attr-defined]
         if "system_prompt" in fields:
             vals.append(indent("system_prompt", self.system_prompt or ""))
         if "summary" in fields:
@@ -110,7 +123,7 @@ class MessageProcessor:
             servers = [s.as_xml() for s in self.mcp_servers]
             vals.append(indent("mcp_servers", "\n".join(servers)))
 
-        return indent(self.entity_type, "\n".join(vals))  # type: ignore
+        return indent(self.entity_type, "\n".join(vals))
 
     def xml_prompt(self) -> str:
         return self.to_xml("name", "system_prompt") if self.system_prompt else ""
@@ -127,17 +140,21 @@ class DiscordServer(Base, MessageProcessor):
 
     __tablename__ = "discord_servers"
 
-    id = Column(BigInteger, primary_key=True)  # Discord guild snowflake ID
-    name = Column(Text, nullable=False)
-    description = Column(Text)
-    member_count = Column(Integer)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord guild snowflake ID
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    member_count: Mapped[int | None] = mapped_column(Integer)
 
     # Collection settings
-    last_sync_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
-    channels = relationship(
+    channels: Mapped[list[DiscordChannel]] = relationship(
         "DiscordChannel", back_populates="server", cascade="all, delete-orphan"
     )
 
@@ -151,16 +168,22 @@ class DiscordChannel(Base, MessageProcessor):
 
     __tablename__ = "discord_channels"
 
-    id = Column(BigInteger, primary_key=True)  # Discord channel snowflake ID
-    server_id = Column(BigInteger, ForeignKey("discord_servers.id"), nullable=True)
-    name = Column(Text, nullable=False)
-    channel_type = Column(Text, nullable=False)  # "text", "voice", "dm", "group_dm"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord channel snowflake ID
+    server_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_servers.id"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    channel_type: Mapped[str] = mapped_column(Text, nullable=False)  # "text", "voice", "dm", "group_dm"
 
     # Collection settings (null = inherit from server)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
-    server = relationship("DiscordServer", back_populates="channels")
+    server: Mapped[DiscordServer | None] = relationship("DiscordServer", back_populates="channels")
     __table_args__ = (Index("discord_channels_server_idx", "server_id"),)
 
 
@@ -169,18 +192,24 @@ class DiscordUser(Base, MessageProcessor):
 
     __tablename__ = "discord_users"
 
-    id = Column(BigInteger, primary_key=True)  # Discord user snowflake ID
-    username = Column(Text, nullable=False)
-    display_name = Column(Text)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord user snowflake ID
+    username: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text)
 
     # Link to system user if registered
-    system_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    system_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
 
     # Basic DM settings
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
-    system_user = relationship("User", back_populates="discord_users")
+    system_user: Mapped[User | None] = relationship("User", back_populates="discord_users")
 
     __table_args__ = (Index("discord_users_system_user_idx", "system_user_id"),)
 

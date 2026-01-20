@@ -8,7 +8,6 @@ from memory.common.calendar import (
     event_to_dict,
     get_events_in_range,
     parse_date_range,
-    EventDict,
 )
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount

@@ -8,11 +8,10 @@ from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from sqlalchemy.orm import Session
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import UserSession
 from memory.common.email_sender import (
     EmailAttachmentData,
@@ -27,13 +26,13 @@ logger = logging.getLogger(__name__)
 email_mcp = FastMCP("memory-email")
 
 
-async def has_send_accounts(user_info: dict, session: Session) -> bool:
+async def has_send_accounts(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show email tools if user has send-enabled accounts."""
     token = user_info.get("token")
-    if not token:
+    if not token or session is None:
         return False
 
-    def _check(session: Session) -> bool:
+    def _check(session: DBSession) -> bool:
         user_session = session.get(UserSession, token)
         if not user_session or not user_session.user:
             return False
@@ -45,7 +44,7 @@ async def has_send_accounts(user_info: dict, session: Session) -> bool:
     return await asyncio.to_thread(_check, session)
 
 
-def _get_user_id(session: Session) -> int:
+def _get_user_id(session: DBSession) -> int:
     """Get the current user ID from the access token or raise ValueError."""
     access_token = get_access_token()
     if not access_token:

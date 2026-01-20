@@ -21,7 +21,7 @@ Usage:
         ...
 
     # Custom checker with database access
-    async def custom_checker(user_info: dict, session: Session) -> bool:
+    async def custom_checker(user_info: dict, session: DBSession) -> bool:
         user_id = user_info.get("user", {}).get("user_id")
         # Query database, etc.
         return some_condition
@@ -37,7 +37,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy.orm import Session
+from memory.common.db.connection import DBSession
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +61,11 @@ class VisibilityChecker(Protocol):
         True if the tool should be visible/callable, False otherwise
     """
 
-    async def __call__(self, user_info: dict, session: Session) -> bool: ...
+    async def __call__(self, user_info: dict, session: DBSession | None) -> bool: ...
 
 
 # Type alias for checker functions
-VisibilityCheckerFunc = Callable[[dict, Session], Awaitable[bool]]
+VisibilityCheckerFunc = Callable[[dict, DBSession | None], Awaitable[bool]]
 
 # Registry: function_name (without prefix) -> checker
 _visibility_checkers: dict[str, VisibilityCheckerFunc] = {}
@@ -127,7 +127,7 @@ def require_scopes(*scopes: str) -> VisibilityCheckerFunc:
         async def admin_tool(...): ...
     """
 
-    async def checker(user_info: dict, session: Session) -> bool:
+    async def checker(user_info: dict, session: DBSession | None) -> bool:
         user_scopes = user_info.get("scopes", [])
         # Wildcard grants access to everything
         if "*" in user_scopes:
@@ -155,11 +155,11 @@ def has_items(model_class: type) -> VisibilityCheckerFunc:
         async def all_books(...): ...
     """
 
-    def _sync_check(session: Session) -> bool:
+    def _sync_check(session: DBSession) -> bool:
         """Synchronous query - runs in thread pool to avoid blocking event loop."""
         return session.query(model_class).limit(1).count() > 0
 
-    async def checker(user_info: dict, session: Session) -> bool:
+    async def checker(user_info: dict, session: DBSession | None) -> bool:
         if session is None:
             # Can't check without session, default to visible
             return True
@@ -208,7 +208,7 @@ def visible_when(*checkers: VisibilityCheckerFunc):
             # No checkers = unrestricted, don't register anything
             return func
 
-        async def combined(user_info: dict, session: Session) -> bool:
+        async def combined(user_info: dict, session: DBSession | None) -> bool:
             for checker in checkers:
                 if not await checker(user_info, session):
                     return False

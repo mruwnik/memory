@@ -78,16 +78,16 @@ async def lifespan(app: FastAPI):
 
     with make_session() as session:
         bots = session.query(DiscordBotUser).all()
-        app.bots = {bot.id: make_collector(bot) for bot in bots}
+        app.state.bots = {bot.id: make_collector(bot) for bot in bots}
 
     logger.info(
-        f"Discord collectors started for {len(app.bots)} bots: {list(app.bots.keys())}"
+        f"Discord collectors started for {len(app.state.bots)} bots: {list(app.state.bots.keys())}"
     )
 
     yield
 
     # Cleanup
-    for bot in app.bots.values():
+    for bot in app.state.bots.values():
         if not bot.collector.is_closed():
             await bot.collector.close()
         if bot.collector_task:
@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
                 await bot.collector_task
             except asyncio.CancelledError:
                 pass
-    logger.info(f"Discord collectors stopped for {len(app.bots)} bots")
+    logger.info(f"Discord collectors stopped for {len(app.state.bots)} bots")
 
 
 # FastAPI app with lifespan management
@@ -106,7 +106,7 @@ app = FastAPI(title="Discord Collector API", version="1.0.0", lifespan=lifespan)
 @app.post("/send_dm")
 async def send_dm_endpoint(request: SendDMRequest):
     """Send a DM via the collector's Discord client"""
-    collector = app.bots.get(request.bot_id)
+    collector = app.state.bots.get(request.bot_id)
     if not collector:
         logger.error(f"Bot not found: {request.bot_id}")
         raise HTTPException(status_code=404, detail="Bot not found")
@@ -133,7 +133,7 @@ async def send_dm_endpoint(request: SendDMRequest):
 @app.post("/typing/dm")
 async def trigger_dm_typing(request: TypingDMRequest):
     """Trigger a typing indicator for a DM via the collector"""
-    collector = app.bots.get(request.bot_id)
+    collector = app.state.bots.get(request.bot_id)
     if not collector:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -159,7 +159,7 @@ async def trigger_dm_typing(request: TypingDMRequest):
 @app.post("/send_channel")
 async def send_channel_endpoint(request: SendChannelRequest):
     """Send a message to a channel via the collector's Discord client"""
-    collector = app.bots.get(request.bot_id)
+    collector = app.state.bots.get(request.bot_id)
     if not collector:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -187,7 +187,7 @@ async def send_channel_endpoint(request: SendChannelRequest):
 @app.post("/typing/channel")
 async def trigger_channel_typing(request: TypingChannelRequest):
     """Trigger a typing indicator for a channel via the collector"""
-    collector = app.bots.get(request.bot_id)
+    collector = app.state.bots.get(request.bot_id)
     if not collector:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -213,7 +213,7 @@ async def trigger_channel_typing(request: TypingChannelRequest):
 @app.get("/health")
 async def health_check():
     """Check if the Discord collector is running and healthy"""
-    if not app.bots:
+    if not app.state.bots:
         raise HTTPException(status_code=503, detail="Discord collector not running")
 
     return {
@@ -223,14 +223,14 @@ async def health_check():
             "user": str(bot.collector.user) if bot.collector.user else None,
             "guilds": len(bot.collector.guilds) if bot.collector.guilds else 0,
         }
-        for bot in app.bots.values()
+        for bot in app.state.bots.values()
     }
 
 
 @app.post("/add_reaction")
 async def add_reaction_endpoint(request: AddReactionRequest):
     """Add a reaction to a message via the collector's Discord client"""
-    collector = app.bots.get(request.bot_id)
+    collector = app.state.bots.get(request.bot_id)
     if not collector:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -260,17 +260,17 @@ async def add_reaction_endpoint(request: AddReactionRequest):
 @app.post("/refresh_metadata")
 async def refresh_metadata():
     """Refresh Discord server/channel/user metadata from Discord API"""
-    if not app.bots:
+    if not app.state.bots:
         raise HTTPException(status_code=503, detail="Discord collector not running")
 
     try:
         result = {
             bot.bot_name: await bot.collector.refresh_metadata()
-            for bot in app.bots.values()
+            for bot in app.state.bots.values()
         }
         return {
             "success": True,
-            "message": f"Metadata refreshed successfully for {len(app.bots)} bots",
+            "message": f"Metadata refreshed successfully for {len(app.state.bots)} bots",
             "results": result,
         }
     except Exception as e:

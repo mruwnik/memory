@@ -2,14 +2,16 @@
 Database models for the knowledge base system.
 """
 
-from typing import cast
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     ARRAY,
     BigInteger,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -19,9 +21,13 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import backref, relationship, validates
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.source_items import BookSection, GithubItem, MailMessage
+    from memory.common.db.models.users import User
 
 
 class Book(Base):
@@ -29,24 +35,26 @@ class Book(Base):
 
     __tablename__ = "book"
 
-    id = Column(BigInteger, primary_key=True)
-    isbn = Column(Text, unique=True)
-    title = Column(Text, nullable=False)
-    author = Column(Text)
-    publisher = Column(Text)
-    published = Column(DateTime(timezone=True))
-    language = Column(Text)
-    edition = Column(Text)
-    series = Column(Text)
-    series_number = Column(Integer)
-    total_pages = Column(Integer)
-    file_path = Column(Text)
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    sections: Mapped[list["BookSection"]] = relationship("BookSection", back_populates="book")
+    isbn: Mapped[str | None] = mapped_column(Text, unique=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    author: Mapped[str | None] = mapped_column(Text)
+    publisher: Mapped[str | None] = mapped_column(Text)
+    published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    language: Mapped[str | None] = mapped_column(Text)
+    edition: Mapped[str | None] = mapped_column(Text)
+    series: Mapped[str | None] = mapped_column(Text)
+    series_number: Mapped[int | None] = mapped_column(Integer)
+    total_pages: Mapped[int | None] = mapped_column(Integer)
+    file_path: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Metadata from ebook parser
-    book_metadata = Column(JSONB, name="metadata")
+    book_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, name="metadata")
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("book_isbn_idx", "isbn"),
@@ -66,7 +74,7 @@ class Book(Base):
             "edition": self.edition,
             "series": self.series,
             "series_number": self.series_number,
-        } | (cast(dict, self.book_metadata) or {})
+        } | (self.book_metadata or {})
         if sections:
             data["sections"] = [section.as_payload() for section in self.sections]
         return data
@@ -75,20 +83,20 @@ class Book(Base):
 class ArticleFeed(Base):
     __tablename__ = "article_feeds"
 
-    id = Column(BigInteger, primary_key=True)
-    url = Column(Text, nullable=False, unique=True)
-    title = Column(Text)
-    description = Column(Text)
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
-    check_interval = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    check_interval: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="60", doc="Minutes between checks"
     )
-    last_checked_at = Column(DateTime(timezone=True))
-    active = Column(Boolean, nullable=False, server_default="true")
-    created_at = Column(
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
@@ -102,47 +110,47 @@ class ArticleFeed(Base):
 class EmailAccount(Base):
     __tablename__ = "email_accounts"
 
-    id = Column(BigInteger, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    name = Column(Text, nullable=False)
-    email_address = Column(Text, nullable=False, unique=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    email_address: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
     # Account type: 'imap' or 'gmail'
-    account_type = Column(Text, nullable=False, server_default="imap")
+    account_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="imap")
 
     # IMAP fields (nullable for Gmail accounts)
-    imap_server = Column(Text, nullable=True)
-    imap_port = Column(Integer, nullable=True)
-    username = Column(Text, nullable=True)
-    password = Column(Text, nullable=True)
-    use_ssl = Column(Boolean, nullable=True)
+    imap_server: Mapped[str | None] = mapped_column(Text, nullable=True)
+    imap_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    use_ssl: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # SMTP fields (optional - inferred from IMAP if not set)
-    smtp_server = Column(Text, nullable=True)
-    smtp_port = Column(Integer, nullable=True)
+    smtp_server: Mapped[str | None] = mapped_column(Text, nullable=True)
+    smtp_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Gmail fields (nullable for IMAP accounts)
-    google_account_id = Column(
+    google_account_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("google_accounts.id"), nullable=True
     )
 
     # Common fields
-    folders = Column(ARRAY(Text), nullable=False, server_default="{}")
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
-    last_sync_at = Column(DateTime(timezone=True))
-    sync_error = Column(Text, nullable=True)
-    active = Column(Boolean, nullable=False, server_default="true")  # sync enabled
-    send_enabled = Column(Boolean, nullable=False, server_default="true")
-    created_at = Column(
+    folders: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")  # sync enabled
+    send_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    user = relationship("User", foreign_keys=[user_id], backref="email_accounts")
-    google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
-    messages = relationship(
+    user: Mapped[User] = relationship("User", foreign_keys=[user_id], backref="email_accounts")
+    google_account: Mapped[GoogleAccount | None] = relationship("GoogleAccount", foreign_keys=[google_account_id])
+    messages: Mapped[list[MailMessage]] = relationship(
         "MailMessage",
         back_populates="email_account",
         cascade="all, delete-orphan",
@@ -180,34 +188,34 @@ class GithubAccount(Base):
 
     __tablename__ = "github_accounts"
 
-    id = Column(BigInteger, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    name = Column(Text, nullable=False)  # Display name
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
 
     # Authentication - support both PAT and GitHub App
-    auth_type = Column(Text, nullable=False)  # 'pat' or 'app'
+    auth_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pat' or 'app'
 
     # For Personal Access Token auth
-    access_token = Column(Text, nullable=True)  # PAT
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)  # PAT
 
     # For GitHub App auth
-    app_id = Column(BigInteger, nullable=True)
-    installation_id = Column(BigInteger, nullable=True)
-    private_key = Column(Text, nullable=True)  # PEM key
+    app_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    private_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # PEM key
 
     # Status
-    active = Column(Boolean, nullable=False, server_default="true")
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    user = relationship("User", foreign_keys=[user_id], backref="github_accounts")
-    repos = relationship(
+    user: Mapped[User] = relationship("User", foreign_keys=[user_id], backref="github_accounts")
+    repos: Mapped[list[GithubRepo]] = relationship(
         "GithubRepo", back_populates="account", cascade="all, delete-orphan"
     )
 
@@ -223,48 +231,48 @@ class GithubRepo(Base):
 
     __tablename__ = "github_repos"
 
-    id = Column(BigInteger, primary_key=True)
-    account_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("github_accounts.id", ondelete="CASCADE"), nullable=False
     )
 
     # Repository identification
-    owner = Column(Text, nullable=False)  # org or user
-    name = Column(Text, nullable=False)  # repo name
+    owner: Mapped[str] = mapped_column(Text, nullable=False)  # org or user
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # repo name
 
     # What to track
-    track_issues = Column(Boolean, nullable=False, server_default="true")
-    track_prs = Column(Boolean, nullable=False, server_default="true")
-    track_comments = Column(Boolean, nullable=False, server_default="true")
-    track_project_fields = Column(Boolean, nullable=False, server_default="false")
+    track_issues: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    track_prs: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    track_comments: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    track_project_fields: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     # Filtering
-    labels_filter = Column(
+    labels_filter: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )  # Empty = all labels
-    state_filter = Column(Text, nullable=True)  # 'open', 'closed', or None for all
+    state_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # 'open', 'closed', or None for all
 
     # Tags to apply to all items from this repo
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Sync configuration
-    check_interval = Column(Integer, nullable=False, server_default="60")  # Minutes
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    check_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")  # Minutes
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Full sync interval for catching project field changes (minutes, 0 = disabled)
-    full_sync_interval = Column(Integer, nullable=False, server_default="1440")  # Daily
-    last_full_sync_at = Column(DateTime(timezone=True), nullable=True)
+    full_sync_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1440")  # Daily
+    last_full_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Status
-    active = Column(Boolean, nullable=False, server_default="true")
-    created_at = Column(
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    account = relationship("GithubAccount", back_populates="repos")
+    account: Mapped[GithubAccount] = relationship("GithubAccount", back_populates="repos")
 
     __table_args__ = (
         UniqueConstraint("account_id", "owner", "name", name="unique_repo_per_account"),
@@ -282,37 +290,37 @@ class GithubMilestone(Base):
 
     __tablename__ = "github_milestones"
 
-    id = Column(BigInteger, primary_key=True)
-    repo_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("github_repos.id", ondelete="CASCADE"), nullable=False
     )
 
     # GitHub identifiers
-    github_id = Column(BigInteger, nullable=False)
-    number = Column(Integer, nullable=False)
+    github_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Data
-    title = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
-    state = Column(Text, nullable=False)  # 'open' or 'closed'
-    due_on = Column(DateTime(timezone=True), nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)  # 'open' or 'closed'
+    due_on: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Timestamps from GitHub
-    github_created_at = Column(DateTime(timezone=True), nullable=True)
-    github_updated_at = Column(DateTime(timezone=True), nullable=True)
-    closed_at = Column(DateTime(timezone=True), nullable=True)
+    github_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Local timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    repo = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
-    items = relationship("GithubItem", back_populates="milestone_rel")
+    repo: Mapped[GithubRepo] = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
+    items: Mapped[list[GithubItem]] = relationship("GithubItem", back_populates="milestone_rel")
 
     __table_args__ = (
         UniqueConstraint("repo_id", "number", name="unique_milestone_per_repo"),
@@ -326,51 +334,51 @@ class GithubProject(Base):
 
     __tablename__ = "github_projects"
 
-    id = Column(BigInteger, primary_key=True)
-    account_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("github_accounts.id", ondelete="CASCADE"), nullable=False
     )
 
     # GitHub identifiers
-    node_id = Column(Text, nullable=False)  # GraphQL node ID
-    number = Column(Integer, nullable=False)  # Project number (shown in URL)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)  # GraphQL node ID
+    number: Mapped[int] = mapped_column(Integer, nullable=False)  # Project number (shown in URL)
 
     # Owner info
-    owner_type = Column(Text, nullable=False)  # 'organization' or 'user'
-    owner_login = Column(Text, nullable=False)  # org or user name
+    owner_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'organization' or 'user'
+    owner_login: Mapped[str] = mapped_column(Text, nullable=False)  # org or user name
 
     # Project data
-    title = Column(Text, nullable=False)
-    short_description = Column(Text, nullable=True)
-    readme = Column(Text, nullable=True)
-    url = Column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    short_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    readme: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Status
-    public = Column(Boolean, nullable=False, server_default="false")
-    closed = Column(Boolean, nullable=False, server_default="false")
+    public: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     # Field definitions stored as JSONB
     # Format: [{"id": "...", "name": "Status", "data_type": "SINGLE_SELECT", "options": {...}}]
-    fields = Column(JSONB, nullable=False, server_default="[]")
+    fields: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     # Stats
-    items_total_count = Column(Integer, nullable=False, server_default="0")
+    items_total_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     # Timestamps from GitHub
-    github_created_at = Column(DateTime(timezone=True), nullable=True)
-    github_updated_at = Column(DateTime(timezone=True), nullable=True)
+    github_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Local timestamps
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    account = relationship("GithubAccount", backref=backref("projects", passive_deletes=True))
+    account: Mapped[GithubAccount] = relationship("GithubAccount", backref=backref("projects", passive_deletes=True))
 
     __table_args__ = (
         UniqueConstraint(
@@ -418,45 +426,45 @@ class GithubTeam(Base):
 
     __tablename__ = "github_teams"
 
-    id = Column(BigInteger, primary_key=True)
-    account_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("github_accounts.id", ondelete="CASCADE"), nullable=False
     )
 
     # GitHub identifiers
-    node_id = Column(Text, nullable=False)  # GraphQL node ID
-    slug = Column(Text, nullable=False)  # URL-safe team name
-    github_id = Column(BigInteger, nullable=False)  # REST API ID
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)  # GraphQL node ID
+    slug: Mapped[str] = mapped_column(Text, nullable=False)  # URL-safe team name
+    github_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # REST API ID
 
     # Team info
-    name = Column(Text, nullable=False)  # Display name
-    description = Column(Text, nullable=True)
-    privacy = Column(Text, nullable=False)  # 'closed' or 'secret'
-    permission = Column(Text, nullable=True)  # 'pull', 'push', 'admin', 'maintain', 'triage'
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    privacy: Mapped[str] = mapped_column(Text, nullable=False)  # 'closed' or 'secret'
+    permission: Mapped[str | None] = mapped_column(Text, nullable=True)  # 'pull', 'push', 'admin', 'maintain', 'triage'
 
     # Organization info
-    org_login = Column(Text, nullable=False)
+    org_login: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Parent team (for nested teams)
-    parent_team_id = Column(BigInteger, ForeignKey("github_teams.id"), nullable=True)
+    parent_team_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("github_teams.id"), nullable=True)
 
     # Member count (cached)
-    members_count = Column(Integer, nullable=False, server_default="0")
+    members_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     # Timestamps
-    github_created_at = Column(DateTime(timezone=True), nullable=True)
-    github_updated_at = Column(DateTime(timezone=True), nullable=True)
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    github_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    account = relationship("GithubAccount", backref=backref("teams", passive_deletes=True))
-    parent_team = relationship("GithubTeam", remote_side=[id], backref="child_teams")
+    account: Mapped[GithubAccount] = relationship("GithubAccount", backref=backref("teams", passive_deletes=True))
+    parent_team: Mapped[GithubTeam | None] = relationship("GithubTeam", remote_side=[id], backref="child_teams")
 
     __table_args__ = (
         UniqueConstraint(
@@ -503,23 +511,23 @@ class GoogleOAuthConfig(Base):
 
     __tablename__ = "google_oauth_config"
 
-    id = Column(BigInteger, primary_key=True)
-    name = Column(Text, nullable=False, unique=True, default="default")
-    client_id = Column(Text, nullable=False)
-    client_secret = Column(Text, nullable=False)
-    project_id = Column(Text, nullable=True)
-    auth_uri = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True, default="default")
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_uri: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="https://accounts.google.com/o/oauth2/auth"
     )
-    token_uri = Column(
+    token_uri: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="https://oauth2.googleapis.com/token"
     )
-    redirect_uris = Column(ARRAY(Text), nullable=False, server_default="{}")
-    javascript_origins = Column(ARRAY(Text), nullable=False, server_default="{}")
-    created_at = Column(
+    redirect_uris: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    javascript_origins: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
@@ -527,7 +535,7 @@ class GoogleOAuthConfig(Base):
     )
 
     @classmethod
-    def from_json(cls, json_data: dict, name: str = "default") -> "GoogleOAuthConfig":
+    def from_json(cls, json_data: dict, name: str = "default") -> GoogleOAuthConfig:
         """Create from Google credentials JSON file content."""
         # Handle both "web" and "installed" credential types
         creds = json_data.get("web") or json_data.get("installed") or json_data
@@ -561,34 +569,34 @@ class GoogleAccount(Base):
 
     __tablename__ = "google_accounts"
 
-    id = Column(BigInteger, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    name = Column(Text, nullable=False)  # Display name
-    email = Column(Text, nullable=False, unique=True)  # Google account email
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # Google account email
 
     # OAuth2 tokens
-    access_token = Column(Text, nullable=True)
-    refresh_token = Column(Text, nullable=True)
-    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Scopes granted
-    scopes = Column(ARRAY(Text), nullable=False, server_default="{}")
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Status
-    active = Column(Boolean, nullable=False, server_default="true")
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    sync_error = Column(Text, nullable=True)  # Last error message if any
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # Last error message if any
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    user = relationship("User", foreign_keys=[user_id], backref="google_accounts")
-    folders = relationship(
+    user: Mapped[User] = relationship("User", foreign_keys=[user_id], backref="google_accounts")
+    folders: Mapped[list[GoogleFolder]] = relationship(
         "GoogleFolder", back_populates="account", cascade="all, delete-orphan"
     )
 
@@ -604,46 +612,46 @@ class GoogleFolder(Base):
 
     __tablename__ = "google_folders"
 
-    id = Column(BigInteger, primary_key=True)
-    account_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("google_accounts.id", ondelete="CASCADE"), nullable=False
     )
 
     # Folder identification
-    folder_id = Column(Text, nullable=False)  # Google Drive folder ID
-    folder_name = Column(Text, nullable=False)  # Display name
-    folder_path = Column(Text, nullable=True)  # Full path for display
+    folder_id: Mapped[str] = mapped_column(Text, nullable=False)  # Google Drive folder ID
+    folder_name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
+    folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # Full path for display
 
     # Sync options
-    recursive = Column(Boolean, nullable=False, server_default="true")  # Include subfolders
-    include_shared = Column(
+    recursive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")  # Include subfolders
+    include_shared: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )  # Include shared files
 
     # File type filters (empty = all text documents)
-    mime_type_filter = Column(ARRAY(Text), nullable=False, server_default="{}")
+    mime_type_filter: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Excluded subfolder IDs (skip these when syncing recursively)
-    exclude_folder_ids = Column(ARRAY(Text), nullable=False, server_default="{}")
+    exclude_folder_ids: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Tags to apply to all documents from this folder
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Sync configuration
-    check_interval = Column(Integer, nullable=False, server_default="60")  # Minutes
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    check_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")  # Minutes
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Status
-    active = Column(Boolean, nullable=False, server_default="true")
-    created_at = Column(
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    account = relationship("GoogleAccount", back_populates="folders")
+    account: Mapped[GoogleAccount] = relationship("GoogleAccount", back_populates="folders")
 
     __table_args__ = (
         UniqueConstraint("account_id", "folder_id", name="unique_folder_per_account"),
@@ -656,46 +664,46 @@ class CalendarAccount(Base):
 
     __tablename__ = "calendar_accounts"
 
-    id = Column(BigInteger, primary_key=True)
-    name = Column(Text, nullable=False)  # Display name
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
 
     # Calendar type
-    calendar_type = Column(Text, nullable=False)  # 'caldav', 'google'
+    calendar_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'caldav', 'google'
 
     # For CalDAV (Radicale, etc.)
-    caldav_url = Column(Text, nullable=True)  # CalDAV server URL
-    caldav_username = Column(Text, nullable=True)
-    caldav_password = Column(Text, nullable=True)
+    caldav_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # CalDAV server URL
+    caldav_username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    caldav_password: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # For Google Calendar - link to existing GoogleAccount
-    google_account_id = Column(
+    google_account_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("google_accounts.id", ondelete="SET NULL"), nullable=True
     )
 
     # Which calendars to sync (empty = all)
-    calendar_ids = Column(ARRAY(Text), nullable=False, server_default="{}")
+    calendar_ids: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Tags to apply to all events from this account
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
 
     # Sync configuration
-    check_interval = Column(Integer, nullable=False, server_default="15")  # Minutes
-    sync_past_days = Column(Integer, nullable=False, server_default="30")  # How far back
-    sync_future_days = Column(Integer, nullable=False, server_default="90")  # How far ahead
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    sync_error = Column(Text, nullable=True)
+    check_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default="15")  # Minutes
+    sync_past_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="30")  # How far back
+    sync_future_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")  # How far ahead
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Status
-    active = Column(Boolean, nullable=False, server_default="true")
-    created_at = Column(
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     # Relationships
-    google_account = relationship("GoogleAccount", foreign_keys=[google_account_id])
+    google_account: Mapped[GoogleAccount | None] = relationship("GoogleAccount", foreign_keys=[google_account_id])
 
     __table_args__ = (
         CheckConstraint("calendar_type IN ('caldav', 'google')"),

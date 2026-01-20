@@ -2,7 +2,7 @@ import logging
 import pathlib
 import contextlib
 import subprocess
-import shlex
+from typing import cast
 
 from memory.common import settings
 from memory.common.db.connection import make_session
@@ -13,7 +13,6 @@ from memory.common.celery_app import (
     SYNC_NOTES,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
-    SYNC_PROFILE_FROM_FILE,
 )
 from memory.common.content_processing import (
     check_content_exists,
@@ -99,7 +98,8 @@ def sync_note(
     with make_session() as session:
         existing_note = check_content_exists(session, Note, sha256=sha256)
         if existing_note:
-            logger.info(f"Note already exists: {existing_note.subject}")
+            existing_as_note = cast(Note, existing_note)
+            logger.info(f"Note already exists: {existing_as_note.subject}")
             return create_task_result(existing_note, "already_exists")
 
         note = session.query(Note).filter(Note.filename == filename).one_or_none()
@@ -136,7 +136,7 @@ def sync_note(
         ):
             # Re-fetch note for file operations (session is closed)
             with make_session() as session:
-                note = session.get(Note, result.get(f"note_id"))
+                note = session.get(Note, result.get("note_id"))
                 if note:
                     note.save_to_file()
 

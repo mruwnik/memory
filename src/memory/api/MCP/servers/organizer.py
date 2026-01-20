@@ -10,10 +10,10 @@ from typing import Literal
 from fastmcp import FastMCP
 
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.common.calendar import get_events_in_range, parse_date_range
+from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent, Task
-from memory.common.tasks import get_tasks, complete_task, task_to_dict
+from memory.common.tasks import TaskDict, get_tasks, task_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ async def get_upcoming(
     end_date: str | None = None,
     days: int = 7,
     limit: int = 50,
-) -> list[dict]:
+) -> list[EventDict]:
     """
     Get calendar events within a time span.
     Use to check the user's schedule, find meetings, or plan around events.
@@ -65,7 +65,7 @@ async def list_tasks(
     include_completed: bool = False,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> list[TaskDict]:
     """
     List the user's tasks/todos with optional filtering.
     Use to check what tasks are pending, find high-priority items, or review completed work.
@@ -96,7 +96,7 @@ async def list_tasks(
 
 @organizer_mcp.tool()
 @visible_when(require_scopes("organizer"), has_items(Task))
-async def get_task(task_id: int) -> dict:
+async def get_task(task_id: int) -> TaskDict | dict:
     """
     Get a specific task by ID.
     Use to retrieve full details of a single task.
@@ -123,7 +123,7 @@ async def create_task(
     priority: Literal["low", "medium", "high", "urgent"] | None = None,
     recurrence: str | None = None,
     tags: list[str] | None = None,
-) -> dict:
+) -> TaskDict:
     """
     Create a new task/todo for the user.
     Use when the user asks you to remember something, add a task, or create a reminder.
@@ -177,7 +177,7 @@ async def update_task(
     priority: Literal["low", "medium", "high", "urgent"] | None = None,
     status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
     tags: list[str] | None = None,
-) -> dict:
+) -> TaskDict:
     """
     Update an existing task.
     Use to modify task details, change priority, or update status.

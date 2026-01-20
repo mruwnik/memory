@@ -203,6 +203,6 @@ def discover_feed(
 
     return FeedDiscoveryResponse(
         url=url_str,
-        title=parser.title,
-        description=parser.description,
+        title=parser.title,  # type: ignore[reportGeneralTypeIssues]
+        description=parser.description,  # type: ignore[reportGeneralTypeIssues]
     )

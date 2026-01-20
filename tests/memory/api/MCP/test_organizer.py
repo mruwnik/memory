@@ -45,8 +45,8 @@ _mock_base.mcp = MagicMock()
 _mock_base.mcp.tool = lambda: lambda f: f
 sys.modules["memory.api.MCP.base"] = _mock_base
 
-from memory.common.db import connection as db_connection
-from memory.common.db.models import CalendarEvent, Task
+from memory.common.db import connection as db_connection  # noqa: E402
+from memory.common.db.models import CalendarEvent, Task  # noqa: E402
 
 
 def get_fn(tool):

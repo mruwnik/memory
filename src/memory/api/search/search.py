@@ -26,6 +26,8 @@ from memory.api.search.constants import (
     STOPWORDS,
 )
 
+# Conditional imports based on settings
+# pyright: reportUnboundVariable=false
 if settings.ENABLE_BM25_SEARCH:
     from memory.api.search.bm25 import search_bm25_chunks
 
@@ -266,7 +268,7 @@ async def _run_llm_analysis(
 
 
 def _apply_query_analysis(
-    analysis_result: QueryAnalysis,
+    analysis_result: QueryAnalysis | None,
     query_text: str,
     data: list[extract.DataChunk],
     modalities: set[str],

@@ -4,21 +4,26 @@ Provides encrypted storage for sensitive values (API keys, tokens, etc.)
 with lookup by symbolic name.
 """
 
+from __future__ import annotations
 import base64
 import logging
 import re
 from datetime import datetime, timezone
-
-logger = logging.getLogger(__name__)
+from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
-from sqlalchemy.orm import Session, relationship, validates
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
+from sqlalchemy.orm import Session, relationship, validates, Mapped, mapped_column
 
 from memory.common import settings
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
+
+logger = logging.getLogger(__name__)
 
 # Clojure symbol pattern: starts with letter or special char, followed by
 # letters, digits, or special chars. No spaces or most punctuation.
@@ -99,15 +104,15 @@ class Secret(Base):
         UniqueConstraint("user_id", "name", name="unique_secret_per_user"),
     )
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    name = Column(String, nullable=False, index=True)
-    encrypted_value = Column(LargeBinary, nullable=False)
-    description = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
-    user = relationship("User", back_populates="secrets")
+    user: Mapped[User] = relationship("User", back_populates="secrets")
 
     @validates("name")
     def validate_name(self, _key: str, name: str) -> str:

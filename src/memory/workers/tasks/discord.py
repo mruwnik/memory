@@ -10,10 +10,8 @@ import textwrap
 from datetime import datetime
 from typing import Any, cast
 
-from memory.common.llms.tools import MCPServer
 import requests
 from sqlalchemy import exc as sqlalchemy_exc
-from sqlalchemy.orm import Session, scoped_session
 
 from memory.common import discord, settings
 from memory.common.celery_app import (
@@ -22,7 +20,7 @@ from memory.common.celery_app import (
     PROCESS_DISCORD_MESSAGE,
     app,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import DiscordMessage, DiscordUser
 from memory.discord.messages import call_llm, comm_channel_prompt, send_discord_response
 from memory.common.content_processing import (
@@ -67,7 +65,7 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
 
 
 def get_prev(
-    session: Session | scoped_session, channel_id: int, sent_at: datetime
+    session: DBSession, channel_id: int, sent_at: datetime
 ) -> list[str]:
     prev = (
         session.query(DiscordUser.username, DiscordMessage.content)
@@ -91,12 +89,19 @@ def should_process(message: DiscordMessage) -> bool:
     ):
         return False
 
-    if f"<@{message.recipient_user.id}>" in message.content:
+    if (
+        message.recipient_user
+        and message.content
+        and f"<@{message.recipient_user.id}>" in message.content
+    ):
         logger.info("Direct mention of the bot, processing message")
         return True
 
     if message.from_user == message.recipient_user:
         logger.info("Skipping message because from_user == recipient_user")
+        return False
+
+    if not message.recipient_user or not message.from_user:
         return False
 
     with make_session() as session:
@@ -317,10 +322,11 @@ def add_discord_message(
             thread_id=thread_id,
             images=saved_image_paths or None,
         )
-        existing_msg = check_content_exists(
+        existing = check_content_exists(
             session, DiscordMessage, message_id=message_id, sha256=content_hash
         )
-        if existing_msg:
+        if existing:
+            existing_msg = cast(DiscordMessage, existing)
             logger.info(f"Discord message already exists: {existing_msg.message_id}")
             return create_task_result(
                 existing_msg, "already_exists", message_id=message_id
@@ -356,16 +362,17 @@ def edit_discord_message(
     """
     logger.info(f"Editing Discord message {message_id}: {content}")
     with make_session() as session:
-        existing_msg = check_content_exists(
+        existing = check_content_exists(
             session, DiscordMessage, message_id=message_id
         )
-        if not existing_msg:
+        if not existing:
             return {
                 "status": "error",
                 "error": "Message not found",
                 "message_id": message_id,
             }
 
+        existing_msg = cast(DiscordMessage, existing)
         existing_msg.content = content  # type: ignore
         if existing_msg.channel_id:
             existing_msg.messages_before = get_prev(

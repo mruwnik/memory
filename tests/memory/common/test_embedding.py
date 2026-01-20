@@ -13,7 +13,7 @@ from memory.common.embedding import (
     embed_by_model,
 )
 from memory.common.extract import DataChunk, MulitmodalChunk
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk
 
 
 @pytest.fixture
@@ -252,7 +252,6 @@ def test_embed_by_model_calls_embed_chunks_correctly(mock_embed):
     embed_by_model(chunks, "test-model")
 
     # Verify embed_chunks was called with the right model
-    expected_chunks = [["content1"], ["content2"]]
     mock_embed.embed.assert_called_once_with(
         ["content1", "content2"], model="test-model", input_type="document"
     )

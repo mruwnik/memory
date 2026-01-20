@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import textwrap
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     ARRAY,
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -11,9 +14,12 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.mcp import MCPServerAssignment as MCPServerAssignmentType
 
 
 class MCPServer(Base):
@@ -21,30 +27,40 @@ class MCPServer(Base):
 
     __tablename__ = "mcp_servers"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     # MCP server info
-    name = Column(Text, nullable=False)
-    mcp_server_url = Column(Text, nullable=False)
-    client_id = Column(Text, nullable=False)
-    available_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
-    disabled_tools = Column(ARRAY(Text), nullable=False, server_default="{}")
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    mcp_server_url: Mapped[str] = mapped_column(Text, nullable=False)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    available_tools: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
+    disabled_tools: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
 
     # OAuth flow state (temporary, cleared after token exchange)
-    state = Column(Text, nullable=True, unique=True)
-    code_verifier = Column(Text, nullable=True)
+    state: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    code_verifier: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # OAuth tokens (set after successful authorization)
-    access_token = Column(Text, nullable=True)
-    refresh_token = Column(Text, nullable=True)
-    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     # Relationships
-    assignments = relationship(
+    assignments: Mapped[list[MCPServerAssignmentType]] = relationship(
         "MCPServerAssignment", back_populates="mcp_server", cascade="all, delete-orphan"
     )
 
@@ -80,21 +96,27 @@ class MCPServerAssignment(Base):
 
     __tablename__ = "mcp_server_assignments"
 
-    id = Column(Integer, primary_key=True)
-    mcp_server_id = Column(Integer, ForeignKey("mcp_servers.id"), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mcp_server_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mcp_servers.id"), nullable=False
+    )
 
     # Polymorphic entity reference
-    entity_type = Column(
+    entity_type: Mapped[str] = mapped_column(
         Text, nullable=False
     )  # "User", "DiscordUser", "DiscordServer", "DiscordChannel"
-    entity_id = Column(BigInteger, nullable=False)
+    entity_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     # Relationships
-    mcp_server = relationship("MCPServer", back_populates="assignments")
+    mcp_server: Mapped[MCPServer] = relationship("MCPServer", back_populates="assignments")
 
     __table_args__ = (
         Index("mcp_assignment_entity_idx", "entity_type", "entity_id"),

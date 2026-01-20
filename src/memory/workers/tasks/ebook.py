@@ -3,7 +3,22 @@ import pathlib
 from datetime import datetime
 from typing import Any, Iterable, TypedDict, cast
 
-from sqlalchemy.orm import Session
+import memory.common.settings as settings
+from memory.common import jobs as job_utils
+from memory.common.celery_app import REPROCESS_BOOK, SYNC_BOOK, app
+from memory.common.content_processing import (
+    check_content_exists,
+    clear_item_chunks,
+    create_content_hash,
+    embed_source_item,
+    push_to_qdrant,
+    safe_task_execution,
+)
+from memory.common.db.connection import DBSession, make_session
+from memory.common.db.models import Book, BookSection
+from memory.parsers.ebook import Ebook, Section, parse_ebook
+
+logger = logging.getLogger(__name__)
 
 
 class BookProcessingResult(TypedDict, total=False):
@@ -17,23 +32,6 @@ class BookProcessingResult(TypedDict, total=False):
     sections_embedded: int
     sections_processed: int
     error: str
-
-import memory.common.settings as settings
-from memory.common.celery_app import SYNC_BOOK, REPROCESS_BOOK, app
-from memory.common.db.connection import make_session
-from memory.common.db.models import Book, BookSection
-from memory.common import jobs as job_utils
-from memory.parsers.ebook import Ebook, Section, parse_ebook
-from memory.common.content_processing import (
-    check_content_exists,
-    clear_item_chunks,
-    create_content_hash,
-    embed_source_item,
-    push_to_qdrant,
-    safe_task_execution,
-)
-
-logger = logging.getLogger(__name__)
 
 
 # Minimum section length to embed (avoid noise from very short sections)
@@ -160,7 +158,7 @@ def embed_sections(all_sections: list[BookSection]) -> int:
     return sum(embed_source_item(section) for section in all_sections)
 
 
-def prepare_book_for_reingest(session: Session, item_id: int) -> Book | None:
+def prepare_book_for_reingest(session: DBSession, item_id: int) -> Book | None:
     """
     Fetch an existing book and clear its sections/chunks for reprocessing.
 
@@ -182,7 +180,7 @@ def prepare_book_for_reingest(session: Session, item_id: int) -> Book | None:
 
 
 def execute_book_processing(
-    session: Session,
+    session: DBSession,
     book: Book,
     ebook: Ebook,
     title: str = "",
@@ -245,10 +243,9 @@ def execute_book_processing(
             book.language = language  # type: ignore
         if edition:
             book.edition = edition  # type: ignore
-        if isinstance(series, dict):
-            series = series.get("name")
-        if series:
-            book.series = series  # type: ignore
+        series_name = series.get("name") if isinstance(series, dict) else series
+        if series_name:
+            book.series = series_name  # type: ignore
         if series_number:
             book.series_number = series_number  # type: ignore
 
@@ -332,23 +329,24 @@ def sync_book(
 
         # Check for existing book (idempotency)
         logger.info(f"Checking for existing book: {ebook.relative_path.as_posix()}")
-        existing_book = check_content_exists(
+        existing_item = check_content_exists(
             session, Book, file_path=ebook.relative_path.as_posix()
         )
-        if existing_book:
+        if existing_item:
+            existing_book = cast(Book, existing_item)
             logger.info(f"Book already exists: {existing_book.title}")
             if job_id:
                 job_utils.complete_job(
                     session, job_id, result_id=existing_book.id, result_type="Book"
                 )
                 session.commit()
-            return {
-                "status": "already_exists",
-                "book_id": existing_book.id,
-                "title": existing_book.title,
-                "author": existing_book.author,
-                "sections_processed": 0,
-            }
+            return BookProcessingResult(
+                status="already_exists",
+                book_id=existing_book.id,
+                title=existing_book.title or "",
+                author=existing_book.author or "",
+                sections_processed=0,
+            )
 
         # Create new book record
         logger.info("Creating book record")
@@ -413,6 +411,12 @@ def reprocess_book(
             return {"status": "error", "error": error}
 
         # Re-parse the ebook from the original file
+        if not book.file_path:
+            error = f"Book {item_id} has no file_path"
+            if job_id:
+                job_utils.fail_job(session, job_id, error)
+                session.commit()
+            return {"status": "error", "error": error}
         ebook = validate_and_parse_book(book.file_path)
 
         return execute_book_processing(

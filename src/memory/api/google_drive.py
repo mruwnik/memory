@@ -11,10 +11,9 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from memory.common import settings
-from memory.common.db.connection import get_session, make_session
+from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import (
     GoogleAccount,
@@ -26,7 +25,7 @@ from memory.api.auth import get_current_user, get_user_account
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
 
-def get_oauth_config(session: Session) -> GoogleOAuthConfig:
+def get_oauth_config(session: DBSession) -> GoogleOAuthConfig:
     """Get the OAuth config from database, falling back to env vars if not found."""
     config = (
         session.query(GoogleOAuthConfig)
@@ -147,7 +146,7 @@ async def upload_oauth_config(
     file: UploadFile,
     name: str = "default",
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> OAuthConfigResponse:
     """Upload Google OAuth credentials JSON file."""
     if not file.filename or not file.filename.endswith(".json"):
@@ -200,7 +199,7 @@ async def upload_oauth_config(
 @router.get("/config")
 def get_config(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> OAuthConfigResponse | None:
     """Get current OAuth configuration (without secrets)."""
     config = (
@@ -222,7 +221,7 @@ def get_config(
 @router.delete("/config")
 def delete_config(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ):
     """Delete OAuth configuration."""
     config = (
@@ -279,7 +278,7 @@ def get_available_scopes(
 def google_authorize(
     scopes: list[str] | None = None,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> dict:
     """Initiate Google OAuth2 flow. Returns the authorization URL.
 
@@ -427,7 +426,7 @@ def google_callback(
 @router.get("/accounts")
 def list_accounts(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> list[AccountResponse]:
     """List Google accounts for the current user."""
     return [
@@ -459,7 +458,7 @@ def list_accounts(
                 for folder in account.folders
             ],
         )
-        for account in user.google_accounts
+        for account in user.google_accounts  # type: ignore[attr-defined]
     ]
 
 
@@ -470,7 +469,7 @@ def browse_folder(
     page_size: int = 100,
     page_token: str | None = None,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> BrowseResponse:
     """Browse a Google Drive folder to list its contents.
 
@@ -583,7 +582,7 @@ def add_folder(
     account_id: int,
     folder: FolderCreate,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> FolderResponse:
     """Add a folder to sync for a Google account."""
     get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
@@ -634,7 +633,7 @@ def update_folder(
     folder_id: int,
     updates: FolderUpdate,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> FolderResponse:
     """Update a folder's configuration."""
     get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
@@ -688,7 +687,7 @@ def remove_folder(
     account_id: int,
     folder_id: int,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ):
     """Remove a folder from sync."""
     get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
@@ -716,7 +715,7 @@ def trigger_sync(
     folder_id: int,
     force_full: bool = False,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ):
     """Manually trigger a sync for a folder."""
     from memory.common.celery_app import app, SYNC_GOOGLE_FOLDER
@@ -747,7 +746,7 @@ def trigger_sync(
 def disconnect_account(
     account_id: int,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ):
     """Disconnect a Google account (removes account and all folders)."""
     account = get_user_account(db, GoogleAccount, account_id, user)
@@ -767,7 +766,7 @@ def reauthorize_account(
     account_id: int,
     request: ReauthorizeRequest | None = None,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: DBSession = Depends(get_session),
 ) -> dict:
     """Re-authorize a Google account to get updated scopes.
 

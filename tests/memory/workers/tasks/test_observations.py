@@ -4,7 +4,6 @@ Tests for observation syncing tasks.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from memory.workers.tasks import observations
 
@@ -26,7 +25,7 @@ class TestSyncObservation:
         mock_check.return_value = None  # No existing observation
         mock_process.return_value = {"status": "created"}
 
-        result = observations.sync_observation(
+        observations.sync_observation(
             subject="User preferences",
             content="User prefers dark mode",
             observation_type="preference",

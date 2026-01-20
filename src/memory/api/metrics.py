@@ -6,11 +6,10 @@ system metrics, and aggregated summaries.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, over, text
+from sqlalchemy import func
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import make_session

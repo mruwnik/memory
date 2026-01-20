@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount

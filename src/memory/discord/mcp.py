@@ -262,7 +262,7 @@ async def run_mcp_server_command(
     url: str | None,
     entity_type: str,
     entity_id: int,
-) -> None:
+) -> str:
     """Handle MCP server management commands."""
     if action not in ["list", "add", "delete", "connect", "tools"]:
         raise ValueError(f"Invalid action: {action}")

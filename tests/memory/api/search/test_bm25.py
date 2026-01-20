@@ -333,7 +333,7 @@ class TestSearchBm25Chunks:
         chunks = [
             extract.DataChunk(data=["text content", 123, {"key": "value"}, "more text"])
         ]
-        result = await bm25.search_bm25_chunks(chunks, {"text"})
+        await bm25.search_bm25_chunks(chunks, {"text"})
 
         # Should extract only string content
         mock_search_bm25.assert_called_once()

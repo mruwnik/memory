@@ -2,16 +2,17 @@
 Database models for availability polls (LettuceMeet-style meeting scheduling).
 """
 
+from __future__ import annotations
+
 import secrets
 import string
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -19,9 +20,13 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.people import Person
+    from memory.common.db.models.users import User
 
 
 def generate_slug(length: int = 12) -> str:
@@ -56,33 +61,49 @@ class AvailabilityPoll(Base):
 
     __tablename__ = "availability_polls"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    slug = Column(String(20), unique=True, nullable=False)
-    title = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default=PollStatus.OPEN.value)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=PollStatus.OPEN.value
+    )
 
     # Poll time window (stored in UTC - clients handle timezone conversion)
-    datetime_start = Column(DateTime(timezone=True), nullable=False)
-    datetime_end = Column(DateTime(timezone=True), nullable=False)
-    slot_duration_minutes = Column(Integer, nullable=False, default=30)
+    datetime_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    datetime_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    slot_duration_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30
+    )
 
     # Creator (optional - polls can be created anonymously via MCP)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    closes_at = Column(DateTime(timezone=True), nullable=True)
-    finalized_at = Column(DateTime(timezone=True), nullable=True)
-    finalized_time = Column(DateTime(timezone=True), nullable=True)  # Selected meeting time
+    closes_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finalized_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )  # Selected meeting time
 
     # Relationships
-    user = relationship("User", backref="availability_polls")
-    responses = relationship(
+    user: Mapped[User | None] = relationship("User", backref="availability_polls")
+    responses: Mapped[list[PollResponse]] = relationship(
         "PollResponse",
         back_populates="poll",
         cascade="all, delete-orphan",
@@ -131,32 +152,32 @@ class PollResponse(Base):
 
     __tablename__ = "poll_responses"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    poll_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    poll_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("availability_polls.id", ondelete="CASCADE"),
         nullable=False,
     )
 
     # Respondent identification (anonymous allowed)
-    respondent_name = Column(String(255), nullable=True)
-    respondent_email = Column(String(255), nullable=True)
-    person_id = Column(
+    respondent_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    respondent_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    person_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("people.id", ondelete="SET NULL"),
         nullable=True,
     )
 
     # Edit token for updating responses without auth
-    edit_token = Column(String(32), nullable=False)
+    edit_token: Mapped[str] = mapped_column(String(32), nullable=False)
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -164,9 +185,11 @@ class PollResponse(Base):
     )
 
     # Relationships
-    poll = relationship("AvailabilityPoll", back_populates="responses")
-    person = relationship("Person", backref="poll_responses")
-    availabilities = relationship(
+    poll: Mapped[AvailabilityPoll] = relationship(
+        "AvailabilityPoll", back_populates="responses"
+    )
+    person: Mapped[Person | None] = relationship("Person", backref="poll_responses")
+    availabilities: Mapped[list[PollAvailability]] = relationship(
         "PollAvailability",
         back_populates="response",
         cascade="all, delete-orphan",
@@ -198,26 +221,30 @@ class PollAvailability(Base):
 
     __tablename__ = "poll_availabilities"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    response_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    response_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("poll_responses.id", ondelete="CASCADE"),
         nullable=False,
     )
 
     # Time slot (stored in UTC)
-    slot_start = Column(DateTime(timezone=True), nullable=False)
-    slot_end = Column(DateTime(timezone=True), nullable=False)
+    slot_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    slot_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Availability level: 1 = available, 2 = if needed
-    availability_level = Column(
+    availability_level: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         default=AvailabilityLevel.AVAILABLE.value,
     )
 
     # Relationships
-    response = relationship("PollResponse", back_populates="availabilities")
+    response: Mapped[PollResponse] = relationship(
+        "PollResponse", back_populates="availabilities"
+    )
 
     __table_args__ = (
         Index("idx_poll_availability_response_id", "response_id"),

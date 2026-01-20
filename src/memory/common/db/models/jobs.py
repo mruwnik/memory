@@ -5,25 +5,28 @@ PendingJob provides client-facing status tracking for async operations,
 allowing clients to check job status and retrieve results.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     String,
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
 
 
 class JobStatus(str, Enum):
@@ -58,44 +61,42 @@ class PendingJob(Base):
 
     __tablename__ = "pending_jobs"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # Job identification
-    job_type = Column(String(50), nullable=False)
-    external_id = Column(String(200), nullable=True)  # Client idempotency key
-    celery_task_id = Column(String(200), nullable=True)  # For correlation
+    job_type: Mapped[str] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(200))  # Client idempotency key
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))  # For correlation
 
     # Status tracking
-    status = Column(String(20), nullable=False, default=JobStatus.PENDING.value)
-    error_message = Column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default=JobStatus.PENDING.value)
+    error_message: Mapped[str | None] = mapped_column(Text)
 
     # Result linking
-    result_id = Column(BigInteger, nullable=True)  # ID of created/modified item
-    result_type = Column(String(50), nullable=True)  # Model name: "Meeting", etc.
+    result_id: Mapped[int | None] = mapped_column(BigInteger)  # ID of created/modified item
+    result_type: Mapped[str | None] = mapped_column(String(50))  # Model name: "Meeting", etc.
 
     # Job parameters (for debugging/retry)
-    params = Column(JSONB, default=dict, nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
-        nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
     )
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Retry tracking
-    attempts = Column(Integer, default=0, nullable=False)
+    attempts: Mapped[int] = mapped_column(default=0)
 
     # User association
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
-    user = relationship("User", backref="jobs")
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    user: Mapped[User | None] = relationship("User", backref="jobs")
 
     __table_args__ = (
         Index("idx_pending_jobs_status", "status"),

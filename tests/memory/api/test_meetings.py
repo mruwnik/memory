@@ -1,9 +1,7 @@
 """Tests for meetings API endpoints."""
 
-from datetime import datetime
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from memory.common.db.models import JobType

@@ -92,8 +92,8 @@ class ProjectResponse(BaseModel):
     directory: str
     name: str | None
     source: str | None
-    created_at: str
-    last_accessed_at: str
+    created_at: str | None
+    last_accessed_at: str | None
     session_count: int
 
 
@@ -107,7 +107,7 @@ class SessionResponse(BaseModel):
     git_branch: str | None
     tool_version: str | None
     source: str | None
-    started_at: str
+    started_at: str | None
     ended_at: str | None
     transcript_path: str | None
 

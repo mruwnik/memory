@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from memory.common import settings
-from memory.common.db.models import GithubItem, MailMessage, SourceItem
+from memory.common.db.models import GithubItem, MailMessage
 from memory.common.db.models.sources import EmailAccount, GithubAccount, GithubRepo
 from memory.workers.verification import (
     BatchVerificationResult,

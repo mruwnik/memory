@@ -2,11 +2,13 @@
 Database models for the knowledge base system.
 """
 
+from __future__ import annotations
+
 import pathlib
 import textwrap
 from datetime import datetime
 from collections.abc import Collection
-from typing import Any, Annotated, Sequence, cast
+from typing import TYPE_CHECKING, Any, Annotated, Sequence
 
 from PIL import Image
 import zlib
@@ -28,7 +30,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common import settings
 import memory.common.extract as extract
@@ -47,6 +49,17 @@ from memory.common.db.models.mcp import (
     MCPServerAssignment,
 )
 
+if TYPE_CHECKING:
+    from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
+    from memory.common.db.models.sources import (
+        Book,
+        CalendarAccount,
+        EmailAccount,
+        GithubMilestone,
+    )
+    from memory.common.db.models.observations import ObservationContradiction
+    from memory.common.db.models.people import Person
+
 
 class MailMessagePayload(SourceItemPayload):
     message_id: Annotated[str, "Unique email message identifier"]
@@ -60,35 +73,37 @@ class MailMessagePayload(SourceItemPayload):
 class MailMessage(SourceItem):
     __tablename__ = "mail_message"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    message_id = Column(Text, unique=True)
-    subject = Column(Text)
-    sender = Column(Text)
-    recipients = Column(ARRAY(Text))
-    sent_at = Column(DateTime(timezone=True))
-    folder = Column(Text)
-    tsv = Column(TSVECTOR)
+    message_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    subject: Mapped[str | None] = mapped_column(Text)
+    sender: Mapped[str | None] = mapped_column(Text)
+    recipients: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    folder: Mapped[str | None] = mapped_column(Text)
+    tsv: Mapped[Any | None] = mapped_column(TSVECTOR)
 
     # Sync tracking for deletion detection
-    email_account_id = Column(
+    email_account_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("email_accounts.id", ondelete="CASCADE"), nullable=True
     )
-    imap_uid = Column(Text, nullable=True)
+    imap_uid: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         if not kwargs.get("modality"):
             kwargs["modality"] = "email"
         super().__init__(**kwargs)
 
-    attachments = relationship(
+    attachments: Mapped[list[EmailAttachment]] = relationship(
         "EmailAttachment",
         back_populates="mail_message",
         foreign_keys="EmailAttachment.mail_message_id",
         cascade="all, delete-orphan",
     )
-    email_account = relationship("EmailAccount", back_populates="messages", foreign_keys=[email_account_id])
+    email_account: Mapped[EmailAccount | None] = relationship(
+        "EmailAccount", back_populates="messages", foreign_keys=[email_account_id]
+    )
 
     __mapper_args__ = {
         "polymorphic_identity": "mail_message",
@@ -96,8 +111,8 @@ class MailMessage(SourceItem):
 
     @property
     def attachments_path(self) -> pathlib.Path:
-        clean_sender = clean_filename(cast(str, self.sender))
-        clean_folder = clean_filename(cast(str | None, self.folder) or "INBOX")
+        clean_sender = clean_filename(self.sender or "")
+        clean_folder = clean_filename(self.folder or "INBOX")
         return pathlib.Path(settings.EMAIL_STORAGE_DIR) / clean_sender / clean_folder
 
     def safe_filename(self, filename: str) -> pathlib.Path:
@@ -108,46 +123,35 @@ class MailMessage(SourceItem):
         return path
 
     def as_payload(self) -> MailMessagePayload:
-        base_payload = super().as_payload() | {
-            "tags": (cast(list[str], self.tags) or [])
-            + [cast(str, self.sender)]
-            + (cast(list[str], self.recipients) or [])
-        }
+        base = super().as_payload()
+        base["tags"] = (self.tags or []) + [self.sender or ""] + (self.recipients or [])
         return MailMessagePayload(
-            **cast(dict, base_payload),
-            message_id=cast(str, self.message_id),
-            subject=cast(str, self.subject),
-            sender=cast(str, self.sender),
-            recipients=cast(list[str], self.recipients),
-            folder=cast(str, self.folder),
-            date=(self.sent_at and self.sent_at.isoformat() or None),  # type: ignore
+            **base,
+            message_id=self.message_id or "",  # type: ignore[arg-type]
+            subject=self.subject or "",  # type: ignore[arg-type]
+            sender=self.sender or "",  # type: ignore[arg-type]
+            recipients=self.recipients or [],  # type: ignore[arg-type]
+            folder=self.folder,  # type: ignore[arg-type]
+            date=(self.sent_at and self.sent_at.isoformat() or None),
         )
 
     @property
     def parsed_content(self) -> dict[str, Any]:
         from memory.parsers.email import parse_email_message
 
-        return cast(
-            dict[str, Any],
-            parse_email_message(cast(str, self.content), cast(str, self.message_id)),
-        )
+        result = parse_email_message(self.content or "", self.message_id or "")
+        return dict(result) if result else {}
 
     @property
     def body(self) -> str:
         return self.parsed_content["body"]
 
     def format_content(self, content: dict[str, Any]) -> str:
-        sender = (
-            cast(str, self.sender) or content.get("from") or content.get("sender", "")
-        )
+        sender = self.sender or content.get("from") or content.get("sender", "")
         recipients = (
-            cast(list[str], self.recipients)
-            or content.get("to")
-            or content.get("recipients", [])
+            self.recipients or content.get("to") or content.get("recipients", [])
         )
-        date = (
-            cast(datetime, self.sent_at) and self.sent_at.isoformat()
-        ) or content.get("date", "")
+        date = (self.sent_at and self.sent_at.isoformat()) or content.get("date", "")
 
         return (
             textwrap.dedent(
@@ -161,7 +165,7 @@ class MailMessage(SourceItem):
             """
             )
             .format(
-                subject=cast(str, self.subject) or content.get("subject", ""),
+                subject=self.subject or content.get("subject", ""),
                 sender=sender,
                 recipients=", ".join(recipients),
                 date=date,
@@ -172,18 +176,19 @@ class MailMessage(SourceItem):
 
     @property
     def display_contents(self) -> dict | None:
+        base = super().display_contents
         return {
-            **cast(dict, super().display_contents),
+            **(base or {}),
             "content": self.body,
             "subject": self.subject,
             "sender": self.sender,
             "recipients": self.recipients,
-            "date": cast(datetime | None, self.sent_at) and self.sent_at.isoformat(),
+            "date": self.sent_at and self.sent_at.isoformat(),
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         content = self.parsed_content
-        body = cast(str, self.body)
+        body = self.body
 
         chunks = extract.extract_text(body, modality="mail")
 
@@ -202,7 +207,7 @@ class MailMessage(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.subject)
+        return self.subject
 
     # Add indexes
     __table_args__ = (
@@ -225,15 +230,17 @@ class EmailAttachmentPayload(SourceItemPayload):
 class EmailAttachment(SourceItem):
     __tablename__ = "email_attachment"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    mail_message_id = Column(
+    mail_message_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("mail_message.id", ondelete="CASCADE"), nullable=False
     )
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
-    mail_message = relationship(
+    mail_message: Mapped[MailMessage] = relationship(
         "MailMessage", back_populates="attachments", foreign_keys=[mail_message_id]
     )
 
@@ -244,32 +251,29 @@ class EmailAttachment(SourceItem):
     def as_payload(self) -> EmailAttachmentPayload:
         return EmailAttachmentPayload(
             **super().as_payload(),
-            created_at=(self.created_at and self.created_at.isoformat() or None),  # type: ignore
-            filename=cast(str, self.filename),
-            content_type=cast(str, self.mime_type),
-            mail_message_id=cast(int, self.mail_message_id),
+            created_at=(self.created_at and self.created_at.isoformat() or None),
+            filename=self.filename or "",
+            content_type=self.mime_type or "",
+            mail_message_id=self.mail_message_id,
             sent_at=(
-                self.mail_message.sent_at
-                and self.mail_message.sent_at.isoformat()
-                or None
-            ),  # type: ignore
+                self.mail_message.sent_at and self.mail_message.sent_at.isoformat() or None
+            ),
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        if cast(str | None, self.filename):
-            contents = (
-                settings.FILE_STORAGE_DIR / cast(str, self.filename)
-            ).read_bytes()
+        if self.filename:
+            contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
         else:
-            contents = cast(str, self.content)
+            contents = self.content or ""
 
-        return extract.extract_data_chunks(cast(str, self.mime_type), contents)
+        return extract.extract_data_chunks(self.mime_type or "", contents)
 
     @property
     def display_contents(self) -> dict:
+        base = super().display_contents
         return {
-            **cast(dict, super().display_contents),
-            **self.mail_message.display_contents,
+            **(base or {}),
+            **(self.mail_message.display_contents or {}),
         }
 
     # Add indexes
@@ -284,13 +288,13 @@ class EmailAttachment(SourceItem):
 class ChatMessage(SourceItem):
     __tablename__ = "chat_message"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    platform = Column(Text)
-    channel_id = Column(Text)  # Keep as Text for cross-platform compatibility
-    author = Column(Text)
-    sent_at = Column(DateTime(timezone=True))
+    platform: Mapped[str | None] = mapped_column(Text)
+    channel_id: Mapped[str | None] = mapped_column(Text)  # Keep as Text for cross-platform compatibility
+    author: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __mapper_args__ = {
         "polymorphic_identity": "chat_message",
@@ -305,34 +309,45 @@ class DiscordMessage(SourceItem):
 
     __tablename__ = "discord_message"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
-    sent_at = Column(DateTime(timezone=True), nullable=False)
-    server_id = Column(BigInteger, ForeignKey("discord_servers.id"), nullable=True)
-    channel_id = Column(BigInteger, ForeignKey("discord_channels.id"), nullable=False)
-    from_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
-    recipient_id = Column(BigInteger, ForeignKey("discord_users.id"), nullable=False)
-    message_id = Column(BigInteger, nullable=False)  # Discord message snowflake ID
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    server_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_servers.id"), nullable=True
+    )
+    channel_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("discord_channels.id"), nullable=False
+    )
+    from_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("discord_users.id"), nullable=False
+    )
+    recipient_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("discord_users.id"), nullable=False
+    )
+    message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # Discord message snowflake ID
 
     # Discord-specific metadata
-    message_type = Column(
+    message_type: Mapped[str] = mapped_column(
         Text, server_default="default"
     )  # "default", "reply", "thread_starter"
-    reply_to_message_id = Column(
+    reply_to_message_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )  # Discord message snowflake ID if replying
-    thread_id = Column(
+    thread_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )  # Discord thread snowflake ID if in thread
-    edited_at = Column(DateTime(timezone=True), nullable=True)
-    images = Column(ARRAY(Text), nullable=True)  # List of image URLs
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)  # List of image URLs
 
-    channel = relationship("DiscordChannel", foreign_keys=[channel_id])
-    server = relationship("DiscordServer", foreign_keys=[server_id])
-    from_user = relationship("DiscordUser", foreign_keys=[from_id])
-    recipient_user = relationship("DiscordUser", foreign_keys=[recipient_id])
+    # Transient attribute for context during processing (not persisted)
+    messages_before: list[str]
+
+    channel: Mapped[DiscordChannel | None] = relationship("DiscordChannel", foreign_keys=[channel_id])
+    server: Mapped[DiscordServer | None] = relationship("DiscordServer", foreign_keys=[server_id])
+    from_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[from_id])
+    recipient_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[recipient_id])
 
     @property
     def allowed_tools(self) -> set[str]:
@@ -362,7 +377,7 @@ class DiscordMessage(SourceItem):
 
     @property
     def ignore_messages(self) -> bool:
-        return (
+        return bool(
             (self.server and self.server.ignore_messages)
             or (self.channel and self.channel.ignore_messages)
             or (self.from_user and self.from_user.ignore_messages)
@@ -398,15 +413,15 @@ class DiscordMessage(SourceItem):
             </message>
         """).format(
             message_id=self.message_id,
-            from_user=self.from_user.username,
+            from_user=self.from_user.username if self.from_user else "unknown",
             sent_at=self.sent_at.isoformat()[:19],
             content=self.content,
         )
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""
-        content = {"text": self.title, "images": []}
-        for path in cast(list[str] | None, self.images) or []:
+        content: dict[str, Any] = {"text": self.title, "images": []}
+        for path in self.images or []:
             try:
                 full_path = settings.FILE_STORAGE_DIR / path
                 if full_path.exists():
@@ -417,7 +432,7 @@ class DiscordMessage(SourceItem):
 
         return content
 
-    def get_mcp_servers(self, session) -> list[MCPServer]:
+    def get_mcp_servers(self, session: Any) -> list[MCPServer] | None:
         entity_ids = list(
             filter(
                 None,
@@ -456,7 +471,7 @@ class DiscordMessage(SourceItem):
     )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = cast(str | None, self.content)
+        content = self.content
         if not content:
             return []
         prev = getattr(self, "messages_before", [])
@@ -467,16 +482,16 @@ class DiscordMessage(SourceItem):
 class GitCommit(SourceItem):
     __tablename__ = "git_commit"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    repo_path = Column(Text)
-    commit_sha = Column(Text, unique=True)
-    author_name = Column(Text)
-    author_email = Column(Text)
-    author_date = Column(DateTime(timezone=True))
-    diff_summary = Column(Text)
-    files_changed = Column(ARRAY(Text))
+    repo_path: Mapped[str | None] = mapped_column(Text)
+    commit_sha: Mapped[str | None] = mapped_column(Text, unique=True)
+    author_name: Mapped[str | None] = mapped_column(Text)
+    author_email: Mapped[str | None] = mapped_column(Text)
+    author_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    diff_summary: Mapped[str | None] = mapped_column(Text)
+    files_changed: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
     __mapper_args__ = {
         "polymorphic_identity": "git_commit",
@@ -492,13 +507,13 @@ class GitCommit(SourceItem):
 class Photo(SourceItem):
     __tablename__ = "photo"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    exif_taken_at = Column(DateTime(timezone=True))
-    exif_lat = Column(Numeric(9, 6))
-    exif_lon = Column(Numeric(9, 6))
-    camera = Column(Text)
+    exif_taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exif_lat: Mapped[Any | None] = mapped_column(Numeric(9, 6))
+    exif_lon: Mapped[Any | None] = mapped_column(Numeric(9, 6))
+    camera: Mapped[str | None] = mapped_column(Text)
 
     __mapper_args__ = {
         "polymorphic_identity": "photo",
@@ -508,7 +523,7 @@ class Photo(SourceItem):
     __table_args__ = (Index("photo_taken_idx", "exif_taken_at"),)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / cast(str, self.filename))
+        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
         return [extract.DataChunk(data=[image])]
 
     @classmethod
@@ -529,16 +544,16 @@ class ComicPayload(SourceItemPayload):
 class Comic(SourceItem):
     __tablename__ = "comic"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    title = Column(Text)
-    author = Column(Text, nullable=True)
-    published = Column(DateTime(timezone=True), nullable=True)
-    volume = Column(Text, nullable=True)
-    issue = Column(Text, nullable=True)
-    page = Column(Integer, nullable=True)
-    url = Column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    volume: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "comic",
@@ -549,17 +564,17 @@ class Comic(SourceItem):
     def as_payload(self) -> ComicPayload:
         return ComicPayload(
             **super().as_payload(),
-            title=cast(str, self.title),
-            author=cast(str | None, self.author),
-            published=(self.published and self.published.isoformat() or None),  # type: ignore
-            volume=cast(str | None, self.volume),
-            issue=cast(str | None, self.issue),
-            page=cast(int | None, self.page),
-            url=cast(str | None, self.url),
+            title=self.title or "",
+            author=self.author,
+            published=(self.published and self.published.isoformat() or None),
+            volume=self.volume,
+            issue=self.issue,
+            page=self.page,
+            url=self.url,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / cast(str, self.filename))
+        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
         description = f"{self.title} by {self.author}"
         return [extract.DataChunk(data=[image, description])]
 
@@ -580,24 +595,24 @@ class BookSection(SourceItem):
 
     __tablename__ = "book_section"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    book_id = Column(
+    book_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("book.id", ondelete="CASCADE"), nullable=False
     )
 
-    section_title = Column(Text)
-    section_number = Column(Integer)
-    section_level = Column(Integer)  # 1=chapter, 2=section, 3=subsection
-    start_page = Column(Integer)
-    end_page = Column(Integer)
+    section_title: Mapped[str | None] = mapped_column(Text)
+    section_number: Mapped[int | None] = mapped_column(Integer)
+    section_level: Mapped[int | None] = mapped_column(Integer)  # 1=chapter, 2=section, 3=subsection
+    start_page: Mapped[int | None] = mapped_column(Integer)
+    end_page: Mapped[int | None] = mapped_column(Integer)
 
     # Parent-child relationships for nested sections
-    parent_section_id = Column(BigInteger, ForeignKey("book_section.id"))
+    parent_section_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("book_section.id"))
 
-    book = relationship("Book", backref="sections")
-    parent = relationship(
+    book: Mapped[Book] = relationship("Book", back_populates="sections")
+    parent: Mapped[BookSection | None] = relationship(
         "BookSection",
         remote_side=[id],
         backref="children",
@@ -618,23 +633,26 @@ class BookSection(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.section_title)
+        return self.section_title
 
     def as_payload(self) -> BookSectionPayload:
+        # Book uses old-style Column, access values explicitly
+        book_title = getattr(self.book, "title", "") if self.book else ""
+        book_author = getattr(self.book, "author", None) if self.book else None
         return BookSectionPayload(
             **super().as_payload(),
-            title=cast(str, self.book.title),
-            author=cast(str | None, self.book.author),
-            book_id=cast(int, self.book_id),
-            section_title=cast(str, self.section_title),
-            section_number=cast(int, self.section_number),
-            section_level=cast(int, self.section_level),
-            start_page=cast(int, self.start_page),
-            end_page=cast(int, self.end_page),
+            title=str(book_title) if book_title else "",
+            author=str(book_author) if book_author else None,
+            book_id=self.book_id,
+            section_title=self.section_title or "",
+            section_number=self.section_number or 0,
+            section_level=self.section_level or 0,
+            start_page=self.start_page or 0,
+            end_page=self.end_page or 0,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = cast(str, self.content.strip())
+        content = (self.content or "").strip()
         if not content:
             return []
 
@@ -670,22 +688,22 @@ class BlogPostPayload(SourceItemPayload):
 class BlogPost(SourceItem):
     __tablename__ = "blog_post"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    url = Column(Text, unique=True)
-    title = Column(Text)
-    author = Column(Text, nullable=True)
-    published = Column(DateTime(timezone=True), nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, unique=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Additional metadata from webpage parsing
-    description = Column(Text, nullable=True)  # Meta description or excerpt
-    domain = Column(Text, nullable=True)  # Domain of the source website
-    word_count = Column(Integer, nullable=True)  # Approximate word count
-    images = Column(ARRAY(Text), nullable=True)  # List of image URLs
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)  # Meta description or excerpt
+    domain: Mapped[str | None] = mapped_column(Text, nullable=True)  # Domain of the source website
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Approximate word count
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)  # List of image URLs
 
     # Store original metadata from parser
-    webpage_metadata = Column(JSONB, nullable=True)
+    webpage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "blog_post",
@@ -699,23 +717,23 @@ class BlogPost(SourceItem):
     )
 
     def as_payload(self) -> BlogPostPayload:
-        published_date = cast(datetime | None, self.published)
-        metadata = cast(dict | None, self.webpage_metadata) or {}
+        published_date = self.published
+        metadata = self.webpage_metadata or {}
 
         return BlogPostPayload(
             **super().as_payload(),
-            url=cast(str, self.url),
-            title=cast(str, self.title),
-            author=cast(str | None, self.author),
-            published=(published_date and published_date.isoformat() or None),  # type: ignore
-            description=cast(str | None, self.description),
-            domain=cast(str | None, self.domain),
-            word_count=cast(int | None, self.word_count),
+            url=self.url or "",
+            title=self.title or "",
+            author=self.author,
+            published=(published_date and published_date.isoformat() or None),
+            description=self.description,
+            domain=self.domain,
+            word_count=self.word_count,
             **metadata,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
+        return chunk_mixed(self.content or "", self.images or [])
 
 
 class ForumPostPayload(SourceItemPayload):
@@ -734,22 +752,22 @@ class ForumPostPayload(SourceItemPayload):
 class ForumPost(SourceItem):
     __tablename__ = "forum_post"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    url = Column(Text, unique=True)
-    title = Column(Text)
-    description = Column(Text, nullable=True)
-    authors = Column(ARRAY(Text), nullable=True)
-    published_at = Column(DateTime(timezone=True), nullable=True)
-    modified_at = Column(DateTime(timezone=True), nullable=True)
-    slug = Column(Text, nullable=True)
-    karma = Column(Integer, nullable=True)
-    votes = Column(Integer, nullable=True)
-    comments = Column(Integer, nullable=True)
-    words = Column(Integer, nullable=True)
-    score = Column(Integer, nullable=True)
-    images = Column(ARRAY(Text), nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, unique=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authors: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    karma: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    votes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    words: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "forum_post",
@@ -764,20 +782,20 @@ class ForumPost(SourceItem):
     def as_payload(self) -> ForumPostPayload:
         return ForumPostPayload(
             **super().as_payload(),
-            url=cast(str, self.url),
-            title=cast(str, self.title),
-            description=cast(str | None, self.description),
-            authors=cast(list[str] | None, self.authors),
-            published=(self.published_at and self.published_at.isoformat() or None),  # type: ignore
-            slug=cast(str | None, self.slug),
-            karma=cast(int | None, self.karma),
-            votes=cast(int | None, self.votes),
-            score=cast(int | None, self.score),
-            comments=cast(int | None, self.comments),
+            url=self.url or "",
+            title=self.title or "",
+            description=self.description,
+            authors=self.authors,
+            published=(self.published_at and self.published_at.isoformat() or None),
+            slug=self.slug,
+            karma=self.karma,
+            votes=self.votes,
+            score=self.score,
+            comments=self.comments,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        return chunk_mixed(cast(str, self.content), cast(list[str], self.images))
+        return chunk_mixed(self.content or "", self.images or [])
 
     @classmethod
     def get_collections(cls) -> list[str]:
@@ -825,10 +843,10 @@ class ForumPost(SourceItem):
 class MiscDoc(SourceItem):
     __tablename__ = "misc_doc"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    path = Column(Text)
+    path: Mapped[str | None] = mapped_column(Text)
 
     __mapper_args__ = {
         "polymorphic_identity": "misc_doc",
@@ -855,51 +873,51 @@ class GithubItemPayload(SourceItemPayload):
 class GithubItem(SourceItem):
     __tablename__ = "github_item"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    kind = Column(Text, nullable=False)
-    repo_path = Column(Text, nullable=False)
-    number = Column(Integer)
-    parent_number = Column(Integer)
-    commit_sha = Column(Text)
-    state = Column(Text)
-    title = Column(Text)
-    labels = Column(ARRAY(Text))
-    author = Column(Text)
-    created_at = Column(DateTime(timezone=True))
-    closed_at = Column(DateTime(timezone=True))
-    merged_at = Column(DateTime(timezone=True))
-    diff_summary = Column(Text)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_path: Mapped[str] = mapped_column(Text, nullable=False)
+    number: Mapped[int | None] = mapped_column(Integer)
+    parent_number: Mapped[int | None] = mapped_column(Integer)
+    commit_sha: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    labels: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    author: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    diff_summary: Mapped[str | None] = mapped_column(Text)
 
-    payload = Column(JSONB)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # New fields for change detection and tracking
-    github_updated_at = Column(DateTime(timezone=True))  # GitHub's updated_at
-    content_hash = Column(Text)  # Hash of body + comments for change detection
-    repo_id = Column(
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # GitHub's updated_at
+    content_hash: Mapped[str | None] = mapped_column(Text)  # Hash of body + comments for change detection
+    repo_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("github_repos.id", ondelete="SET NULL"), nullable=True
     )
 
     # GitHub Projects v2 fields
-    project_status = Column(Text, nullable=True)
-    project_priority = Column(Text, nullable=True)
-    project_fields = Column(JSONB, nullable=True)  # All project field values
+    project_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_priority: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_fields: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)  # All project field values
 
     # Additional tracking
-    assignees = Column(ARRAY(Text), nullable=True)
-    milestone_id = Column(
+    assignees: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    milestone_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("github_milestones.id", ondelete="SET NULL"),
         nullable=True,
     )
-    comment_count = Column(Integer, nullable=True)
+    comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationship to milestone
-    milestone_rel = relationship("GithubMilestone", back_populates="items")
+    milestone_rel: Mapped[GithubMilestone | None] = relationship("GithubMilestone", back_populates="items")
 
     # Relationship to PR-specific data
-    pr_data = relationship(
+    pr_data: Mapped[GithubPRData | None] = relationship(
         "GithubPRData",
         back_populates="github_item",
         uselist=False,
@@ -927,25 +945,25 @@ class GithubItem(SourceItem):
     def as_payload(self) -> GithubItemPayload:
         return GithubItemPayload(
             **super().as_payload(),
-            kind=cast(str, self.kind),
-            repo_path=cast(str, self.repo_path),
-            number=cast(int | None, self.number),
-            state=cast(str | None, self.state),
-            title=cast(str | None, self.title),
-            author=cast(str | None, self.author),
-            labels=cast(list[str] | None, self.labels),
-            assignees=cast(list[str] | None, self.assignees),
-            milestone=self.milestone_rel.title if self.milestone_rel else None,
-            project_status=cast(str | None, self.project_status),
-            project_priority=cast(str | None, self.project_priority),
-            created_at=cast(datetime | None, self.created_at),
-            closed_at=cast(datetime | None, self.closed_at),
-            merged_at=cast(datetime | None, self.merged_at),
+            kind=self.kind,
+            repo_path=self.repo_path,
+            number=self.number,
+            state=self.state,
+            title=self.title,
+            author=self.author,
+            labels=self.labels,
+            assignees=self.assignees,
+            milestone=str(getattr(self.milestone_rel, "title", "")) if self.milestone_rel and getattr(self.milestone_rel, "title", None) else None,
+            project_status=self.project_status,
+            project_priority=self.project_priority,
+            created_at=self.created_at,
+            closed_at=self.closed_at,
+            merged_at=self.merged_at,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         """Override to use 'github' modality instead of default 'text'."""
-        content = cast(str | None, self.content)
+        content = self.content
         if content:
             return extract.extract_text(content, modality="github")
         return []
@@ -956,8 +974,8 @@ class GithubPRData(Base):
 
     __tablename__ = "github_pr_data"
 
-    id = Column(BigInteger, primary_key=True)
-    github_item_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    github_item_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("github_item.id", ondelete="CASCADE"),
         unique=True,
@@ -966,27 +984,27 @@ class GithubPRData(Base):
     )
 
     # Diff (compressed with zlib)
-    diff_compressed = Column(LargeBinary, nullable=True)
+    diff_compressed: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     # File changes as structured data
     # [{filename, status, additions, deletions, patch?}]
-    files = Column(JSONB, nullable=True)
+    files: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # Stats
-    additions = Column(Integer, nullable=True)
-    deletions = Column(Integer, nullable=True)
-    changed_files_count = Column(Integer, nullable=True)
+    additions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deletions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changed_files_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Reviews (structured)
     # [{user, state, body, submitted_at}]
-    reviews = Column(JSONB, nullable=True)
+    reviews: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # Review comments (line-by-line code comments)
     # [{user, body, path, line, diff_hunk, created_at}]
-    review_comments = Column(JSONB, nullable=True)
+    review_comments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # Relationship back to GithubItem
-    github_item = relationship("GithubItem", back_populates="pr_data")
+    github_item: Mapped[GithubItem] = relationship("GithubItem", back_populates="pr_data")
 
     @property
     def diff(self) -> str | None:
@@ -1015,11 +1033,11 @@ class Note(SourceItem):
 
     __tablename__ = "notes"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    note_type = Column(Text, nullable=True)
-    subject = Column(Text, nullable=True)
+    note_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "note",
@@ -1033,8 +1051,8 @@ class Note(SourceItem):
     def as_payload(self) -> NotePayload:
         return NotePayload(
             **super().as_payload(),
-            note_type=cast(str | None, self.note_type),
-            subject=cast(str | None, self.subject),
+            note_type=self.note_type,
+            subject=self.subject,
             confidence=self.confidence_dict,
         )
 
@@ -1048,12 +1066,12 @@ class Note(SourceItem):
             "tags": self.tags,
         }
 
-    def save_to_file(self):
+    def save_to_file(self) -> None:
         if not self.filename:
             self.filename = f"{self.subject}.md"
         path = settings.NOTES_STORAGE_DIR / self.filename
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(cast(str, self.content))
+        path.write_text(self.content or "")
 
     @staticmethod
     def as_text(content: str, subject: str | None = None) -> str:
@@ -1063,9 +1081,7 @@ class Note(SourceItem):
         return text
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        return extract.extract_text(
-            self.as_text(cast(str, self.content), cast(str | None, self.subject))
-        )
+        return extract.extract_text(self.as_text(self.content or "", self.subject))
 
     @classmethod
     def get_collections(cls) -> list[str]:
@@ -1073,7 +1089,7 @@ class Note(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.subject)
+        return self.subject
 
 
 class AgentObservationPayload(SourceItemPayload):
@@ -1093,25 +1109,25 @@ class AgentObservation(SourceItem):
 
     __tablename__ = "agent_observation"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    session_id = Column(Text, nullable=True)
-    observation_type = Column(
+    session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observation_type: Mapped[str] = mapped_column(
         Text, nullable=False
     )  # belief, preference, pattern, contradiction, behavior
-    subject = Column(Text, nullable=False)  # What/who the observation is about
-    evidence = Column(JSONB)  # Supporting context, quotes, etc.
-    agent_model = Column(Text, nullable=False)  # Which AI model made this observation
+    subject: Mapped[str] = mapped_column(Text, nullable=False)  # What/who the observation is about
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # Supporting context, quotes, etc.
+    agent_model: Mapped[str] = mapped_column(Text, nullable=False)  # Which AI model made this observation
 
     # Relationships
-    contradictions_as_first = relationship(
+    contradictions_as_first: Mapped[list[ObservationContradiction]] = relationship(
         "ObservationContradiction",
         foreign_keys="ObservationContradiction.observation_1_id",
         back_populates="observation_1",
         cascade="all, delete-orphan",
     )
-    contradictions_as_second = relationship(
+    contradictions_as_second: Mapped[list[ObservationContradiction]] = relationship(
         "ObservationContradiction",
         foreign_keys="ObservationContradiction.observation_2_id",
         back_populates="observation_2",
@@ -1129,7 +1145,7 @@ class AgentObservation(SourceItem):
         Index("agent_obs_model_idx", "agent_model"),
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         if not kwargs.get("modality"):
             kwargs["modality"] = "observation"
         super().__init__(**kwargs)
@@ -1137,16 +1153,16 @@ class AgentObservation(SourceItem):
     def as_payload(self) -> AgentObservationPayload:
         return AgentObservationPayload(
             **super().as_payload(),
-            observation_type=cast(str, self.observation_type),
-            subject=cast(str, self.subject),
+            observation_type=self.observation_type,
+            subject=self.subject,
             confidence=self.confidence_dict,
-            evidence=cast(dict | None, self.evidence),
-            agent_model=cast(str, self.agent_model),
-            session_id=cast(str | None, self.session_id) and str(self.session_id),
+            evidence=self.evidence,
+            agent_model=self.agent_model,
+            session_id=self.session_id and str(self.session_id),
         )
 
     @property
-    def all_contradictions(self):
+    def all_contradictions(self) -> list[ObservationContradiction]:
         """Get all contradictions involving this observation."""
         return self.contradictions_as_first + self.contradictions_as_second
 
@@ -1169,11 +1185,13 @@ class AgentObservation(SourceItem):
         """
         # 1. Semantic chunk - standard content representation
         chunks: list[extract.DataChunk] = []
+        # Cast to Evidence type (or None) for type checker
+        evidence: observation.Evidence | None = self.evidence  # type: ignore[assignment]
         semantic_text = observation.generate_semantic_text(
-            cast(str, self.subject),
-            cast(str, self.observation_type),
-            cast(str, self.content),
-            cast(observation.Evidence | None, self.evidence),
+            self.subject,
+            self.observation_type,
+            self.content or "",
+            evidence,
         )
         if semantic_text:
             chunks += [
@@ -1186,9 +1204,9 @@ class AgentObservation(SourceItem):
 
         # 2. Temporal chunk - time-aware representation
         temporal_text = observation.generate_temporal_text(
-            cast(str, self.subject),
-            cast(str, self.content),
-            cast(datetime, self.inserted_at),
+            self.subject,
+            self.content or "",
+            self.inserted_at or datetime.now(),
         )
         if temporal_text:
             chunks += [
@@ -1201,7 +1219,7 @@ class AgentObservation(SourceItem):
 
         raw_data = [
             self.content,
-            cast(dict | None, self.evidence) and self.evidence.get("quote"),
+            self.evidence and self.evidence.get("quote"),
         ]
         chunks += [
             extract.DataChunk(
@@ -1246,7 +1264,7 @@ class AgentObservation(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.subject)
+        return self.subject
 
 
 class GoogleDocPayload(SourceItemPayload):
@@ -1265,35 +1283,35 @@ class GoogleDoc(SourceItem):
 
     __tablename__ = "google_doc"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
     # Google-specific identifiers
-    google_file_id = Column(Text, nullable=False, unique=True)  # Drive file ID
-    google_modified_at = Column(
+    google_file_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # Drive file ID
+    google_modified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )  # For change detection
 
     # Document metadata
-    title = Column(Text, nullable=False)
-    original_mime_type = Column(
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    original_mime_type: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # e.g., "application/vnd.google-apps.document"
-    folder_id = Column(
+    folder_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("google_folders.id", ondelete="SET NULL"), nullable=True
     )
-    folder_path = Column(Text, nullable=True)  # e.g., "My Drive/Work/Projects"
+    folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # e.g., "My Drive/Work/Projects"
 
     # Authorship tracking
-    owner = Column(Text, nullable=True)  # Email of owner
-    last_modified_by = Column(Text, nullable=True)  # Email of last modifier
+    owner: Mapped[str | None] = mapped_column(Text, nullable=True)  # Email of owner
+    last_modified_by: Mapped[str | None] = mapped_column(Text, nullable=True)  # Email of last modifier
 
     # Content stats
-    word_count = Column(Integer, nullable=True)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Content hash for change detection
-    content_hash = Column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "google_doc",
@@ -1309,20 +1327,20 @@ class GoogleDoc(SourceItem):
     def as_payload(self) -> GoogleDocPayload:
         return GoogleDocPayload(
             **super().as_payload(),
-            google_file_id=cast(str, self.google_file_id),
-            title=cast(str, self.title),
-            original_mime_type=cast(str | None, self.original_mime_type),
-            folder_path=cast(str | None, self.folder_path),
-            owner=cast(str | None, self.owner),
-            last_modified_by=cast(str | None, self.last_modified_by),
+            google_file_id=self.google_file_id,
+            title=self.title,
+            original_mime_type=self.original_mime_type,
+            folder_path=self.folder_path,
+            owner=self.owner,
+            last_modified_by=self.last_modified_by,
             google_modified_at=(
                 self.google_modified_at and self.google_modified_at.isoformat()
             ),
-            word_count=cast(int | None, self.word_count),
+            word_count=self.word_count,
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = cast(str | None, self.content)
+        content = self.content
         if not content:
             return []
 
@@ -1347,22 +1365,22 @@ class Task(SourceItem):
 
     __tablename__ = "task"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
-    task_title = Column(Text, nullable=False)
-    due_date = Column(DateTime(timezone=True), nullable=True)
-    priority = Column(Text, nullable=True)  # low, medium, high, urgent
-    status = Column(Text, nullable=False, server_default="pending")
-    recurrence = Column(Text, nullable=True)  # RRULE format for habits
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    task_title: Mapped[str] = mapped_column(Text, nullable=False)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str | None] = mapped_column(Text, nullable=True)  # low, medium, high, urgent
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    recurrence: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format for habits
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Link to source that spawned this task (email, note, etc.)
-    source_item_id = Column(
+    source_item_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="SET NULL"), nullable=True
     )
-    source_item = relationship(
+    source_item: Mapped[SourceItem | None] = relationship(
         "SourceItem", foreign_keys=[source_item_id], backref="spawned_tasks"
     )
 
@@ -1386,7 +1404,7 @@ class Task(SourceItem):
         Index("task_source_item_idx", "source_item_id"),
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         if not kwargs.get("modality"):
             kwargs["modality"] = "task"
         super().__init__(**kwargs)
@@ -1394,12 +1412,12 @@ class Task(SourceItem):
     def as_payload(self) -> TaskPayload:
         return TaskPayload(
             **super().as_payload(),
-            title=cast(str, self.task_title),
+            title=self.task_title,
             due_date=(self.due_date and self.due_date.isoformat() or None),
-            priority=cast(str | None, self.priority),
-            status=cast(str, self.status),
-            recurrence=cast(str | None, self.recurrence),
-            source_item_id=cast(int | None, self.source_item_id),
+            priority=self.priority,
+            status=self.status,
+            recurrence=self.recurrence,
+            source_item_id=self.source_item_id,
         )
 
     @property
@@ -1415,9 +1433,9 @@ class Task(SourceItem):
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        parts = [cast(str, self.task_title)]
+        parts = [self.task_title]
         if self.content:
-            parts.append(cast(str, self.content))
+            parts.append(self.content)
         if self.due_date:
             parts.append(f"Due: {self.due_date.isoformat()}")
         text = "\n\n".join(parts)
@@ -1429,7 +1447,7 @@ class Task(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.task_title)
+        return self.task_title
 
 
 class CalendarEventPayload(SourceItemPayload):
@@ -1450,30 +1468,32 @@ class CalendarEvent(SourceItem):
 
     __tablename__ = "calendar_event"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
     # Core event fields
-    event_title = Column(Text, nullable=False)
-    start_time = Column(DateTime(timezone=True), nullable=False)
-    end_time = Column(DateTime(timezone=True), nullable=True)
-    all_day = Column(Boolean, default=False, nullable=False)
-    location = Column(Text, nullable=True)
-    recurrence_rule = Column(Text, nullable=True)  # RRULE format
+    event_title: Mapped[str] = mapped_column(Text, nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recurrence_rule: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format
 
     # Sync metadata
-    calendar_account_id = Column(
+    calendar_account_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("calendar_accounts.id", ondelete="SET NULL"), nullable=True
     )
-    calendar_name = Column(Text, nullable=True)
-    external_id = Column(Text, nullable=True)  # For dedup/sync
+    calendar_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)  # For dedup/sync
 
     # Relationship
-    calendar_account = relationship("CalendarAccount", foreign_keys=[calendar_account_id])
+    calendar_account: Mapped[CalendarAccount | None] = relationship(
+        "CalendarAccount", foreign_keys=[calendar_account_id]
+    )
 
     # Flexible metadata (attendees, meeting links, conference info, etc.)
-    event_metadata = Column(JSONB, default=dict)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     __mapper_args__ = {
         "polymorphic_identity": "calendar_event",
@@ -1493,7 +1513,7 @@ class CalendarEvent(SourceItem):
         ),
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         if not kwargs.get("modality"):
             kwargs["modality"] = "calendar"
         super().__init__(**kwargs)
@@ -1501,16 +1521,16 @@ class CalendarEvent(SourceItem):
     def as_payload(self) -> CalendarEventPayload:
         return CalendarEventPayload(
             **super().as_payload(),
-            event_title=cast(str, self.event_title),
-            start_time=cast(datetime, self.start_time).isoformat(),
+            event_title=self.event_title,
+            start_time=self.start_time.isoformat(),
             end_time=(self.end_time and self.end_time.isoformat() or None),
-            all_day=cast(bool, self.all_day),
-            location=cast(str | None, self.location),
-            recurrence_rule=cast(str | None, self.recurrence_rule),
-            calendar_account_id=cast(int | None, self.calendar_account_id),
-            calendar_name=cast(str | None, self.calendar_name),
-            external_id=cast(str | None, self.external_id),
-            event_metadata=cast(dict | None, self.event_metadata),
+            all_day=self.all_day,
+            location=self.location,
+            recurrence_rule=self.recurrence_rule,
+            calendar_account_id=self.calendar_account_id,
+            calendar_name=self.calendar_name,
+            external_id=self.external_id,
+            event_metadata=self.event_metadata,
         )
 
     @property
@@ -1518,7 +1538,7 @@ class CalendarEvent(SourceItem):
         return {
             "title": self.event_title,
             "description": self.content,
-            "start_time": cast(datetime, self.start_time).isoformat(),
+            "start_time": self.start_time.isoformat(),
             "end_time": self.end_time and self.end_time.isoformat(),
             "all_day": self.all_day,
             "location": self.location,
@@ -1528,15 +1548,15 @@ class CalendarEvent(SourceItem):
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        parts = [cast(str, self.event_title)]
+        parts = [self.event_title]
 
         if self.content:
-            parts.append(cast(str, self.content))
+            parts.append(self.content)
 
         if self.location:
             parts.append(f"Location: {self.location}")
 
-        metadata = cast(dict | None, self.event_metadata) or {}
+        metadata = self.event_metadata or {}
         if attendees := metadata.get("attendees"):
             if isinstance(attendees, list):
                 parts.append(f"Attendees: {', '.join(str(a) for a in attendees)}")
@@ -1553,7 +1573,7 @@ class CalendarEvent(SourceItem):
 
     @property
     def title(self) -> str | None:
-        return cast(str | None, self.event_title)
+        return self.event_title
 
 
 # Association table for Meeting <-> Person many-to-many relationship
@@ -1593,33 +1613,33 @@ class Meeting(SourceItem):
 
     __tablename__ = "meeting"
 
-    id = Column(
+    id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
     # Core metadata
-    title = Column(Text, nullable=True)
-    meeting_date = Column(DateTime(timezone=True), nullable=True)
-    duration_minutes = Column(Integer, nullable=True)
-    source_tool = Column(Text, nullable=True)  # "fireflies", "granola", etc.
-    external_id = Column(Text, nullable=True)  # Dedup key from source (unique via partial index)
-    calendar_event_id = Column(
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_tool: Mapped[str | None] = mapped_column(Text, nullable=True)  # "fireflies", "granola", etc.
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)  # Dedup key from source (unique via partial index)
+    calendar_event_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("calendar_event.id", ondelete="SET NULL"), nullable=True
     )
 
     # LLM-extracted fields
-    summary = Column(Text, nullable=True)
-    notes = Column(Text, nullable=True)
-    extraction_status = Column(Text, nullable=False, server_default="pending")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
 
     # Relationships
-    attendees = relationship(
+    attendees: Mapped[list[Person]] = relationship(
         "Person",
         secondary=meeting_attendees,
         backref="meetings",
         lazy="selectin",
     )
-    calendar_event = relationship(
+    calendar_event: Mapped[CalendarEvent | None] = relationship(
         "CalendarEvent",
         foreign_keys=[calendar_event_id],
         backref="meetings",
@@ -1643,24 +1663,26 @@ class Meeting(SourceItem):
         Index("meeting_calendar_event_idx", "calendar_event_id"),
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         if not kwargs.get("modality"):
             kwargs["modality"] = "meeting"
         super().__init__(**kwargs)
 
     def as_payload(self) -> MeetingPayload:
+        # spawned_tasks comes from backref on Task.source_item
+        spawned = getattr(self, "spawned_tasks", [])
         return MeetingPayload(
             **super().as_payload(),
-            title=cast(str | None, self.title),
+            title=self.title,
             meeting_date=(self.meeting_date and self.meeting_date.isoformat() or None),
-            duration_minutes=cast(int | None, self.duration_minutes),
-            source_tool=cast(str | None, self.source_tool),
-            summary=cast(str | None, self.summary),
-            notes=cast(str | None, self.notes),
-            extraction_status=cast(str, self.extraction_status),
+            duration_minutes=self.duration_minutes,
+            source_tool=self.source_tool,
+            summary=self.summary,
+            notes=self.notes,
+            extraction_status=self.extraction_status,
             attendee_ids=[p.id for p in self.attendees],
-            task_ids=[t.id for t in self.spawned_tasks],
-            calendar_event_id=cast(int | None, self.calendar_event_id),
+            task_ids=[t.id for t in spawned],
+            calendar_event_id=self.calendar_event_id,
         )
 
     @property
@@ -1674,7 +1696,7 @@ class Meeting(SourceItem):
             "notes": self.notes,
             "extraction_status": self.extraction_status,
             "attendees": [p.display_name for p in self.attendees],
-            "task_count": len(self.spawned_tasks),
+            "task_count": len(getattr(self, "spawned_tasks", [])),
             "tags": self.tags,
             "calendar_event_id": self.calendar_event_id,
         }
@@ -1700,7 +1722,7 @@ class Meeting(SourceItem):
 
         # Include full transcript for search
         if self.content:
-            parts.append(f"Transcript:\n{cast(str, self.content)}")
+            parts.append(f"Transcript:\n{self.content}")
 
         text = "\n\n".join(parts)
 
