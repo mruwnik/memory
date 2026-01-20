@@ -27,17 +27,17 @@ from memory.common import extract
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_basic_query(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Basic search with query returns results."""
     mock_extract.extract_text.return_value = "extracted text"
     mock_result = MagicMock()
     mock_result.model_dump.return_value = {"id": 1, "score": 0.9}
-    mock_search.return_value = [mock_result]
+    mock_search_base.return_value = [mock_result]
     mock_filter_ids.return_value = None
 
     results = await search.fn(query="test query")
@@ -45,146 +45,146 @@ async def test_search_basic_query(
     assert len(results) == 1
     assert results[0]["id"] == 1
     mock_extract.extract_text.assert_called_once_with("test query", skip_summary=True)
-    mock_search.assert_called_once()
+    mock_search_base.assert_called_once()
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_with_modalities(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search filters by specified modalities."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", modalities={"mail", "blog"})
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert "mail" in call_kwargs["modalities"]
     assert "blog" in call_kwargs["modalities"]
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_excludes_observation_modalities(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search excludes observation modalities even if specified."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", modalities={"semantic", "temporal"})
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert "semantic" not in call_kwargs["modalities"]
     assert "temporal" not in call_kwargs["modalities"]
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_limit_enforced(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search enforces max limit of 100."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", limit=500)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["config"].limit == 100
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_with_filters(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search applies filters from filters parameter."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = [1, 2, 3]
 
     filters = {"tags": ["important"], "min_size": 1000}
     await search.fn(query="test", filters=filters)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["filters"]["source_ids"] == [1, 2, 3]
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_previews_config(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search passes previews config correctly."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", previews=True)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["config"].previews is True
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_use_scores_config(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search passes useScores config correctly."""
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", use_scores=True)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["config"].useScores is True
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_empty_modalities_searches_all(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search with empty modalities searches all available."""
 
     mock_extract.extract_text.return_value = "extracted text"
-    mock_search.return_value = []
+    mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
     await search.fn(query="test", modalities=set())
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     # Should include all collections minus observation collections
     assert len(call_kwargs["modalities"]) > 0
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
 async def test_search_returns_serialized_results(
-    mock_filter_ids, mock_extract, mock_search
+    mock_filter_ids, mock_extract, mock_search_base
 ):
     """Search returns model_dump() of results."""
     mock_extract.extract_text.return_value = "extracted text"
@@ -192,7 +192,7 @@ async def test_search_returns_serialized_results(
     mock_result1.model_dump.return_value = {"id": 1, "score": 0.9}
     mock_result2 = MagicMock()
     mock_result2.model_dump.return_value = {"id": 2, "score": 0.7}
-    mock_search.return_value = [mock_result1, mock_result2]
+    mock_search_base.return_value = [mock_result1, mock_result2]
     mock_filter_ids.return_value = None
 
     results = await search.fn(query="test")
@@ -346,11 +346,11 @@ async def test_observe_queue_name(mock_settings, mock_celery):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_basic_query(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Basic observation search returns formatted results."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
@@ -362,7 +362,7 @@ async def test_search_observations_basic_query(
     mock_result.tags = ["preference"]
     mock_result.created_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
     mock_result.metadata = {"confidence": 0.9}
-    mock_search.return_value = [mock_result]
+    mock_search_base.return_value = [mock_result]
 
     results = await search_observations.fn(query="dark mode preferences")
 
@@ -374,117 +374,117 @@ async def test_search_observations_basic_query(
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_with_subject_filter(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations filters by subject."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(query="test", subject="user_preferences")
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["filters"]["subject"] == "user_preferences"
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_with_tags_filter(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations filters by tags."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = [1, 2, 3]
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(query="test", tags=["programming", "typescript"])
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["filters"]["tags"] == ["programming", "typescript"]
     assert call_kwargs["filters"]["source_ids"] == [1, 2, 3]
     mock_filter_ids.assert_called_once_with(tags=["programming", "typescript"])
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_with_observation_types(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations filters by observation types."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(
         query="test", observation_types=["belief", "preference"]
     )
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["filters"]["observation_types"] == ["belief", "preference"]
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_with_min_confidences(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations filters by minimum confidence thresholds."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     min_conf = {"accuracy": 0.8, "relevance": 0.7}
     await search_observations.fn(query="test", min_confidences=min_conf)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["filters"]["min_confidences"] == min_conf
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_limit_enforced(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations enforces max limit of 100."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(query="test", limit=500)
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["config"].limit == 100
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_generates_semantic_text(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations generates semantic text from query and filters."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(
         query="dark mode",
@@ -501,17 +501,17 @@ async def test_search_observations_generates_semantic_text(
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_generates_temporal_text(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations generates temporal text."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(query="test", subject="test_subject")
 
@@ -523,30 +523,30 @@ async def test_search_observations_generates_temporal_text(
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_searches_semantic_and_temporal_modalities(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations only searches semantic and temporal modalities."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
-    mock_search.return_value = []
+    mock_search_base.return_value = []
 
     await search_observations.fn(query="test")
 
-    call_kwargs = mock_search.call_args[1]
+    call_kwargs = mock_search_base.call_args[1]
     assert call_kwargs["modalities"] == {"semantic", "temporal"}
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search")
+@patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
 async def test_search_observations_handles_null_created_at(
-    mock_filter_ids, mock_obs_formatter, mock_search
+    mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
     """Search observations handles None created_at."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
@@ -558,7 +558,7 @@ async def test_search_observations_handles_null_created_at(
     mock_result.tags = []
     mock_result.created_at = None
     mock_result.metadata = {}
-    mock_search.return_value = [mock_result]
+    mock_search_base.return_value = [mock_result]
 
     results = await search_observations.fn(query="test")
 

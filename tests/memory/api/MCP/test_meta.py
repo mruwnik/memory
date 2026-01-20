@@ -54,13 +54,15 @@ async def test_get_metadata_schemas_returns_schemas(mock_qdrant, mock_get_schema
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.get_schema")
 @patch("memory.api.MCP.servers.meta.qdrant")
-async def test_get_metadata_schemas_excludes_empty_collections(mock_qdrant):
+async def test_get_metadata_schemas_excludes_empty_collections(mock_qdrant, mock_get_schema):
     """Get metadata schemas excludes collections with no size."""
     mock_client = MagicMock()
     mock_qdrant.get_qdrant_client.return_value = mock_client
     # Return empty sizes
     mock_qdrant.get_collection_sizes.return_value = {}
+    mock_get_schema.return_value = {}
 
     result = await get_metadata_schemas.fn()
 
