@@ -149,17 +149,15 @@ async def get_current_time() -> dict:
 async def get_user(
     generate_one_time_key: bool = False,
     key_name: str | None = None,
-    key_type: str = "mcp",
 ) -> dict:
     """Get information about the authenticated user.
 
     Args:
-        generate_one_time_key: If True, generates a one-time API key that can be
-            used for a single authentication. This is useful for MCP clients that
-            need to make one-off API calls.
+        generate_one_time_key: If True, generates a one-time MCP API key that can
+            be used for a single authentication. This is useful for MCP clients
+            that need to make one-off API calls. The key is always of type "mcp"
+            for security reasons.
         key_name: Optional name for the generated key (for identification).
-        key_type: Type of key to generate. One of: internal, mcp, discord, google,
-            github, external. Default is "mcp".
 
     Returns:
         User information dict. If generate_one_time_key is True, also includes
@@ -181,21 +179,11 @@ async def get_user(
             if not user_session or not user_session.user:
                 return result
 
-            # Map string key_type to ApiKeyType enum
-            key_type_map = {
-                "internal": ApiKeyType.INTERNAL,
-                "mcp": ApiKeyType.MCP,
-                "discord": ApiKeyType.DISCORD,
-                "google": ApiKeyType.GOOGLE,
-                "github": ApiKeyType.GITHUB,
-                "external": ApiKeyType.EXTERNAL,
-            }
-            api_key_type = key_type_map.get(key_type.lower(), ApiKeyType.MCP)
-
-            # Create one-time key
+            # Always create MCP type keys from this endpoint for security
+            # This prevents bypassing require_key_types() restrictions
             api_key, plaintext_key = ApiKey.create(
                 user_id=user_session.user.id,
-                key_type=api_key_type,
+                key_type=ApiKeyType.MCP,
                 name=key_name or "One-time MCP key",
                 is_one_time=True,
                 prefix="key",

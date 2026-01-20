@@ -102,17 +102,20 @@ def upgrade() -> None:
             },
         )
 
-    # Update the check constraint to no longer require api_key
-    # First drop the old constraint
-    op.drop_constraint("user_has_auth_method", "users", type_="check")
-
-    # Create new constraint that checks for password OR existing api_keys
-    # Note: We can't easily check the api_keys table in a check constraint,
-    # so we make password_hash OR api_key optional (rely on application logic)
-    # Actually, let's just remove the constraint entirely since api_keys
-    # are now in a separate table
-    # For backwards compatibility during migration, we keep the api_key column
-    # but mark it as deprecated
+    # Update the check constraint to allow users without legacy api_key
+    # since API keys are now in a separate table.
+    # We keep the constraint requiring password_hash OR api_key for backward
+    # compatibility - new users will have password_hash (human) or entries
+    # in api_keys table (bots can be created with a legacy api_key initially).
+    #
+    # NOTE: The legacy users.api_key column still contains PLAINTEXT keys
+    # for backwards compatibility. New keys should be created in api_keys table.
+    # A future migration should deprecate and remove the legacy column.
+    #
+    # The constraint is kept as-is because:
+    # 1. Human users still need password_hash
+    # 2. Bot users created via BotUser.create_with_api_key() set legacy api_key
+    # 3. Application code handles the new api_keys table separately
 
 
 def downgrade() -> None:

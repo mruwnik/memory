@@ -100,7 +100,7 @@ def get_user_session(
 def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | None:
     """Authenticate a bot by API key.
 
-    DEPRECATED: Use authenticate_by_api_key_new instead.
+    DEPRECATED: Use authenticate_with_api_key from models instead.
     This function is kept for backwards compatibility with legacy api_key column.
     """
     # First try the new api_keys table
@@ -142,7 +142,7 @@ def authenticate_by_api_key(
         # Check if key type is allowed
         if allowed_key_types is not None and key_obj.key_type not in allowed_key_types:
             logger.warning(
-                f"API key type {key_obj.key_type} not allowed for this endpoint"
+                f"API key type {key_obj.key_type.value} not allowed for this endpoint"
             )
             return None
         return user
@@ -163,6 +163,10 @@ def get_api_key_scopes(
     Returns None if the key is not found or invalid.
     For new api_keys, returns key-specific scopes or user scopes.
     For legacy keys, returns user scopes.
+
+    NOTE: This function does NOT mark the key as used or consume one-time keys.
+    It is a read-only operation. If you need to authenticate and consume a
+    one-time key, use authenticate_by_api_key instead.
     """
     # Try new api_keys table first
     key_hash = hash_api_key(api_key)

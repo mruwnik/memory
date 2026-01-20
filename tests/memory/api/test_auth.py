@@ -159,22 +159,45 @@ async def test_oauth_callback_discord_validates_query_params():
     assert "Missing authorization code" in body
 
 
-def test_authenticate_bot_finds_matching_bot():
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_bot_finds_matching_bot_via_new_system(mock_authenticate_new):
+    """Test that authenticate_bot tries the new api_keys table first."""
     db = MagicMock()
-    bot = MagicMock()
+    bot = MagicMock(spec=["api_key"])
+    mock_authenticate_new.return_value = (bot, MagicMock())
+
+    result = auth.authenticate_bot("bot_test123", db)
+
+    assert result is bot
+    mock_authenticate_new.assert_called_once_with(db, "bot_test123")
+
+
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_bot_falls_back_to_legacy(mock_authenticate_new):
+    """Test that authenticate_bot falls back to legacy api_key column."""
+    from memory.common.db.models import BotUser
+
+    db = MagicMock()
+    mock_authenticate_new.return_value = (None, None)
+
+    # Set up legacy bot user
+    bot = MagicMock(spec=BotUser)
     bot.api_key = "bot_test123"
-    db.query.return_value.all.return_value = [bot]
+    db.query.return_value.filter.return_value.all.return_value = [bot]
 
     result = auth.authenticate_bot("bot_test123", db)
 
     assert result is bot
 
 
-def test_authenticate_bot_returns_none_for_invalid_key():
+@patch("memory.api.auth.authenticate_with_api_key")
+def test_authenticate_bot_returns_none_for_invalid_key(mock_authenticate_new):
     db = MagicMock()
+    mock_authenticate_new.return_value = (None, None)
+
     bot = MagicMock()
     bot.api_key = "bot_test123"
-    db.query.return_value.all.return_value = [bot]
+    db.query.return_value.filter.return_value.all.return_value = [bot]
 
     result = auth.authenticate_bot("bot_wrong", db)
 

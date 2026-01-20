@@ -215,7 +215,9 @@ class ApiKey(Base):
 
         if self.expires_at is not None:
             now = datetime.now(timezone.utc)
-            if self.expires_at.replace(tzinfo=timezone.utc) < now:
+            # Use astimezone for proper timezone handling
+            expires_utc = self.expires_at.astimezone(timezone.utc) if self.expires_at.tzinfo else self.expires_at.replace(tzinfo=timezone.utc)
+            if expires_utc < now:
                 return False
 
         return True
@@ -301,6 +303,12 @@ def authenticate_with_api_key(
 
     Returns (user, api_key) tuple if valid, (None, None) otherwise.
     Also marks the key as used and deactivates one-time keys.
+
+    For one-time keys, uses an atomic UPDATE to prevent race conditions where
+    multiple concurrent requests could use the same one-time key.
+
+    Note: This function commits the session for one-time keys to ensure
+    atomicity. The caller should be aware of this behavior.
     """
     key_hash = hash_api_key(plaintext_key)
     api_key = find_api_key_by_hash(session, key_hash)
@@ -311,8 +319,32 @@ def authenticate_with_api_key(
     if not api_key.is_valid():
         return None, None
 
-    # Mark as used (this deactivates one-time keys)
-    api_key.mark_used()
+    # For one-time keys, use atomic update to prevent race conditions
+    if api_key.is_one_time:
+        # Atomically deactivate the key and check it was active
+        from sqlalchemy import update
+
+        result = session.execute(
+            update(ApiKey)
+            .where(ApiKey.id == api_key.id)
+            .where(ApiKey.is_active == True)  # noqa: E712 - SQLAlchemy requires ==
+            .values(
+                is_active=False,
+                last_used_at=datetime.now(timezone.utc),
+                use_count=ApiKey.use_count + 1,
+            )
+        )
+        session.commit()
+
+        # If no rows were updated, another request already used this key
+        if result.rowcount == 0:
+            return None, None
+
+        # Refresh to get updated values
+        session.refresh(api_key)
+    else:
+        # For regular keys, just mark as used (caller can commit)
+        api_key.mark_used()
 
     return api_key.user, api_key
 

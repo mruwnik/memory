@@ -1,6 +1,7 @@
 """API endpoints for User management."""
 
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -411,9 +412,23 @@ def create_api_key(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Calculate expiration
-    from datetime import datetime, timedelta, timezone
+    # Prevent scope escalation: API key scopes must be a subset of the user's scopes
+    # unless the creating user has admin privileges
+    if data.scopes is not None:
+        user_scopes = set(target_user.scopes or ["read"])
+        requested_scopes = set(data.scopes)
 
+        # Users with "*" scope can grant any scope
+        if "*" not in (user.scopes or []):
+            # Check if requested scopes exceed the target user's scopes
+            if not requested_scopes.issubset(user_scopes):
+                extra_scopes = requested_scopes - user_scopes
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Cannot create API key with scopes not granted to user: {extra_scopes}",
+                )
+
+    # Calculate expiration
     expires_at = None
     if data.expires_in_days is not None:
         expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
@@ -458,7 +473,7 @@ def delete_api_key(
     key_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-):
+) -> dict:
     """Delete an API key. Users can delete their own keys, admins can delete any key."""
     is_admin = has_admin_scope(user)
     is_self = user_id == user.id
@@ -485,7 +500,7 @@ def revoke_api_key(
     key_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-):
+) -> dict:
     """Revoke (deactivate) an API key without deleting it. Useful for audit trails."""
     is_admin = has_admin_scope(user)
     is_self = user_id == user.id
