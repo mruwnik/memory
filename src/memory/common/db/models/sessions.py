@@ -5,12 +5,13 @@ Stores coding sessions and projects for analysis and retrieval.
 Session messages are stored as JSONL files on disk.
 """
 
+from __future__ import annotations
 from datetime import datetime, timezone
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, TYPE_CHECKING
+from uuid import UUID as PyUUID
 
 from sqlalchemy import (
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -19,9 +20,12 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
 
 
 class ProjectPayload(TypedDict):
@@ -29,8 +33,8 @@ class ProjectPayload(TypedDict):
     directory: Annotated[str, "Project directory path"]
     name: Annotated[str | None, "Optional friendly name"]
     source: Annotated[str | None, "Source identifier (hostname, IP, etc)"]
-    created_at: Annotated[str, "ISO timestamp of creation"]
-    last_accessed_at: Annotated[str, "ISO timestamp of last access"]
+    created_at: Annotated[str | None, "ISO timestamp of creation"]
+    last_accessed_at: Annotated[str | None, "ISO timestamp of last access"]
     session_count: Annotated[int, "Number of sessions"]
 
 
@@ -41,7 +45,7 @@ class SessionPayload(TypedDict):
     git_branch: Annotated[str | None, "Git branch name"]
     tool_version: Annotated[str | None, "Tool version (e.g., Claude Code version)"]
     source: Annotated[str | None, "Source identifier (hostname, IP, etc)"]
-    started_at: Annotated[str, "ISO timestamp when session started"]
+    started_at: Annotated[str | None, "ISO timestamp when session started"]
     ended_at: Annotated[str | None, "ISO timestamp when session ended"]
     transcript_path: Annotated[str | None, "Path to JSONL transcript file"]
 
@@ -55,32 +59,32 @@ class Project(Base):
 
     __tablename__ = "projects"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this project
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    user = relationship("User", lazy="select")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user: Mapped[User] = relationship("User", lazy="select")
 
     # Directory information
-    directory = Column(Text, nullable=False)
+    directory: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Metadata
-    name = Column(String(255), nullable=True)  # Optional friendly name
-    source = Column(String(255), nullable=True)  # Source identifier (hostname, IP)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # Optional friendly name
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)  # Source identifier (hostname, IP)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    last_accessed_at = Column(
+    last_accessed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
     # Relationships
-    sessions = relationship(
+    sessions: Mapped[list[Session]] = relationship(
         "Session", back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -117,47 +121,47 @@ class Session(Base):
     __tablename__ = "sessions"
 
     # Use the session UUID as the primary key
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
 
     # User who owns this session
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    user = relationship("User", lazy="select")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user: Mapped[User] = relationship("User", lazy="select")
 
     # Optional project association
-    project_id = Column(
+    project_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    project = relationship("Project", back_populates="sessions")
+    project: Mapped[Project | None] = relationship("Project", back_populates="sessions")
 
     # Parent session (for subagents) - references by UUID
-    parent_session_id = Column(
+    parent_session_id: Mapped[PyUUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("sessions.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    parent_session = relationship(
+    parent_session: Mapped[Session | None] = relationship(
         "Session", remote_side="Session.id", backref="child_sessions"
     )
 
     # Session metadata
-    git_branch = Column(String(255), nullable=True)
-    tool_version = Column(String(50), nullable=True)  # e.g., Claude Code version
-    source = Column(String(255), nullable=True)  # Source identifier (hostname, IP)
+    git_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tool_version: Mapped[str | None] = mapped_column(String(50), nullable=True)  # e.g., Claude Code version
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)  # Source identifier (hostname, IP)
 
     # Path to JSONL transcript file (relative to storage dir)
-    transcript_path = Column(Text, nullable=True)
+    transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Timestamps
-    started_at = Column(
+    started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    ended_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("idx_sessions_user", "user_id"),

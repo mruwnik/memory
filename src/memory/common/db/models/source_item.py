@@ -2,9 +2,13 @@
 Database models for the knowledge base system.
 """
 
+from __future__ import annotations
+
 import pathlib
 import re
-from typing import Any, Annotated, Sequence, TypedDict, cast
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Annotated, Sequence, TypedDict
 import uuid
 
 from PIL import Image
@@ -13,7 +17,6 @@ from sqlalchemy import (
     UUID,
     BigInteger,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -26,7 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA
-from sqlalchemy.orm import Session, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.types import Numeric
 
 from memory.common import settings, tokens
@@ -35,6 +38,9 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    pass
 
 
 class MetadataSchema(TypedDict):
@@ -140,23 +146,28 @@ class Chunk(Base):
     """Stores content chunks with their vector embeddings."""
 
     __tablename__ = "chunk"
+    __allow_unmapped__ = True
 
     # The ID is also used as the vector ID in the vector database
-    id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=func.uuid_generate_v4()
     )
-    source_id = Column(
+    source_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
     )
-    file_paths = Column(
+    file_paths: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text), nullable=True
     )  # Path to content if stored as a file
-    content = Column(Text)  # Direct content storage
-    embedding_model = Column(Text)
-    collection_name = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    checked_at = Column(DateTime(timezone=True), server_default=func.now())
-    search_vector = Column(TSVECTOR)  # Full-text search index
+    content: Mapped[str | None] = mapped_column(Text)  # Direct content storage
+    embedding_model: Mapped[str | None] = mapped_column(Text)
+    collection_name: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    search_vector: Mapped[Any | None] = mapped_column(TSVECTOR)  # Full-text search index
 
     vector: list[float] = []
     item_metadata: dict[str, Any] = {}
@@ -173,28 +184,24 @@ class Chunk(Base):
     @property
     def chunks(self) -> list[extract.MulitmodalChunk]:
         chunks: list[extract.MulitmodalChunk] = []
-        if cast(str | None, self.content):
-            chunks = [cast(str, self.content)]
+        if self.content:
+            chunks = [self.content]
         if self.images:
             chunks += self.images
-        elif cast(Sequence[str] | None, self.file_paths):
-            chunks += [
-                Image.open(pathlib.Path(cast(str, cp))) for cp in self.file_paths
-            ]
+        elif self.file_paths:
+            chunks += [Image.open(pathlib.Path(cp)) for cp in self.file_paths]
         return chunks
 
     @property
     def data(self) -> list[bytes | str | Image.Image]:
-        content = cast(str | None, self.content)
-        file_paths = cast(Sequence[str] | None, self.file_paths)
         items: list[bytes | str | Image.Image] = []
-        if content:
-            items = [content]
+        if self.content:
+            items = [self.content]
 
-        if not file_paths:
+        if not self.file_paths:
             return items
 
-        paths = [pathlib.Path(cast(str, p)) for p in file_paths]
+        paths = [pathlib.Path(p) for p in self.file_paths]
         files = [path for path in paths if path.exists()]
 
         for file_path in files:
@@ -216,17 +223,19 @@ class ConfidenceScore(Base):
 
     __tablename__ = "confidence_score"
 
-    id = Column(BigInteger, primary_key=True)
-    source_item_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source_item_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
     )
-    confidence_type = Column(
+    confidence_type: Mapped[str] = mapped_column(
         Text, nullable=False
     )  # e.g., "observation_accuracy", "interpretation", "predictive_value"
-    score = Column(Numeric(3, 2), nullable=False)  # 0.0-1.0
+    score: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)  # 0.0-1.0
 
     # Relationship back to source item
-    source_item = relationship("SourceItem", back_populates="confidence_scores")
+    source_item: Mapped[SourceItem] = relationship(
+        "SourceItem", back_populates="confidence_scores"
+    )
 
     __table_args__ = (
         Index("confidence_source_idx", "source_item_id"),
@@ -249,38 +258,47 @@ class SourceItem(Base):
     __tablename__ = "source_item"
     __allow_unmapped__ = True
 
-    id = Column(BigInteger, primary_key=True)
-    modality = Column(Text, nullable=False)
-    sha256 = Column(BYTEA, nullable=False, unique=True)
-    inserted_at = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    modality: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[bytes] = mapped_column(BYTEA, nullable=False, unique=True)
+    inserted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=func.now()
     )
-    tags = Column(ARRAY(Text), nullable=False, server_default="{}")
-    size = Column(Integer)
-    mime_type = Column(Text)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    size: Mapped[int | None] = mapped_column(Integer)
+    mime_type: Mapped[str | None] = mapped_column(Text)
 
     # Content is stored in the database if it's small enough and text
-    content = Column(Text)
+    content: Mapped[str | None] = mapped_column(Text)
     # Otherwise the content is stored on disk
-    filename = Column(Text, nullable=True)
+    filename: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Chunks relationship
-    embed_status = Column(Text, nullable=False, server_default="RAW")
-    chunks = relationship("Chunk", backref="source", cascade="all, delete-orphan")
+    embed_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="RAW")
+    chunks: Mapped[list[Chunk]] = relationship(
+        "Chunk", backref="source", cascade="all, delete-orphan"
+    )
 
     # Confidence scores relationship
-    confidence_scores = relationship(
+    confidence_scores: Mapped[list[ConfidenceScore]] = relationship(
         "ConfidenceScore", back_populates="source_item", cascade="all, delete-orphan"
     )
 
     # Discriminator column for SQLAlchemy inheritance
-    type = Column(String(50))
+    type: Mapped[str | None] = mapped_column(String(50))
 
     # Orphan verification tracking
-    last_verified_at = Column(DateTime(timezone=True), nullable=True)
-    verification_failures = Column(Integer, nullable=False, server_default="0")
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verification_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
 
-    __mapper_args__ = {"polymorphic_on": type, "polymorphic_identity": "source_item"}
+    __mapper_args__: dict[str, Any] = {
+        "polymorphic_on": type,
+        "polymorphic_identity": "source_item",
+    }
 
     # Add table-level constraint and indexes
     __table_args__ = (
@@ -322,7 +340,7 @@ class SourceItem(Base):
 
         for confidence_type, score in confidence_updates.items():
             if current_score := current.get(confidence_type):
-                current_score.score = score
+                current_score.score = score  # type: ignore[assignment]
             else:
                 new_score = ConfidenceScore(
                     source_item_id=self.id, confidence_type=confidence_type, score=score
@@ -330,14 +348,12 @@ class SourceItem(Base):
                 self.confidence_scores.append(new_score)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = cast(str | None, self.content)
-        if content:
-            chunks = extract.extract_text(content)
+        if self.content:
+            chunks = extract.extract_text(self.content)
         else:
             chunks = []
 
-        mime_type = cast(str | None, self.mime_type)
-        if mime_type and mime_type.startswith("image/"):
+        if self.mime_type and self.mime_type.startswith("image/"):
             chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
         return chunks
 
@@ -349,7 +365,7 @@ class SourceItem(Base):
         images = [c for c in data.data if isinstance(c, Image.Image)]
         image_names = image_filenames(chunk_id, images)
 
-        modality = data.modality or cast(str, self.modality)
+        modality = data.modality if data.modality else self.modality
         chunk = Chunk(
             id=chunk_id,
             source=self,
@@ -359,7 +375,7 @@ class SourceItem(Base):
             collection_name=modality,
             embedding_model=collections.collection_model(modality, text, images),
             item_metadata=extract.merge_metadata(
-                cast(dict[str, Any], self.as_payload()), data.metadata, metadata
+                dict(self.as_payload()), data.metadata, metadata
             ),
         )
         return chunk
@@ -369,9 +385,9 @@ class SourceItem(Base):
 
     def as_payload(self) -> SourceItemPayload:
         return SourceItemPayload(
-            source_id=cast(int, self.id),
-            tags=cast(list[str], self.tags),
-            size=cast(int | None, self.size),
+            source_id=self.id,
+            tags=self.tags,
+            size=self.size,
         )
 
     @classmethod
@@ -397,7 +413,7 @@ class SourceItem(Base):
         Subclasses should override to return their specific title field
         (e.g., subject for emails, title for blog posts).
         """
-        return cast(str | None, self.filename)
+        return self.filename
 
     @property
     def display_contents(self) -> dict | None:

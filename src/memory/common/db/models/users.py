@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import secrets
 import uuid
-from typing import cast
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 import bcrypt
 from cryptography.hazmat.primitives import serialization
@@ -9,7 +13,6 @@ from sqlalchemy import (
     ARRAY,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Integer,
@@ -17,11 +20,15 @@ from sqlalchemy import (
     Numeric,
     String,
 )
-from sqlalchemy.orm import Session, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
+
+if TYPE_CHECKING:
+    from memory.common.db.models.discord import DiscordUser
+    from memory.common.db.models.secrets import Secret
 
 
 def hash_password(password: str) -> str:
@@ -57,24 +64,24 @@ class User(Base):
         ),
     )
 
-    id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    email = Column(String, nullable=False, unique=True)
-    user_type = Column(String, nullable=False)  # Discriminator column
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    user_type: Mapped[str] = mapped_column(String, nullable=False)  # Discriminator column
 
     # Make these nullable since subclasses will use them selectively
-    password_hash = Column(String, nullable=True)
-    api_key = Column(String, nullable=True, unique=True)
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    api_key: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
 
     # MCP tool scopes - controls which tools this user can access
     # Example: ["read", "observe", "github"] or ["*"] for full access
-    scopes = Column(ARRAY(String), nullable=False, default=["read"])
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=["read"])
 
     # SSH keys for container Git operations
     # Public key stored as plaintext (safe to expose)
-    ssh_public_key = Column(String, nullable=True)
+    ssh_public_key: Mapped[str | None] = mapped_column(String, nullable=True)
     # Private key encrypted at rest using Fernet with SECRETS_ENCRYPTION_KEY
-    ssh_private_key_encrypted = Column(LargeBinary, nullable=True)
+    ssh_private_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     @property
     def ssh_private_key(self) -> str | None:
@@ -92,27 +99,27 @@ class User(Base):
             self.ssh_private_key_encrypted = encrypt_value(value)
 
     # Relationship to sessions
-    sessions = relationship(
+    sessions: Mapped[list[UserSession]] = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan"
     )
-    oauth_states = relationship(
+    oauth_states: Mapped[list[OAuthState]] = relationship(
         "OAuthState", back_populates="user", cascade="all, delete-orphan"
     )
-    discord_users = relationship("DiscordUser", back_populates="system_user")
-    secrets = relationship("Secret", back_populates="user", cascade="all, delete-orphan")
+    discord_users: Mapped[list[DiscordUser]] = relationship("DiscordUser", back_populates="system_user")
+    secrets: Mapped[list[Secret]] = relationship("Secret", back_populates="user", cascade="all, delete-orphan")
 
-    __mapper_args__ = {
+    __mapper_args__: dict[str, Any] = {
         "polymorphic_on": user_type,
         "polymorphic_identity": "user",
     }
 
-    def serialize(self) -> dict:
+    def serialize(self) -> dict[str, Any]:
         return {
             "user_id": self.id,
             "name": self.name,
             "email": self.email,
             "user_type": self.user_type,
-            "scopes": self.scopes or ["read"],
+            "scopes": self.scopes if self.scopes else ["read"],
             "discord_users": {
                 discord_user.id: discord_user.username
                 for discord_user in self.discord_users
@@ -123,7 +130,7 @@ class User(Base):
 class HumanUser(User):
     """Human user with password authentication"""
 
-    __mapper_args__ = {
+    __mapper_args__: dict[str, Any] = {
         "polymorphic_identity": "human",
     }
 
@@ -132,10 +139,12 @@ class HumanUser(User):
 
         Automatically upgrades legacy SHA-256 hashes to bcrypt on successful login.
         """
-        return verify_password(password, cast(str, self.password_hash))
+        if self.password_hash is None:
+            return False
+        return verify_password(password, self.password_hash)
 
     @classmethod
-    def create_with_password(cls, email: str, name: str, password: str) -> "HumanUser":
+    def create_with_password(cls, email: str, name: str, password: str) -> HumanUser:
         """Create a new human user with a hashed password"""
         return cls(
             email=email,
@@ -148,14 +157,14 @@ class HumanUser(User):
 class BotUser(User):
     """Bot user with API key authentication"""
 
-    __mapper_args__ = {
+    __mapper_args__: dict[str, Any] = {
         "polymorphic_identity": "bot",
     }
 
     @classmethod
     def create_with_api_key(
         cls, name: str, email: str, api_key: str | None = None
-    ) -> "BotUser":
+    ) -> BotUser:
         """Create a new bot user with an API key"""
         if api_key is None:
             api_key = f"bot_{secrets.token_hex(32)}"
@@ -170,21 +179,28 @@ class BotUser(User):
 class DiscordBotUser(BotUser):
     """Bot user with API key authentication"""
 
-    __mapper_args__ = {
+    __mapper_args__: dict[str, Any] = {
         "polymorphic_identity": "discord_bot",
     }
 
     @classmethod
     def create_with_api_key(
         cls,
-        discord_users: list,
+        discord_users: list[DiscordUser],
         name: str,
         email: str,
         api_key: str | None = None,
-    ) -> "DiscordBotUser":
+    ) -> DiscordBotUser:
         if not discord_users:
             raise ValueError("discord_users must be provided")
-        bot = super().create_with_api_key(name, email, api_key)
+        if api_key is None:
+            api_key = f"bot_{secrets.token_hex(32)}"
+        bot = cls(
+            name=name,
+            email=email,
+            api_key=api_key,
+            user_type=cls.__mapper_args__["polymorphic_identity"],
+        )
         bot.discord_users = discord_users
         return bot
 
@@ -198,43 +214,43 @@ class DiscordBotUser(BotUser):
 class UserSession(Base):
     __tablename__ = "user_sessions"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    oauth_state_id = Column(Integer, ForeignKey("oauth_states.id"), nullable=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime, nullable=False)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    oauth_state_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("oauth_states.id"), nullable=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     # Relationship to user
-    user = relationship("User", back_populates="sessions")
-    oauth_state = relationship("OAuthState", back_populates="session")
+    user: Mapped[User] = relationship("User", back_populates="sessions")
+    oauth_state: Mapped[OAuthState | None] = relationship("OAuthState", back_populates="session")
 
 
 class OAuthClientInformation(Base):
     __tablename__ = "oauth_client"
 
-    client_id = Column(String, primary_key=True)
-    client_secret = Column(String, nullable=True)
-    client_id_issued_at = Column(Numeric, nullable=False)
-    client_secret_expires_at = Column(Numeric, nullable=True)
+    client_id: Mapped[str] = mapped_column(String, primary_key=True)
+    client_secret: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_id_issued_at: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    client_secret_expires_at: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
 
-    redirect_uris = Column(ARRAY(String), nullable=False)
-    token_endpoint_auth_method = Column(String, nullable=False)
-    grant_types = Column(ARRAY(String), nullable=False)
-    response_types = Column(ARRAY(String), nullable=False)
-    scope = Column(String, nullable=False)
-    client_name = Column(String, nullable=False)
-    client_uri = Column(String, nullable=True)
-    logo_uri = Column(String, nullable=True)
-    contacts = Column(ARRAY(String), nullable=True)
-    tos_uri = Column(String, nullable=True)
-    policy_uri = Column(String, nullable=True)
-    jwks_uri = Column(String, nullable=True)
+    redirect_uris: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    token_endpoint_auth_method: Mapped[str] = mapped_column(String, nullable=False)
+    grant_types: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    response_types: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    client_name: Mapped[str] = mapped_column(String, nullable=False)
+    client_uri: Mapped[str | None] = mapped_column(String, nullable=True)
+    logo_uri: Mapped[str | None] = mapped_column(String, nullable=True)
+    contacts: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    tos_uri: Mapped[str | None] = mapped_column(String, nullable=True)
+    policy_uri: Mapped[str | None] = mapped_column(String, nullable=True)
+    jwks_uri: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    sessions = relationship(
+    sessions: Mapped[list[OAuthState]] = relationship(
         "OAuthState", back_populates="client", cascade="all, delete-orphan"
     )
 
-    def serialize(self) -> dict:
+    def serialize(self) -> dict[str, Any]:
         return {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
@@ -256,14 +272,14 @@ class OAuthClientInformation(Base):
 
 
 class OAuthToken:
-    id = Column(Integer, primary_key=True)
-    client_id = Column(String, ForeignKey("oauth_client.client_id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    scopes = Column(ARRAY(String), nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String, ForeignKey("oauth_client.client_id"), nullable=False)
+    user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
-    def serialize(self) -> dict:
+    def serialize(self) -> dict[str, Any]:
         return {
             "client_id": self.client_id,
             "scopes": self.scopes,
@@ -274,14 +290,14 @@ class OAuthToken:
 class OAuthState(Base, OAuthToken):
     __tablename__ = "oauth_states"
 
-    state = Column(String, nullable=False)
-    code = Column(String, nullable=True)
-    redirect_uri = Column(String, nullable=False)
-    redirect_uri_provided_explicitly = Column(Boolean, nullable=False)
-    code_challenge = Column(String, nullable=True)
-    stale = Column(Boolean, nullable=False, default=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    code: Mapped[str | None] = mapped_column(String, nullable=True)
+    redirect_uri: Mapped[str] = mapped_column(String, nullable=False)
+    redirect_uri_provided_explicitly: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    code_challenge: Mapped[str | None] = mapped_column(String, nullable=True)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    def serialize(self, code: bool = False) -> dict:
+    def serialize(self, code: bool = False) -> dict[str, Any]:
         data = {
             "redirect_uri": self.redirect_uri,
             "redirect_uri_provided_explicitly": self.redirect_uri_provided_explicitly,
@@ -294,30 +310,30 @@ class OAuthState(Base, OAuthToken):
             }
         return data
 
-    client = relationship("OAuthClientInformation", back_populates="sessions")
-    session = relationship("UserSession", back_populates="oauth_state", uselist=False)
-    user = relationship("User", back_populates="oauth_states")
+    client: Mapped[OAuthClientInformation] = relationship("OAuthClientInformation", back_populates="sessions")
+    session: Mapped[UserSession | None] = relationship("UserSession", back_populates="oauth_state", uselist=False)
+    user: Mapped[User | None] = relationship("User", back_populates="oauth_states")
 
 
 class OAuthRefreshToken(Base, OAuthToken):
     __tablename__ = "oauth_refresh_tokens"
 
-    token = Column(
+    token: Mapped[str] = mapped_column(
         String, nullable=False, default=lambda: f"rt_{secrets.token_hex(32)}"
     )
-    revoked = Column(Boolean, nullable=False, default=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Optional: link to the access token session that was created with this refresh token
-    access_token_session_id = Column(
+    access_token_session_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("user_sessions.id"), nullable=True
     )
 
     # Relationships
-    client = relationship("OAuthClientInformation")
-    user = relationship("User")
-    access_token_session = relationship("UserSession")
+    client: Mapped[OAuthClientInformation] = relationship("OAuthClientInformation")
+    user: Mapped[User | None] = relationship("User")
+    access_token_session: Mapped[UserSession | None] = relationship("UserSession")
 
-    def serialize(self) -> dict:
+    def serialize(self) -> dict[str, Any]:
         return {
             "token": self.token,
             "expires_at": self.expires_at.timestamp(),
@@ -325,7 +341,7 @@ class OAuthRefreshToken(Base, OAuthToken):
         } | super().serialize()
 
 
-def purge_oauth(session: Session):
+def purge_oauth(session: Session) -> None:
     for token in session.query(OAuthRefreshToken).all():
         session.delete(token)
     for user_session in session.query(UserSession).all():

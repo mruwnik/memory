@@ -5,11 +5,12 @@ Stores OpenTelemetry metrics and events for usage analysis,
 cost tracking, and pattern identification.
 """
 
+from __future__ import annotations
 from datetime import datetime, timezone
+from typing import Any, TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
-    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -18,9 +19,12 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
 
 
 class TelemetryEvent(Base):
@@ -36,36 +40,36 @@ class TelemetryEvent(Base):
 
     __tablename__ = "telemetry_events"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    timestamp = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
     # User who reported this event
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    user = relationship("User", lazy="select")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user: Mapped[User] = relationship("User", lazy="select")
 
     # Event classification
-    event_type = Column(String(50), nullable=False)  # 'metric' or 'log'
-    name = Column(String(100), nullable=False)  # e.g., 'token.usage', 'user_prompt'
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # 'metric' or 'log'
+    name: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g., 'token.usage', 'user_prompt'
 
     # Numeric value (for counters/gauges)
-    value = Column(Float, nullable=True)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Session tracking - stores session UUID as string
-    session_id = Column(String(100), nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
     # Common dimensions extracted for efficient querying
-    source = Column(String(100), nullable=True)  # e.g., model name, tool name
-    tool_name = Column(String(100), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g., model name, tool name
+    tool_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Full OTLP attributes (token_type, cost_type, etc.)
-    attributes = Column(JSONB, default=dict, nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # For log events: body content (prompt hash, error message, etc.)
-    body = Column(Text, nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_telemetry_events_timestamp", "timestamp"),

@@ -4,11 +4,12 @@ Database models for Claude Code config snapshots.
 Stores config snapshots for running Claude Code in containers.
 """
 
-from typing import Annotated, TypedDict
+from __future__ import annotations
+from datetime import datetime
+from typing import Annotated, TypedDict, TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -16,10 +17,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.users import User
 
 
 class ClaudeConfigSnapshotPayload(TypedDict):
@@ -44,28 +48,28 @@ class ClaudeConfigSnapshot(Base):
 
     __tablename__ = "claude_config_snapshots"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this snapshot
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    user = relationship("User", backref="claude_snapshots", lazy="select")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user: Mapped[User] = relationship("User", backref="claude_snapshots", lazy="select")
 
     # Snapshot metadata
-    name = Column(Text, nullable=False)
-    content_hash = Column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
     # Claude account info (extracted from .credentials.json)
-    claude_account_email = Column(Text, nullable=True)
-    subscription_type = Column(Text, nullable=True)
+    claude_account_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscription_type: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Summary for UI (JSON)
-    summary = Column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Storage
-    filename = Column(Text, nullable=False)
-    size = Column(Integer, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    created_at = Column(
+    created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
@@ -114,31 +118,31 @@ class ClaudeEnvironment(Base):
 
     __tablename__ = "claude_environments"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this environment
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
-    user = relationship("User", backref="claude_environments", lazy="select")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user: Mapped[User] = relationship("User", backref="claude_environments", lazy="select")
 
     # Environment metadata
-    name = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
-    volume_name = Column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    volume_name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
     # Initialization source (optional - tracks what snapshot was used to init)
-    initialized_from_snapshot_id = Column(
+    initialized_from_snapshot_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("claude_config_snapshots.id", ondelete="SET NULL"),
         nullable=True,
     )
-    initialized_from_snapshot = relationship("ClaudeConfigSnapshot", lazy="select")
+    initialized_from_snapshot: Mapped[ClaudeConfigSnapshot | None] = relationship("ClaudeConfigSnapshot", lazy="select")
 
     # Usage tracking
-    size_bytes = Column(BigInteger, nullable=True)
-    last_used_at = Column(DateTime(timezone=True), nullable=True)
-    session_count = Column(Integer, default=0, nullable=False)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    session_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    created_at = Column(
+    created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,

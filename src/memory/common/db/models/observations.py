@@ -2,23 +2,32 @@
 Agent observation models for the epistemic sparring partner system.
 """
 
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
 from sqlalchemy import (
     ARRAY,
     BigInteger,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     Text,
-    UUID,
     func,
 )
+from sqlalchemy import UUID as SQLUUID
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+
+if TYPE_CHECKING:
+    from memory.common.db.models.source_items import AgentObservation
 
 
 class ObservationContradiction(Base):
@@ -29,30 +38,38 @@ class ObservationContradiction(Base):
 
     __tablename__ = "observation_contradiction"
 
-    id = Column(BigInteger, primary_key=True)
-    observation_1_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    observation_1_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("agent_observation.id", ondelete="CASCADE"),
         nullable=False,
     )
-    observation_2_id = Column(
+    observation_2_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("agent_observation.id", ondelete="CASCADE"),
         nullable=False,
     )
-    contradiction_type = Column(Text, nullable=False)  # direct, implied, temporal
-    detected_at = Column(DateTime(timezone=True), server_default=func.now())
-    detection_method = Column(Text, nullable=False)  # manual, automatic, agent-reported
-    resolution = Column(Text)  # How it was resolved, if at all
-    observation_metadata = Column(JSONB)
+    contradiction_type: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # direct, implied, temporal
+    detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    detection_method: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # manual, automatic, agent-reported
+    resolution: Mapped[str | None] = mapped_column(
+        Text
+    )  # How it was resolved, if at all
+    observation_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # Relationships - use string references to avoid circular imports
-    observation_1 = relationship(
+    observation_1: Mapped[AgentObservation] = relationship(
         "AgentObservation",
         foreign_keys=[observation_1_id],
         back_populates="contradictions_as_first",
     )
-    observation_2 = relationship(
+    observation_2: Mapped[AgentObservation] = relationship(
         "AgentObservation",
         foreign_keys=[observation_2_id],
         back_populates="contradictions_as_second",
@@ -73,18 +90,26 @@ class ReactionPattern(Base):
 
     __tablename__ = "reaction_pattern"
 
-    id = Column(BigInteger, primary_key=True)
-    trigger_type = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    trigger_type: Mapped[str] = mapped_column(
         Text, nullable=False
     )  # What kind of observation triggers this
-    reaction_type = Column(Text, nullable=False)  # How user typically responds
-    frequency = Column(Numeric(3, 2), nullable=False)  # How often this pattern appears
-    first_observed = Column(DateTime(timezone=True), server_default=func.now())
-    last_observed = Column(DateTime(timezone=True), server_default=func.now())
-    example_observations = Column(
+    reaction_type: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # How user typically responds
+    frequency: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), nullable=False
+    )  # How often this pattern appears
+    first_observed: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_observed: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    example_observations: Mapped[list[int] | None] = mapped_column(
         ARRAY(BigInteger)
     )  # IDs of observations showing this pattern
-    reaction_metadata = Column(JSONB)
+    reaction_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     __table_args__ = (
         Index("reaction_trigger_idx", "trigger_type"),
@@ -100,19 +125,29 @@ class ObservationPattern(Base):
 
     __tablename__ = "observation_pattern"
 
-    id = Column(BigInteger, primary_key=True)
-    pattern_type = Column(Text, nullable=False)  # behavioral, cognitive, emotional
-    description = Column(Text, nullable=False)
-    supporting_observations = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    pattern_type: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # behavioral, cognitive, emotional
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_observations: Mapped[list[int]] = mapped_column(
         ARRAY(BigInteger), nullable=False
     )  # Observation IDs
-    exceptions = Column(ARRAY(BigInteger))  # Observations that don't fit
-    confidence = Column(Numeric(3, 2), nullable=False, default=0.7)
-    validity_start = Column(DateTime(timezone=True))
-    validity_end = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
-    pattern_metadata = Column(JSONB)
+    exceptions: Mapped[list[int] | None] = mapped_column(
+        ARRAY(BigInteger)
+    )  # Observations that don't fit
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), nullable=False, default=0.7
+    )
+    validity_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    validity_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    pattern_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     __table_args__ = (
         Index("obs_pattern_type_idx", "pattern_type"),
@@ -128,15 +163,23 @@ class BeliefCluster(Base):
 
     __tablename__ = "belief_cluster"
 
-    id = Column(BigInteger, primary_key=True)
-    cluster_name = Column(Text, nullable=False)
-    core_beliefs = Column(ARRAY(Text), nullable=False)
-    peripheral_beliefs = Column(ARRAY(Text))
-    internal_consistency = Column(Numeric(3, 2))  # How well beliefs align
-    supporting_observations = Column(ARRAY(BigInteger))  # Observation IDs
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_updated = Column(DateTime(timezone=True), server_default=func.now())
-    cluster_metadata = Column(JSONB)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    cluster_name: Mapped[str] = mapped_column(Text, nullable=False)
+    core_beliefs: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
+    peripheral_beliefs: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    internal_consistency: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2)
+    )  # How well beliefs align
+    supporting_observations: Mapped[list[int] | None] = mapped_column(
+        ARRAY(BigInteger)
+    )  # Observation IDs
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_updated: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    cluster_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     __table_args__ = (
         Index("belief_cluster_name_idx", "cluster_name"),
@@ -151,18 +194,26 @@ class ConversationMetrics(Base):
 
     __tablename__ = "conversation_metrics"
 
-    id = Column(BigInteger, primary_key=True)
-    session_id = Column(UUID(as_uuid=True), nullable=False)
-    depth_score = Column(Numeric(3, 2))  # How deep the conversation went
-    breakthrough_count = Column(Integer, default=0)
-    challenge_acceptance = Column(Numeric(3, 2))  # How well challenges were received
-    new_insights = Column(Integer, default=0)
-    user_engagement = Column(Numeric(3, 2))  # Inferred engagement level
-    duration_minutes = Column(Integer)
-    observation_count = Column(Integer, default=0)
-    contradiction_count = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    metrics_metadata = Column(JSONB)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(SQLUUID(as_uuid=True), nullable=False)
+    depth_score: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2)
+    )  # How deep the conversation went
+    breakthrough_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    challenge_acceptance: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2)
+    )  # How well challenges were received
+    new_insights: Mapped[int | None] = mapped_column(Integer, default=0)
+    user_engagement: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2)
+    )  # Inferred engagement level
+    duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    observation_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    contradiction_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    metrics_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     __table_args__ = (
         Index("conv_metrics_session_idx", "session_id", unique=True),
