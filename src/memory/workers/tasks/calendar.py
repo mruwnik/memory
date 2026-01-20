@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict, cast
 
 import caldav
-from sqlalchemy.orm import Session
 from googleapiclient.discovery import build
 
 from memory.common.celery_app import (
@@ -15,7 +14,7 @@ from memory.common.celery_app import (
     SYNC_CALENDAR_EVENT,
     app,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
 from memory.parsers.google_drive import refresh_credentials
@@ -324,7 +323,7 @@ def _fetch_google_calendar_events(
     calendar_ids: list[str],
     since: datetime,
     until: datetime,
-    session: Session,
+    session: DBSession,
 ) -> list[EventData]:
     """Fetch events from Google Calendar using existing GoogleAccount."""
     google_account = account.google_account

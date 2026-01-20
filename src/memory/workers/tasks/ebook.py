@@ -14,10 +14,9 @@ from memory.common.content_processing import (
     push_to_qdrant,
     safe_task_execution,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Book, BookSection
 from memory.parsers.ebook import Ebook, Section, parse_ebook
-from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +158,7 @@ def embed_sections(all_sections: list[BookSection]) -> int:
     return sum(embed_source_item(section) for section in all_sections)
 
 
-def prepare_book_for_reingest(session: Session, item_id: int) -> Book | None:
+def prepare_book_for_reingest(session: DBSession, item_id: int) -> Book | None:
     """
     Fetch an existing book and clear its sections/chunks for reprocessing.
 
@@ -181,7 +180,7 @@ def prepare_book_for_reingest(session: Session, item_id: int) -> Book | None:
 
 
 def execute_book_processing(
-    session: Session,
+    session: DBSession,
     book: Book,
     ebook: Ebook,
     title: str = "",

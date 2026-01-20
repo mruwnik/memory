@@ -7,10 +7,9 @@ from datetime import datetime
 
 from dateutil import parser as date_parser
 from sqlalchemy import func as sql_func
-from sqlalchemy.orm import Session
 
 from memory.common import llms, settings, jobs as job_utils
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Task
 from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.people import Person
@@ -269,7 +268,7 @@ def create_action_item_tasks(
     return created_tasks
 
 
-def detach_meeting_tasks(session: Session, meeting: Meeting) -> int:
+def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
     """Detach action item tasks from a meeting (for reingest). Returns count detached."""
     tasks = session.query(Task).filter(Task.source_item_id == meeting.id).all()
     for task in tasks:
@@ -279,7 +278,7 @@ def detach_meeting_tasks(session: Session, meeting: Meeting) -> int:
 
 
 def extract_and_update_meeting(
-    session: Session,
+    session: DBSession,
     meeting: Meeting,
     extraction_prompt: str | None = None,
     system_prompt: str | None = None,
@@ -320,7 +319,7 @@ def extract_and_update_meeting(
 
 
 def reextract_meeting(
-    session: Session,
+    session: DBSession,
     meeting: Meeting,
     extraction_prompt: str | None = None,
     system_prompt: str | None = None,
@@ -346,7 +345,7 @@ def reextract_meeting(
 
 
 def create_meeting_record(
-    session: Session,
+    session: DBSession,
     transcript: str,
     title: str | None,
     meeting_date: str | None,
@@ -384,7 +383,7 @@ def create_meeting_record(
     return meeting
 
 
-def prepare_meeting_for_reingest(session: Session, item_id: int) -> Meeting | None:
+def prepare_meeting_for_reingest(session: DBSession, item_id: int) -> Meeting | None:
     """
     Fetch an existing meeting and clear its chunks/tasks for reprocessing.
 
@@ -405,7 +404,7 @@ def prepare_meeting_for_reingest(session: Session, item_id: int) -> Meeting | No
 
 
 def execute_meeting_processing(
-    session: Session,
+    session: DBSession,
     meeting: Meeting,
     attendee_names: list[str] | None,
     extraction_prompt: str | None,

@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 import discord
-from sqlalchemy.orm import Session
 
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     DiscordChannel,
     DiscordServer,
@@ -55,7 +54,7 @@ class CommandResponse:
 class CommandContext:
     """All information a handler needs to fulfil a command."""
 
-    session: Session
+    session: DBSession
     interaction: discord.Interaction
     actor: DiscordUser
     scope: ScopeLiteral
@@ -467,7 +466,7 @@ async def _run_interaction_command(
 
 
 def _build_context(
-    session: Session,
+    session: DBSession,
     interaction: discord.Interaction,
     scope: ScopeLiteral,
     target_user: discord.User | None,
@@ -519,7 +518,7 @@ def _build_context(
     )
 
 
-def ensure_server(session: Session, guild: discord.Guild) -> DiscordServer:
+def ensure_server(session: DBSession, guild: discord.Guild) -> DiscordServer:
     server = session.get(DiscordServer, guild.id)
     if server is None:
         server = DiscordServer(
@@ -544,7 +543,7 @@ def ensure_server(session: Session, guild: discord.Guild) -> DiscordServer:
 
 
 def _ensure_channel(
-    session: Session,
+    session: DBSession,
     channel: discord.abc.Messageable,
     guild_id: int | None,
 ) -> DiscordChannel:
@@ -570,7 +569,7 @@ def _ensure_channel(
     return channel_model
 
 
-def ensure_user(session: Session, discord_user: discord.abc.User) -> DiscordUser:
+def ensure_user(session: DBSession, discord_user: discord.abc.User) -> DiscordUser:
     user = session.get(DiscordUser, discord_user.id)
     display_name = getattr(discord_user, "display_name", discord_user.name)
     if user is None:

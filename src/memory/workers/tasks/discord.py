@@ -12,7 +12,6 @@ from typing import Any, cast
 
 import requests
 from sqlalchemy import exc as sqlalchemy_exc
-from sqlalchemy.orm import Session, scoped_session
 
 from memory.common import discord, settings
 from memory.common.celery_app import (
@@ -21,7 +20,7 @@ from memory.common.celery_app import (
     PROCESS_DISCORD_MESSAGE,
     app,
 )
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import DiscordMessage, DiscordUser
 from memory.discord.messages import call_llm, comm_channel_prompt, send_discord_response
 from memory.common.content_processing import (
@@ -66,7 +65,7 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
 
 
 def get_prev(
-    session: Session | scoped_session, channel_id: int, sent_at: datetime
+    session: DBSession, channel_id: int, sent_at: datetime
 ) -> list[str]:
     prev = (
         session.query(DiscordUser.username, DiscordMessage.content)

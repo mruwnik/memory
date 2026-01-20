@@ -8,11 +8,10 @@ from typing import TypedDict
 
 from PIL import Image
 from PIL.ExifTags import TAGS
-from sqlalchemy.orm import Session
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_PHOTO, REPROCESS_PHOTO, app
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Photo
 from memory.common import jobs as job_utils
 from memory.common.content_processing import (
@@ -96,7 +95,7 @@ def get_gps_coordinates(exif_data: dict) -> tuple[float | None, float | None]:
     return lat, lon
 
 
-def prepare_photo_for_reingest(session: Session, item_id: int) -> Photo | None:
+def prepare_photo_for_reingest(session: DBSession, item_id: int) -> Photo | None:
     """
     Fetch an existing photo and clear its chunks for reprocessing.
 
@@ -113,7 +112,7 @@ def prepare_photo_for_reingest(session: Session, item_id: int) -> Photo | None:
 
 
 def execute_photo_processing(
-    session: Session,
+    session: DBSession,
     photo: Photo,
     job_id: int | None = None,
 ) -> PhotoProcessingResult:

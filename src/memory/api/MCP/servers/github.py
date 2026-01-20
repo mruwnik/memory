@@ -6,10 +6,9 @@ from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from sqlalchemy.orm import Session
 
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import UserSession
 from memory.common.db.models.sources import GithubAccount
 
@@ -37,13 +36,13 @@ logger = logging.getLogger(__name__)
 github_mcp = FastMCP("memory-github")
 
 
-async def has_github_account(user_info: dict, session: Session) -> bool:
+async def has_github_account(user_info: dict, session: DBSession) -> bool:
     """Visibility checker: only show GitHub write tools if user has an active account."""
     token = user_info.get("token")
     if not token:
         return False
 
-    def _check(session: Session) -> bool:
+    def _check(session: DBSession) -> bool:
         user_session = session.get(UserSession, token)
         if not user_session or not user_session.user:
             return False

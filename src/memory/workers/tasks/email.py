@@ -3,10 +3,9 @@ from datetime import datetime
 from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
 from memory.parsers.email import parse_email_message
 from memory.workers.email import (
@@ -111,7 +110,7 @@ def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
 
 def process_email_batch(
     account: EmailAccount,
-    db: Session,
+    db: DBSession,
     messages: Generator[tuple[str, str], None, None],
     folder: str = "INBOX",
 ) -> dict:
@@ -160,7 +159,7 @@ def process_email_batch(
 
 def finalize_sync(
     account: EmailAccount,
-    db: Session,
+    db: DBSession,
     error: Exception | None = None,
 ) -> None:
     """Update account sync status after sync completes."""
@@ -174,7 +173,7 @@ def finalize_sync(
 
 def sync_imap_messages(
     account: EmailAccount,
-    db: Session,
+    db: DBSession,
     cutoff_date: datetime,
 ) -> dict:
     """Sync emails from an IMAP account."""
@@ -219,7 +218,7 @@ def sync_imap_messages(
 
 def sync_gmail_messages(
     account: EmailAccount,
-    db: Session,
+    db: DBSession,
     cutoff_date: datetime,
 ) -> dict:
     """Sync emails from a Gmail account using the Gmail API."""

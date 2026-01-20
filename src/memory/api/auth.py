@@ -4,12 +4,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy.orm import Session as DBSession
-from sqlalchemy.orm import scoped_session
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from memory.common import settings
-from memory.common.db.connection import get_session, make_session
+from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     BotUser,
     MCPServer,
@@ -78,7 +76,7 @@ def create_user_session(
 
 
 def get_user_session(
-    request: Request, db: DBSession | scoped_session
+    request: Request, db: DBSession
 ) -> UserSession | None:
     """Get session ID from request"""
     session_id = get_token(request)
@@ -96,7 +94,7 @@ def get_user_session(
     return session
 
 
-def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | None:
+def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
     """Authenticate a bot by API key.
 
     Uses constant-time comparison to prevent timing attacks.
@@ -110,7 +108,7 @@ def authenticate_bot(api_key: str, db: DBSession | scoped_session) -> BotUser | 
     return None
 
 
-def authenticate_by_api_key(api_key: str, db: DBSession | scoped_session) -> User | None:
+def authenticate_by_api_key(api_key: str, db: DBSession) -> User | None:
     """Authenticate any user by API key.
 
     Supports both bot users (bot_* keys) and human users (user_* keys).
@@ -124,7 +122,7 @@ def authenticate_by_api_key(api_key: str, db: DBSession | scoped_session) -> Use
     return None
 
 
-def get_session_user(request: Request, db: DBSession | scoped_session) -> User | None:
+def get_session_user(request: Request, db: DBSession) -> User | None:
     """Get user from session ID or API key if valid.
 
     Supports two authentication methods:
@@ -154,7 +152,7 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def get_user_from_token(token: str, db: DBSession | scoped_session) -> User | None:
+def get_user_from_token(token: str, db: DBSession) -> User | None:
     """Authenticate user from a token string.
 
     Supports both session tokens (UUIDs) and API keys.

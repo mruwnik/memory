@@ -11,9 +11,8 @@ from typing import Any
 from sqlalchemy import Text, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Session
 
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     GithubItem,
     GithubMilestone,
@@ -395,7 +394,7 @@ def fetch_issue(repo: str, number: int) -> dict[str, Any]:
 
 
 def fetch_project_fields_for_item(
-    session: Session,
+    session: DBSession,
     repo_path: str,
     number: int,
     kind: str,
