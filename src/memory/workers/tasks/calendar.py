@@ -28,14 +28,20 @@ from memory.common.content_processing import (
 logger = logging.getLogger(__name__)
 
 
-class EventData(TypedDict, total=False):
+class _EventDataRequired(TypedDict):
+    """Required fields for EventData."""
+
+    title: str
+    start_time: datetime
+
+
+class EventData(_EventDataRequired, total=False):
     """Structured event data for calendar sync.
 
     Required fields: title, start_time
+    Optional fields: all others
     """
 
-    title: str  # Required
-    start_time: datetime  # Required
     end_time: datetime | None
     all_day: bool
     description: str

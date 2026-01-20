@@ -553,7 +553,7 @@ def test_from_annotation_handles_insufficient_args():
 
     # Annotation with only one argument (needs 2)
     try:
-        annotation = Annotated[str]  # This will raise error when created
+        annotation = Annotated[str]  # type: ignore[misc]  # This will raise error when created
     except TypeError:
         # Can't create Annotated with just one arg, so test with get_args returning empty
         pass

@@ -90,13 +90,10 @@ def get_raw_events(
     Only returns events for the authenticated user.
     """
     # Default to last 24 hours if no time range specified
-    if from_time is None and to_time is None:
+    if to_time is None:
         to_time = datetime.now(timezone.utc)
+    if from_time is None:
         from_time = to_time - timedelta(hours=24)
-    elif from_time is None:
-        from_time = to_time - timedelta(hours=24)
-    elif to_time is None:
-        to_time = datetime.now(timezone.utc)
 
     with make_session() as session:
         query = (
@@ -177,13 +174,10 @@ def get_aggregated_metrics(
     event_type, name) and JSONB attribute keys using the format "attributes.<key>".
     """
     # Default to last 7 days if no time range specified
-    if from_time is None and to_time is None:
+    if to_time is None:
         to_time = datetime.now(timezone.utc)
+    if from_time is None:
         from_time = to_time - timedelta(days=7)
-    elif from_time is None:
-        from_time = to_time - timedelta(days=7)
-    elif to_time is None:
-        to_time = datetime.now(timezone.utc)
 
     with make_session() as session:
         # Build time bucket using date_trunc with interval

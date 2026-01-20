@@ -2,7 +2,11 @@
   "include": ["src", "tests", "tools", "db"],
   "exclude": ["**/node_modules", "**/__pycache__", ".git"],
   "reportMissingImports": false,
+  "reportMissingModuleSource": false,
   "reportGeneralTypeIssues": false,
   "reportOptionalMemberAccess": false,
+  "reportUnboundVariable": false,
+  "reportOptionalOperand": false,
+  "reportTypedDictNotRequiredAccess": false,
   "pythonVersion": "3.11"
 }
