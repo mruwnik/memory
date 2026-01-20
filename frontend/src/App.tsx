@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
+import { PersonList } from '@/components/people'
 import { UserSettings, UserManagement } from '@/components/users'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
@@ -229,6 +230,15 @@ const AuthWrapper = () => {
       {/* Poll routes - public (no auth required) */}
       <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
       <Route path="/ui/polls/results/:slug" element={<PollResults />} />
+
+      {/* People routes */}
+      <Route path="/ui/people" element={
+        isAuthenticated ? (
+          <PersonList />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
 
       {/* Default redirect */}
       <Route path="/" element={
