@@ -104,25 +104,29 @@ async def update(
     tags: list[str] | None = None,
     notes: str | None = None,
     replace_notes: bool = False,
+    replace_tags: bool = False,
+    replace_aliases: bool = False,
 ) -> dict:
     """
-    Update information about a person with merge semantics.
+    Update information about a person with configurable merge/replace semantics.
 
-    This tool MERGES new information with existing data rather than replacing it:
-    - display_name: Replaces existing value
-    - aliases: Adds new aliases (union with existing)
+    By default, this tool MERGES new information with existing data:
+    - display_name: Always replaces existing value
+    - aliases: Adds new aliases (union with existing), or replaces if replace_aliases=True
     - contact_info: Deep merges (adds new keys, updates existing keys, never deletes)
-    - tags: Adds new tags (union with existing)
-    - notes: Appends to existing notes (or replaces if replace_notes=True)
+    - tags: Adds new tags (union with existing), or replaces if replace_tags=True
+    - notes: Appends to existing notes, or replaces if replace_notes=True
 
     Args:
         identifier: The person's unique identifier
         display_name: New display name (replaces existing)
-        aliases: Additional aliases to add
+        aliases: Aliases to add (or replace existing if replace_aliases=True)
         contact_info: Additional contact info to merge
-        tags: Additional tags to add
+        tags: Tags to add (or replace existing if replace_tags=True)
         notes: Notes to append (or replace if replace_notes=True)
         replace_notes: If True, replace notes instead of appending
+        replace_tags: If True, replace all tags instead of merging
+        replace_aliases: If True, replace all aliases instead of merging
 
     Returns:
         Task status with task_id
@@ -133,6 +137,13 @@ async def update(
             identifier="alice_chen",
             contact_info={"phone": "555-1234"},  # Added to existing
             notes="Enjoys rock climbing"  # Appended to existing notes
+        )
+
+        # Replace all tags (useful for removing tags)
+        update(
+            identifier="alice_chen",
+            tags=["work"],  # Replaces all existing tags
+            replace_tags=True
         )
     """
     logger.info(f"MCP: Updating person: {identifier}")
@@ -153,6 +164,8 @@ async def update(
             "tags": tags,
             "notes": notes,
             "replace_notes": replace_notes,
+            "replace_tags": replace_tags,
+            "replace_aliases": replace_aliases,
         },
     )
 

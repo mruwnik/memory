@@ -71,6 +71,12 @@ export interface ToolUsageResponse {
   tools: ToolUsageStats[]
 }
 
+export interface TelemetryUser {
+  id: number
+  name: string
+  email: string
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type')
   if (!contentType?.includes('application/json')) {
@@ -162,9 +168,18 @@ export const useTelemetry = () => {
     return parseJsonResponse<ToolUsageResponse>(response)
   }, [apiCall])
 
+  const getUsersWithTelemetry = useCallback(async (): Promise<TelemetryUser[]> => {
+    const response = await apiCall('/telemetry/users')
+    if (!response.ok) {
+      throw new Error(`Failed to fetch telemetry users: ${response.status}`)
+    }
+    return parseJsonResponse<TelemetryUser[]>(response)
+  }, [apiCall])
+
   return {
     getRawEvents,
     getMetrics,
     getToolUsage,
+    getUsersWithTelemetry,
   }
 }

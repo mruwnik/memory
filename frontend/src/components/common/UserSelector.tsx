@@ -1,21 +1,31 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, User } from '../../hooks/useUsers'
 
 export type SelectedUser = { type: 'all' } | { type: 'user'; id: number; name: string }
 
+// Minimal user info for filtering
+export interface FilterUser {
+  id: number
+  name: string
+}
+
 interface UserSelectorProps {
   value: SelectedUser
   onChange: (user: SelectedUser) => void
   className?: string
+  // Optional: only show users that exist in this list (e.g., users with telemetry data)
+  filterToUsers?: FilterUser[]
 }
 
 /**
  * User selector dropdown for admin users.
  * Allows admins to select a specific user or "All Users" to view aggregate data.
  * Non-admin users will not see this component (returns null).
+ *
+ * If filterToUsers is provided, only users in that list will be shown.
  */
-const UserSelector = ({ value, onChange, className = '' }: UserSelectorProps) => {
+const UserSelector = ({ value, onChange, className = '', filterToUsers }: UserSelectorProps) => {
   const { hasScope, user: currentUser } = useAuth()
   const { listUsers } = useUsers()
   const [users, setUsers] = useState<User[]>([])
@@ -42,6 +52,13 @@ const UserSelector = ({ value, onChange, className = '' }: UserSelectorProps) =>
 
     loadUsers()
   }, [isAdmin, listUsers])
+
+  // Filter users if filterToUsers is provided
+  const displayUsers = useMemo(() => {
+    if (!filterToUsers) return users
+    const filterIds = new Set(filterToUsers.map(u => u.id))
+    return users.filter(u => filterIds.has(u.id))
+  }, [users, filterToUsers])
 
   // Don't render for non-admins
   if (!isAdmin) return null
@@ -87,7 +104,7 @@ const UserSelector = ({ value, onChange, className = '' }: UserSelectorProps) =>
         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
       >
         <option value="all">All Users</option>
-        {users.map(user => (
+        {displayUsers.map(user => (
           <option key={user.id} value={`user:${user.id}`}>
             {user.name} {user.id === currentUser?.id ? '(you)' : ''}
           </option>
