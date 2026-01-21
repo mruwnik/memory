@@ -59,12 +59,18 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
     }
   }
 
-  // Categorize sessions by token usage (top 20% = high, next 30% = medium, rest = low)
+  // Categorize sessions by token usage percentiles:
+  // - High: top 20% (index 0 to 0.2*length)
+  // - Medium: next 30% (index 0.2*length to 0.5*length)
+  // - Low: bottom 50% (index 0.5*length to end)
+  // Thresholds are the token values at the percentile boundaries.
   const sortedByTokens = [...data.sessions].sort((a, b) => b.total_tokens - a.total_tokens)
   const highThreshold = sortedByTokens[Math.floor(sortedByTokens.length * 0.2)]?.total_tokens ?? 0
   const mediumThreshold = sortedByTokens[Math.floor(sortedByTokens.length * 0.5)]?.total_tokens ?? 0
 
   const getCategory = (tokens: number): UsageCategory => {
+    // With fewer than 3 sessions, percentile-based categorization isn't meaningful
+    if (sortedByTokens.length < 3) return 'medium'
     if (tokens >= highThreshold) return 'high'
     if (tokens >= mediumThreshold) return 'medium'
     return 'low'
