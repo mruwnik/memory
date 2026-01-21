@@ -256,6 +256,16 @@ async def search_manifold_markets(
         return [{"source": "manifold", **r} for r in results if isinstance(r, dict)]
 
 
+def parse_outcome_prices(outcome_prices: str | list) -> list:
+    """Parse Polymarket outcome prices from string or list format."""
+    if isinstance(outcome_prices, str):
+        try:
+            return json.loads(outcome_prices)
+        except json.JSONDecodeError:
+            return []
+    return outcome_prices
+
+
 async def search_polymarket_markets(
     term: str, min_volume: int = 1000, binary: bool = False
 ) -> list[dict]:
@@ -289,15 +299,7 @@ async def search_polymarket_markets(
             # For binary events (single market with yes/no)
             if len(markets) == 1:
                 market = markets[0]
-                outcome_prices = market.get("outcomePrices", "[]")
-                if isinstance(outcome_prices, str):
-                    try:
-                        prices = json.loads(outcome_prices)
-                    except json.JSONDecodeError:
-                        prices = []
-                else:
-                    prices = outcome_prices
-
+                prices = parse_outcome_prices(market.get("outcomePrices", "[]"))
                 prob = float(prices[0]) if prices else None
 
                 results.append(
@@ -316,15 +318,7 @@ async def search_polymarket_markets(
                 answers = {}
                 for market in markets:
                     outcome = market.get("outcome", market.get("groupItemTitle", ""))
-                    outcome_prices = market.get("outcomePrices", "[]")
-                    if isinstance(outcome_prices, str):
-                        try:
-                            prices = json.loads(outcome_prices)
-                        except json.JSONDecodeError:
-                            prices = []
-                    else:
-                        prices = outcome_prices
-
+                    prices = parse_outcome_prices(market.get("outcomePrices", "[]"))
                     prob = float(prices[0]) if prices else 0
                     if outcome:
                         answers[outcome] = round(prob, 3)
@@ -452,7 +446,7 @@ async def search_markets(
         if source in search_funcs:
             valid_sources.append(source)
         else:
-            logger.warning(f"Unknown prediction market source: {source}")
+            logger.warning("Unknown prediction market source: %s", source)
 
     if not valid_sources:
         return []
@@ -466,7 +460,7 @@ async def search_markets(
         if isinstance(result, list):
             all_markets.extend(result)
         elif isinstance(result, Exception):
-            logger.warning(f"Error fetching markets from {source}: {result}")
+            logger.warning("Error fetching markets from %s: %s", source, result)
 
     return all_markets
 
