@@ -13,10 +13,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from pydantic import BaseModel
 from sqlalchemy import func
 
+from sqlalchemy.orm import Session as DBSession
+
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import TelemetryEvent, User
-from sqlalchemy.orm import Session as DBSession
+from memory.common.telemetry import (
+    parse_otlp_json,
+    write_events_to_db,
+)
 
 
 def has_admin_scope(user: User) -> bool:
@@ -53,10 +58,6 @@ def resolve_user_filter(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
     return user_id
-from memory.common.telemetry import (
-    parse_otlp_json,
-    write_events_to_db,
-)
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 

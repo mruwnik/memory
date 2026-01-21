@@ -18,10 +18,47 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import joinedload
 
+from sqlalchemy.orm import Session as DBSession
+
 from memory.api.auth import get_current_user
 from memory.common import settings
-from memory.common.db.connection import make_session
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import Project, Session, User
+
+
+def has_admin_scope(user: User) -> bool:
+    """Check if user has admin scope (can view all users' data)."""
+    user_scopes = user.scopes or []
+    return "*" in user_scopes or "admin" in user_scopes
+
+
+def resolve_user_filter(
+    user_id: int | None, current_user: User, db: DBSession
+) -> int | None:
+    """
+    Resolve user_id filter for admin queries.
+
+    Returns:
+        - None if admin requests all users (user_id omitted)
+        - Specific user_id if admin requests specific user
+        - current_user.id if non-admin (ignores user_id param)
+
+    Raises:
+        HTTPException 404 if requested user doesn't exist
+    """
+    if not has_admin_scope(current_user):
+        # Non-admins can only see their own data
+        return current_user.id
+
+    if user_id is None:
+        # Admin with no filter - return all users
+        return None
+
+    # Admin requesting specific user - verify they exist
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_id
 
 logger = logging.getLogger(__name__)
 
@@ -651,13 +688,21 @@ def compute_call_stats(per_call_totals: list[int]) -> ToolCallStats | None:
 def get_tool_usage_stats(
     from_time: datetime | None = Query(None, alias="from", description="Start time"),
     to_time: datetime | None = Query(None, alias="to", description="End time"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> ToolUsageResponse:
     """
     Get aggregated token usage statistics by tool.
 
     Parses session transcripts to correlate tool calls with token usage.
+
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see tool usage across all users
+    - Specify user_id to filter to a specific user's sessions
     """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
     # Default to last 7 days
     if to_time is None:
         to_time = datetime.now(timezone.utc)
@@ -669,18 +714,19 @@ def get_tool_usage_stats(
 
         # Get sessions that overlap with the time range:
         # - started before to_time AND (ended after from_time OR still ongoing)
-        sessions = (
-            db_session.query(Session)
-            .filter(
-                Session.user_id == user.id,
-                Session.started_at <= to_time,
-                or_(
-                    Session.ended_at.is_(None),
-                    Session.ended_at >= from_time,
-                ),
-            )
-            .all()
+        query = db_session.query(Session).filter(
+            Session.started_at <= to_time,
+            or_(
+                Session.ended_at.is_(None),
+                Session.ended_at >= from_time,
+            ),
         )
+
+        # Apply user filter
+        if resolved_user_id is not None:
+            query = query.filter(Session.user_id == resolved_user_id)
+
+        sessions = query.all()
 
         # Aggregate tool usage across all sessions
         aggregated: dict[str, dict] = {}
