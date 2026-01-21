@@ -12,7 +12,11 @@ from memory.api.MCP.servers.meta import (
     get_forecasts,
     from_annotation,
     get_schema,
-    format_market,
+    format_manifold_market,
+    search_manifold_markets,
+    search_polymarket_markets,
+    search_kalshi_markets,
+    search_markets,
 )
 
 
@@ -305,7 +309,7 @@ async def test_get_forecasts_returns_markets(mock_search):
     assert len(result) == 2
     assert result[0]["id"] == "market1"
     assert result[1]["id"] == "market2"
-    mock_search.assert_called_once_with("AI AGI", 1000, True)
+    mock_search.assert_called_once_with("AI AGI", 1000, True, None)
 
 
 @pytest.mark.asyncio
@@ -316,7 +320,7 @@ async def test_get_forecasts_with_default_params(mock_search):
 
     await get_forecasts.fn(term="test")
 
-    mock_search.assert_called_once_with("test", 1000, False)
+    mock_search.assert_called_once_with("test", 1000, False, None)
 
 
 @pytest.mark.asyncio
@@ -330,13 +334,13 @@ async def test_get_forecasts_empty_results(mock_search):
     assert result == []
 
 
-# ====== format_market tests ======
+# ====== format_manifold_market tests ======
 # Note: Skipping search_markets tests due to async mocking complexity
 # The get_forecasts tests above provide coverage at the API level
 
 
 @pytest.mark.asyncio
-async def test_format_market_binary_includes_probability():
+async def test_format_manifold_market_binary_includes_probability():
     """Format market includes probability for binary markets."""
     mock_session = AsyncMock()
 
@@ -350,7 +354,7 @@ async def test_format_market_binary_includes_probability():
         "createdTime": 1704067200000,  # 2024-01-01 00:00:00
     }
 
-    result = await format_market(mock_session, cast(Any, market))
+    result = await format_manifold_market(mock_session, cast(Any, market))
 
     assert result["probability"] == 0.65
     assert result["question"] == "Will it rain?"
@@ -358,7 +362,7 @@ async def test_format_market_binary_includes_probability():
 
 
 @pytest.mark.asyncio
-async def test_format_market_converts_created_time():
+async def test_format_manifold_market_converts_created_time():
     """Format market converts createdTime to ISO format."""
     mock_session = AsyncMock()
 
@@ -369,7 +373,7 @@ async def test_format_market_converts_created_time():
         "volume": 1000,
     }
 
-    result = await format_market(mock_session, cast(Any, market))
+    result = await format_manifold_market(mock_session, cast(Any, market))
 
     assert "createdAt" in result
     # Should be ISO format timestamp
@@ -377,7 +381,7 @@ async def test_format_market_converts_created_time():
 
 
 @pytest.mark.asyncio
-async def test_format_market_filters_fields():
+async def test_format_manifold_market_filters_fields():
     """Format market only includes specific fields."""
     mock_session = AsyncMock()
 
@@ -392,7 +396,7 @@ async def test_format_market_filters_fields():
         "another_field": 123,
     }
 
-    result = await format_market(mock_session, cast(Any, market))
+    result = await format_manifold_market(mock_session, cast(Any, market))
 
     assert "extra_field" not in result
     assert "another_field" not in result
@@ -475,3 +479,247 @@ def test_get_schema_returns_empty_without_as_payload():
     result = get_schema(cast(Any, MockClass))
 
     assert result == {}
+
+
+# ====== Polymarket search tests ======
+
+
+@pytest.fixture
+def mock_aiohttp_session():
+    """Fixture to create a properly mocked aiohttp session."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+
+    # Set up the nested async context managers
+    mock_get_cm = MagicMock()
+    mock_get_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_session.get = MagicMock(return_value=mock_get_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+    return mock_session_cm, mock_response
+
+
+@pytest.mark.asyncio
+async def test_search_polymarket_markets_parses_events(mock_aiohttp_session):
+    """search_polymarket_markets correctly parses event data."""
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.json = AsyncMock(return_value={
+        "events": [
+            {
+                "id": "event1",
+                "title": "Will AI reach AGI by 2030?",
+                "slug": "will-ai-reach-agi-2030",
+                "volume": 50000,
+                "startDate": "2024-01-01T00:00:00Z",
+                "markets": [
+                    {
+                        "id": "market1",
+                        "outcomePrices": "[0.35, 0.65]",
+                    }
+                ],
+            }
+        ]
+    })
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await search_polymarket_markets("AI AGI", min_volume=1000)
+
+    assert len(result) == 1
+    assert result[0]["source"] == "polymarket"
+    assert result[0]["question"] == "Will AI reach AGI by 2030?"
+    assert result[0]["probability"] == 0.35
+    assert result[0]["volume"] == 50000
+
+
+@pytest.mark.asyncio
+async def test_search_polymarket_markets_handles_multiple_choice(mock_aiohttp_session):
+    """search_polymarket_markets handles multi-outcome events."""
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.json = AsyncMock(return_value={
+        "events": [
+            {
+                "id": "event2",
+                "title": "Who will win the election?",
+                "slug": "election-winner",
+                "volume": 100000,
+                "startDate": "2024-01-01T00:00:00Z",
+                "markets": [
+                    {"id": "m1", "outcome": "Candidate A", "outcomePrices": "[0.45, 0.55]"},
+                    {"id": "m2", "outcome": "Candidate B", "outcomePrices": "[0.35, 0.65]"},
+                    {"id": "m3", "outcome": "Candidate C", "outcomePrices": "[0.20, 0.80]"},
+                ],
+            }
+        ]
+    })
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await search_polymarket_markets("election", min_volume=1000, binary=False)
+
+    assert len(result) == 1
+    assert result[0]["source"] == "polymarket"
+    assert "answers" in result[0]
+    assert result[0]["answers"]["Candidate A"] == 0.45
+    assert result[0]["answers"]["Candidate B"] == 0.35
+
+
+@pytest.mark.asyncio
+async def test_search_polymarket_markets_filters_by_volume(mock_aiohttp_session):
+    """search_polymarket_markets filters out low volume events."""
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.json = AsyncMock(return_value={
+        "events": [
+            {"id": "e1", "title": "High volume", "slug": "high", "volume": 5000, "markets": [{"id": "m1", "outcomePrices": "[0.5, 0.5]"}]},
+            {"id": "e2", "title": "Low volume", "slug": "low", "volume": 500, "markets": [{"id": "m2", "outcomePrices": "[0.5, 0.5]"}]},
+        ]
+    })
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await search_polymarket_markets("test", min_volume=1000)
+
+    assert len(result) == 1
+    assert result[0]["question"] == "High volume"
+
+
+# ====== Kalshi search tests ======
+
+
+@pytest.mark.asyncio
+async def test_search_kalshi_markets_filters_by_term(mock_aiohttp_session):
+    """search_kalshi_markets filters markets by search term."""
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.json = AsyncMock(return_value={
+        "markets": [
+            {
+                "ticker": "TRUMP-2024",
+                "title": "Trump wins 2024 election",
+                "subtitle": "",
+                "event_title": "2024 Presidential Election",
+                "volume": 100000,
+                "yes_bid": 55,
+                "open_time": "2024-01-01T00:00:00Z",
+            },
+            {
+                "ticker": "BITCOIN-100K",
+                "title": "Bitcoin reaches $100k",
+                "subtitle": "",
+                "event_title": "Crypto markets",
+                "volume": 50000,
+                "yes_bid": 30,
+                "open_time": "2024-01-01T00:00:00Z",
+            },
+        ],
+        "cursor": None,
+    })
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await search_kalshi_markets("bitcoin", min_volume=1000)
+
+    assert len(result) == 1
+    assert result[0]["source"] == "kalshi"
+    assert result[0]["id"] == "BITCOIN-100K"
+    assert result[0]["probability"] == 0.3  # 30 cents / 100
+
+
+@pytest.mark.asyncio
+async def test_search_kalshi_markets_filters_by_volume(mock_aiohttp_session):
+    """search_kalshi_markets filters out low volume markets."""
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.json = AsyncMock(return_value={
+        "markets": [
+            {"ticker": "HIGH", "title": "High volume market", "subtitle": "", "event_title": "", "volume": 50000, "yes_bid": 50, "open_time": None},
+            {"ticker": "LOW", "title": "Low volume market", "subtitle": "", "event_title": "", "volume": 100, "yes_bid": 50, "open_time": None},
+        ],
+        "cursor": None,
+    })
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await search_kalshi_markets("market", min_volume=1000)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "HIGH"
+
+
+# ====== Multi-source search tests ======
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
+@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
+@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+async def test_search_markets_aggregates_all_sources(mock_manifold, mock_polymarket, mock_kalshi):
+    """search_markets aggregates results from all sources by default."""
+    mock_manifold.return_value = [{"source": "manifold", "id": "m1", "question": "Manifold market"}]
+    mock_polymarket.return_value = [{"source": "polymarket", "id": "p1", "question": "Polymarket market"}]
+    mock_kalshi.return_value = [{"source": "kalshi", "id": "k1", "question": "Kalshi market"}]
+
+    result = await search_markets("test")
+
+    assert len(result) == 3
+    sources = {r["source"] for r in result}
+    assert sources == {"manifold", "polymarket", "kalshi"}
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
+@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
+@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+async def test_search_markets_respects_sources_param(mock_manifold, mock_polymarket, mock_kalshi):
+    """search_markets only queries specified sources."""
+    mock_manifold.return_value = [{"source": "manifold", "id": "m1"}]
+    mock_polymarket.return_value = [{"source": "polymarket", "id": "p1"}]
+    mock_kalshi.return_value = [{"source": "kalshi", "id": "k1"}]
+
+    result = await search_markets("test", sources=["manifold", "polymarket"])
+
+    assert len(result) == 2
+    mock_manifold.assert_called_once()
+    mock_polymarket.assert_called_once()
+    mock_kalshi.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
+@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
+@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+async def test_search_markets_handles_source_errors(mock_manifold, mock_polymarket, mock_kalshi):
+    """search_markets gracefully handles errors from individual sources."""
+    mock_manifold.return_value = [{"source": "manifold", "id": "m1"}]
+    mock_polymarket.side_effect = Exception("API error")
+    mock_kalshi.return_value = [{"source": "kalshi", "id": "k1"}]
+
+    result = await search_markets("test")
+
+    # Should still return results from working sources
+    assert len(result) == 2
+    sources = {r["source"] for r in result}
+    assert sources == {"manifold", "kalshi"}
+
+
+# ====== get_forecasts with sources tests ======
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.search_markets")
+async def test_get_forecasts_passes_sources_param(mock_search):
+    """get_forecasts passes sources parameter to search_markets."""
+    mock_search.return_value = []
+
+    await get_forecasts.fn(term="test", sources=["kalshi"])
+
+    mock_search.assert_called_once_with("test", 1000, False, ["kalshi"])
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.search_markets")
+async def test_get_forecasts_defaults_to_all_sources(mock_search):
+    """get_forecasts uses all sources when none specified."""
+    mock_search.return_value = []
+
+    await get_forecasts.fn(term="test")
+
+    mock_search.assert_called_once_with("test", 1000, False, None)

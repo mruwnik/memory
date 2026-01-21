@@ -1,6 +1,7 @@
 """MCP subserver for metadata, utilities, and forecasting."""
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -159,6 +160,7 @@ class MultiProbs(TypedDict):
 
 Probs = dict[str, BinaryProbs | MultiProbs]
 OutcomeType = Literal["BINARY", "MULTIPLE_CHOICE"]
+MarketSource = Literal["manifold", "polymarket", "kalshi"]
 
 
 class MarketAnswer(TypedDict):
@@ -193,7 +195,7 @@ class Market(TypedDict):
     details: NotRequired[MarketDetails]
 
 
-async def get_details(session: aiohttp.ClientSession, market_id: str):
+async def get_manifold_details(session: aiohttp.ClientSession, market_id: str):
     async with session.get(
         f"https://api.manifold.markets/v0/market/{market_id}"
     ) as resp:
@@ -201,9 +203,9 @@ async def get_details(session: aiohttp.ClientSession, market_id: str):
         return await resp.json()
 
 
-async def format_market(session: aiohttp.ClientSession, market: Market):
+async def format_manifold_market(session: aiohttp.ClientSession, market: Market):
     if market.get("outcomeType") != "BINARY":
-        details = await get_details(session, market["id"])
+        details = await get_manifold_details(session, market["id"])
         market["answers"] = {
             answer["text"]: round(
                 answer.get("resolutionProbability") or answer.get("probability") or 0, 3
@@ -227,7 +229,10 @@ async def format_market(session: aiohttp.ClientSession, market: Market):
     return {k: v for k, v in market.items() if k in fields}
 
 
-async def search_markets(term: str, min_volume: int = 1000, binary: bool = False):
+async def search_manifold_markets(
+    term: str, min_volume: int = 1000, binary: bool = False
+) -> list[dict]:
+    """Search Manifold Markets for prediction markets matching the term."""
     async with aiohttp.ClientSession() as session:
         async with session.get(
             "https://api.manifold.markets/v0/search-markets",
@@ -241,25 +246,245 @@ async def search_markets(term: str, min_volume: int = 1000, binary: bool = False
 
         results = await asyncio.gather(
             *[
-                format_market(session, market)
+                format_manifold_market(session, market)
                 for market in markets
                 if market.get("volume", 0) >= min_volume
             ],
             return_exceptions=True,
         )
         # Filter out any failed market fetches
-        return [r for r in results if isinstance(r, dict)]
+        return [{"source": "manifold", **r} for r in results if isinstance(r, dict)]
+
+
+async def search_polymarket_markets(
+    term: str, min_volume: int = 1000, binary: bool = False
+) -> list[dict]:
+    """Search Polymarket for prediction markets matching the term.
+
+    Uses the Gamma API public search endpoint.
+    """
+    async with aiohttp.ClientSession() as session:
+        params: dict = {
+            "q": term,
+            "limit_per_type": 50,
+            "events_status": "active",
+        }
+        async with session.get(
+            "https://gamma-api.polymarket.com/public-search",
+            params=params,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+
+        events = data.get("events", [])
+        results = []
+        for event in events:
+            volume = float(event.get("volume", 0) or 0)
+            if volume < min_volume:
+                continue
+
+            # Events can have multiple markets (outcomes)
+            markets = event.get("markets", [])
+
+            # For binary events (single market with yes/no)
+            if len(markets) == 1:
+                market = markets[0]
+                outcome_prices = market.get("outcomePrices", "[]")
+                if isinstance(outcome_prices, str):
+                    try:
+                        prices = json.loads(outcome_prices)
+                    except json.JSONDecodeError:
+                        prices = []
+                else:
+                    prices = outcome_prices
+
+                prob = float(prices[0]) if prices else None
+
+                results.append(
+                    {
+                        "source": "polymarket",
+                        "id": market.get("id") or event.get("id"),
+                        "question": event.get("title", ""),
+                        "url": f"https://polymarket.com/event/{event.get('slug', '')}",
+                        "volume": volume,
+                        "probability": round(prob, 3) if prob else None,
+                        "createdAt": event.get("startDate"),
+                    }
+                )
+            elif not binary:
+                # Multiple choice event - include all outcomes
+                answers = {}
+                for market in markets:
+                    outcome = market.get("outcome", market.get("groupItemTitle", ""))
+                    outcome_prices = market.get("outcomePrices", "[]")
+                    if isinstance(outcome_prices, str):
+                        try:
+                            prices = json.loads(outcome_prices)
+                        except json.JSONDecodeError:
+                            prices = []
+                    else:
+                        prices = outcome_prices
+
+                    prob = float(prices[0]) if prices else 0
+                    if outcome:
+                        answers[outcome] = round(prob, 3)
+
+                results.append(
+                    {
+                        "source": "polymarket",
+                        "id": event.get("id"),
+                        "question": event.get("title", ""),
+                        "url": f"https://polymarket.com/event/{event.get('slug', '')}",
+                        "volume": volume,
+                        "answers": answers,
+                        "createdAt": event.get("startDate"),
+                    }
+                )
+
+        return results
+
+
+async def search_kalshi_markets(
+    term: str, min_volume: int = 1000, binary: bool = False  # noqa: ARG001
+) -> list[dict]:
+    """Search Kalshi for prediction markets matching the term.
+
+    Kalshi doesn't have a text search API, so we fetch open markets and filter locally.
+    Note: The `binary` parameter is accepted for API consistency but ignored since
+    all Kalshi markets are binary (yes/no) by design.
+    """
+    async with aiohttp.ClientSession() as session:
+        all_markets = []
+        cursor = None
+
+        # Paginate through markets (up to a reasonable limit)
+        for _ in range(5):  # Max 5 pages = 500 markets
+            params: dict = {
+                "status": "open",
+                "limit": 100,
+            }
+            if cursor:
+                params["cursor"] = cursor
+
+            async with session.get(
+                "https://api.elections.kalshi.com/trade-api/v2/markets",
+                params=params,
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+            markets = data.get("markets", [])
+            all_markets.extend(markets)
+
+            cursor = data.get("cursor")
+            if not cursor or not markets:
+                break
+
+        # Filter by search term (case-insensitive)
+        term_lower = term.lower()
+        results = []
+
+        for market in all_markets:
+            title = market.get("title", "")
+            subtitle = market.get("subtitle", "")
+            event_title = market.get("event_title", "")
+
+            # Check if term matches title, subtitle, or event title
+            searchable = f"{title} {subtitle} {event_title}".lower()
+            if term_lower not in searchable:
+                continue
+
+            volume = market.get("volume", 0) or 0
+            if volume < min_volume:
+                continue
+
+            # Kalshi markets are binary (yes/no)
+            # Prefer last_price (actual trade price) over yes_bid (current bid)
+            # for more accurate probability in illiquid markets
+            yes_price = market.get("last_price") or market.get("yes_bid") or 0
+            # Kalshi prices are in cents (0-100)
+            probability = yes_price / 100 if yes_price else None
+
+            results.append(
+                {
+                    "source": "kalshi",
+                    "id": market.get("ticker"),
+                    "question": title,
+                    "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
+                    "volume": volume,
+                    "probability": round(probability, 3) if probability else None,
+                    "createdAt": market.get("open_time"),
+                }
+            )
+
+        return results
+
+
+async def search_markets(
+    term: str,
+    min_volume: int = 1000,
+    binary: bool = False,
+    sources: list[MarketSource] | None = None,
+) -> list[dict]:
+    """Search multiple prediction market sources.
+
+    Args:
+        term: Search query.
+        min_volume: Minimum market volume to include.
+        binary: Whether to only return binary (yes/no) markets.
+        sources: List of sources to search. Defaults to all sources.
+
+    Returns:
+        Combined list of markets from all requested sources.
+    """
+    if sources is None:
+        sources = ["manifold", "polymarket", "kalshi"]
+
+    search_funcs = {
+        "manifold": search_manifold_markets,
+        "polymarket": search_polymarket_markets,
+        "kalshi": search_kalshi_markets,
+    }
+
+    # Filter out invalid sources with a warning
+    valid_sources = []
+    for source in sources:
+        if source in search_funcs:
+            valid_sources.append(source)
+        else:
+            logger.warning(f"Unknown prediction market source: {source}")
+
+    if not valid_sources:
+        return []
+
+    tasks = [search_funcs[source](term, min_volume, binary) for source in valid_sources]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Flatten results, filtering out errors
+    all_markets = []
+    for source, result in zip(valid_sources, results):
+        if isinstance(result, list):
+            all_markets.extend(result)
+        elif isinstance(result, Exception):
+            logger.warning(f"Error fetching markets from {source}: {result}")
+
+    return all_markets
 
 
 @meta_mcp.tool()
 async def get_forecasts(
-    term: str, min_volume: int = 1000, binary: bool = False
+    term: str,
+    min_volume: int = 1000,
+    binary: bool = False,
+    sources: list[MarketSource] | None = None,
 ) -> list[dict]:
-    """Get prediction market forecasts for a given term.
+    """Get prediction market forecasts for a given term from multiple prediction markets.
 
     Args:
         term: The term to search for.
-        min_volume: The minimum volume of the market, in units of that market, so Mana for Manifold.
+        min_volume: The minimum volume of the market, in units of that market (Mana for Manifold, USD for others).
         binary: Whether to only return binary markets.
+        sources: List of prediction market sources to search. Options: "manifold", "polymarket", "kalshi".
+                 Defaults to all three if not specified.
     """
-    return await search_markets(term, min_volume, binary)
+    return await search_markets(term, min_volume, binary, sources)
