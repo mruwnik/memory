@@ -57,7 +57,7 @@ export const useAuth = () => {
           name: userData.name,
           email: userData.email,
           user_type: userData.user_type,
-          scopes: userData.scopes || ['read'],
+          scopes: userData.scopes || [],
         })
         setIsAuthenticated(true)
         setIsLoading(false)

@@ -22,7 +22,7 @@ organizer_mcp = FastMCP("org")
 
 @organizer_mcp.tool()
 @visible_when(require_scopes("organizer"), has_items(CalendarEvent))
-async def get_upcoming(
+async def get_upcoming_events(
     start_date: str | None = None,
     end_date: str | None = None,
     days: int = 7,

@@ -18,9 +18,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import joinedload
 
-from memory.api.auth import get_current_user
+from sqlalchemy.orm import Session as DBSession
+
+from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
-from memory.common.db.connection import make_session
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import Project, Session, User
 
 logger = logging.getLogger(__name__)
@@ -651,96 +653,104 @@ def compute_call_stats(per_call_totals: list[int]) -> ToolCallStats | None:
 def get_tool_usage_stats(
     from_time: datetime | None = Query(None, alias="from", description="Start time"),
     to_time: datetime | None = Query(None, alias="to", description="End time"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> ToolUsageResponse:
     """
     Get aggregated token usage statistics by tool.
 
     Parses session transcripts to correlate tool calls with token usage.
+
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see tool usage across all users
+    - Specify user_id to filter to a specific user's sessions
     """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
     # Default to last 7 days
     if to_time is None:
         to_time = datetime.now(timezone.utc)
     if from_time is None:
         from_time = to_time - timedelta(days=7)
 
-    with make_session() as db_session:
-        from sqlalchemy import or_
+    from sqlalchemy import or_
 
-        # Get sessions that overlap with the time range:
-        # - started before to_time AND (ended after from_time OR still ongoing)
-        sessions = (
-            db_session.query(Session)
-            .filter(
-                Session.user_id == user.id,
-                Session.started_at <= to_time,
-                or_(
-                    Session.ended_at.is_(None),
-                    Session.ended_at >= from_time,
-                ),
-            )
-            .all()
+    # Get sessions that overlap with the time range:
+    # - started before to_time AND (ended after from_time OR still ongoing)
+    query = db.query(Session).filter(
+        Session.started_at <= to_time,
+        or_(
+            Session.ended_at.is_(None),
+            Session.ended_at >= from_time,
+        ),
+    )
+
+    # Apply user filter
+    if resolved_user_id is not None:
+        query = query.filter(Session.user_id == resolved_user_id)
+
+    sessions = query.all()
+
+    # Aggregate tool usage across all sessions
+    aggregated: dict[str, dict] = {}
+
+    for session in sessions:
+        if not session.transcript_path:
+            continue
+
+        session_stats = extract_tool_usage_from_transcript(
+            session.transcript_path, from_time, to_time
         )
 
-        # Aggregate tool usage across all sessions
-        aggregated: dict[str, dict] = {}
+        for tool_name, stats in session_stats.items():
+            if tool_name not in aggregated:
+                aggregated[tool_name] = {
+                    "call_count": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_creation_tokens": 0,
+                    "per_call_totals": [],
+                }
 
-        for session in sessions:
-            if not session.transcript_path:
-                continue
-
-            session_stats = extract_tool_usage_from_transcript(
-                session.transcript_path, from_time, to_time
+            aggregated[tool_name]["call_count"] += stats["call_count"]
+            aggregated[tool_name]["input_tokens"] += stats["input_tokens"]
+            aggregated[tool_name]["output_tokens"] += stats["output_tokens"]
+            aggregated[tool_name]["cache_read_tokens"] += stats["cache_read_tokens"]
+            aggregated[tool_name]["cache_creation_tokens"] += stats[
+                "cache_creation_tokens"
+            ]
+            aggregated[tool_name]["per_call_totals"].extend(
+                stats.get("per_call_totals", [])
             )
 
-            for tool_name, stats in session_stats.items():
-                if tool_name not in aggregated:
-                    aggregated[tool_name] = {
-                        "call_count": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "cache_read_tokens": 0,
-                        "cache_creation_tokens": 0,
-                        "per_call_totals": [],
-                    }
-
-                aggregated[tool_name]["call_count"] += stats["call_count"]
-                aggregated[tool_name]["input_tokens"] += stats["input_tokens"]
-                aggregated[tool_name]["output_tokens"] += stats["output_tokens"]
-                aggregated[tool_name]["cache_read_tokens"] += stats["cache_read_tokens"]
-                aggregated[tool_name]["cache_creation_tokens"] += stats[
-                    "cache_creation_tokens"
-                ]
-                aggregated[tool_name]["per_call_totals"].extend(
-                    stats.get("per_call_totals", [])
-                )
-
-        # Convert to response format
-        tools = [
-            ToolUsageStats(
-                tool_name=name,
-                call_count=stats["call_count"],
-                input_tokens=stats["input_tokens"],
-                output_tokens=stats["output_tokens"],
-                cache_read_tokens=stats["cache_read_tokens"],
-                cache_creation_tokens=stats["cache_creation_tokens"],
-                total_tokens=(
-                    stats["input_tokens"]
-                    + stats["output_tokens"]
-                    + stats["cache_read_tokens"]
-                    + stats["cache_creation_tokens"]
-                ),
-                per_call=compute_call_stats(stats["per_call_totals"]),
-            )
-            for name, stats in aggregated.items()
-        ]
-
-        # Sort by total tokens descending
-        tools.sort(key=lambda t: t.total_tokens, reverse=True)
-
-        return ToolUsageResponse(
-            from_time=from_time.isoformat(),
-            to_time=to_time.isoformat(),
-            session_count=len(sessions),
-            tools=tools,
+    # Convert to response format
+    tools = [
+        ToolUsageStats(
+            tool_name=name,
+            call_count=stats["call_count"],
+            input_tokens=stats["input_tokens"],
+            output_tokens=stats["output_tokens"],
+            cache_read_tokens=stats["cache_read_tokens"],
+            cache_creation_tokens=stats["cache_creation_tokens"],
+            total_tokens=(
+                stats["input_tokens"]
+                + stats["output_tokens"]
+                + stats["cache_read_tokens"]
+                + stats["cache_creation_tokens"]
+            ),
+            per_call=compute_call_stats(stats["per_call_totals"]),
         )
+        for name, stats in aggregated.items()
+    ]
+
+    # Sort by total tokens descending
+    tools.sort(key=lambda t: t.total_tokens, reverse=True)
+
+    return ToolUsageResponse(
+        from_time=from_time.isoformat(),
+        to_time=to_time.isoformat(),
+        session_count=len(sessions),
+        tools=tools,
+    )

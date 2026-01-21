@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useJobs, Job, JobStatus } from '@/hooks/useJobs'
+import UserSelector, { useUserSelection } from '@/components/common/UserSelector'
 
 type StatusFilter = 'all' | JobStatus
 
@@ -36,13 +37,17 @@ const Jobs = () => {
   const [reingestingId, setReingestingId] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const [selectedUser, setSelectedUser] = useUserSelection('jobsSelectedUser')
+
+  // Convert selectedUser to userId for API calls
+  const userId = selectedUser.type === 'user' ? selectedUser.id : undefined
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     setActionError(null)
     try {
       const filters = statusFilter !== 'all' ? { status: statusFilter } : {}
-      const data = await listJobs({ ...filters, limit: 100 })
+      const data = await listJobs({ ...filters, limit: 100, userId })
       // Check if request was aborted
       if (signal?.aborted) return
       // Sort: failed first, then processing, pending, complete
@@ -63,7 +68,7 @@ const Jobs = () => {
         setLoading(false)
       }
     }
-  }, [listJobs, statusFilter])
+  }, [listJobs, statusFilter, userId])
 
   useEffect(() => {
     // Cancel any in-flight request
@@ -133,6 +138,7 @@ const Jobs = () => {
           Back
         </Link>
         <h1 className="text-2xl font-semibold text-slate-800 flex-1">Jobs</h1>
+        <UserSelector value={selectedUser} onChange={setSelectedUser} />
         <div className="flex gap-3 text-sm">
           {showStats ? (
             <>

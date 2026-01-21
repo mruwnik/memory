@@ -119,7 +119,7 @@ class User(Base):
             "name": self.name,
             "email": self.email,
             "user_type": self.user_type,
-            "scopes": self.scopes if self.scopes else ["read"],
+            "scopes": self.scopes or [],
             "discord_users": {
                 discord_user.id: discord_user.username
                 for discord_user in self.discord_users

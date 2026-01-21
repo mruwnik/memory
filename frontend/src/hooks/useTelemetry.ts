@@ -93,6 +93,7 @@ export const useTelemetry = () => {
       to?: Date
       limit?: number
       offset?: number
+      userId?: number  // Admin only: filter by specific user, omit for all users
     } = {}
   ): Promise<TelemetryRawResponse> => {
     const params = new URLSearchParams()
@@ -104,6 +105,7 @@ export const useTelemetry = () => {
     if (options.to) params.set('to', options.to.toISOString())
     if (options.limit) params.set('limit', options.limit.toString())
     if (options.offset) params.set('offset', options.offset.toString())
+    if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/raw?${params}`)
     if (!response.ok) {
@@ -120,6 +122,7 @@ export const useTelemetry = () => {
       to?: Date
       source?: string
       groupBy?: string[]
+      userId?: number  // Admin only: filter by specific user, omit for all users
     } = {}
   ): Promise<TelemetryMetricsResponse> => {
     const params = new URLSearchParams()
@@ -131,6 +134,7 @@ export const useTelemetry = () => {
     if (options.groupBy) {
       options.groupBy.forEach(g => params.append('group_by', g))
     }
+    if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/metrics?${params}`)
     if (!response.ok) {
@@ -143,11 +147,13 @@ export const useTelemetry = () => {
     options: {
       from?: Date
       to?: Date
+      userId?: number  // Admin only: filter by specific user, omit for all users
     } = {}
   ): Promise<ToolUsageResponse> => {
     const params = new URLSearchParams()
     if (options.from) params.set('from', options.from.toISOString())
     if (options.to) params.set('to', options.to.toISOString())
+    if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/sessions/stats/tool-usage?${params}`)
     if (!response.ok) {
