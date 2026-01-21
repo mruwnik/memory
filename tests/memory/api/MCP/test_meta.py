@@ -13,7 +13,6 @@ from memory.api.MCP.servers.meta import (
     from_annotation,
     get_schema,
     format_manifold_market,
-    search_manifold_markets,
     search_polymarket_markets,
     search_kalshi_markets,
     search_markets,
@@ -438,7 +437,7 @@ def test_from_annotation_handles_insufficient_args():
 
     # Annotation with only one argument (needs 2)
     try:
-        _ = Annotated[str]  # This will raise error when created
+        _ = Annotated[str]  # type: ignore[misc]  # Intentionally invalid for testing
     except TypeError:
         # Can't create Annotated with just one arg, so test with get_args returning empty
         pass
