@@ -37,5 +37,4 @@ def test_generate_bot_invite_url_handles_errors(mock_get):
     result = runner.invoke(generate_bot_invite_url, ["--bot-token", "token"])
 
     assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError)
-    assert "Could not get bot info" in str(result.exception)
+    assert "Could not get bot info" in result.output

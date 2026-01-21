@@ -1,8 +1,14 @@
+"""
+Celery tasks for executing scheduled LLM calls and sending messages.
+
+TODO: The Discord sending functionality needs to be reimplemented
+to use the new DiscordBot/CollectorManager system for message sending.
+"""
+
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
-from memory.common import settings
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_CALL,
     RUN_SCHEDULED_CALLS,
@@ -10,7 +16,6 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledLLMCall
-from memory.discord.messages import call_llm, send_discord_response
 from memory.common.content_processing import safe_task_execution
 
 logger = logging.getLogger(__name__)
@@ -20,50 +25,38 @@ logger = logging.getLogger(__name__)
 STALE_EXECUTION_TIMEOUT_HOURS = 2
 
 
-def call_llm_for_scheduled(session, scheduled_call: ScheduledLLMCall) -> str | None:
-    """Call LLM with tools support for scheduled calls."""
-    if not scheduled_call.discord_user:
-        logger.warning("No discord_user for scheduled call - cannot execute")
+def call_llm_for_scheduled(_session, scheduled_call: ScheduledLLMCall) -> str | None:
+    """Call LLM with tools support for scheduled calls.
+
+    TODO: This needs to be reimplemented - the old LLM calling code was removed
+    during the Discord simplification. For now, if no model is specified,
+    we just return the message directly.
+    """
+    if scheduled_call.model:
+        # LLM processing not yet reimplemented
+        logger.warning(
+            f"LLM model {scheduled_call.model} specified but LLM calling not yet reimplemented"
+        )
         return None
 
-    model = cast(str, scheduled_call.model or settings.DISCORD_MODEL)
-    system_prompt = cast(str, scheduled_call.system_prompt or "")
-    message = cast(str, scheduled_call.message)
-    allowed_tools_list = cast(list[str] | None, scheduled_call.allowed_tools)
+    # If no model specified, just return the message as-is
+    return cast(str, scheduled_call.message)
 
-    bot_user = (
-        scheduled_call.user.discord_users[0]
-        if scheduled_call.user.discord_users
-        else None
+
+def send_to_discord(_bot_id: int, scheduled_call: ScheduledLLMCall, response: str):
+    """Send the response to Discord user or channel.
+
+    TODO: This needs to use the new CollectorManager to send messages
+    via the Discord bot. For now, this is a no-op that logs a warning.
+    """
+    channel_id = scheduled_call.discord_channel.id if scheduled_call.discord_channel else None
+    user_name = scheduled_call.discord_user.username if scheduled_call.discord_user else None
+
+    logger.warning(
+        f"Discord sending not yet implemented. Would send to "
+        f"channel={channel_id}, user={user_name}: {response[:100]}..."
     )
-    if not bot_user:
-        logger.warning("No bot user available for scheduled call")
-        return None
-
-    return call_llm(
-        session=session,
-        bot_user=bot_user,
-        from_user=scheduled_call.discord_user,
-        channel=scheduled_call.discord_channel,
-        messages=[message],
-        model=model,
-        system_prompt=system_prompt,
-        allowed_tools=allowed_tools_list,
-    )
-
-
-def send_to_discord(bot_id: int, scheduled_call: ScheduledLLMCall, response: str):
-    """Send the LLM response to Discord user or channel."""
-    send_discord_response(
-        bot_id=bot_id,
-        response=response,
-        channel_id=cast(int, scheduled_call.discord_channel.id)
-        if scheduled_call.discord_channel
-        else None,
-        user_identifier=scheduled_call.discord_user.username
-        if scheduled_call.discord_user
-        else None,
-    )
+    # TODO: Implement using CollectorManager.send_message() or CollectorManager.send_dm()
 
 
 @app.task(bind=True, name=EXECUTE_SCHEDULED_CALL)

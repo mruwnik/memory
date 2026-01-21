@@ -4,7 +4,6 @@ from memory.common.db.models.users import (
     verify_password,
     HumanUser,
     BotUser,
-    DiscordBotUser,
 )
 
 
@@ -150,35 +149,6 @@ def test_create_bot_user_auto_api_key(db_session):
     assert user.api_key is not None
     assert user.api_key.startswith("bot_")
     assert len(user.api_key) == 68  # "bot_" + 32 bytes hex encoded (64 chars)
-
-
-def test_create_discord_bot_user(db_session):
-    """Test creating a DiscordBotUser"""
-    from memory.common.db.models import DiscordUser
-
-    # Create a Discord user for the bot
-    discord_user = DiscordUser(
-        id=123456789,
-        username="botuser",
-    )
-    db_session.add(discord_user)
-    db_session.commit()
-
-    user = DiscordBotUser.create_with_api_key(
-        discord_users=[discord_user],
-        name="Discord Bot",
-        email="discordbot@example.com",
-        api_key="discord_key_123",
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    assert user.id is not None
-    assert user.email == "discordbot@example.com"
-    assert user.name == "Discord Bot"
-    assert user.user_type == "discord_bot"
-    assert user.api_key == "discord_key_123"
-    assert len(user.discord_users) == 1
 
 
 def test_user_serialization_human(db_session):

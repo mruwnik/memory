@@ -16,7 +16,6 @@ DISCORD_ROOT = "memory.workers.tasks.discord"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
-PROACTIVE_ROOT = "memory.workers.tasks.proactive"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
 MEETINGS_ROOT = "memory.workers.tasks.meetings"
@@ -24,7 +23,7 @@ METRICS_ROOT = "memory.workers.tasks.metrics"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
-PROCESS_DISCORD_MESSAGE = f"{DISCORD_ROOT}.process_discord_message"
+UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
@@ -83,9 +82,6 @@ SYNC_PERSON = f"{PEOPLE_ROOT}.sync_person"
 UPDATE_PERSON = f"{PEOPLE_ROOT}.update_person"
 SYNC_PROFILE_FROM_FILE = f"{PEOPLE_ROOT}.sync_profile_from_file"
 
-# Proactive check-in tasks
-EVALUATE_PROACTIVE_CHECKINS = f"{PROACTIVE_ROOT}.evaluate_proactive_checkins"
-EXECUTE_PROACTIVE_CHECKIN = f"{PROACTIVE_ROOT}.execute_proactive_checkin"
 # Google Drive tasks
 SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
 SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
@@ -166,7 +162,6 @@ app.conf.update(
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
         f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
-        f"{PROACTIVE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},

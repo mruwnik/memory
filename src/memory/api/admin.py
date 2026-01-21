@@ -36,7 +36,7 @@ from memory.common.db.models import (
     CalendarAccount,
     Meeting,
 )
-from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
+from memory.common.db.models.discord import DiscordBot, DiscordChannel, DiscordServer, DiscordUser
 
 logger = logging.getLogger(__name__)
 
@@ -283,11 +283,7 @@ class DiscordUserAdmin(ModelView, model=DiscordUser):
         "id",
         "username",
         "display_name",
-        "track_messages",
-        "ignore_messages",
-        "allowed_tools",
-        "disallowed_tools",
-        "summary",
+        "system_user_id",
         "created_at",
         "updated_at",
     ]
@@ -299,12 +295,8 @@ class DiscordServerAdmin(ModelView, model=DiscordServer):
         "name",
         "description",
         "member_count",
+        "collect_messages",
         "last_sync_at",
-        "track_messages",
-        "ignore_messages",
-        "allowed_tools",
-        "disallowed_tools",
-        "summary",
         "created_at",
         "updated_at",
     ]
@@ -314,14 +306,19 @@ class DiscordChannelAdmin(ModelView, model=DiscordChannel):
     column_list = [
         "id",
         "name",
-        "description",
-        "member_count",
-        "last_sync_at",
-        "track_messages",
-        "ignore_messages",
-        "allowed_tools",
-        "disallowed_tools",
-        "summary",
+        "server_id",
+        "channel_type",
+        "collect_messages",
+        "created_at",
+        "updated_at",
+    ]
+
+
+class DiscordBotAdmin(ModelView, model=DiscordBot):
+    column_list = [
+        "id",
+        "name",
+        "is_active",
         "created_at",
         "updated_at",
     ]
@@ -524,6 +521,7 @@ def setup_admin(admin: Admin):
     admin.add_view(DiscordUserAdmin)
     admin.add_view(DiscordServerAdmin)
     admin.add_view(DiscordChannelAdmin)
+    admin.add_view(DiscordBotAdmin)
     admin.add_view(MCPServerAdmin)
     admin.add_view(ScheduledLLMCallAdmin)
     admin.add_view(GithubAccountAdmin)
