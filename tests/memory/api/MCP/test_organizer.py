@@ -564,9 +564,9 @@ async def test_update_task_due_date(db_session, sample_tasks):
 @pytest.mark.asyncio
 async def test_get_upcoming_default_range(db_session, sample_events):
     """Test getting events with default 7 day range."""
-    from memory.api.MCP.servers.organizer import get_upcoming
+    from memory.api.MCP.servers.organizer import get_upcoming_events
 
-    get_upcoming_fn = get_fn(get_upcoming)
+    get_upcoming_fn = get_fn(get_upcoming_events)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
@@ -583,9 +583,9 @@ async def test_get_upcoming_default_range(db_session, sample_events):
 @pytest.mark.asyncio
 async def test_get_upcoming_with_dates(db_session, sample_events):
     """Test getting events with specific date range."""
-    from memory.api.MCP.servers.organizer import get_upcoming
+    from memory.api.MCP.servers.organizer import get_upcoming_events
 
-    get_upcoming_fn = get_fn(get_upcoming)
+    get_upcoming_fn = get_fn(get_upcoming_events)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=5)).isoformat()
     end = (now + timedelta(days=5)).isoformat()
@@ -603,9 +603,9 @@ async def test_get_upcoming_with_dates(db_session, sample_events):
 @pytest.mark.asyncio
 async def test_get_upcoming_limit(db_session, sample_events):
     """Test limiting event results."""
-    from memory.api.MCP.servers.organizer import get_upcoming
+    from memory.api.MCP.servers.organizer import get_upcoming_events
 
-    get_upcoming_fn = get_fn(get_upcoming)
+    get_upcoming_fn = get_fn(get_upcoming_events)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=10)).isoformat()
     end = (now + timedelta(days=10)).isoformat()
@@ -622,9 +622,9 @@ async def test_get_upcoming_limit(db_session, sample_events):
 @pytest.mark.asyncio
 async def test_get_upcoming_limit_capped(db_session, sample_events):
     """Test that limit is capped at 200."""
-    from memory.api.MCP.servers.organizer import get_upcoming
+    from memory.api.MCP.servers.organizer import get_upcoming_events
 
-    get_upcoming_fn = get_fn(get_upcoming)
+    get_upcoming_fn = get_fn(get_upcoming_events)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
@@ -639,9 +639,9 @@ async def test_get_upcoming_limit_capped(db_session, sample_events):
 @pytest.mark.asyncio
 async def test_get_upcoming_days_capped(db_session, sample_events):
     """Test that days parameter is capped at 365."""
-    from memory.api.MCP.servers.organizer import get_upcoming
+    from memory.api.MCP.servers.organizer import get_upcoming_events
 
-    get_upcoming_fn = get_fn(get_upcoming)
+    get_upcoming_fn = get_fn(get_upcoming_events)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",

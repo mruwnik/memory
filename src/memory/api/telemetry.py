@@ -11,11 +11,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import exists, func
 
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
 from memory.common.db.connection import get_session
 from memory.common.db.models import TelemetryEvent, User
 from memory.common.telemetry import (
@@ -293,3 +293,45 @@ def get_aggregated_metrics(
         "group_by": group_by_fields,
         "data": data,
     }
+
+
+class TelemetryUser(BaseModel):
+    """User with telemetry data."""
+
+    id: int
+    name: str
+    email: str
+
+
+@router.get("/users", response_model=list[TelemetryUser])
+def get_users_with_telemetry(
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> list[TelemetryUser]:
+    """
+    Get list of users who have telemetry data.
+
+    Only available to admin users. Returns users who have at least one
+    telemetry event recorded.
+    """
+    if not has_admin_scope(user):
+        # Non-admins only see themselves if they have telemetry
+        has_data = db.query(TelemetryEvent).filter(TelemetryEvent.user_id == user.id).first()
+        if has_data:
+            return [TelemetryUser(id=user.id, name=user.name or "", email=user.email or "")]
+        return []
+
+    # Get users who have at least one telemetry event (single query with EXISTS)
+    users = (
+        db.query(User)
+        .filter(
+            exists()
+            .where(TelemetryEvent.user_id == User.id)
+        )
+        .all()
+    )
+
+    return [
+        TelemetryUser(id=u.id, name=u.name or "", email=u.email or "")
+        for u in users
+    ]

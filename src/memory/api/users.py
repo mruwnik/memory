@@ -75,7 +75,7 @@ def user_to_response(user: User) -> UserResponse:
         name=cast(str, user.name),
         email=cast(str, user.email),
         user_type=cast(str, user.user_type),
-        scopes=list(user.scopes or ["read"]),
+        scopes=list(user.scopes or []),
         has_api_key=user.api_key is not None,
     )
 

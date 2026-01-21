@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useJobs, Job, JobStatus } from '@/hooks/useJobs'
+import { useJobs, Job, JobStatus, JobUser } from '@/hooks/useJobs'
 import UserSelector, { useUserSelection } from '@/components/common/UserSelector'
 
 type StatusFilter = 'all' | JobStatus
@@ -28,7 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const Jobs = () => {
-  const { listJobs, retryJob, reingestJob } = useJobs()
+  const { listJobs, retryJob, reingestJob, getUsersWithJobs } = useJobs()
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -38,9 +38,18 @@ const Jobs = () => {
   const [actionError, setActionError] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const [selectedUser, setSelectedUser] = useUserSelection('jobsSelectedUser')
+  const [usersWithJobs, setUsersWithJobs] = useState<JobUser[]>([])
+
+  // Load users with jobs data for the selector filter
+  useEffect(() => {
+    getUsersWithJobs()
+      .then(setUsersWithJobs)
+      .catch(console.error)
+  }, [getUsersWithJobs])
 
   // Convert selectedUser to userId for API calls
-  const userId = selectedUser.type === 'user' ? selectedUser.id : undefined
+  // Note: id=0 is a placeholder meaning "user not loaded yet", so treat it as undefined
+  const userId = selectedUser.type === 'user' && selectedUser.id !== 0 ? selectedUser.id : undefined
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
@@ -138,7 +147,7 @@ const Jobs = () => {
           Back
         </Link>
         <h1 className="text-2xl font-semibold text-slate-800 flex-1">Jobs</h1>
-        <UserSelector value={selectedUser} onChange={setSelectedUser} />
+        <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithJobs} />
         <div className="flex gap-3 text-sm">
           {showStats ? (
             <>

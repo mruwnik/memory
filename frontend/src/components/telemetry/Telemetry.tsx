@@ -6,6 +6,7 @@ import {
   TelemetryRawResponse,
   ToolUsageResponse,
   SessionStatsResponse,
+  TelemetryUser,
 } from '@/hooks/useTelemetry'
 import { TokenUsageChart } from './TokenUsageChart'
 import { CostChart } from './CostChart'
@@ -48,11 +49,20 @@ const Telemetry: React.FC = () => {
   const [recentEvents, setRecentEvents] = useState<TelemetryRawResponse | null>(null)
   const [toolUsage, setToolUsage] = useState<ToolUsageResponse | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStatsResponse | null>(null)
+  const [usersWithTelemetry, setUsersWithTelemetry] = useState<TelemetryUser[]>([])
 
-  const { getMetrics, getRawEvents, getToolUsage, getSessionStats } = useTelemetry()
+  const { getMetrics, getRawEvents, getToolUsage, getSessionStats, getUsersWithTelemetry } = useTelemetry()
+
+  // Load users with telemetry data for the selector filter
+  useEffect(() => {
+    getUsersWithTelemetry()
+      .then(setUsersWithTelemetry)
+      .catch(console.error)
+  }, [getUsersWithTelemetry])
 
   // Convert selectedUser to userId for API calls
-  const userId = selectedUser.type === 'user' ? selectedUser.id : undefined
+  // Note: id=0 is a placeholder meaning "user not loaded yet", so treat it as undefined
+  const userId = selectedUser.type === 'user' && selectedUser.id !== 0 ? selectedUser.id : undefined
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -103,7 +113,7 @@ const Telemetry: React.FC = () => {
           <h1 className="text-2xl font-semibold text-slate-800">Claude Code Telemetry</h1>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <UserSelector value={selectedUser} onChange={setSelectedUser} />
+          <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithTelemetry} />
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
           <button
             onClick={loadData}

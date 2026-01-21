@@ -90,10 +90,14 @@ const PersonFormModal = ({
     if (isEdit) {
       const data: PersonUpdate = {
         display_name: form.display_name || undefined,
-        aliases: form.aliases ? parseCommaSeparated(form.aliases) : undefined,
-        tags: form.tags ? parseCommaSeparated(form.tags) : undefined,
+        aliases: parseCommaSeparated(form.aliases),
+        tags: parseCommaSeparated(form.tags),
         notes: form.notes || undefined,
         contact_info: Object.keys(contact_info).length > 0 ? contact_info : undefined,
+        // Use replace mode for tags and aliases so removals work
+        replace_tags: true,
+        replace_aliases: true,
+        replace_notes: true,
       }
       await onSubmit(data)
     } else {
@@ -112,12 +116,7 @@ const PersonFormModal = ({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg m-4 max-h-[90vh] overflow-y-auto">
-        <h3 className={`text-lg font-semibold text-slate-800 ${isEdit ? 'mb-2' : 'mb-4'}`}>{title}</h3>
-        {isEdit && (
-          <p className="text-xs text-slate-500 mb-4">
-            Note: Aliases and tags are merged with existing values (added, not replaced).
-          </p>
-        )}
+        <h3 className="text-lg font-semibold text-slate-800 mb-4">{title}</h3>
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>

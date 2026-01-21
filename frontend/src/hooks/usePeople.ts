@@ -27,6 +27,8 @@ export interface PersonUpdate {
   tags?: string[]
   notes?: string
   replace_notes?: boolean
+  replace_tags?: boolean
+  replace_aliases?: boolean
 }
 
 export interface PersonFilters {
@@ -88,6 +90,8 @@ export const usePeople = () => {
       tags: data.tags,
       notes: data.notes,
       replace_notes: data.replace_notes,
+      replace_tags: data.replace_tags,
+      replace_aliases: data.replace_aliases,
     })
     return result?.[0]
   }, [mcpCall])

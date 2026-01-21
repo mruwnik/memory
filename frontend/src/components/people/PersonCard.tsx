@@ -13,10 +13,24 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
     (person.contact_info && Object.keys(person.contact_info).length > 0) ||
     person.notes
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    // Don't toggle if clicking on buttons, links, or details elements
+    const target = e.target as HTMLElement
+    if (target.closest('button') || target.closest('a') || target.closest('details')) {
+      return
+    }
+    if (hasDetails) {
+      onToggleExpand()
+    }
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden">
-      {/* Main content - always visible */}
-      <div className="p-6">
+      {/* Main content - clickable to expand if has details */}
+      <div
+        className={`p-6 ${hasDetails ? 'cursor-pointer hover:bg-slate-50/50 transition-colors' : ''}`}
+        onClick={handleCardClick}
+      >
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-3">
@@ -27,45 +41,51 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
                 </span>
               </div>
 
-              <div>
-                <h3 className="font-semibold text-slate-800 text-lg">{person.display_name}</h3>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-slate-800 text-lg">{person.display_name}</h3>
+                  {hasDetails && (
+                    <svg
+                      className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  )}
+                </div>
                 <p className="text-sm text-slate-500">@{person.identifier}</p>
               </div>
             </div>
 
-            {/* Tags */}
+            {/* Tags - collapsible */}
             {person.tags && person.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-3">
-                {person.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs"
-                  >
-                    {tag}
+              <details className="mt-3">
+                <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700 select-none list-none">
+                  <span className="flex items-center gap-1">
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h5c.256 0 .512.098.707.293l7 7zM5 6a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                    </svg>
+                    {person.tags.length} tag{person.tags.length !== 1 ? 's' : ''}
                   </span>
-                ))}
-              </div>
+                </summary>
+                <div className="flex flex-wrap gap-1 mt-2 pl-4">
+                  {person.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            {hasDetails && (
-              <button
-                onClick={onToggleExpand}
-                className="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 rounded hover:bg-slate-100 transition-colors flex items-center gap-1"
-              >
-                {expanded ? 'Less' : 'More'}
-                <svg
-                  className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
             <button
               onClick={onEdit}
               className="text-sm text-primary hover:text-primary/80 px-3 py-1 rounded hover:bg-primary/10 transition-colors"

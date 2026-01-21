@@ -26,6 +26,12 @@ export interface JobFilters {
   userId?: number  // Admin only: filter by specific user, omit for all users
 }
 
+export interface JobUser {
+  id: number
+  name: string
+  email: string
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type')
   if (!contentType?.includes('application/json')) {
@@ -80,10 +86,19 @@ export const useJobs = () => {
     return parseJsonResponse<Job>(response)
   }, [apiCall])
 
+  const getUsersWithJobs = useCallback(async (): Promise<JobUser[]> => {
+    const response = await apiCall('/jobs/users/with-jobs')
+    if (!response.ok) {
+      throw new Error(`Failed to fetch job users: ${response.status}`)
+    }
+    return parseJsonResponse<JobUser[]>(response)
+  }, [apiCall])
+
   return {
     listJobs,
     getJob,
     retryJob,
     reingestJob,
+    getUsersWithJobs,
   }
 }

@@ -125,19 +125,24 @@ def update_person(
     tags: list[str] | None = None,
     notes: str | None = None,
     replace_notes: bool = False,
+    replace_tags: bool = False,
+    replace_aliases: bool = False,
     save_to_file: bool = True,
 ):
     """
-    Update a person with merge semantics.
+    Update a person with configurable merge/replace semantics.
 
-    Merge behavior:
+    Merge behavior (default):
     - display_name: Replaces if provided
-    - aliases: Union with existing
+    - aliases: Union with existing (or replace if replace_aliases=True)
     - contact_info: Deep merge with existing
-    - tags: Union with existing
+    - tags: Union with existing (or replace if replace_tags=True)
     - notes: Append to existing (or replace if replace_notes=True)
 
     Args:
+        replace_notes: If True, replace notes instead of appending
+        replace_tags: If True, replace all tags instead of merging
+        replace_aliases: If True, replace all aliases instead of merging
         save_to_file: Whether to save to profile note file (default True)
     """
     logger.info(f"Updating person: {identifier}")
@@ -152,18 +157,24 @@ def update_person(
             person.display_name = display_name
 
         if aliases is not None:
-            existing_aliases = set(person.aliases or [])
-            new_aliases = existing_aliases | set(aliases)
-            person.aliases = list(new_aliases)
+            if replace_aliases:
+                person.aliases = list(aliases)
+            else:
+                existing_aliases = set(person.aliases or [])
+                new_aliases = existing_aliases | set(aliases)
+                person.aliases = list(new_aliases)
 
         if contact_info is not None:
             existing_contact = dict(person.contact_info or {})
             person.contact_info = _deep_merge(existing_contact, contact_info)
 
         if tags is not None:
-            existing_tags = set(person.tags or [])
-            new_tags = existing_tags | set(tags)
-            person.tags = list(new_tags)
+            if replace_tags:
+                person.tags = list(tags)
+            else:
+                existing_tags = set(person.tags or [])
+                new_tags = existing_tags | set(tags)
+                person.tags = list(new_tags)
 
         if notes is not None:
             if replace_notes or not person.content:
