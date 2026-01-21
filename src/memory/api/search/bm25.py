@@ -165,7 +165,7 @@ async def search_bm25_chunks(
     modalities: set[str] = set(),
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
-    timeout: int = 10,
+    timeout: float = 10,
 ) -> dict[str, float]:
     """
     Search chunks using PostgreSQL full-text search.

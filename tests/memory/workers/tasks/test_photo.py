@@ -470,7 +470,7 @@ def test_execute_photo_processing_success(mock_process, mock_job_utils):
 
     result = photo.execute_photo_processing(mock_session, mock_photo)
 
-    assert result == {"status": "created", "photo_id": 123}
+    assert result == {"status": "created", "photo_id": 123, "error": ""}
     mock_process.assert_called_once_with(mock_photo, mock_session)
     mock_session.commit.assert_called_once()
 
@@ -502,9 +502,9 @@ def test_execute_photo_processing_handles_error(mock_process, mock_job_utils):
 
     result = photo.execute_photo_processing(mock_session, mock_photo)
 
-    assert result["status"] == "error"
-    assert "Processing failed" in result["error"]
-    assert result["photo_id"] == 123
+    assert result.get("status") == "error"
+    assert "Processing failed" in (result.get("error") or "")
+    assert result.get("photo_id") == 123
     mock_session.rollback.assert_called_once()
 
 

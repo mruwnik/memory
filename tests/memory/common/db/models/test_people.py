@@ -94,7 +94,7 @@ def test_person_chunk_contents(person_data):
     chunks = person._chunk_contents()
 
     assert len(chunks) > 0
-    chunk_text = chunks[0].data[0]
+    chunk_text = str(chunks[0].data[0])
 
     # Should include display name
     assert "Alice Chen" in chunk_text
@@ -114,7 +114,7 @@ def test_person_chunk_contents_minimal(minimal_person_data):
     chunks = person._chunk_contents()
 
     assert len(chunks) > 0
-    chunk_text = chunks[0].data[0]
+    chunk_text = str(chunks[0].data[0])
     assert "Bob Smith" in chunk_text
 
 

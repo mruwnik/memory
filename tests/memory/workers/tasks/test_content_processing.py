@@ -307,7 +307,8 @@ def test_push_to_qdrant_no_processing(
     item1 = create_item("1", item1_status, item1_has_chunks)
     item2 = create_item("2", item2_status, item2_has_chunks)
 
-    push_to_qdrant([item1, item2])
+    with patch("memory.common.content_processing.qdrant.upsert_vectors"):
+        push_to_qdrant([item1, item2])
 
     assert str(item1.embed_status) == expected_item1_status
     assert str(item2.embed_status) == expected_item2_status

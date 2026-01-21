@@ -317,13 +317,23 @@ def mock_voyage_client():
     def embeder(chunks, *args, **kwargs):
         return Mock(embeddings=[[0.1] * 1024] * len(chunks))
 
-    real_client = voyageai.Client
+    real_client = voyageai.Client  # type: ignore[reportPrivateImportUsage]
     with patch.object(voyageai, "Client", autospec=True) as mock_client:
         client = mock_client()
         client.real_client = real_client
         client.embed = embeder
         client.multimodal_embed = embeder
         yield client
+
+
+@pytest.fixture(autouse=True)
+def mock_api_keys():
+    """Mock API keys so tests don't fail on missing keys."""
+    with (
+        patch.object(settings, "ANTHROPIC_API_KEY", "test-anthropic-key"),
+        patch.object(settings, "OPENAI_API_KEY", "test-openai-key"),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)

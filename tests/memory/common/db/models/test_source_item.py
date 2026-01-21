@@ -175,80 +175,42 @@ def test_chunk_data_property_with_files(tmp_path):
                 ]
             ],
         ),
-        pytest.param(
+        (
             10,
             [
-                ["Lorem ipsum dolor sit amet, consectetur adipiscing elit."],
+                ["Lorem ipsum dolor sit amet, consectetur"],
+                ["adipiscing elit."],
                 ["Sed do eiusmod tempor incididunt ut labore"],
-                ["et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud"],
-                [
-                    "et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-                    "ullamco laboris nisi ut"
-                ],
-                [
-                    "et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-                    "ullamco laboris nisi ut aliquip ex ea commodo consequat."
-                ],
-                [
-                    "et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-                    "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure "
-                    "dolor in reprehenderit in"
-                ],
-                [
-                    "ip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in "
-                    "voluptate velit esse cillum dolore eu"
-                ],
-                [
-                    "ip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in "
-                    "voluptate velit esse cillum dolore eu fugiat nulla pariatur."
-                ],
-                [
-                    "ip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in "
-                    "voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint "
-                    "occaecat cupidatat non"
-                ],
-                [
-                    "dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non "
-                    "proident, sunt in culpa qui officia"
-                ],
-                [
-                    "dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non "
-                    "proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
-                ],
-                [
-                    "dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non "
-                    "proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
-                ],
+                ["et dolore magna aliqua."],
+                ["Ut enim ad minim veniam, quis nostrud"],
+                ["exercitation ullamco laboris nisi ut"],
+                ["aliquip ex ea commodo consequat."],
+                ["Duis aute irure dolor in reprehenderit in"],
+                ["voluptate velit esse cillum dolore eu"],
+                ["fugiat nulla pariatur."],
+                ["Excepteur sint occaecat cupidatat non"],
+                ["proident, sunt in culpa qui officia"],
+                ["deserunt mollit anim id est laborum."],
             ],
-            marks=pytest.mark.xfail(reason="Chunking now uses sentence boundaries"),
         ),
-        pytest.param(
+        (
             20,
             [
+                ["Lorem ipsum dolor sit amet, consectetur adipiscing elit."],
+                ["Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."],
                 [
-                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod "
-                    "tempor incididunt ut labore et dolore magna aliqua."
+                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip"
                 ],
+                ["ex ea commodo consequat."],
                 [
-                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod "
-                    "tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim "
-                    "veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip"
+                    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu"
                 ],
+                ["fugiat nulla pariatur."],
                 [
-                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut "
-                    "aliquip ex ea commodo consequat."
-                ],
-                [
-                    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum "
-                    "dolore eu fugiat nulla pariatur."
-                ],
-                [
-                    "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia "
-                    "deserunt"
+                    "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt"
                 ],
                 ["mollit anim id est laborum."],
             ],
-            marks=pytest.mark.xfail(reason="Chunking now uses sentence boundaries"),
         ),
     ),
 )

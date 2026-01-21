@@ -1,5 +1,6 @@
 """Tests for Discord MCP server management."""
 
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
@@ -571,7 +572,7 @@ async def test_run_mcp_server_command_invalid_action(mock_bot_user):
     """Test run_mcp_server_command with invalid action."""
     with pytest.raises(ValueError, match="Invalid action"):
         await run_mcp_server_command(
-            mock_bot_user, "invalid", None, "DiscordUser", 123456
+            mock_bot_user, cast(Any, "invalid"), None, "DiscordUser", 123456
         )
 
 

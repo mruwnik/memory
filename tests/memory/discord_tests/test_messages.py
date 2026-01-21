@@ -1,6 +1,7 @@
 """Tests for Discord message helper functions."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,6 +87,7 @@ def test_resolve_discord_user_with_discord_user_object(
     """Test resolving a DiscordUser object returns it unchanged."""
     result = resolve_discord_user(db_session, sample_discord_user)
     assert result == sample_discord_user
+    assert result is not None
     assert result.id == 123456789
 
 
@@ -125,6 +127,7 @@ def test_resolve_discord_channel_with_channel_object(
     """Test resolving a DiscordChannel object returns it unchanged."""
     result = resolve_discord_channel(db_session, sample_discord_channel)
     assert result == sample_discord_channel
+    assert result is not None
     assert result.id == 111222333
 
 
@@ -442,6 +445,9 @@ def test_call_llm_includes_web_search_and_mcp_servers(
     mock_prev_messages,
     mock_create_provider,
 ):
+    from memory.common.db.models import DiscordBotUser
+    from unittest.mock import create_autospec
+
     provider = MagicMock()
     provider.usage_tracker.is_rate_limited.return_value = False
     provider.as_messages.return_value = ["converted"]
@@ -456,8 +462,12 @@ def test_call_llm_includes_web_search_and_mcp_servers(
     web_tool_instance = MagicMock(name="web_tool")
     mock_web_search.return_value = web_tool_instance
 
+    # Use create_autospec so isinstance(system_user, DiscordBotUser) passes
+    mock_system_user = create_autospec(DiscordBotUser, instance=True)
+    mock_system_user.discord_id = 999888777
+
     bot_user = SimpleNamespace(
-        system_user=SimpleNamespace(discord_id=999888777),
+        system_user=mock_system_user,
         system_prompt="bot prompt"
     )
     from_user = SimpleNamespace(id=123)
@@ -470,12 +480,12 @@ def test_call_llm_includes_web_search_and_mcp_servers(
 
     result = call_llm(
         session=MagicMock(),
-        bot_user=bot_user,
-        from_user=from_user,
+        bot_user=cast(Any, bot_user),
+        from_user=cast(Any, from_user),
         channel=None,
         model="gpt-test",
         messages=["hi"],
-        mcp_servers=[mcp_model],
+        mcp_servers=cast(Any, [mcp_model]),
     )
 
     assert result == "llm-output"
@@ -503,6 +513,9 @@ def test_call_llm_filters_disallowed_tools(
     mock_prev_messages,
     mock_create_provider,
 ):
+    from memory.common.db.models import DiscordBotUser
+    from unittest.mock import create_autospec
+
     provider = MagicMock()
     provider.usage_tracker.is_rate_limited.return_value = False
     provider.as_messages.return_value = ["converted"]
@@ -520,16 +533,20 @@ def test_call_llm_filters_disallowed_tools(
 
     mock_web_search.return_value = MagicMock(name="web_tool")
 
+    # Use create_autospec so isinstance(system_user, DiscordBotUser) passes
+    mock_system_user = create_autospec(DiscordBotUser, instance=True)
+    mock_system_user.discord_id = 999888777
+
     bot_user = SimpleNamespace(
-        system_user=SimpleNamespace(discord_id=999888777),
+        system_user=mock_system_user,
         system_prompt=None
     )
     from_user = SimpleNamespace(id=1)
 
     call_llm(
         session=MagicMock(),
-        bot_user=bot_user,
-        from_user=from_user,
+        bot_user=cast(Any, bot_user),
+        from_user=cast(Any, from_user),
         channel=None,
         model="gpt-test",
         messages=[],

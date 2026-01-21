@@ -37,6 +37,7 @@ def test_task_to_dict_basic():
     assert result["status"] == "pending"
     assert result["recurrence"] == "FREQ=DAILY"
     assert result["tags"] == ["work", "important"]
+    assert result["due_date"] is not None
     assert "2024-01-15" in result["due_date"]
     assert result["inserted_at"] is None  # Not set for non-persisted task
 
@@ -74,6 +75,7 @@ def test_task_to_dict_completed():
     result = task_to_dict(task)
 
     assert result["status"] == "done"
+    assert result["completed_at"] is not None
     assert "2024-01-20" in result["completed_at"]
 
 
@@ -218,6 +220,7 @@ def test_complete_task_marks_done(db_session):
 
     result = complete_task(db_session, task.id)
 
+    assert result is not None
     assert result.status == "done"
     assert result.completed_at is not None
 
@@ -244,5 +247,6 @@ def test_complete_task_already_done(db_session):
     result = complete_task(db_session, task.id)
 
     # Should update to new completion time
+    assert result is not None
     assert result.status == "done"
     assert result.completed_at != original_time

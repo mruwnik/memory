@@ -256,6 +256,7 @@ def test_create_mail_message(db_session):
     assert cast(str, mail_message.subject) == "Test Subject"
     assert cast(str, mail_message.sender) == "sender@example.com"
     assert cast(list[str], mail_message.recipients) == ["recipient@example.com"]
+    assert mail_message.sent_at is not None
     assert mail_message.sent_at.isoformat()[:-6] == "2023-01-01T12:00:00"
     assert cast(str, mail_message.content) == raw_email
     assert mail_message.body == "Test body content"

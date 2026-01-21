@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -315,7 +316,7 @@ def test_with_object_context_uses_ensured_objects(
     bot_client = SimpleNamespace(user=MagicMock())
     override_user = MagicMock(spec=discord.User)
 
-    result = with_object_context(bot_client, interaction, handler, override_user)
+    result = with_object_context(cast(Any, bot_client), interaction, handler, override_user)
 
     assert result == "done"
     objects = handler_objects["objects"]

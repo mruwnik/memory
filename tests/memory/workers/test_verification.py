@@ -648,6 +648,7 @@ def test_verify_emails_api_error():
 
     # On error, items are marked as existing with error
     assert results[1].exists is True
+    assert results[1].error is not None
     assert "Connection refused" in results[1].error
 
 
@@ -716,6 +717,7 @@ def test_verify_github_items_api_error():
         results = verify_github_items(session, 1, [item])
 
     assert results[1].exists is True
+    assert results[1].error is not None
     assert "Rate limited" in results[1].error
 
 
@@ -736,6 +738,7 @@ def test_verify_github_items_client_setup_error():
 
     # Setup errors mark all as existing with error
     assert results[1].exists is True
+    assert results[1].error is not None
     assert "Invalid credentials" in results[1].error
 
 

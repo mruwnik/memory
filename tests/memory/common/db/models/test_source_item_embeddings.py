@@ -1,7 +1,7 @@
 import hashlib
 import textwrap
 from datetime import datetime
-from typing import Sequence, cast
+from typing import Any, Sequence, cast
 from unittest.mock import ANY, Mock, call
 
 import pymupdf  # PyMuPDF
@@ -50,7 +50,7 @@ from tests.data.contents import (
 
 def compare_chunks(
     chunks: Sequence[Chunk],
-    expected: Sequence[tuple[str | None, list[str], dict]],
+    expected: Sequence[tuple[str | None, list[str], Any]],
 ):
     data = [
         (c.content, [image_hash(i) for i in c.images], c.item_metadata) for c in chunks
@@ -69,7 +69,7 @@ def test_base_source_item_text_embeddings(mock_voyage_client):
         size=len(SAMPLE_MARKDOWN),
         tags=["bla"],
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (CHUNKS[0].strip(), cast(list[str], []), metadata),
@@ -106,7 +106,7 @@ def test_base_source_item_mixed_embeddings(mock_voyage_client):
         size=len(SAMPLE_MARKDOWN),
         tags=["bla"],
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (CHUNKS[0].strip(), [], metadata),
@@ -167,7 +167,7 @@ def test_mail_message_with_attachments_embeddings(mock_voyage_client):
         Body:
         """
     ).lstrip()
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla", "john.doe@techcorp.com"} | set(email["recipients"])
     expected = [
         (email_header + CHUNKS[0].strip(), [], metadata),
@@ -219,7 +219,7 @@ def test_email_attachment_embeddings_text(mock_voyage_client):
             folder="INBOX",
         ),
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (CHUNKS[0].strip(), cast(list[str], []), metadata),
@@ -267,7 +267,7 @@ def test_email_attachment_embeddings_photo(mock_voyage_client):
             folder="INBOX",
         ),
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (None, [LANG_TIMELINE_HASH], metadata),
@@ -312,7 +312,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
             folder="INBOX",
         ),
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     with pymupdf.open(item.filename) as pdf:
         expected = [
@@ -367,7 +367,7 @@ def test_embeddings_comic(mock_voyage_client):
         issue="1",
         page=1,
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (
@@ -422,7 +422,7 @@ def test_book_section_embeddings_single_page(mock_voyage_client):
             published=datetime(2025, 1, 1, 12, 0, 0),
         ),
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (CHUNKS[0].strip(), cast(list[str], []), metadata | {"type": "page"}),
@@ -474,10 +474,11 @@ def test_book_section_embeddings_multiple_pages(mock_voyage_client):
             published=datetime(2025, 1, 1, 12, 0, 0),
         ),
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla", "tag1", "tag2"}
+    content = item.content or ""
     expected = [
-        (item.content.strip(), cast(list[str], []), metadata | {"type": "section"}),
+        (content.strip(), cast(list[str], []), metadata | {"type": "section"}),
         ("test summary", [], metadata | {"type": "summary"}),
     ]
 
@@ -492,7 +493,7 @@ def test_book_section_embeddings_multiple_pages(mock_voyage_client):
     assert not mock_voyage_client.multimodal_embed.call_count
 
     assert mock_voyage_client.embed.call_args == call(
-        [item.content.strip(), "test summary"],
+        [content.strip(), "test summary"],
         model=settings.TEXT_EMBEDDING_MODEL,
         input_type="document",
     )
@@ -516,7 +517,7 @@ def test_post_embeddings_single_page(mock_voyage_client, class_, modality):
         tags=["bla"],
         images=[LANG_TIMELINE.filename, CODE_COMPLEXITY.filename],  # type: ignore
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla", "tag1", "tag2"}
     expected = [
         (item.content.strip(), [LANG_TIMELINE_HASH, CODE_COMPLEXITY_HASH], metadata),
@@ -562,7 +563,7 @@ def test_post_embeddings_multi_page(mock_voyage_client, class_, modality):
         tags=["bla"],
         images=[LANG_TIMELINE.filename, CODE_COMPLEXITY.filename],  # type: ignore
     )
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla", "tag1", "tag2"}
 
     all_contents = (
@@ -646,7 +647,7 @@ def test_agent_observation_embeddings(mock_voyage_client):
         inserted_at=datetime(2025, 1, 1, 12, 0, 0),
     )
     item.update_confidences({"observation_accuracy": 0.8})
-    metadata = item.as_payload()
+    metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     expected = [
         (

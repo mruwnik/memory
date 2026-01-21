@@ -255,10 +255,11 @@ class TestSearchBm25Chunks:
         assert result == {}
 
     async def test_data_chunks_with_no_strings_returns_empty(self):
-        # DataChunks with only non-string content
+        # DataChunks with only non-string content (using cast to test edge case handling)
+        from typing import cast, Any
         chunks = [
-            extract.DataChunk(data=[123, 456]),
-            extract.DataChunk(data=[{"key": "value"}]),
+            extract.DataChunk(data=cast(Any, [123, 456])),
+            extract.DataChunk(data=cast(Any, [{"key": "value"}])),
         ]
         result = await bm25.search_bm25_chunks(chunks, {"text"})
         assert result == {}
@@ -327,11 +328,12 @@ class TestSearchBm25Chunks:
 
     @patch("memory.api.search.bm25.search_bm25")
     async def test_mixed_content_chunks(self, mock_search_bm25):
-        # DataChunks with mixed string and non-string content
+        # DataChunks with mixed string and non-string content (using cast to test edge case handling)
+        from typing import cast, Any
         mock_search_bm25.return_value = {"chunk1": 0.5}
 
         chunks = [
-            extract.DataChunk(data=["text content", 123, {"key": "value"}, "more text"])
+            extract.DataChunk(data=cast(Any, ["text content", 123, {"key": "value"}, "more text"]))
         ]
         await bm25.search_bm25_chunks(chunks, {"text"})
 

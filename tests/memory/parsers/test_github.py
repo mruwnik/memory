@@ -138,7 +138,7 @@ def test_github_client_pat_auth():
     with patch.object(requests.Session, "get"):
         client = GithubClient(credentials)
 
-    assert "Bearer ghp_test_token" in client.session.headers["Authorization"]
+    assert "Bearer ghp_test_token" in str(client.session.headers["Authorization"])
     assert client.session.headers["Accept"] == "application/vnd.github+json"
     assert client.session.headers["X-GitHub-Api-Version"] == "2022-11-28"
 

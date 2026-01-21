@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime
 import logging
 from typing import Optional, cast, TypedDict, NotRequired
@@ -35,7 +36,7 @@ class SearchResult(BaseModel):
 
     @classmethod
     def from_source_item(
-        cls, source: SourceItem, chunks: list[Chunk], previews: Optional[bool] = False
+        cls, source: SourceItem, chunks: Sequence[Chunk], previews: Optional[bool] = False
     ) -> "SearchResult":
         try:
             metadata = source.display_contents or {}
