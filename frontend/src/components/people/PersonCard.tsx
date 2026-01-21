@@ -14,9 +14,9 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
     person.notes
 
   const handleCardClick = (e: React.MouseEvent) => {
-    // Don't toggle if clicking on buttons, links, or details elements
+    // Don't toggle if clicking on buttons or links
     const target = e.target as HTMLElement
-    if (target.closest('button') || target.closest('a') || target.closest('details')) {
+    if (target.closest('button') || target.closest('a')) {
       return
     }
     if (hasDetails) {
@@ -59,28 +59,18 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
               </div>
             </div>
 
-            {/* Tags - collapsible */}
+            {/* Tags */}
             {person.tags && person.tags.length > 0 && (
-              <details className="mt-3">
-                <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700 select-none list-none">
-                  <span className="flex items-center gap-1">
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h5c.256 0 .512.098.707.293l7 7zM5 6a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                    </svg>
-                    {person.tags.length} tag{person.tags.length !== 1 ? 's' : ''}
+              <div className="flex flex-wrap gap-1 mt-3">
+                {person.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs"
+                  >
+                    {tag}
                   </span>
-                </summary>
-                <div className="flex flex-wrap gap-1 mt-2 pl-4">
-                  {person.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </details>
+                ))}
+              </div>
             )}
           </div>
 
