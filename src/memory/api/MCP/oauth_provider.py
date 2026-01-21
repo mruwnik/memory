@@ -17,7 +17,9 @@ from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from memory.common import settings
-from memory.common.db.connection import make_session, scoped_session
+from sqlalchemy.orm import scoped_session
+
+from memory.common.db.connection import make_session
 from memory.common.db.models.users import (
     OAuthClientInformation,
     OAuthRefreshToken,

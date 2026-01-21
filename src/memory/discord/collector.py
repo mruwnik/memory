@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
@@ -28,6 +29,15 @@ from memory.common.celery_app import ADD_DISCORD_MESSAGE
 
 if TYPE_CHECKING:
     from celery import Celery
+
+
+@dataclass
+class BotInfo:
+    """Simple data holder for bot info to avoid SQLAlchemy session issues."""
+
+    id: int
+    name: str
+    token: str
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +142,7 @@ class MessageCollector(commands.Bot):
     - Queues messages for async processing via Celery
     """
 
-    def __init__(self, bot_record: DiscordBot, celery_app: Celery):
+    def __init__(self, bot_info: BotInfo, celery_app: Celery):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
@@ -140,13 +150,13 @@ class MessageCollector(commands.Bot):
 
         super().__init__(command_prefix="!", intents=intents)
 
-        self.bot_record = bot_record
+        self.bot_info = bot_info
         self.celery_app = celery_app
         self._ready = asyncio.Event()
 
     async def on_ready(self) -> None:
         """Called when the bot is ready."""
-        logger.info(f"Bot {self.user} (ID: {self.bot_record.id}) is ready")
+        logger.info(f"Bot {self.user} (ID: {self.bot_info.id}) is ready")
         self._ready.set()
 
     async def wait_until_ready(self) -> None:
@@ -156,7 +166,7 @@ class MessageCollector(commands.Bot):
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming messages."""
         # Ignore our own messages
-        if message.author.id == self.bot_record.id:
+        if message.author.id == self.bot_info.id:
             return
 
         # Ignore bot messages (optional, could be configurable)
@@ -172,7 +182,7 @@ class MessageCollector(commands.Bot):
         self, _before: discord.Message, after: discord.Message
     ) -> None:
         """Handle message edits."""
-        if after.author.id == self.bot_record.id:
+        if after.author.id == self.bot_info.id:
             return
 
         try:
@@ -225,7 +235,7 @@ class MessageCollector(commands.Bot):
         self.celery_app.send_task(
             ADD_DISCORD_MESSAGE,
             kwargs={
-                "bot_id": self.bot_record.id,
+                "bot_id": self.bot_info.id,
                 "message_id": message.id,
                 "channel_id": message.channel.id,
                 "server_id": guild_id,
@@ -317,39 +327,41 @@ class CollectorManager:
 
     async def start_all(self) -> None:
         """Start all active bots."""
+        bot_infos: list[BotInfo] = []
         with make_session() as session:
             bots = session.query(DiscordBot).filter_by(is_active=True).all()
-
             for bot in bots:
-                if bot.token:
-                    await self.start_bot(bot)
+                token = bot.token
+                if token:
+                    bot_infos.append(BotInfo(id=bot.id, name=bot.name, token=token))
 
-    async def start_bot(self, bot: DiscordBot) -> None:
+        for bot_info in bot_infos:
+            await self.start_bot(bot_info)
+
+    async def start_bot(self, bot_info: BotInfo) -> None:
         """Start a single bot."""
-        if bot.id in self.collectors:
-            logger.warning(f"Bot {bot.id} already running")
+        if bot_info.id in self.collectors:
+            logger.warning(f"Bot {bot_info.id} already running")
             return
 
-        collector = MessageCollector(bot, self.celery_app)
-        self.collectors[bot.id] = collector
+        collector = MessageCollector(bot_info, self.celery_app)
+        self.collectors[bot_info.id] = collector
 
         # Start in background task
-        task = asyncio.create_task(self._run_bot(bot, collector))
-        self._tasks[bot.id] = task
+        task = asyncio.create_task(self._run_bot(bot_info, collector))
+        self._tasks[bot_info.id] = task
 
-        logger.info(f"Started bot {bot.id} ({bot.name})")
+        logger.info(f"Started bot {bot_info.id} ({bot_info.name})")
 
-    async def _run_bot(self, bot: DiscordBot, collector: MessageCollector) -> None:
+    async def _run_bot(self, bot_info: BotInfo, collector: MessageCollector) -> None:
         """Run a bot until stopped."""
         try:
-            token = bot.token
-            if token:
-                await collector.start(token)
+            await collector.start(bot_info.token)
         except Exception:
-            logger.exception(f"Bot {bot.id} crashed")
+            logger.exception(f"Bot {bot_info.id} crashed")
         finally:
-            self.collectors.pop(bot.id, None)
-            self._tasks.pop(bot.id, None)
+            self.collectors.pop(bot_info.id, None)
+            self._tasks.pop(bot_info.id, None)
 
     async def stop_bot(self, bot_id: int) -> None:
         """Stop a single bot."""
