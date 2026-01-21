@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, resolve_user_filter
-from memory.common.db.connection import get_session, make_session
+from memory.common.db.connection import get_session
 from memory.common.db.models import TelemetryEvent, User
 from memory.common.telemetry import (
     parse_otlp_json,
@@ -108,59 +108,58 @@ def get_raw_events(
     elif to_time is None:
         to_time = datetime.now(timezone.utc)
 
-    with make_session() as session:
-        query = (
-            session.query(TelemetryEvent)
-            .filter(TelemetryEvent.timestamp >= from_time)
-            .filter(TelemetryEvent.timestamp <= to_time)
-        )
+    query = (
+        db.query(TelemetryEvent)
+        .filter(TelemetryEvent.timestamp >= from_time)
+        .filter(TelemetryEvent.timestamp <= to_time)
+    )
 
-        # Apply user filter
-        if resolved_user_id is not None:
-            query = query.filter(TelemetryEvent.user_id == resolved_user_id)
+    # Apply user filter
+    if resolved_user_id is not None:
+        query = query.filter(TelemetryEvent.user_id == resolved_user_id)
 
-        if event_type:
-            query = query.filter(TelemetryEvent.event_type == event_type)
-        if name:
-            query = query.filter(TelemetryEvent.name == name)
-        if session_id:
-            query = query.filter(TelemetryEvent.session_id == session_id)
-        if source:
-            query = query.filter(TelemetryEvent.source == source)
+    if event_type:
+        query = query.filter(TelemetryEvent.event_type == event_type)
+    if name:
+        query = query.filter(TelemetryEvent.name == name)
+    if session_id:
+        query = query.filter(TelemetryEvent.session_id == session_id)
+    if source:
+        query = query.filter(TelemetryEvent.source == source)
 
-        # Get total count
-        total = query.count()
+    # Get total count
+    total = query.count()
 
-        # Get paginated results
-        events = (
-            query.order_by(TelemetryEvent.timestamp.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+    # Get paginated results
+    events = (
+        query.order_by(TelemetryEvent.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
-        return {
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "from": from_time.isoformat(),
-            "to": to_time.isoformat(),
-            "events": [
-                {
-                    "id": e.id,
-                    "timestamp": e.timestamp.isoformat(),
-                    "event_type": e.event_type,
-                    "name": e.name,
-                    "value": e.value,
-                    "session_id": e.session_id,
-                    "source": e.source,
-                    "tool_name": e.tool_name,
-                    "attributes": e.attributes,
-                    "body": e.body[:500] if e.body else None,
-                }
-                for e in events
-            ],
-        }
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "from": from_time.isoformat(),
+        "to": to_time.isoformat(),
+        "events": [
+            {
+                "id": e.id,
+                "timestamp": e.timestamp.isoformat(),
+                "event_type": e.event_type,
+                "name": e.name,
+                "value": e.value,
+                "session_id": e.session_id,
+                "source": e.source,
+                "tool_name": e.tool_name,
+                "attributes": e.attributes,
+                "body": e.body[:500] if e.body else None,
+            }
+            for e in events
+        ],
+    }
 
 
 # Valid group-by columns
@@ -208,90 +207,89 @@ def get_aggregated_metrics(
     elif to_time is None:
         to_time = datetime.now(timezone.utc)
 
-    with make_session() as session:
-        # Build time bucket using date_trunc with interval
-        # PostgreSQL date_trunc supports: microseconds, milliseconds, second, minute, hour, day, week, month, quarter, year
-        if granularity >= 1440:
-            trunc_interval = "day"
-        elif granularity >= 60:
-            trunc_interval = "hour"
-        else:
-            trunc_interval = "minute"
+    # Build time bucket using date_trunc with interval
+    # PostgreSQL date_trunc supports: microseconds, milliseconds, second, minute, hour, day, week, month, quarter, year
+    if granularity >= 1440:
+        trunc_interval = "day"
+    elif granularity >= 60:
+        trunc_interval = "hour"
+    else:
+        trunc_interval = "minute"
 
-        trunc_func = func.date_trunc(trunc_interval, TelemetryEvent.timestamp)
+    trunc_func = func.date_trunc(trunc_interval, TelemetryEvent.timestamp)
 
-        # Build group-by columns
-        group_columns = [trunc_func]
-        select_columns = [
-            trunc_func.label("bucket"),
-            func.count().label("count"),
-            func.sum(TelemetryEvent.value).label("sum_value"),
-            func.min(TelemetryEvent.value).label("min_value"),
-            func.max(TelemetryEvent.value).label("max_value"),
-        ]
+    # Build group-by columns
+    group_columns = [trunc_func]
+    select_columns = [
+        trunc_func.label("bucket"),
+        func.count().label("count"),
+        func.sum(TelemetryEvent.value).label("sum_value"),
+        func.min(TelemetryEvent.value).label("min_value"),
+        func.max(TelemetryEvent.value).label("max_value"),
+    ]
 
-        # Track which fields we're grouping by for the response
-        group_by_fields = []
+    # Track which fields we're grouping by for the response
+    group_by_fields = []
 
-        for field in group_by:
-            if field in VALID_GROUP_BY_COLUMNS:
-                col = getattr(TelemetryEvent, field)
-                select_columns.append(col)
-                group_columns.append(col)
-                group_by_fields.append(field)
-            elif field.startswith("attributes."):
-                # Extract JSONB key
-                attr_key = field[11:]  # Remove "attributes." prefix
-                json_col = TelemetryEvent.attributes[attr_key].astext.label(f"attr_{attr_key}")
-                select_columns.append(json_col)
-                group_columns.append(TelemetryEvent.attributes[attr_key].astext)
-                group_by_fields.append(field)
+    for field in group_by:
+        if field in VALID_GROUP_BY_COLUMNS:
+            col = getattr(TelemetryEvent, field)
+            select_columns.append(col)
+            group_columns.append(col)
+            group_by_fields.append(field)
+        elif field.startswith("attributes."):
+            # Extract JSONB key
+            attr_key = field[11:]  # Remove "attributes." prefix
+            json_col = TelemetryEvent.attributes[attr_key].astext.label(f"attr_{attr_key}")
+            select_columns.append(json_col)
+            group_columns.append(TelemetryEvent.attributes[attr_key].astext)
+            group_by_fields.append(field)
 
-        query = (
-            session.query(*select_columns)
-            .filter(TelemetryEvent.name == metric)
-            .filter(TelemetryEvent.timestamp >= from_time)
-            .filter(TelemetryEvent.timestamp <= to_time)
-        )
+    query = (
+        db.query(*select_columns)
+        .filter(TelemetryEvent.name == metric)
+        .filter(TelemetryEvent.timestamp >= from_time)
+        .filter(TelemetryEvent.timestamp <= to_time)
+    )
 
-        # Apply user filter
-        if resolved_user_id is not None:
-            query = query.filter(TelemetryEvent.user_id == resolved_user_id)
+    # Apply user filter
+    if resolved_user_id is not None:
+        query = query.filter(TelemetryEvent.user_id == resolved_user_id)
 
-        if source:
-            query = query.filter(TelemetryEvent.source == source)
+    if source:
+        query = query.filter(TelemetryEvent.source == source)
 
-        results = (
-            query.group_by(*group_columns)
-            .order_by(trunc_func)
-            .all()
-        )
+    results = (
+        query.group_by(*group_columns)
+        .order_by(trunc_func)
+        .all()
+    )
 
-        # Build response data
-        data = []
-        for r in results:
-            row = {
-                "timestamp": r.bucket.isoformat() if r.bucket else None,
-                "count": r.count,
-                "sum": r.sum_value,
-                "min": r.min_value,
-                "max": r.max_value,
-            }
-            # Add group-by fields
-            for i, field in enumerate(group_by_fields):
-                # The group-by columns start at index 5 in the result tuple
-                val = r[5 + i]
-                if field.startswith("attributes."):
-                    row[field] = val
-                else:
-                    row[field] = val
-            data.append(row)
-
-        return {
-            "metric": metric,
-            "granularity_minutes": granularity,
-            "from": from_time.isoformat(),
-            "to": to_time.isoformat(),
-            "group_by": group_by_fields,
-            "data": data,
+    # Build response data
+    data = []
+    for r in results:
+        row = {
+            "timestamp": r.bucket.isoformat() if r.bucket else None,
+            "count": r.count,
+            "sum": r.sum_value,
+            "min": r.min_value,
+            "max": r.max_value,
         }
+        # Add group-by fields
+        for i, field in enumerate(group_by_fields):
+            # The group-by columns start at index 5 in the result tuple
+            val = r[5 + i]
+            if field.startswith("attributes."):
+                row[field] = val
+            else:
+                row[field] = val
+        data.append(row)
+
+    return {
+        "metric": metric,
+        "granularity_minutes": granularity,
+        "from": from_time.isoformat(),
+        "to": to_time.isoformat(),
+        "group_by": group_by_fields,
+        "data": data,
+    }
