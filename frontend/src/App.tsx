@@ -6,6 +6,7 @@ import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
+import { PeopleManagement } from '@/components/people'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
 const Metrics = lazy(() => import('@/components/metrics/Metrics'))
@@ -158,6 +159,16 @@ const AuthWrapper = () => {
       <Route path="/ui/notes" element={
         isAuthenticated ? (
           <NotesPage />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/people" element={
+        isAuthenticated && hasScope('people') ? (
+          <PeopleManagement />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
         ) : (
           <Navigate to="/ui/login" replace />
         )
