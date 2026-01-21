@@ -432,7 +432,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
         self,
         per_page: int = 100,
         sort: str = "updated",
-        max_repos: int = 500,
+        max_repos: int | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """List repositories accessible to the authenticated user/app.
 
@@ -442,6 +442,11 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
            (viewer.repositories, viewer.repositoriesContributedTo, viewer.organizations...).
         2. For App auth: There's no direct GraphQL equivalent for `/installation/repositories`.
         3. This method doesn't suffer from N+1 problems - it just lists repos once.
+
+        Args:
+            per_page: Number of repos to fetch per API request (max 100).
+            sort: Sort order for repos (default: updated).
+            max_repos: Maximum number of repos to return. None means no limit (fetch all).
         """
         if self.credentials.auth_type == "app":
             url = f"{GITHUB_API_URL}/installation/repositories"
@@ -456,9 +461,8 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
 
         page = 1
         repos_yielded = 0
-        max_pages = (max_repos // per_page) + 1
 
-        while page <= max_pages:
+        while True:
             params["page"] = page
             response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
@@ -471,7 +475,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
                 break
 
             for repo in repos:
-                if repos_yielded >= max_repos:
+                if max_repos is not None and repos_yielded >= max_repos:
                     return
                 yield {
                     "owner": repo["owner"]["login"],
