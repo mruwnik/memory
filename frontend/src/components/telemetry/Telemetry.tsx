@@ -12,6 +12,7 @@ import { SessionActivityChart } from './SessionActivityChart'
 import { TelemetrySummaryCards } from './TelemetrySummaryCards'
 import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
+import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 
@@ -36,6 +37,7 @@ const Telemetry: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [selectedUser, setSelectedUser] = useUserSelection('telemetrySelectedUser')
 
   // Data state
   const [tokenUsage, setTokenUsage] = useState<TelemetryMetricsResponse | null>(null)
@@ -46,6 +48,9 @@ const Telemetry: React.FC = () => {
 
   const { getMetrics, getRawEvents, getToolUsage } = useTelemetry()
 
+  // Convert selectedUser to userId for API calls
+  const userId = selectedUser.type === 'user' ? selectedUser.id : undefined
+
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -55,11 +60,11 @@ const Telemetry: React.FC = () => {
 
     try {
       const [tokenRes, costRes, sessionRes, eventsRes, toolRes] = await Promise.all([
-        getMetrics('token.usage', { from, to, granularity, groupBy: ['source'] }),
-        getMetrics('cost.usage', { from, to, granularity, groupBy: ['source'] }),
-        getMetrics('session.count', { from, to, granularity, groupBy: [] }),
-        getRawEvents({ from, to, limit: 50 }),
-        getToolUsage({ from, to }),
+        getMetrics('token.usage', { from, to, granularity, groupBy: ['source'], userId }),
+        getMetrics('cost.usage', { from, to, granularity, groupBy: ['source'], userId }),
+        getMetrics('session.count', { from, to, granularity, groupBy: [], userId }),
+        getRawEvents({ from, to, limit: 50, userId }),
+        getToolUsage({ from, to, userId }),
       ])
 
       setTokenUsage(tokenRes)
@@ -73,7 +78,7 @@ const Telemetry: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [timeRange, getMetrics, getRawEvents, getToolUsage])
+  }, [timeRange, getMetrics, getRawEvents, getToolUsage, userId])
 
   useEffect(() => {
     loadData()
@@ -93,6 +98,7 @@ const Telemetry: React.FC = () => {
           <h1 className="text-2xl font-semibold text-slate-800">Claude Code Telemetry</h1>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <UserSelector value={selectedUser} onChange={setSelectedUser} />
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
           <button
             onClick={loadData}

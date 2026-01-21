@@ -9,13 +9,50 @@ Provides endpoints for:
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 
 from memory.api.auth import get_current_user
-from memory.common.db.connection import make_session
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import TelemetryEvent, User
+from sqlalchemy.orm import Session as DBSession
+
+
+def has_admin_scope(user: User) -> bool:
+    """Check if user has admin scope (can view all users' data)."""
+    user_scopes = user.scopes or []
+    return "*" in user_scopes or "admin" in user_scopes
+
+
+def resolve_user_filter(
+    user_id: int | None, current_user: User, db: DBSession
+) -> int | None:
+    """
+    Resolve user_id filter for admin queries.
+
+    Returns:
+        - None if admin requests all users (user_id="all" passed as None with special handling)
+        - Specific user_id if admin requests specific user
+        - current_user.id if non-admin (ignores user_id param)
+
+    Raises:
+        HTTPException 404 if requested user doesn't exist
+        HTTPException 403 if non-admin tries to view other user's data
+    """
+    if not has_admin_scope(current_user):
+        # Non-admins can only see their own data
+        return current_user.id
+
+    if user_id is None:
+        # Admin with no filter - return all users
+        return None
+
+    # Admin requesting specific user - verify they exist
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_id
 from memory.common.telemetry import (
     parse_otlp_json,
     write_events_to_db,
@@ -82,13 +119,20 @@ def get_raw_events(
     to_time: datetime | None = Query(None, alias="to", description="End time (ISO format)"),
     limit: int = Query(100, ge=1, le=1000, description="Max events to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> dict:
     """
     Query raw telemetry events for debugging and detailed analysis.
 
-    Only returns events for the authenticated user.
+    By default returns events for the authenticated user only.
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see all users' events
+    - Specify user_id to filter to a specific user
     """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
     # Default to last 24 hours if no time range specified
     if from_time is None and to_time is None:
         to_time = datetime.now(timezone.utc)
@@ -102,10 +146,13 @@ def get_raw_events(
     with make_session() as session:
         query = (
             session.query(TelemetryEvent)
-            .filter(TelemetryEvent.user_id == user.id)
             .filter(TelemetryEvent.timestamp >= from_time)
             .filter(TelemetryEvent.timestamp <= to_time)
         )
+
+        # Apply user filter
+        if resolved_user_id is not None:
+            query = query.filter(TelemetryEvent.user_id == resolved_user_id)
 
         if event_type:
             query = query.filter(TelemetryEvent.event_type == event_type)
@@ -152,7 +199,7 @@ def get_raw_events(
 
 
 # Valid group-by columns
-VALID_GROUP_BY_COLUMNS = {"source", "tool_name", "session_id", "event_type", "name"}
+VALID_GROUP_BY_COLUMNS = {"source", "tool_name", "session_id", "event_type", "name", "user_id"}
 
 
 @router.get("/metrics")
@@ -164,9 +211,11 @@ def get_aggregated_metrics(
     source: str | None = Query(None, description="Filter by source"),
     group_by: list[str] = Query(
         default=["source", "tool_name"],
-        description="Fields to group by: source, tool_name, session_id, event_type, name, or attributes.<key>",
+        description="Fields to group by: source, tool_name, session_id, event_type, name, user_id, or attributes.<key>",
     ),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
     user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
 ) -> dict:
     """
     Query aggregated metrics over time.
@@ -175,8 +224,15 @@ def get_aggregated_metrics(
     Aggregates are computed from raw events on-the-fly.
 
     The group_by parameter supports both column names (source, tool_name, session_id,
-    event_type, name) and JSONB attribute keys using the format "attributes.<key>".
+    event_type, name, user_id) and JSONB attribute keys using the format "attributes.<key>".
+
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see aggregated metrics across all users
+    - Specify user_id to filter to a specific user
+    - Use 'user_id' in group_by to see per-user breakdowns
     """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
     # Default to last 7 days if no time range specified
     if from_time is None and to_time is None:
         to_time = datetime.now(timezone.utc)
@@ -228,11 +284,14 @@ def get_aggregated_metrics(
 
         query = (
             session.query(*select_columns)
-            .filter(TelemetryEvent.user_id == user.id)
             .filter(TelemetryEvent.name == metric)
             .filter(TelemetryEvent.timestamp >= from_time)
             .filter(TelemetryEvent.timestamp <= to_time)
         )
+
+        # Apply user filter
+        if resolved_user_id is not None:
+            query = query.filter(TelemetryEvent.user_id == resolved_user_id)
 
         if source:
             query = query.filter(TelemetryEvent.source == source)
