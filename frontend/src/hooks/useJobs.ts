@@ -23,6 +23,7 @@ export interface JobFilters {
   job_type?: string
   limit?: number
   offset?: number
+  userId?: number  // Admin only: filter by specific user, omit for all users
 }
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
@@ -43,6 +44,7 @@ export const useJobs = () => {
     if (filters.job_type) params.set('job_type', filters.job_type)
     if (filters.limit) params.set('limit', filters.limit.toString())
     if (filters.offset) params.set('offset', filters.offset.toString())
+    if (filters.userId !== undefined) params.set('user_id', filters.userId.toString())
 
     const query = params.toString()
     const response = await apiCall(`/jobs${query ? `?${query}` : ''}`)

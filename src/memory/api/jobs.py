@@ -3,13 +3,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
 from memory.common.jobs import retry_failed_job, reingest_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def can_access_job(job, current_user: User) -> bool:
+    """Check if user can access a specific job."""
+    if has_admin_scope(current_user):
+        return True
+    return job.user_id is None or job.user_id == current_user.id
 
 
 # NOTE: /external/{external_id} must come BEFORE /{job_id} to avoid
@@ -32,7 +39,7 @@ def get_job_by_external_id(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.user_id and job.user_id != user.id:
+    if not can_access_job(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return PendingJobPayload.model_validate(job)
@@ -48,14 +55,14 @@ def get_job(
     Get the status of a specific job.
 
     Returns 404 if the job doesn't exist or doesn't belong to the user.
+    Admins can view any job.
     """
     job = job_utils.get_job(db, job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Users can only see their own jobs (admins could see all)
-    if job.user_id and job.user_id != user.id:
+    if not can_access_job(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return PendingJobPayload.model_validate(job)
@@ -69,17 +76,24 @@ def list_jobs(
     job_type: str | None = Query(None, description="Filter by job type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results to skip"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
 ) -> list[PendingJobPayload]:
     """
     List jobs for the current user.
 
     Supports filtering by status and job type.
+
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see all users' jobs
+    - Specify user_id to filter to a specific user's jobs
     """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
     jobs = job_utils.list_jobs(
         db,
         status=status,
         job_type=job_type,
-        user_id=user.id,
+        user_id=resolved_user_id,
         limit=limit,
         offset=offset,
     )
@@ -106,7 +120,7 @@ def retry_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.user_id and job.user_id != user.id:
+    if not can_access_job(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.status != JobStatus.FAILED.value:
@@ -143,7 +157,7 @@ def reingest_job_endpoint(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.user_id and job.user_id != user.id:
+    if not can_access_job(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):

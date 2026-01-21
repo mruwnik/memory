@@ -357,3 +357,145 @@ def test_route_ordering_external_before_job_id(client: TestClient, job_for_user)
     # Should succeed (not fail with "invalid integer")
     assert response.status_code == 200
     assert response.json()["external_id"] == "user-job-ext-123"
+
+
+# ---------- Admin user tests ----------
+
+
+@pytest.fixture
+def admin_user(db_session):
+    """Create an admin user with * scope."""
+    existing = db_session.query(User).filter(User.id == 2).first()
+    if existing:
+        existing.scopes = ["*"]
+        db_session.commit()
+        return existing
+    admin = User(
+        id=2,
+        name="Admin User",
+        email="admin@example.com",
+        scopes=["*"],
+    )
+    db_session.add(admin)
+    db_session.commit()
+    return admin
+
+
+@pytest.fixture
+def admin_client(app_client, db_session, admin_user):
+    """Get a test client authenticated as admin user."""
+    from unittest.mock import MagicMock, patch
+    from memory.api import auth
+    from memory.common.db.connection import get_session
+
+    test_client, app = app_client
+
+    # Create mock admin user
+    mock_admin = MagicMock()
+    mock_admin.id = admin_user.id
+    mock_admin.email = admin_user.email
+    mock_admin.scopes = ["*"]
+
+    def get_test_session():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    # Patch auth to return admin user
+    with patch.object(auth, "get_session_user", return_value=mock_admin):
+        app.dependency_overrides[get_session] = get_test_session
+        yield test_client
+        app.dependency_overrides.clear()
+
+
+def test_admin_can_see_other_user_job(admin_client: TestClient, job_for_other_user):
+    """Test that admin can view another user's job."""
+    response = admin_client.get(f"/jobs/{job_for_other_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == job_for_other_user.id
+
+
+def test_admin_list_all_users_jobs(admin_client: TestClient, db_session, user, other_user):
+    """Test that admin with no user_id filter sees all jobs."""
+    # Create jobs for both users
+    job1 = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={},
+        status=JobStatus.PENDING.value,
+        user_id=user.id,
+        external_id="admin-test-user1",
+    )
+    job2 = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={},
+        status=JobStatus.PENDING.value,
+        user_id=other_user.id,
+        external_id="admin-test-other",
+    )
+    db_session.add_all([job1, job2])
+    db_session.commit()
+
+    response = admin_client.get("/jobs")
+
+    assert response.status_code == 200
+    data = response.json()
+    job_ids = [j["id"] for j in data]
+    # Admin should see both jobs
+    assert job1.id in job_ids
+    assert job2.id in job_ids
+
+
+def test_admin_filter_by_user_id(admin_client: TestClient, db_session, user, other_user):
+    """Test that admin can filter jobs by user_id."""
+    # Create jobs for both users
+    job1 = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={},
+        status=JobStatus.PENDING.value,
+        user_id=user.id,
+        external_id="filter-test-user1",
+    )
+    job2 = PendingJob(
+        job_type=JobType.MEETING.value,
+        params={},
+        status=JobStatus.PENDING.value,
+        user_id=other_user.id,
+        external_id="filter-test-other",
+    )
+    db_session.add_all([job1, job2])
+    db_session.commit()
+
+    # Filter by specific user
+    response = admin_client.get(f"/jobs?user_id={other_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    # Should only see other_user's jobs when filtering
+    job_ids = [j["id"] for j in data]
+    assert job2.id in job_ids
+    # job1 should not appear (belongs to user, not other_user)
+    filtered_job = [j for j in data if j["external_id"] == "filter-test-user1"]
+    assert len(filtered_job) == 0
+
+
+def test_admin_filter_nonexistent_user(admin_client: TestClient):
+    """Test that admin filtering by non-existent user returns 404."""
+    response = admin_client.get("/jobs?user_id=999999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+
+
+def test_non_admin_cannot_filter_by_user_id(client: TestClient, job_for_other_user):
+    """Test that non-admin users cannot use user_id filter to see other users' jobs."""
+    # Regular client (non-admin) trying to filter by other user's ID
+    response = client.get(f"/jobs?user_id={job_for_other_user.user_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    # Should not see other user's job even with user_id filter
+    job_ids = [j["id"] for j in data]
+    assert job_for_other_user.id not in job_ids
