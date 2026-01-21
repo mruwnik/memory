@@ -1,20 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { usePeople, type Person, type PersonCreate, type PersonUpdate } from '../../hooks/usePeople'
+import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
-
-// Custom hook for debouncing values
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay)
-    return () => clearTimeout(timer)
-  }, [value, delay])
-
-  return debouncedValue
-}
 
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson } = usePeople()
@@ -47,8 +36,11 @@ const PeopleManagement = () => {
   // Expanded card state
   const [expandedIdentifier, setExpandedIdentifier] = useState<string | null>(null)
 
-  // Collect all unique tags from people for the filter
-  const allTags = Array.from(new Set(people.flatMap(p => p.tags || []))).sort()
+  // Collect all unique tags from people for the filter (memoized to avoid recomputing on every render)
+  const allTags = useMemo(
+    () => Array.from(new Set(people.flatMap(p => p.tags || []))).sort(),
+    [people]
+  )
 
   const loadPeople = useCallback(async () => {
     setLoading(true)
@@ -78,8 +70,10 @@ const PeopleManagement = () => {
     try {
       await addPerson(data)
       setShowCreateModal(false)
-      // Wait a moment for the background task to complete
-      setTimeout(() => loadPeople(), 500)
+      // Background task processes asynchronously via Celery.
+      // Delay refresh to allow task completion. This is a pragmatic approach;
+      // for guaranteed consistency, consider polling task status or using SSE.
+      setTimeout(() => loadPeople(), 1000)
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : 'Failed to create person')
     } finally {
@@ -96,8 +90,10 @@ const PeopleManagement = () => {
     try {
       await updatePerson(editingPerson.identifier, data)
       setEditingPerson(null)
-      // Wait a moment for the background task to complete
-      setTimeout(() => loadPeople(), 500)
+      // Background task processes asynchronously via Celery.
+      // Delay refresh to allow task completion. This is a pragmatic approach;
+      // for guaranteed consistency, consider polling task status or using SSE.
+      setTimeout(() => loadPeople(), 1000)
     } catch (e) {
       setEditError(e instanceof Error ? e.message : 'Failed to update person')
     } finally {

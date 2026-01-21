@@ -45,6 +45,11 @@ export interface TaskResult {
 export const usePeople = () => {
   const { mcpCall } = useMCP()
 
+  // Note: mcpCall returns results wrapped in an array from the SSE response parsing.
+  // The result?.[0] pattern unwraps the first (and only) response element.
+  // The double-array typing (e.g., Person[][]) reflects: outer array from mcpCall,
+  // inner array from the actual API response.
+
   const listPeople = useCallback(async (filters: PersonFilters = {}): Promise<Person[]> => {
     const result = await mcpCall<Person[][]>('people_list_people', {
       tags: filters.tags,

@@ -50,7 +50,11 @@ const PersonFormModal = ({
   })
 
   const generateIdentifier = (name: string): string => {
+    // Normalize unicode characters and convert to ASCII-friendly slug
+    // Note: This strips non-ASCII chars; international names may need manual adjustment
     return name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, '')
       .replace(/\s+/g, '_')
