@@ -165,7 +165,7 @@ async def search_bm25_chunks(
     modalities: set[str] = set(),
     limit: int = 10,
     filters: SearchFilters = SearchFilters(),
-    timeout: int = 10,
+    timeout: float = 10,
 ) -> dict[str, float]:
     """
     Search chunks using PostgreSQL full-text search.
@@ -201,7 +201,7 @@ async def search_bm25_chunks(
     # Merge results - take max score for each chunk across all queries
     merged: dict[str, float] = {}
     for result in results:
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             continue
         for chunk_id, score in result.items():
             if chunk_id not in merged or score > merged[chunk_id]:

@@ -114,6 +114,7 @@ def test_create_or_update_server_updates_existing(db_session, mock_guild):
 
     result = create_or_update_server(db_session, mock_guild)
 
+    assert result is not None
     assert result.name == "New Name"
     assert result.description == "New Description"
     assert result.member_count == 50
@@ -260,6 +261,7 @@ def test_create_or_update_channel_updates_existing(db_session, mock_text_channel
 
     result = create_or_update_channel(db_session, mock_text_channel)
 
+    assert result is not None
     assert result.name == "new-name"
 
 
@@ -297,13 +299,14 @@ def test_create_or_update_user_updates_existing(db_session, mock_user):
 
     result = create_or_update_user(db_session, mock_user)
 
+    assert result is not None
     assert result.username == "newname"
     assert result.display_name == "New Display Name"
 
 
 def test_create_or_update_user_none_user(db_session):
     """Test with None user"""
-    result = create_or_update_user(db_session, None)
+    result = create_or_update_user(db_session, None)  # type: ignore[arg-type]
     assert result is None
 
 

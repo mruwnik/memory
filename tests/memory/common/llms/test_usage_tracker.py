@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Any, Iterable, cast
 
 import pytest
 
@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - import guard for test envs
                     "The 'redis' package is required to use RedisUsageTracker"
                 )
 
-    sys.modules.setdefault("redis", _RedisStub())
+    sys.modules.setdefault("redis", cast(Any, _RedisStub()))
 
 from memory.common.llms.usage import (
     InMemoryUsageTracker,
@@ -73,7 +73,7 @@ def redis_tracker() -> RedisUsageTracker:
             "anthropic/claude-3": config,
             "anthropic/haiku": config,
         },
-        redis_client=FakeRedis(),
+        redis_client=cast(Any, FakeRedis()),
     )
 
 

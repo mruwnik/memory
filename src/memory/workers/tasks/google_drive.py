@@ -273,7 +273,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                     try:
                         file_data = client.fetch_file(file_meta, file_folder_path)
                         serialized = _serialize_file_data(file_data)
-                        task = sync_google_doc.delay(folder.id, serialized)
+                        task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
                         task_ids.append(task.id)
                         docs_synced += 1
                     except Exception as e:
@@ -305,7 +305,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                 try:
                     file_data = client.fetch_file(file_metadata, folder_path)
                     serialized = _serialize_file_data(file_data)
-                    task = sync_google_doc.delay(folder.id, serialized)
+                    task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
                     task_ids.append(task.id)
                     docs_synced = 1
                 except Exception as e:
@@ -349,7 +349,7 @@ def sync_all_google_accounts(force_full: bool = False) -> list[dict[str, Any]]:
             {
                 "folder_id": folder.id,
                 "folder_name": folder.folder_name,
-                "task_id": sync_google_folder.delay(folder.id, force_full=force_full).id,
+                "task_id": sync_google_folder.delay(folder.id, force_full=force_full).id,  # type: ignore[attr-defined]
             }
             for folder in active_folders
         ]

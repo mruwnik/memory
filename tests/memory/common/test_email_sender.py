@@ -1,6 +1,8 @@
 """Tests for email sending functionality."""
 
+from email.message import Message as EmailMessage
 from email.mime.multipart import MIMEMultipart
+from typing import cast
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -155,7 +157,7 @@ def test_build_mime_message_with_html():
     )
 
     # Should have multipart/alternative for body
-    payload = msg.get_payload()
+    payload = cast(list[EmailMessage], msg.get_payload())
     assert len(payload) == 1
     alt_part = payload[0]
     assert alt_part.get_content_type() == "multipart/alternative"
@@ -275,6 +277,7 @@ def test_send_via_smtp_auth_failure(mock_smtp_class):
     )
 
     assert result.success is False
+    assert result.error is not None
     assert "Authentication failed" in result.error
 
 
@@ -301,6 +304,7 @@ def test_send_via_smtp_timeout(mock_smtp_class):
     )
 
     assert result.success is False
+    assert result.error is not None
     assert "timed out" in result.error.lower()
 
 
@@ -324,6 +328,7 @@ def test_send_via_smtp_no_password(mock_smtp_class):
     )
 
     assert result.success is False
+    assert result.error is not None
     assert "password" in result.error.lower()
     # Should not have attempted to connect
     mock_smtp_class.assert_not_called()

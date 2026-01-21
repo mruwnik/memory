@@ -4,7 +4,7 @@ MCP subserver for availability polling tools (LettuceMeet-style meeting scheduli
 
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
@@ -112,9 +112,9 @@ async def upsert_poll(
         if description is not None:
             poll.description = description
         if datetime_start is not None:
-            poll.datetime_start = parse_datetime(datetime_start)
+            poll.datetime_start = cast(datetime, parse_datetime(datetime_start))
         if datetime_end is not None:
-            poll.datetime_end = parse_datetime(datetime_end)
+            poll.datetime_end = cast(datetime, parse_datetime(datetime_end))
         if slot_duration is not None:
             poll.slot_duration_minutes = slot_duration
         elif poll_id is None:

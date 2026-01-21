@@ -526,7 +526,7 @@ class BaseLLMProvider(ABC):
         Yields:
             StreamEvent objects containing text chunks, tool uses, or errors
         """
-        pass
+        yield StreamEvent(type="error", data="Not implemented")  # Abstract
 
     def stream_with_tools(
         self,

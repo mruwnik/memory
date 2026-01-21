@@ -58,7 +58,7 @@ def mock_issue_data(mock_github_comment) -> GithubIssueData:
         author="testuser",
         labels=["bug", "help wanted"],
         assignees=["developer1"],
-        milestone="v1.0",
+        milestone_number=1,
         created_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -68,6 +68,7 @@ def mock_issue_data(mock_github_comment) -> GithubIssueData:
         diff_summary=None,
         project_fields=None,
         content_hash="abc123hash",
+        pr_data=None,
     )
 
 
@@ -83,7 +84,7 @@ def mock_pr_data() -> GithubIssueData:
         author="contributor",
         labels=["enhancement"],
         assignees=["reviewer1", "reviewer2"],
-        milestone="v2.0",
+        milestone_number=2,
         created_at=datetime(2024, 1, 5, 9, 0, 0, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -93,6 +94,7 @@ def mock_pr_data() -> GithubIssueData:
         diff_summary="+100 -50",
         project_fields={"Status": "In Progress", "Priority": "High"},
         content_hash="pr123hash",
+        pr_data=None,
     )
 
 
@@ -108,7 +110,7 @@ def mock_closed_issue_data() -> GithubIssueData:
         author="reporter",
         labels=["bug", "fixed"],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2023, 12, 1, 12, 0, 0, tzinfo=timezone.utc),
         closed_at=datetime(2023, 12, 15, 18, 0, 0, tzinfo=timezone.utc),
         merged_at=None,
@@ -118,6 +120,7 @@ def mock_closed_issue_data() -> GithubIssueData:
         diff_summary=None,
         project_fields=None,
         content_hash="closedhash",
+        pr_data=None,
     )
 
 
@@ -266,7 +269,7 @@ def test_build_content_no_comments():
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -276,6 +279,7 @@ def test_build_content_no_comments():
         diff_summary=None,
         project_fields=None,
         content_hash="hash",
+        pr_data=None,
     )
     content = _build_content(data)
 
@@ -311,7 +315,7 @@ def test_serialize_handles_none_dates():
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -321,6 +325,7 @@ def test_serialize_handles_none_dates():
         diff_summary=None,
         project_fields=None,
         content_hash="hash",
+        pr_data=None,
     )
     serialized = serialize_issue_data(data)
 
@@ -359,7 +364,7 @@ def test_needs_reindex_content_hash_changed(github_repo, db_session):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -369,6 +374,7 @@ def test_needs_reindex_content_hash_changed(github_repo, db_session):
         diff_summary=None,
         project_fields=None,
         content_hash="newhash",  # Different hash
+        pr_data=None,
     )
 
     assert _needs_reindex(existing, new_data) is True
@@ -400,7 +406,7 @@ def test_needs_reindex_github_updated_at_newer(github_repo, db_session):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -410,6 +416,7 @@ def test_needs_reindex_github_updated_at_newer(github_repo, db_session):
         diff_summary=None,
         project_fields=None,
         content_hash="samehash",
+        pr_data=None,
     )
 
     assert _needs_reindex(existing, new_data) is True
@@ -441,7 +448,7 @@ def test_needs_reindex_project_fields_changed(github_repo, db_session):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -451,6 +458,7 @@ def test_needs_reindex_project_fields_changed(github_repo, db_session):
         diff_summary=None,
         project_fields={"Status": "In Progress"},  # Changed
         content_hash="samehash",
+        pr_data=None,
     )
 
     assert _needs_reindex(existing, new_data) is True
@@ -482,7 +490,7 @@ def test_needs_reindex_no_changes(github_repo, db_session):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -492,6 +500,7 @@ def test_needs_reindex_no_changes(github_repo, db_session):
         diff_summary=None,
         project_fields={"Status": "Todo"},  # Same
         content_hash="samehash",  # Same
+        pr_data=None,
     )
 
     assert _needs_reindex(existing, new_data) is False
@@ -588,7 +597,7 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
         author="user",
         labels=["bug"],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         comment_count=0,
@@ -612,7 +621,7 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
         author="user",
         labels=["bug", "fixed"],
         assignees=["dev1"],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -622,6 +631,7 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
         diff_summary=None,
         project_fields=None,
         content_hash="updatedhash",  # Different hash triggers reindex
+        pr_data=None,
     )
     serialized = serialize_issue_data(updated_data)
     result = github.sync_github_item(github_repo.id, serialized)
@@ -1031,7 +1041,7 @@ def test_project_status_extraction(github_repo, db_session, qdrant):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1041,6 +1051,7 @@ def test_project_status_extraction(github_repo, db_session, qdrant):
         diff_summary=None,
         project_fields={"Status": "Done", "Priority": "Low", "Custom Field": "Value"},
         content_hash="hash",
+        pr_data=None,
     )
     serialized = serialize_issue_data(data)
     github.sync_github_item(github_repo.id, serialized)
@@ -1066,7 +1077,7 @@ def test_project_fields_case_insensitive(github_repo, db_session, qdrant):
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1076,6 +1087,7 @@ def test_project_fields_case_insensitive(github_repo, db_session, qdrant):
         diff_summary=None,
         project_fields={"PROJECT STATUS": "In Review", "item priority": "Medium"},
         content_hash="hash",
+        pr_data=None,
     )
     serialized = serialize_issue_data(data)
     github.sync_github_item(github_repo.id, serialized)
@@ -1121,7 +1133,7 @@ def test_tag_merging(repo_tags, issue_labels, expected_tags, github_account, db_
         author="user",
         labels=issue_labels,
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1131,6 +1143,7 @@ def test_tag_merging(repo_tags, issue_labels, expected_tags, github_account, db_
         diff_summary=None,
         project_fields=None,
         content_hash="hash",
+        pr_data=None,
     )
     serialized = serialize_issue_data(data)
     github.sync_github_item(repo.id, serialized)
@@ -1202,7 +1215,7 @@ def mock_pr_data_with_extended() -> GithubIssueData:
         author="contributor",
         labels=["enhancement", "needs-review"],
         assignees=["reviewer1"],
-        milestone="v2.0",
+        milestone_number=2,
         created_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1253,7 +1266,7 @@ def test_build_content_pr_without_review_comments():
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1291,7 +1304,7 @@ def test_build_content_issue_no_pr_data():
         author="reporter",
         labels=["bug"],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1323,15 +1336,18 @@ def test_create_pr_data_function(mock_pr_data_with_extended):
     assert result.changed_files_count == 2
 
     # Files are stored as JSONB
+    assert result.files is not None
     assert len(result.files) == 2
     assert result.files[0]["filename"] == "src/main.py"
 
     # Reviews
+    assert result.reviews is not None
     assert len(result.reviews) == 1
     assert result.reviews[0]["user"] == "lead_reviewer"
     assert result.reviews[0]["state"] == "approved"
 
     # Review comments
+    assert result.review_comments is not None
     assert len(result.review_comments) == 1
     assert result.review_comments[0]["path"] == "src/main.py"
 
@@ -1353,7 +1369,7 @@ def test_create_pr_data_none_for_issue():
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime.now(timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1393,11 +1409,8 @@ def test_serialize_deserialize_with_pr_data(mock_pr_data_with_extended):
 
 def test_serialize_deserialize_without_pr_data(mock_issue_data):
     """Test serialization roundtrip for issue without pr_data."""
-    # Add pr_data=None to the mock (issues don't have it)
-    issue_with_none = dict(mock_issue_data)
-    issue_with_none["pr_data"] = None
-
-    serialized = serialize_issue_data(issue_with_none)
+    # mock_issue_data already has pr_data=None
+    serialized = serialize_issue_data(mock_issue_data)
     assert serialized.get("pr_data") is None
 
     deserialized = _deserialize_issue_data(serialized)
@@ -1447,7 +1460,7 @@ def test_sync_github_item_pr_without_pr_data(github_repo, db_session, qdrant):
         author="old_contributor",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         closed_at=datetime(2024, 1, 5, tzinfo=timezone.utc),
         merged_at=datetime(2024, 1, 5, tzinfo=timezone.utc),
@@ -1489,7 +1502,7 @@ def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdra
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         comment_count=0,
@@ -1527,7 +1540,7 @@ def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdra
         author="user",
         labels=["ready-for-review"],
         assignees=["reviewer"],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,
@@ -1596,7 +1609,7 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         comment_count=0,
@@ -1622,7 +1635,7 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
         author="user",
         labels=[],
         assignees=[],
-        milestone=None,
+        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         closed_at=None,
         merged_at=None,

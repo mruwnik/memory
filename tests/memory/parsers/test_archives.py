@@ -14,6 +14,8 @@ from memory.parsers.archives import (
     get_archive_fetcher,
     FETCHER_REGISTRY,
 )
+from typing import Generator
+
 from memory.parsers.feeds import (
     FeedItem,
     FeedParser,
@@ -31,8 +33,8 @@ class MockParser(FeedParser):
         self.items = items or []
         self.content = content
 
-    def parse_feed(self):
-        return self.items
+    def parse_feed(self) -> Generator[FeedItem, None, None]:
+        yield from self.items
 
 
 def test_archive_fetcher_make_parser():

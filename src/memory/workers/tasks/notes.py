@@ -172,13 +172,13 @@ def sync_notes(folder: str):
                 )
                 if not existing:
                     new_profiles += 1
-                    sync_profile_from_file.delay(relative_path)
+                    sync_profile_from_file.delay(relative_path)  # type: ignore[attr-defined]
             else:
                 if not check_content_exists(
                     session, Note, filename=filename.as_posix()
                 ):
                     new_notes += 1
-                    sync_note.delay(
+                    sync_note.delay(  # type: ignore[attr-defined]
                         subject=filename.stem,
                         content=filename.read_text(),
                         filename=relative_path,
@@ -264,9 +264,9 @@ def track_git_changes():
             # Import here to avoid circular imports
             from memory.workers.tasks.people import sync_profile_from_file
 
-            sync_profile_from_file.delay(filename)
+            sync_profile_from_file.delay(filename)  # type: ignore[attr-defined]
         else:
-            sync_note.delay(
+            sync_note.delay(  # type: ignore[attr-defined]
                 subject=file.stem,
                 content=file.read_text(),
                 filename=filename,

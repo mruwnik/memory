@@ -69,6 +69,7 @@ def get_test_path():
         (b"\x00\x01\x02\xff" * 10000, "another-key"),
         (b"x" * 1000000, "large-data-key"),
     ],
+    ids=["text-data", "binary-with-nulls", "large-data"],
 )
 def test_encrypt_decrypt_roundtrip(data, key):
     """Test encryption and decryption produces original data."""
@@ -292,7 +293,9 @@ def test_backup_encrypted_data_integrity(
         note1_found = False
         for member in tar.getmembers():
             if member.name.endswith("note1.md") and member.isfile():
-                content = tar.extractfile(member).read().decode()
+                file_obj = tar.extractfile(member)
+                assert file_obj is not None
+                content = file_obj.read().decode()
                 assert "Content of notes/note1.md" in content
                 note1_found = True
         assert note1_found, "note1.md not found in tarball"
@@ -308,8 +311,13 @@ def test_backup_disabled():
 
 def test_backup_full_execution(sample_files, mock_s3_client, backup_settings):
     """Test full backup execution dispatches tasks for all directories."""
-    with patch.object(backup, "backup_to_s3") as mock_task:
+    with (
+        patch.object(backup, "backup_to_s3") as mock_task,
+        patch.object(backup, "backup_lock") as mock_lock,
+    ):
         mock_task.delay = Mock()
+        mock_lock.return_value.__enter__ = Mock()
+        mock_lock.return_value.__exit__ = Mock(return_value=None)
 
         result = backup.backup_all_to_s3()
 

@@ -25,9 +25,15 @@ def test_mcp_server_as_xml_formats_available_tools(available_tools, expected_too
     xml_output = server.as_xml()
     root = ET.fromstring(xml_output)
 
-    assert root.find("name").text.strip() == "Example Server"
-    assert root.find("mcp_server_url").text.strip() == "https://example.com/mcp"
-    assert root.find("client_id").text.strip() == "client-123"
+    name_el = root.find("name")
+    url_el = root.find("mcp_server_url")
+    client_id_el = root.find("client_id")
+    assert name_el is not None and name_el.text is not None
+    assert url_el is not None and url_el.text is not None
+    assert client_id_el is not None and client_id_el.text is not None
+    assert name_el.text.strip() == "Example Server"
+    assert url_el.text.strip() == "https://example.com/mcp"
+    assert client_id_el.text.strip() == "client-123"
 
     tools_element = root.find("available_tools")
     assert tools_element is not None

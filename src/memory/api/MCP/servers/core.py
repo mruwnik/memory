@@ -150,8 +150,9 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
         return source_ids
 
     tags = filters.get("tags")
-    size = filters.get("size")
-    if not (tags or size):
+    min_size = filters.get("min_size")
+    max_size = filters.get("max_size")
+    if not (tags or min_size or max_size):
         return None
 
     with make_session() as session:
@@ -161,8 +162,10 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
             items_query = items_query.filter(
                 SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
             )
-        if size:
-            items_query = items_query.filter(SourceItem.size == size)
+        if min_size is not None:
+            items_query = items_query.filter(SourceItem.size >= min_size)
+        if max_size is not None:
+            items_query = items_query.filter(SourceItem.size <= max_size)
         if modalities:
             items_query = items_query.filter(SourceItem.modality.in_(modalities))
         source_ids = [item.id for item in items_query.all()]

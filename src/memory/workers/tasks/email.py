@@ -139,7 +139,7 @@ def process_email_batch(
             ):
                 continue
 
-            process_message.delay(
+            process_message.delay(  # type: ignore[attr-defined]
                 cast(int, account.id),
                 message_id,
                 folder,

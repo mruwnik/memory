@@ -491,7 +491,7 @@ def test_html_list_parser_should_skip_url(url, should_skip):
             "h2",
             "Custom Title",
         ),
-        ('<li><a href="/link">Link</a></li>', None, None),
+        ('<li><a href="/link">Link</a></li>', None, ""),
     ],
 )
 def test_html_list_parser_extract_title(html, title_selector, expected):
@@ -501,14 +501,14 @@ def test_html_list_parser_extract_title(html, title_selector, expected):
     parser = HTMLListParser(url="https://example.com")
     parser.title_selector = title_selector
 
-    if expected and title_selector:
+    if title_selector:
         with patch("memory.parsers.feeds.extract_title") as mock_extract:
             mock_extract.return_value = expected
             title = parser.extract_title(item)
             mock_extract.assert_called_once_with(item, title_selector)
             assert title == expected
     else:
-        assert parser.extract_title(item) is None
+        assert parser.extract_title(item) == ""
 
 
 @pytest.mark.parametrize(
@@ -519,7 +519,7 @@ def test_html_list_parser_extract_title(html, title_selector, expected):
             "p",
             "Description text",
         ),
-        ('<li><a href="/link">Link</a></li>', None, None),
+        ('<li><a href="/link">Link</a></li>', None, ""),
     ],
 )
 def test_html_list_parser_extract_description(html, description_selector, expected):

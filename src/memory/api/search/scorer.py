@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import Sequence
+
 from bs4 import BeautifulSoup
 from PIL import Image
 
@@ -70,7 +72,7 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
 
 
 async def rank_chunks(
-    query: str, chunks: list[Chunk], min_score: float = 0
+    query: str, chunks: Sequence[Chunk], min_score: float = 0
 ) -> list[Chunk]:
     calls = [score_chunk(query, chunk) for chunk in chunks]
     scored = await asyncio.gather(*calls)

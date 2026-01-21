@@ -59,8 +59,8 @@ class RedisUsageTracker(UsageTracker):
         prefix = key_prefix or settings.LLM_USAGE_REDIS_PREFIX
         self._key_prefix = prefix.rstrip(":")
 
-    def get_state(self, model: str) -> UsageState:
-        redis_key = self._format_key(model)
+    def get_state(self, key: str) -> UsageState:
+        redis_key = self._format_key(key)
         payload = self._redis.get(redis_key)
         if not payload:
             return UsageState()
@@ -71,23 +71,23 @@ class RedisUsageTracker(UsageTracker):
     def iter_state_items(self) -> Iterable[tuple[str, UsageState]]:
         pattern = f"{self._key_prefix}:*"
         for redis_key in self._redis.scan_iter(match=pattern):
-            key = self._ensure_str(redis_key)
-            payload = self._redis.get(key)
+            state_key = self._ensure_str(redis_key)
+            payload = self._redis.get(state_key)
             if not payload:
                 continue
             if isinstance(payload, bytes):
                 payload = payload.decode()
             state = UsageState.from_payload(json.loads(payload))
-            yield key[len(self._key_prefix) + 1 :], state
+            yield state_key[len(self._key_prefix) + 1 :], state
 
-    def save_state(self, model: str, state: UsageState) -> None:
-        redis_key = self._format_key(model)
+    def save_state(self, key: str, state: UsageState) -> None:
+        redis_key = self._format_key(key)
         self._redis.set(
             redis_key, json.dumps(state.to_payload(), separators=(",", ":"))
         )
 
-    def _format_key(self, model: str) -> str:
-        return f"{self._key_prefix}:{model}"
+    def _format_key(self, key: str) -> str:
+        return f"{self._key_prefix}:{key}"
 
     @staticmethod
     def _ensure_str(value: Any) -> str:

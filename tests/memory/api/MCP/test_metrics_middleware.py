@@ -165,12 +165,12 @@ async def test_on_call_tool_user_info_error(mock_context):
     middleware = MetricsMiddleware(get_user_info=bad_user_info)
     mock_result = Mock(isError=False)
 
-    async def call_next(ctx):
+    async def call_next(context):
         return mock_result
 
     with patch("memory.api.MCP.metrics_middleware.record_metric") as mock_record:
         # Should not raise despite user info error
-        result = await middleware.on_call_tool(mock_context, call_next)
+        result = await middleware.on_call_tool(mock_context, call_next)  # type: ignore[arg-type]
 
         assert result is mock_result
         mock_record.assert_called_once()

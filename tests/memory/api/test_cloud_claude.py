@@ -17,12 +17,21 @@ from memory.common.db.models.users import HumanUser
 
 
 def test_make_session_id_includes_user_id():
-    """Test that session IDs include the user ID prefix."""
+    """Test that session IDs include the user ID prefix and source indicator."""
+    # With no environment_id or snapshot_id, source is 'x'
     session_id = make_session_id(42)
-    assert session_id.startswith("u42-")
-    # Should have random hex after the prefix
-    random_part = session_id.split("-")[1]
+    assert session_id.startswith("u42-x-")
+    # Should have random hex after the source indicator
+    random_part = session_id.split("-")[2]
     assert len(random_part) == 12  # 6 bytes = 12 hex chars
+
+    # With environment_id
+    session_id = make_session_id(42, environment_id=5)
+    assert session_id.startswith("u42-e5-")
+
+    # With snapshot_id
+    session_id = make_session_id(42, snapshot_id=10)
+    assert session_id.startswith("u42-s10-")
 
 
 def test_make_session_id_unique():

@@ -1,4 +1,5 @@
 import pytest
+from typing import Any, cast
 from PIL import Image
 
 from memory.common.llms.base import (
@@ -120,7 +121,7 @@ def test_message_simple_string_content():
 
 def test_message_list_content():
     content_list = [TextContent(text="hello"), TextContent(text="world")]
-    msg = Message(role=MessageRole.USER, content=content_list)
+    msg = Message(role=MessageRole.USER, content=cast(Any, content_list))
     assert msg.role == MessageRole.USER
     assert len(msg.content) == 2
 
@@ -157,7 +158,7 @@ def test_message_assistant_filters_invalid_content():
         TextContent(text=""),  # Invalid - empty
     )
     assert len(msg.content) == 1
-    assert msg.content[0].text == "valid"
+    assert cast(TextContent, msg.content[0]).text == "valid"
 
 
 def test_message_user_factory():

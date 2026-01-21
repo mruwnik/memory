@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from memory.api.MCP.servers.meta import (
@@ -289,7 +290,7 @@ async def test_format_market_binary_includes_probability():
         "createdTime": 1704067200000,  # 2024-01-01 00:00:00
     }
 
-    result = await format_market(mock_session, market)
+    result = await format_market(mock_session, cast(Any, market))
 
     assert result["probability"] == 0.65
     assert result["question"] == "Will it rain?"
@@ -308,11 +309,11 @@ async def test_format_market_converts_created_time():
         "volume": 1000,
     }
 
-    result = await format_market(mock_session, market)
+    result = await format_market(mock_session, cast(Any, market))
 
     assert "createdAt" in result
     # Should be ISO format timestamp
-    assert result["createdAt"].startswith("2024-01-01")
+    assert str(result["createdAt"]).startswith("2024-01-01")
 
 
 @pytest.mark.asyncio
@@ -331,7 +332,7 @@ async def test_format_market_filters_fields():
         "another_field": 123,
     }
 
-    result = await format_market(mock_session, market)
+    result = await format_market(mock_session, cast(Any, market))
 
     assert "extra_field" not in result
     assert "another_field" not in result
@@ -395,9 +396,9 @@ def test_get_schema_returns_payload_fields():
     class MockClass:
         @staticmethod
         def as_payload() -> PayloadType:
-            pass
+            return {"title": "", "count": 0}
 
-    result = get_schema(MockClass)
+    result = get_schema(cast(Any, MockClass))
 
     assert "title" in result
     assert "count" in result
@@ -411,6 +412,6 @@ def test_get_schema_returns_empty_without_as_payload():
     class MockClass:
         pass
 
-    result = get_schema(MockClass)
+    result = get_schema(cast(Any, MockClass))
 
     assert result == {}

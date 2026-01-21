@@ -1,5 +1,7 @@
 """Tests for the MCP visibility system."""
 
+from typing import cast
+
 import pytest
 from sqlalchemy.orm import Session
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -174,6 +176,7 @@ async def test_visible_when_multiple_checkers_fails_fast(mock_session):
         pass
 
     combined = get_visibility_checker("fail_fast_tool")
+    assert combined is not None
     result = await combined({}, mock_session)
 
     assert result is False
@@ -393,10 +396,10 @@ async def test_on_call_tool_denies_when_checker_fails(middleware):
     with patch("memory.api.MCP.visibility_middleware.make_session"):
         result = await middleware.on_call_tool(context, call_next)
 
-    # Should return error result
-    assert result.isError is True
-    assert "Access denied" in result.content[0].text
-    assert "denied_tool" in result.content[0].text
+    # Should return error result with access denied message
+    text_content = cast(mt.TextContent, result.content[0])
+    assert "Access denied" in text_content.text
+    assert "denied_tool" in text_content.text
 
     # call_next should NOT be called
     call_next.assert_not_awaited()
@@ -420,10 +423,10 @@ async def test_on_call_tool_checker_error_returns_error_result(middleware):
     with patch("memory.api.MCP.visibility_middleware.make_session"):
         result = await middleware.on_call_tool(context, call_next)
 
-    # Should return error result
-    assert result.isError is True
-    assert "Access check failed" in result.content[0].text
-    assert "error_tool" in result.content[0].text
+    # Should return error result with access check failed message
+    text_content = cast(mt.TextContent, result.content[0])
+    assert "Access check failed" in text_content.text
+    assert "error_tool" in text_content.text
 
     # call_next should NOT be called
     call_next.assert_not_awaited()
@@ -453,5 +456,6 @@ async def test_on_call_tool_strips_prefix_for_checker_lookup():
         result = await middleware.on_call_tool(context, call_next)
 
     # Should be denied (checker found via base name lookup)
-    assert result.isError is True
+    text_content = cast(mt.TextContent, result.content[0])
+    assert "Access denied" in text_content.text
     call_next.assert_not_awaited()

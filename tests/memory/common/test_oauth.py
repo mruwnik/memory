@@ -1,6 +1,7 @@
 """Tests for OAuth 2.0 flow handling."""
 
 import pytest
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
@@ -77,6 +78,7 @@ class TestDiscoverOauthMetadata:
             result = await discover_oauth_metadata("https://example.com")
 
         assert result == metadata
+        assert result is not None
         assert result["authorization_endpoint"] == "https://example.com/auth"
 
     @pytest.mark.asyncio
@@ -410,7 +412,7 @@ class TestCompleteOauthFlow:
     async def test_complete_oauth_flow_invalid_state(self):
         """Test OAuth flow completion with invalid state."""
         status, message = await complete_oauth_flow(
-            None,
+            cast(Any, None),
             "auth-code-123",
             "invalid-state",
         )

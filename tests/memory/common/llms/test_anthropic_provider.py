@@ -1,4 +1,5 @@
 import pytest
+from typing import Any, cast
 from unittest.mock import Mock
 from PIL import Image
 
@@ -373,7 +374,7 @@ def test_execute_tool_success(provider):
             name="test",
             description="test",
             input_schema={},
-            function=lambda x: f"result: {x['arg']}",
+            function=cast(Any, lambda x: f"result: {x['arg']}"),
         )
     }
 
@@ -413,7 +414,7 @@ def test_execute_tool_exception(provider):
             name="test",
             description="test",
             input_schema={},
-            function=lambda x: 1 / 0,  # Raises ZeroDivisionError
+            function=cast(Any, lambda x: 1 / 0),  # Raises ZeroDivisionError
         )
     }
 

@@ -175,6 +175,7 @@ def main():
             sys.exit(1)
 
     # Decrypt and extract
+    assert password is not None  # Checked earlier with sys.exit(1) if not set
     if decrypt_and_extract(encrypted_data, password, args.output):
         print(f"\nFiles restored to: {args.output.absolute()}")
     else:

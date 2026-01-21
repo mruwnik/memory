@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from memory.common import extract, settings
 from memory.common.db.connection import make_session
@@ -53,7 +54,7 @@ def extract_query_terms(query: str) -> set[str]:
 
 
 def apply_query_term_boost(
-    chunks: list[Chunk],
+    chunks: Sequence[Chunk],
     query_terms: set[str],
 ) -> None:
     """
@@ -74,7 +75,7 @@ def apply_query_term_boost(
             chunk.relevance_score = (chunk.relevance_score or 0) + boost
 
 
-def deduplicate_by_source(chunks: list[Chunk]) -> list[Chunk]:
+def deduplicate_by_source(chunks: Sequence[Chunk]) -> list[Chunk]:
     """
     Keep only the highest-scoring chunk per source.
 
@@ -94,7 +95,7 @@ def deduplicate_by_source(chunks: list[Chunk]) -> list[Chunk]:
 
 
 def apply_source_boosts(
-    chunks: list[Chunk],
+    chunks: Sequence[Chunk],
     query_terms: set[str],
     recalled_titles: list[str] | None = None,
 ) -> None:
@@ -252,7 +253,7 @@ async def _run_llm_analysis(
 
         for i, (name, _) in enumerate(tasks):
             result = results[i]
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.warning(f"{name} failed: {result}")
                 continue
 
@@ -424,12 +425,12 @@ async def _run_searches(
             return_exceptions=True,
         )
 
-        embedding_scores = results[0] if not isinstance(results[0], Exception) else {}
-        if isinstance(results[0], Exception):
+        embedding_scores = results[0] if not isinstance(results[0], BaseException) else {}
+        if isinstance(results[0], BaseException):
             logger.warning(f"Embedding search failed: {results[0]}")
 
-        bm25_scores = results[1] if not isinstance(results[1], Exception) else {}
-        if isinstance(results[1], Exception):
+        bm25_scores = results[1] if not isinstance(results[1], BaseException) else {}
+        if isinstance(results[1], BaseException):
             logger.warning(f"BM25 search failed: {results[1]}")
     else:
         embedding_scores = await embedding_task
@@ -488,7 +489,7 @@ def _fetch_chunks(
 
 
 def _apply_boosts(
-    chunks: list[Chunk],
+    chunks: Sequence[Chunk],
     data: list[extract.DataChunk],
     recalled_content: list[str] | None = None,
 ) -> None:
@@ -514,7 +515,7 @@ def _apply_boosts(
 
 
 async def _apply_reranking(
-    chunks: list[Chunk],
+    chunks: Sequence[Chunk],
     query_text: str,
     limit: int,
     use_reranking: bool,
@@ -523,7 +524,7 @@ async def _apply_reranking(
     Apply cross-encoder reranking if enabled.
     """
     if not (use_reranking and chunks and query_text.strip()):
-        return chunks
+        return list(chunks)
 
     try:
         return await rerank_chunks(
@@ -531,7 +532,7 @@ async def _apply_reranking(
         )
     except Exception as e:
         logger.warning(f"Reranking failed, using RRF order: {e}")
-        return chunks
+        return list(chunks)
 
 
 async def search_chunks(
@@ -612,7 +613,7 @@ async def search_chunks(
 
 
 async def search_sources(
-    chunks: list[Chunk], previews: bool = False
+    chunks: Sequence[Chunk], previews: bool = False
 ) -> list[SearchResult]:
     by_source = defaultdict(list)
     for chunk in chunks:

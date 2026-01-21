@@ -108,6 +108,8 @@ class TestSearchResult:
         result_b = SearchResult.from_source_item(source, chunks_b)
 
         # A should rank higher than B (0.7 > 0.6)
+        assert result_a.search_score is not None
+        assert result_b.search_score is not None
         assert result_a.search_score > result_b.search_score
 
     def test_basic_result_fields(self):

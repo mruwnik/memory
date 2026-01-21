@@ -171,7 +171,7 @@ def test_apply_query_term_boost_multiple_chunks():
 # ============================================================================
 
 
-def _make_source_chunk(source_id: int, score: float):
+def _make_source_chunk(source_id: int, score: float | None):
     """Create a mock chunk with given source_id and score."""
     chunk = MagicMock()
     chunk.source_id = source_id
@@ -259,8 +259,14 @@ def test_apply_source_boosts_title(mock_make_session, title, query_terms, initia
     assert chunks[0].relevance_score == pytest.approx(expected)
 
 
-def test_apply_source_boosts_empty_inputs():
+@patch("memory.api.search.search.make_session")
+def test_apply_source_boosts_empty_inputs(mock_make_session):
     """Should not modify chunks if query_terms or chunks is empty."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+    mock_session.query.return_value.filter.return_value.all.return_value = []
+
     chunks = [_make_boost_chunk(1, 0.5)]
     apply_source_boosts(chunks, set())
     assert chunks[0].relevance_score == 0.5

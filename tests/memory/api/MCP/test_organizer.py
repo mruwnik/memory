@@ -557,102 +557,22 @@ async def test_update_task_due_date(db_session, sample_tasks):
 
 
 # =============================================================================
-# Tests for complete_task_by_id
+# Tests for get_upcoming
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_complete_task_success(db_session, sample_tasks):
-    """Test completing a task."""
-    from memory.api.MCP.servers.organizer import complete_task_by_id
-
-    complete_task_by_id_fn = get_fn(complete_task_by_id)
-    task_id = sample_tasks[0].id
-
-    with patch(
-        "memory.api.MCP.servers.organizer.make_session",
-        return_value=db_session.__enter__(),
-    ):
-        result = await complete_task_by_id_fn(task_id=task_id)
-
-    assert result["status"] == "done"
-    assert result["completed_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_complete_task_not_found(db_session, sample_tasks):
-    """Test completing a task that doesn't exist."""
-    from memory.api.MCP.servers.organizer import complete_task_by_id
-
-    complete_task_by_id_fn = get_fn(complete_task_by_id)
-
-    with patch(
-        "memory.api.MCP.servers.organizer.make_session",
-        return_value=db_session.__enter__(),
-    ):
-        with pytest.raises(ValueError, match="not found"):
-            await complete_task_by_id_fn(task_id=99999)
-
-
-# =============================================================================
-# Tests for delete_task
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_delete_task_success(db_session, sample_tasks):
-    """Test deleting a task."""
-    from memory.api.MCP.servers.organizer import delete_task
-
-    delete_task_fn = get_fn(delete_task)
-    task_id = sample_tasks[0].id
-
-    with patch(
-        "memory.api.MCP.servers.organizer.make_session",
-        return_value=db_session.__enter__(),
-    ):
-        result = await delete_task_fn(task_id=task_id)
-
-    assert result["deleted"] is True
-    assert result["task_id"] == task_id
-
-    # Verify task was deleted
-    task = db_session.get(Task, task_id)
-    assert task is None
-
-
-@pytest.mark.asyncio
-async def test_delete_task_not_found(db_session, sample_tasks):
-    """Test deleting a task that doesn't exist."""
-    from memory.api.MCP.servers.organizer import delete_task
-
-    delete_task_fn = get_fn(delete_task)
-
-    with patch(
-        "memory.api.MCP.servers.organizer.make_session",
-        return_value=db_session.__enter__(),
-    ):
-        with pytest.raises(ValueError, match="not found"):
-            await delete_task_fn(task_id=99999)
-
-
-# =============================================================================
-# Tests for get_upcoming_events
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_get_upcoming_events_default_range(db_session, sample_events):
+async def test_get_upcoming_default_range(db_session, sample_events):
     """Test getting events with default 7 day range."""
-    from memory.api.MCP.servers.organizer import get_upcoming_events
+    from memory.api.MCP.servers.organizer import get_upcoming
 
-    get_upcoming_events_fn = get_fn(get_upcoming_events)
+    get_upcoming_fn = get_fn(get_upcoming)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events_fn()
+        results = await get_upcoming_fn()
 
     # Should include future events within 7 days
     assert len(results) >= 1
@@ -661,11 +581,11 @@ async def test_get_upcoming_events_default_range(db_session, sample_events):
 
 
 @pytest.mark.asyncio
-async def test_get_upcoming_events_with_dates(db_session, sample_events):
+async def test_get_upcoming_with_dates(db_session, sample_events):
     """Test getting events with specific date range."""
-    from memory.api.MCP.servers.organizer import get_upcoming_events
+    from memory.api.MCP.servers.organizer import get_upcoming
 
-    get_upcoming_events_fn = get_fn(get_upcoming_events)
+    get_upcoming_fn = get_fn(get_upcoming)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=5)).isoformat()
     end = (now + timedelta(days=5)).isoformat()
@@ -674,18 +594,18 @@ async def test_get_upcoming_events_with_dates(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events_fn(start_date=start, end_date=end)
+        results = await get_upcoming_fn(start_date=start, end_date=end)
 
     # Should include events in the range
     assert len(results) >= 1
 
 
 @pytest.mark.asyncio
-async def test_get_upcoming_events_limit(db_session, sample_events):
+async def test_get_upcoming_limit(db_session, sample_events):
     """Test limiting event results."""
-    from memory.api.MCP.servers.organizer import get_upcoming_events
+    from memory.api.MCP.servers.organizer import get_upcoming
 
-    get_upcoming_events_fn = get_fn(get_upcoming_events)
+    get_upcoming_fn = get_fn(get_upcoming)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=10)).isoformat()
     end = (now + timedelta(days=10)).isoformat()
@@ -694,41 +614,41 @@ async def test_get_upcoming_events_limit(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_events_fn(start_date=start, end_date=end, limit=1)
+        results = await get_upcoming_fn(start_date=start, end_date=end, limit=1)
 
     assert len(results) <= 1
 
 
 @pytest.mark.asyncio
-async def test_get_upcoming_events_limit_capped(db_session, sample_events):
+async def test_get_upcoming_limit_capped(db_session, sample_events):
     """Test that limit is capped at 200."""
-    from memory.api.MCP.servers.organizer import get_upcoming_events
+    from memory.api.MCP.servers.organizer import get_upcoming
 
-    get_upcoming_events_fn = get_fn(get_upcoming_events)
+    get_upcoming_fn = get_fn(get_upcoming)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         # Request 500, should be capped
-        results = await get_upcoming_events_fn(limit=500)
+        results = await get_upcoming_fn(limit=500)
 
     assert len(results) <= 200
 
 
 @pytest.mark.asyncio
-async def test_get_upcoming_events_days_capped(db_session, sample_events):
+async def test_get_upcoming_days_capped(db_session, sample_events):
     """Test that days parameter is capped at 365."""
-    from memory.api.MCP.servers.organizer import get_upcoming_events
+    from memory.api.MCP.servers.organizer import get_upcoming
 
-    get_upcoming_events_fn = get_fn(get_upcoming_events)
+    get_upcoming_fn = get_fn(get_upcoming)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
         # Request 1000 days, should work but cap at 365
-        results = await get_upcoming_events_fn(days=1000)
+        results = await get_upcoming_fn(days=1000)
 
     # Should not raise, just cap internally
     assert isinstance(results, list)

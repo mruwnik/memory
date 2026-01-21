@@ -23,7 +23,7 @@ class MockRerankResponse:
         self.results = results
 
 
-def _make_chunk(content: str = "test content", score: float = 0.5):
+def _make_chunk(content: str | None = "test content", score: float = 0.5):
     """Create a mock chunk."""
     chunk = MagicMock()
     chunk.content = content

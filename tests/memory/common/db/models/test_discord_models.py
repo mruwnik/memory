@@ -89,6 +89,7 @@ def test_create_discord_channel(db_session):
     assert channel.server_id == server.id
     assert channel.name == "general"
     assert channel.channel_type == "text"
+    assert channel.server is not None
     assert channel.server.name == "Parent Server"
 
 
@@ -178,6 +179,7 @@ def test_discord_user_with_system_user(db_session):
     db_session.commit()
 
     assert discord_user.system_user_id == system_user.id
+    assert discord_user.system_user is not None
     assert discord_user.system_user.email == "user@example.com"
 
 

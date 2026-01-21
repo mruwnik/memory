@@ -228,6 +228,8 @@ docker-compose logs -f worker
 docker-compose logs -f
 ```
 
+There's also `tools/diagnose.sh` that you can use for this.
+
 ## Contributing
 
 This is a personal knowledge base system. Feel free to fork and adapt for your own use cases.

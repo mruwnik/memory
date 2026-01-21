@@ -860,7 +860,7 @@ def test_filter_source_ids_by_size(mock_make_session):
     mock_item.id = 1
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_item]
 
-    filters = SearchFilters(size=1000)
+    filters = SearchFilters(max_size=1000)
     result = filter_source_ids(set(), filters)
 
     assert result == [1]

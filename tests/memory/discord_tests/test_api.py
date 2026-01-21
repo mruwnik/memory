@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -9,13 +10,14 @@ from memory.discord import api
 
 @pytest.fixture(autouse=True)
 def reset_app_bots():
-    existing = getattr(api.app, "bots", None)
-    api.app.bots = {}
+    existing = getattr(api.app.state, "bots", None)
+    api.app.state.bots = {}
     yield
     if existing is None:
-        delattr(api.app, "bots")
+        if hasattr(api.app.state, "bots"):
+            delattr(api.app.state, "bots")
     else:
-        api.app.bots = existing
+        api.app.state.bots = existing
 
 
 @pytest.fixture
@@ -38,7 +40,7 @@ def active_bot():
         bot_token="token-123",
         bot_name="Test Bot",
     )
-    api.app.bots[bot.bot_id] = bot
+    cast(dict[Any, Any], api.app.state.bots)[bot.bot_id] = bot
     return bot
 
 

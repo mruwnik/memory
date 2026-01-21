@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 
 from dateutil import parser as date_parser
@@ -84,7 +85,7 @@ def parse_extraction_response(response: str) -> dict:
         return {"summary": "", "notes": "", "action_items": []}
 
 
-def find_person_by_name(session, name: str) -> Person | None:
+def find_person_by_name(session, name: str | None) -> Person | None:
     """Try to find a Person record by name, alias, or email."""
     if not name:
         return None
@@ -192,7 +193,7 @@ def _find_or_create_person(session, name: str) -> tuple[Person, bool]:
 
 
 def link_attendees(
-    session, meeting: Meeting, attendee_names: list[str], create_missing: bool = True
+    session, meeting: Meeting, attendee_names: Sequence[str | None], create_missing: bool = True
 ) -> dict:
     """Link attendee names to Person records, optionally creating new ones."""
     logger.info(f"Processing {len(attendee_names)} attendees: {attendee_names}")

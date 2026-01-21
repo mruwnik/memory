@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from unittest.mock import patch, Mock
-from typing import cast
+from typing import Any, cast
 import pytest
 from PIL import Image
 from datetime import datetime
@@ -15,7 +15,7 @@ from memory.common.db.models.source_items import (
     AgentObservation,
     Note,
 )
-from tests.data.contents import SAMPLE_MARKDOWN, CHUNKS
+from tests.data.contents import SAMPLE_MARKDOWN
 
 
 @pytest.fixture
@@ -382,7 +382,7 @@ def test_book_section_data_chunks(pages, expected_chunks):
 
     chunks = book_section.data_chunks()
     expected = [
-        (c, extract.merge_metadata(book_section.as_payload(), m))
+        (c, extract.merge_metadata(cast(dict[str, Any], book_section.as_payload()), m))
         for c, m in expected_chunks
     ]
     assert [(c.content, c.item_metadata) for c in chunks] == expected
@@ -472,7 +472,6 @@ def test_blog_post_chunk_contents_with_images(tmp_path):
     ]
 
 
-@pytest.mark.xfail(reason="Chunking now uses sentence boundaries, expected chunks need updating")
 def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chunk_size):
     default_chunk_size(10)
     img1_path = tmp_path / "img1.jpg"
@@ -496,20 +495,19 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
         [i if isinstance(i, str) else getattr(i, "filename") for i in c.data]
         for c in result
     ]
+    # With sentence-boundary chunking and small chunk size, long image paths get
+    # split into separate chunks. Each image gets its own chunk with the image
+    # appearing twice (once from the text reference, once from the images list).
     assert result == [
         [
             f"First picture is here: {img1_path.as_posix()}\nSecond picture is here: {img2_path.as_posix()}",
             img1_path.as_posix(),
             img2_path.as_posix(),
         ],
-        [
-            f"First picture is here: {img1_path.as_posix()}",
-            img1_path.as_posix(),
-        ],
-        [
-            f"Second picture is here: {img2_path.as_posix()}",
-            img2_path.as_posix(),
-        ],
+        ["First picture is here:"],
+        [img1_path.as_posix(), img1_path.as_posix()],
+        ["Second picture is here:"],
+        [img2_path.as_posix(), img2_path.as_posix()],
         ["test summary"],
     ]
 
@@ -740,12 +738,6 @@ def test_agent_observation_data_chunks_merge_metadata_behavior():
         (None, "bla bla bla", ["bla bla bla"]),
         (None, "    \n\n  bla bla bla  \t\t \n ", ["bla bla bla"]),
         ("my gosh, a subject!", "blee bleee", ["# my gosh, a subject!\n\nblee bleee"]),
-        pytest.param(
-            None,
-            SAMPLE_MARKDOWN,
-            [i.strip() for i in CHUNKS] + ["test summary"],
-            marks=pytest.mark.xfail(reason="Chunking now uses sentence boundaries"),
-        ),
     ),
 )
 def test_note_data_chunks(subject, content, expected):
@@ -773,3 +765,39 @@ def test_note_data_chunks(subject, content, expected):
             "subject": subject,
             "tags": tags,
         }
+
+
+def test_note_data_chunks_long_content():
+    """Test Note.data_chunks() with long content that gets split into multiple chunks."""
+    note = Note(
+        sha256=b"test_obs_long",
+        content=SAMPLE_MARKDOWN,
+        subject=None,
+        note_type="quicky",
+        size=123,
+        tags=["bla"],
+    )
+    note.update_confidences({"observation_accuracy": 0.9})
+    chunks = note.data_chunks()
+
+    # Should produce multiple text chunks plus a summary chunk
+    assert len(chunks) >= 2, "Long content should produce multiple chunks"
+
+    # The last chunk should be the summary
+    assert chunks[-1].content == "test summary"
+    assert chunks[-1].item_metadata["tags"] == {"bla", "tag1", "tag2"}
+
+    # All text chunks (except summary) should contain substantial portions of the original
+    text_chunks = chunks[:-1]
+    all_chunk_text = " ".join(str(chunk.content) for chunk in text_chunks)
+    assert "Programming languages" in all_chunk_text
+    assert "WebAssembly" in all_chunk_text
+
+    # All chunks should have correct base metadata
+    for chunk in chunks:
+        assert cast(list, chunk.file_paths) == []
+        assert chunk.item_metadata["confidence"] == {"observation_accuracy": 0.9}
+        assert chunk.item_metadata["note_type"] == "quicky"
+        assert chunk.item_metadata["size"] == 123
+        assert chunk.item_metadata["source_id"] is None
+        assert chunk.item_metadata["subject"] is None

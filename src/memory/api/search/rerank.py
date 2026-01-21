@@ -7,6 +7,7 @@ sees query and document together, rather than comparing embeddings separately.
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Optional
 
 import voyageai
@@ -23,7 +24,7 @@ DEFAULT_RERANK_MODEL = "rerank-2-lite"
 
 async def rerank_chunks(
     query: str,
-    chunks: list[Chunk],
+    chunks: Sequence[Chunk],
     model: str = DEFAULT_RERANK_MODEL,
     top_k: Optional[int] = None,
 ) -> list[Chunk]:
@@ -46,7 +47,7 @@ async def rerank_chunks(
         return []
 
     if not query.strip():
-        return chunks
+        return list(chunks)
 
     # Extract text content from chunks
     documents = []
@@ -70,7 +71,7 @@ async def rerank_chunks(
             no_content_chunks.append(chunk)
 
     if not documents:
-        return chunks
+        return list(chunks)
 
     try:
         vo = voyageai.Client()  # type: ignore[reportPrivateImportUsage]
@@ -96,4 +97,4 @@ async def rerank_chunks(
 
     except Exception as e:
         logger.warning(f"Reranking failed, returning original order: {e}")
-        return chunks
+        return list(chunks)

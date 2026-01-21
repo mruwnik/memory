@@ -473,7 +473,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             return make_token(session, db_refresh_token, scopes)
 
-    async def revoke_token(
+    async def revoke_token(  # type: ignore[override]
         self, token: str, token_type_hint: Optional[str] = None
     ) -> None:
         """Revoke a token (access token or refresh token)."""

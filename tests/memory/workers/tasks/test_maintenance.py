@@ -239,8 +239,10 @@ def test_check_batch(db_session, qdrant):
     }
     db_session.commit()
     for chunk in chunks[::2]:
+        assert chunk.checked_at is not None
         assert chunk.checked_at.isoformat() > start_time.isoformat()
     for chunk in chunks[1::2]:
+        assert chunk.checked_at is not None
         assert chunk.checked_at.isoformat()[:19] == "2025-01-01T00:00:00"
 
 

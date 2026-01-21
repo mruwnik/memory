@@ -265,6 +265,7 @@ def test_parse_otlp_json_user_prompt_hashes_body():
     assert len(events) == 1
     event = events[0]
     assert event.name == "user_prompt"
+    assert event.body is not None
     assert event.body != "my secret prompt"
     assert event.body == hash_prompt("my secret prompt")
     assert len(event.body) == 64

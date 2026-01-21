@@ -1,0 +1,6 @@
+{
+  "pythonVersion": "3.12",
+  "include": ["src", "tests", "tools", "db", "orchestrator"],
+  "exclude": ["**/node_modules", "**/__pycache__", ".git", "build", "dist"],
+  "extraPaths": ["src"]
+}

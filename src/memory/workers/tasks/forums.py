@@ -85,7 +85,7 @@ def sync_lesswrong(
         for post in posts:
             if not check_content_exists(session, ForumPost, url=post["url"]):
                 new_posts += 1
-                sync_lesswrong_post.delay(post, tags)
+                sync_lesswrong_post.delay(post, tags)  # type: ignore[attr-defined]
 
             if posts_num >= max_items:
                 break
