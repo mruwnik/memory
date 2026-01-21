@@ -1,4 +1,5 @@
 """Tests for MCP core tools: search, observe, fetch operations."""
+# pyright: reportFunctionMemberAccess=false
 
 import base64
 import pytest

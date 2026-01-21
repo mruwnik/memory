@@ -191,7 +191,7 @@ def execute_task(ctx, category: str, task_name: str, **kwargs):
         sys.exit(1)
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def backup(ctx):
     """Backup-related tasks."""
@@ -213,7 +213,7 @@ def backup_path_cmd(ctx, path):
     execute_task(ctx, "backup", "backup_path", path=path)
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def email(ctx):
     """Email-related tasks."""
@@ -256,7 +256,7 @@ def email_process_message(ctx, message_id, folder, raw_email):
     )
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def ebook(ctx):
     """Ebook-related tasks."""
@@ -272,7 +272,7 @@ def ebook_sync_book(ctx, file_path, tags):
     execute_task(ctx, "ebook", "sync_book", file_path=file_path, tags=tags)
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def notes(ctx):
     """Notes-related tasks."""
@@ -296,7 +296,7 @@ def notes_track_git_changes(ctx):
     execute_task(ctx, "notes", "track_git_changes")
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def maintenance(ctx):
     """Maintenance tasks."""
@@ -385,7 +385,7 @@ def maintenance_reingest_chunk(ctx, chunk_id):
     execute_task(ctx, "maintenance", "reingest_chunk", chunk_id=chunk_id)
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def blogs(ctx):
     """Blog-related tasks."""
@@ -451,7 +451,7 @@ def blogs_add_article_feed(ctx, url, title, description, tags, active, check_int
     )
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def comic(ctx):
     """Comic-related tasks."""
@@ -505,7 +505,7 @@ def comic_full_sync_comics(ctx):
     execute_task(ctx, "comic", "full_sync_comics")
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def forums(ctx):
     """Forum-related tasks."""
@@ -541,7 +541,7 @@ def forums_sync_lesswrong_post(ctx, url):
     execute_task(ctx, "forums", "sync_lesswrong_post", url=url)
 
 
-@cli.group()
+@cli.group()  # type: ignore[attr-defined]
 @click.pass_context
 def github(ctx):
     """GitHub-related tasks."""
@@ -566,4 +566,4 @@ def github_sync_repo(ctx, repo_id, force_full):
 
 
 if __name__ == "__main__":
-    cli()
+    cli()  # type: ignore[call-arg]

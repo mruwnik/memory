@@ -162,10 +162,10 @@ def cli():
     pass
 
 
-cli.add_command(generate_bot_invite_url, name="generate-invite")
-cli.add_command(add_bot, name="add-bot")
-cli.add_command(authorize_user, name="authorize-user")
-cli.add_command(list_bots, name="list-bots")
+cli.add_command(generate_bot_invite_url, name="generate-invite")  # type: ignore[attr-defined]
+cli.add_command(add_bot, name="add-bot")  # type: ignore[attr-defined]
+cli.add_command(authorize_user, name="authorize-user")  # type: ignore[attr-defined]
+cli.add_command(list_bots, name="list-bots")  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

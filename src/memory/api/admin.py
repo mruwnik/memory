@@ -1,6 +1,7 @@
 """
 SQLAdmin views for the knowledge base database models.
 """
+# pyright: reportGeneralTypeIssues=false, reportCallIssue=false
 
 import logging
 

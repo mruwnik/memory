@@ -1,4 +1,5 @@
 """Tests for MCP meta tools: metadata, utilities, and forecasting."""
+# pyright: reportFunctionMemberAccess=false
 
 import pytest
 from datetime import datetime, timezone

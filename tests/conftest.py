@@ -182,6 +182,7 @@ def test_db():
         test_db_url = create_test_database(test_db_name)
     except OperationalError as e:
         pytest.skip(f"Failed to create test database: {e}")
+        raise  # unreachable, but tells type checker pytest.skip doesn't return
 
     try:
         run_alembic_migrations(test_db_name)

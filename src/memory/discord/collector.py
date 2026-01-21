@@ -6,6 +6,7 @@ This module provides a Discord bot that:
 - Queues messages for storage and embedding via Celery
 - Provides methods for sending messages (used by MCP tools)
 """
+# pyright: reportAttributeAccessIssue=false
 
 from __future__ import annotations
 

@@ -1,4 +1,5 @@
 """Tests for MCP polling server."""
+# pyright: reportFunctionMemberAccess=false
 
 import pytest
 from datetime import datetime, timezone

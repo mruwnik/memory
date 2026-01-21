@@ -1,4 +1,5 @@
 """Tests for MCP core server functions."""
+# pyright: reportFunctionMemberAccess=false
 
 import pytest
 from unittest.mock import patch, MagicMock
