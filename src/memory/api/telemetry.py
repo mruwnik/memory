@@ -9,55 +9,19 @@ Provides endpoints for:
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import TelemetryEvent, User
 from memory.common.telemetry import (
     parse_otlp_json,
     write_events_to_db,
 )
-
-
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope (can view all users' data)."""
-    user_scopes = user.scopes or []
-    return "*" in user_scopes or "admin" in user_scopes
-
-
-def resolve_user_filter(
-    user_id: int | None, current_user: User, db: DBSession
-) -> int | None:
-    """
-    Resolve user_id filter for admin queries.
-
-    Returns:
-        - None if admin requests all users (user_id="all" passed as None with special handling)
-        - Specific user_id if admin requests specific user
-        - current_user.id if non-admin (ignores user_id param)
-
-    Raises:
-        HTTPException 404 if requested user doesn't exist
-        HTTPException 403 if non-admin tries to view other user's data
-    """
-    if not has_admin_scope(current_user):
-        # Non-admins can only see their own data
-        return current_user.id
-
-    if user_id is None:
-        # Admin with no filter - return all users
-        return None
-
-    # Admin requesting specific user - verify they exist
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user_id
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 

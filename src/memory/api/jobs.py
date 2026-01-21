@@ -3,48 +3,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
 from memory.common.jobs import retry_failed_job, reingest_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
-
-
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope (can view all users' data)."""
-    user_scopes = user.scopes or []
-    return "*" in user_scopes or "admin" in user_scopes
-
-
-def resolve_user_filter(
-    user_id: int | None, current_user: User, db: DBSession
-) -> int | None:
-    """
-    Resolve user_id filter for admin queries.
-
-    Returns:
-        - None if admin requests all users (user_id omitted)
-        - Specific user_id if admin requests specific user
-        - current_user.id if non-admin (ignores user_id param)
-
-    Raises:
-        HTTPException 404 if requested user doesn't exist
-    """
-    if not has_admin_scope(current_user):
-        # Non-admins can only see their own data
-        return current_user.id
-
-    if user_id is None:
-        # Admin with no filter - return all users
-        return None
-
-    # Admin requesting specific user - verify they exist
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user_id
 
 
 def can_access_job(job, current_user: User) -> bool:

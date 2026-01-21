@@ -108,25 +108,28 @@ export function useUserSelection(storageKey: string = 'adminSelectedUser'): [Sel
   const isAdmin = hasScope('admin') || hasScope('*')
 
   const [selectedUser, setSelectedUserState] = useState<SelectedUser>(() => {
-    if (!isAdmin) {
-      // Non-admins always see their own data
-      return currentUser
-        ? { type: 'user', id: currentUser.id, name: currentUser.name }
-        : { type: 'all' }
-    }
-
-    // Try to restore from localStorage for admins
-    try {
-      const stored = localStorage.getItem(storageKey)
-      if (stored) {
-        return JSON.parse(stored)
+    // For admins, try to restore from localStorage
+    if (isAdmin) {
+      try {
+        const stored = localStorage.getItem(storageKey)
+        if (stored) {
+          return JSON.parse(stored)
+        }
+      } catch {
+        // Ignore parsing errors
       }
-    } catch {
-      // Ignore parsing errors
+      // Default to "all" for admins
+      return { type: 'all' }
     }
 
-    // Default to "all" for admins
-    return { type: 'all' }
+    // Non-admins always see their own data
+    // If currentUser isn't loaded yet, use a placeholder that will be updated
+    // by the useEffect below once the user data is available
+    if (currentUser) {
+      return { type: 'user', id: currentUser.id, name: currentUser.name }
+    }
+    // Temporary state until currentUser loads - the useEffect will fix this
+    return { type: 'user', id: 0, name: '' }
   })
 
   const setSelectedUser = (user: SelectedUser) => {

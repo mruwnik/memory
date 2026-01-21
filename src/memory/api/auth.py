@@ -220,6 +220,52 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
     return account
 
 
+def has_admin_scope(user: User) -> bool:
+    """Check if user has admin scope (can view all users' data).
+
+    Admin users have either '*' (full access) or 'admin' scope.
+    """
+    user_scopes = user.scopes or []
+    return "*" in user_scopes or "admin" in user_scopes
+
+
+def resolve_user_filter(
+    user_id: int | None, current_user: User, db: DBSession
+) -> int | None:
+    """Resolve user_id filter for admin queries.
+
+    Used by endpoints that support admin viewing of other users' data.
+    Non-admin users always see only their own data regardless of the
+    user_id parameter.
+
+    Args:
+        user_id: Requested user ID filter (None for all users)
+        current_user: The authenticated user making the request
+        db: Database session for user validation
+
+    Returns:
+        - None if admin requests all users (user_id omitted)
+        - Specific user_id if admin requests specific user
+        - current_user.id if non-admin (ignores user_id param)
+
+    Raises:
+        HTTPException 404 if requested user doesn't exist
+    """
+    if not has_admin_scope(current_user):
+        # Non-admins can only see their own data
+        return current_user.id
+
+    if user_id is None:
+        # Admin with no filter - return all users
+        return None
+
+    # Admin requesting specific user - verify they exist
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_id
+
+
 def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
     """Create a new human user"""
     # Check if user already exists
