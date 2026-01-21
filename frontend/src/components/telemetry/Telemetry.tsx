@@ -5,6 +5,7 @@ import {
   TelemetryMetricsResponse,
   TelemetryRawResponse,
   ToolUsageResponse,
+  SessionStatsResponse,
   TelemetryUser,
 } from '@/hooks/useTelemetry'
 import { TokenUsageChart } from './TokenUsageChart'
@@ -13,6 +14,7 @@ import { SessionActivityChart } from './SessionActivityChart'
 import { TelemetrySummaryCards } from './TelemetrySummaryCards'
 import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
+import { SessionBreakdownChart } from './SessionBreakdownChart'
 import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -46,9 +48,10 @@ const Telemetry: React.FC = () => {
   const [sessionActivity, setSessionActivity] = useState<TelemetryMetricsResponse | null>(null)
   const [recentEvents, setRecentEvents] = useState<TelemetryRawResponse | null>(null)
   const [toolUsage, setToolUsage] = useState<ToolUsageResponse | null>(null)
+  const [sessionStats, setSessionStats] = useState<SessionStatsResponse | null>(null)
   const [usersWithTelemetry, setUsersWithTelemetry] = useState<TelemetryUser[]>([])
 
-  const { getMetrics, getRawEvents, getToolUsage, getUsersWithTelemetry } = useTelemetry()
+  const { getMetrics, getRawEvents, getToolUsage, getSessionStats, getUsersWithTelemetry } = useTelemetry()
 
   // Load users with telemetry data for the selector filter
   useEffect(() => {
@@ -69,12 +72,13 @@ const Telemetry: React.FC = () => {
     const to = new Date()
 
     try {
-      const [tokenRes, costRes, sessionRes, eventsRes, toolRes] = await Promise.all([
+      const [tokenRes, costRes, sessionRes, eventsRes, toolRes, sessionStatsRes] = await Promise.all([
         getMetrics('token.usage', { from, to, granularity, groupBy: ['source'], userId }),
         getMetrics('cost.usage', { from, to, granularity, groupBy: ['source'], userId }),
         getMetrics('session.count', { from, to, granularity, groupBy: [], userId }),
         getRawEvents({ from, to, limit: 50, userId }),
         getToolUsage({ from, to, userId }),
+        getSessionStats({ from, to, userId }),
       ])
 
       setTokenUsage(tokenRes)
@@ -82,13 +86,14 @@ const Telemetry: React.FC = () => {
       setSessionActivity(sessionRes)
       setRecentEvents(eventsRes)
       setToolUsage(toolRes)
+      setSessionStats(sessionStatsRes)
       setLastRefresh(new Date())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry')
     } finally {
       setLoading(false)
     }
-  }, [timeRange, getMetrics, getRawEvents, getToolUsage, userId])
+  }, [timeRange, getMetrics, getRawEvents, getToolUsage, getSessionStats, userId])
 
   useEffect(() => {
     loadData()
@@ -177,6 +182,17 @@ const Telemetry: React.FC = () => {
             <div className="bg-white p-6 rounded-xl shadow-md">
               <h3 className="text-lg font-semibold text-slate-800 mb-4">Token Usage by Tool</h3>
               <ToolBreakdownChart data={toolUsage} />
+            </div>
+          </section>
+
+          <section className="mb-8">
+            <div className="bg-white p-6 rounded-xl shadow-md">
+              <h3 className="text-lg font-semibold text-slate-800 mb-4">Session Breakdown</h3>
+              <p className="text-sm text-slate-500 mb-4">
+                Token consumption by individual session. Sessions are categorized by usage volume:
+                high (top 20%), medium (next 30%), and low (bottom 50%).
+              </p>
+              <SessionBreakdownChart data={sessionStats} />
             </div>
           </section>
         </>

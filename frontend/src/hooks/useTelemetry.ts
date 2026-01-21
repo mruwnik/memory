@@ -71,6 +71,21 @@ export interface ToolUsageResponse {
   tools: ToolUsageStats[]
 }
 
+export interface SessionStats {
+  session_id: string
+  total_tokens: number
+  total_cost: number
+  event_count: number
+  first_seen: string
+  last_seen: string
+}
+
+export interface SessionStatsResponse {
+  from: string
+  to: string
+  sessions: SessionStats[]
+}
+
 export interface TelemetryUser {
   id: number
   name: string
@@ -168,6 +183,96 @@ export const useTelemetry = () => {
     return parseJsonResponse<ToolUsageResponse>(response)
   }, [apiCall])
 
+  const getSessionStats = useCallback(async (
+    options: {
+      from?: Date
+      to?: Date
+      userId?: number
+    } = {}
+  ): Promise<SessionStatsResponse> => {
+    const { from, to, userId } = options
+
+    // Fetch token and cost metrics grouped by session_id
+    // Use max granularity (1440 = 1 day) to minimize data points per session.
+    // Sessions spanning multiple days will have multiple data points which are
+    // aggregated below.
+    const [tokenRes, costRes] = await Promise.all([
+      getMetrics('token.usage', {
+        from,
+        to,
+        granularity: 1440,
+        groupBy: ['session_id'],
+        userId,
+      }),
+      getMetrics('cost.usage', {
+        from,
+        to,
+        granularity: 1440,
+        groupBy: ['session_id'],
+        userId,
+      }),
+    ])
+
+    // Aggregate token data by session_id
+    const sessionMap = new Map<string, {
+      total_tokens: number
+      total_cost: number
+      event_count: number
+      first_seen: string
+      last_seen: string
+    }>()
+
+    for (const d of tokenRes.data) {
+      const sessionId = d.session_id
+      if (!sessionId) continue
+
+      const existing = sessionMap.get(sessionId)
+      if (existing) {
+        existing.total_tokens += d.sum ?? 0
+        existing.event_count += d.count
+        if (d.timestamp && d.timestamp < existing.first_seen) {
+          existing.first_seen = d.timestamp
+        }
+        if (d.timestamp && d.timestamp > existing.last_seen) {
+          existing.last_seen = d.timestamp
+        }
+      } else {
+        sessionMap.set(sessionId, {
+          total_tokens: d.sum ?? 0,
+          total_cost: 0,
+          event_count: d.count,
+          first_seen: d.timestamp,
+          last_seen: d.timestamp,
+        })
+      }
+    }
+
+    // Add cost data
+    for (const d of costRes.data) {
+      const sessionId = d.session_id
+      if (!sessionId) continue
+
+      const existing = sessionMap.get(sessionId)
+      if (existing) {
+        existing.total_cost += d.sum ?? 0
+      }
+    }
+
+    // Convert to array and sort by total tokens descending
+    const sessions: SessionStats[] = Array.from(sessionMap.entries())
+      .map(([session_id, stats]) => ({
+        session_id,
+        ...stats,
+      }))
+      .sort((a, b) => b.total_tokens - a.total_tokens)
+
+    return {
+      from: tokenRes.from,
+      to: tokenRes.to,
+      sessions,
+    }
+  }, [getMetrics])
+
   const getUsersWithTelemetry = useCallback(async (): Promise<TelemetryUser[]> => {
     const response = await apiCall('/telemetry/users')
     if (!response.ok) {
@@ -180,6 +285,7 @@ export const useTelemetry = () => {
     getRawEvents,
     getMetrics,
     getToolUsage,
+    getSessionStats,
     getUsersWithTelemetry,
   }
 }
