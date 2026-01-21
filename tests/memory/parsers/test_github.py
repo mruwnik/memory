@@ -758,6 +758,106 @@ def test_list_repos_pat_auth():
     assert repos[0]["owner"] == "testuser"
 
 
+def test_list_repos_unlimited():
+    """Test listing all repos without a limit (max_repos=None)."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    def make_repo(i: int) -> dict:
+        return {
+            "owner": {"login": "testuser"},
+            "name": f"repo{i}",
+            "full_name": f"testuser/repo{i}",
+            "description": f"Test repo {i}",
+            "private": False,
+            "html_url": f"https://github.com/testuser/repo{i}",
+        }
+
+    # 3 pages of repos, 2 each, to verify pagination works
+    page1 = [make_repo(1), make_repo(2)]
+    page2 = [make_repo(3), make_repo(4)]
+    page3 = [make_repo(5)]
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [
+            mock_rest_response(page1),
+            mock_rest_response(page2),
+            mock_rest_response(page3),
+            mock_rest_response([]),  # Empty page to stop
+        ]
+        client = GithubClient(credentials)
+        repos = list(client.list_repos(per_page=2, max_repos=None))
+
+    assert len(repos) == 5
+    assert [r["name"] for r in repos] == ["repo1", "repo2", "repo3", "repo4", "repo5"]
+
+
+def test_list_repos_stops_at_max():
+    """Test that list_repos respects max_repos limit."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    def make_repo(i: int) -> dict:
+        return {
+            "owner": {"login": "testuser"},
+            "name": f"repo{i}",
+            "full_name": f"testuser/repo{i}",
+            "description": None,
+            "private": False,
+            "html_url": f"https://github.com/testuser/repo{i}",
+        }
+
+    # Full page that would exceed max_repos if not limited
+    page1 = [make_repo(i) for i in range(1, 6)]
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_get.side_effect = [mock_rest_response(page1)]
+        client = GithubClient(credentials)
+        repos = list(client.list_repos(per_page=100, max_repos=3))
+
+    # Should stop at 3 even though page had 5
+    assert len(repos) == 3
+    assert [r["name"] for r in repos] == ["repo1", "repo2", "repo3"]
+
+
+def test_list_repos_app_auth():
+    """Test listing repos with GitHub App authentication."""
+    credentials = GithubCredentials(
+        auth_type="app",
+        app_id=12345,
+        installation_id=67890,
+        private_key="fake-key",
+    )
+
+    page1 = {
+        "repositories": [
+            {
+                "owner": {"login": "org"},
+                "name": "app-repo",
+                "full_name": "org/app-repo",
+                "description": "App-accessible repo",
+                "private": True,
+                "html_url": "https://github.com/org/app-repo",
+            }
+        ]
+    }
+
+    # Mock the JWT generation for app auth before creating client
+    with patch(
+        "memory.common.github.core.GithubClientCore._get_installation_token"
+    ) as mock_token:
+        mock_token.return_value = "installation-token"
+        with patch.object(requests.Session, "get") as mock_get:
+            mock_get.side_effect = [
+                mock_rest_response(page1),
+                mock_rest_response({"repositories": []}),
+            ]
+            client = GithubClient(credentials)
+            repos = list(client.list_repos(max_repos=None))
+
+    assert len(repos) == 1
+    assert repos[0]["name"] == "app-repo"
+    assert repos[0]["private"] is True
+
+
 # =============================================================================
 # Tests for GraphQL helper methods
 # =============================================================================
