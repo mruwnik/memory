@@ -13,10 +13,24 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
     (person.contact_info && Object.keys(person.contact_info).length > 0) ||
     person.notes
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    // Don't toggle if clicking on buttons or links
+    const target = e.target as HTMLElement
+    if (target.closest('button') || target.closest('a')) {
+      return
+    }
+    if (hasDetails) {
+      onToggleExpand()
+    }
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden">
-      {/* Main content - always visible */}
-      <div className="p-6">
+      {/* Main content - clickable to expand if has details */}
+      <div
+        className={`p-6 ${hasDetails ? 'cursor-pointer hover:bg-slate-50/50 transition-colors' : ''}`}
+        onClick={handleCardClick}
+      >
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-3">
@@ -27,8 +41,20 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
                 </span>
               </div>
 
-              <div>
-                <h3 className="font-semibold text-slate-800 text-lg">{person.display_name}</h3>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-slate-800 text-lg">{person.display_name}</h3>
+                  {hasDetails && (
+                    <svg
+                      className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  )}
+                </div>
                 <p className="text-sm text-slate-500">@{person.identifier}</p>
               </div>
             </div>
@@ -50,22 +76,6 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            {hasDetails && (
-              <button
-                onClick={onToggleExpand}
-                className="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 rounded hover:bg-slate-100 transition-colors flex items-center gap-1"
-              >
-                {expanded ? 'Less' : 'More'}
-                <svg
-                  className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
             <button
               onClick={onEdit}
               className="text-sm text-primary hover:text-primary/80 px-3 py-1 rounded hover:bg-primary/10 transition-colors"

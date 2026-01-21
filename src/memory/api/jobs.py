@@ -1,15 +1,25 @@
 """API endpoints for job status tracking."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import exists
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
 from memory.common.db.connection import get_session
-from memory.common.db.models import PendingJobPayload, User, JobStatus
+from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
 from memory.common.jobs import retry_failed_job, reingest_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+class JobUser(BaseModel):
+    """User with job data."""
+
+    id: int
+    name: str
+    email: str
 
 
 def can_access_job(job, current_user: User) -> bool:
@@ -171,3 +181,38 @@ def reingest_job_endpoint(
         return PendingJobPayload.model_validate(result.job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/users/with-jobs", response_model=list[JobUser])
+def get_users_with_jobs(
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> list[JobUser]:
+    """
+    Get list of users who have job data.
+
+    Only available to admin users. Returns users who have at least one
+    job recorded.
+    """
+    if not has_admin_scope(user):
+        # Non-admins only see themselves if they have jobs
+        has_data = db.query(PendingJob).filter(PendingJob.user_id == user.id).first()
+        if has_data:
+            return [JobUser(id=user.id, name=user.name or "", email=user.email or "")]
+        return []
+
+    # Get users who have at least one job (single query with EXISTS)
+    users = (
+        db.query(User)
+        .filter(
+            exists()
+            .where(PendingJob.user_id == User.id)
+            .where(PendingJob.user_id.isnot(None))
+        )
+        .all()
+    )
+
+    return [
+        JobUser(id=u.id, name=u.name or "", email=u.email or "")
+        for u in users
+    ]

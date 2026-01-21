@@ -191,32 +191,51 @@ const PeopleManagement = () => {
             </button>
           </div>
 
-          {/* Tag filters */}
+          {/* Tag filters - collapsible */}
           {allTags.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <span className="text-sm text-slate-500 self-center mr-2">Filter by tag:</span>
-              {allTags.map(tag => (
-                <button
-                  key={tag}
-                  onClick={() => toggleTagFilter(tag)}
-                  className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                    tagFilter.includes(tag)
-                      ? 'bg-primary text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
+            <details className="group">
+              <summary className="text-sm text-slate-500 cursor-pointer hover:text-slate-700 select-none list-none flex items-center gap-2">
+                <svg
+                  className="w-4 h-4 transition-transform group-open:rotate-90"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  {tag}
-                </button>
-              ))}
-              {tagFilter.length > 0 && (
-                <button
-                  onClick={() => setTagFilter([])}
-                  className="px-3 py-1 rounded-full text-sm text-slate-500 hover:text-slate-700 underline"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="flex items-center gap-2">
+                  Filter by tag
+                  {tagFilter.length > 0 && (
+                    <span className="bg-primary text-white text-xs px-2 py-0.5 rounded-full">
+                      {tagFilter.length} selected
+                    </span>
+                  )}
+                </span>
+              </summary>
+              <div className="flex flex-wrap gap-2 mt-3 pl-6">
+                {allTags.map(tag => (
+                  <button
+                    key={tag}
+                    onClick={() => toggleTagFilter(tag)}
+                    className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                      tagFilter.includes(tag)
+                        ? 'bg-primary text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+                {tagFilter.length > 0 && (
+                  <button
+                    onClick={() => setTagFilter([])}
+                    className="px-3 py-1 rounded-full text-sm text-slate-500 hover:text-slate-700 underline"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </details>
           )}
         </div>
 
