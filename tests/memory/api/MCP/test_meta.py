@@ -218,6 +218,66 @@ async def test_get_user_no_email_accounts(mock_make_session, mock_get_token):
     assert result["user"]["email_accounts"] == []
 
 
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.get_access_token")
+@patch("memory.api.MCP.servers.meta.make_session")
+async def test_get_user_returns_ssh_public_key(mock_make_session, mock_get_token):
+    """Get user returns the user's SSH public key as 'public_key'."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+
+    mock_token = MagicMock()
+    mock_token.token = "test-token"
+    mock_token.scopes = ["read"]
+    mock_token.client_id = "test-client"
+    mock_get_token.return_value = mock_token
+
+    mock_user = MagicMock(spec=["id", "serialize", "ssh_public_key"])
+    mock_user.id = 123
+    mock_user.serialize.return_value = {"id": 123, "email": "test@example.com"}
+    mock_user.ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+    mock_session.get.return_value = mock_user_session
+    mock_session.query.return_value.filter.return_value.all.return_value = []
+
+    result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    assert result["public_key"] == "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.get_access_token")
+@patch("memory.api.MCP.servers.meta.make_session")
+async def test_get_user_returns_none_when_no_ssh_key(mock_make_session, mock_get_token):
+    """Get user returns None for public_key when user has no SSH key."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+
+    mock_token = MagicMock()
+    mock_token.token = "test-token"
+    mock_token.scopes = ["read"]
+    mock_token.client_id = "test-client"
+    mock_get_token.return_value = mock_token
+
+    mock_user = MagicMock(spec=["id", "serialize", "ssh_public_key"])
+    mock_user.id = 123
+    mock_user.serialize.return_value = {"id": 123, "email": "test@example.com"}
+    mock_user.ssh_public_key = None
+
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+    mock_session.get.return_value = mock_user_session
+    mock_session.query.return_value.filter.return_value.all.return_value = []
+
+    result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    assert result["public_key"] is None
+
+
 # ====== get_forecasts tests ======
 
 
