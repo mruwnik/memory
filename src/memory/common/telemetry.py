@@ -88,12 +88,17 @@ def parse_metric_datapoint(
     dp_attrs = extract_otlp_attributes(dp)
     all_attrs = {**resource_attrs, **dp_attrs}
 
+    # Check datapoint attributes for session_id if not in resource attributes
+    effective_session_id = session_id
+    if not effective_session_id:
+        effective_session_id = dp_attrs.get("session.id") or dp_attrs.get("session_id")
+
     return ParsedTelemetryEvent(
         timestamp=parse_otlp_timestamp(dp.get("timeUnixNano")),
         event_type="metric",
         name=name,
         value=dp.get("asDouble") or dp.get("asInt"),
-        session_id=session_id,
+        session_id=effective_session_id,
         source=all_attrs.get("model"),
         tool_name=all_attrs.get("tool_name") or all_attrs.get("tool"),
         attributes=all_attrs,
@@ -131,7 +136,7 @@ def parse_log_record(
         event_type="log",
         name=event_name,
         value=all_attrs.get("duration_ms") or all_attrs.get("cost"),
-        session_id=session_id or all_attrs.get("session.id"),
+        session_id=session_id or all_attrs.get("session.id") or all_attrs.get("session_id"),
         source=all_attrs.get("model"),
         tool_name=all_attrs.get("tool_name") or all_attrs.get("tool"),
         attributes=all_attrs,

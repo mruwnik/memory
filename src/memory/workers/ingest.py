@@ -17,7 +17,6 @@ from memory.common.celery_app import (
     SYNC_LESSWRONG,
     RUN_SCHEDULED_CALLS,
     BACKUP_ALL,
-    EVALUATE_PROACTIVE_CHECKINS,
     SYNC_ALL_GITHUB_REPOS,
     SYNC_ALL_GOOGLE_ACCOUNTS,
     SYNC_ALL_CALENDARS,
@@ -71,10 +70,6 @@ app.conf.beat_schedule.update({
     "backup-all": {
         "task": BACKUP_ALL,
         "schedule": settings.S3_BACKUP_INTERVAL,
-    },
-    "evaluate-proactive-checkins": {
-        "task": EVALUATE_PROACTIVE_CHECKINS,
-        "schedule": settings.PROACTIVE_CHECKIN_INTERVAL,
     },
     "sync-github-repos": {
         "task": SYNC_ALL_GITHUB_REPOS,

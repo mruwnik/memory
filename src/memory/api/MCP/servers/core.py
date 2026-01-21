@@ -469,9 +469,9 @@ def fetch_file(filename: str) -> dict:
     def serialize_chunk(
         chunk: extract.DataChunk, data: extract.MulitmodalChunk
     ) -> dict:
-        contents = data
+        contents: str | bytes = data  # type: ignore[assignment]
         if isinstance(data, Image.Image):
-            contents = data.tobytes()
+            contents = data.tobytes()  # type: ignore[union-attr]
         if isinstance(contents, bytes):
             contents = base64.b64encode(contents).decode("ascii")
 

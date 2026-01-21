@@ -2,14 +2,17 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 
 from fastmcp import FastMCP
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBotUser, ScheduledLLMCall
-from memory.discord.messages import schedule_discord_message
+from memory.common.db.models import (
+    DiscordChannel,
+    DiscordUser,
+    ScheduledLLMCall,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,24 +90,47 @@ async def message(
     except ValueError:
         raise ValueError("Invalid datetime format")
 
-    with make_session() as session:
-        bot = session.query(DiscordBotUser).first()
-        if not bot:
-            return {"error": "No bot found"}
+    # Validate that the scheduled time is in the future
+    current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    if scheduled_dt <= current_time_naive:
+        raise ValueError("Scheduled time must be in the future")
 
-        scheduled_call = schedule_discord_message(
-            session=session,
+    with make_session() as session:
+        # Resolve discord user and channel
+        discord_user_obj = None
+        discord_channel_obj = None
+
+        if discord_user:
+            discord_user_obj = (
+                session.query(DiscordUser)
+                .filter(DiscordUser.username == discord_user)
+                .first()
+            )
+
+        if discord_channel:
+            discord_channel_obj = (
+                session.query(DiscordChannel)
+                .filter(DiscordChannel.name == discord_channel)
+                .first()
+            )
+
+        if not discord_user_obj and not discord_channel_obj:
+            return {"error": "Could not resolve discord_user or discord_channel"}
+
+        # Create the scheduled call
+        scheduled_call = ScheduledLLMCall(
+            user_id=user_id,
             scheduled_time=scheduled_dt,
             message=message,
-            user_id=cast(int, bot.id),
-            model=model,
             topic=topic,
-            discord_channel=discord_channel,
-            discord_user=discord_user,
+            model=model,
             system_prompt=system_prompt,
-            metadata=metadata,
+            discord_channel=discord_channel_obj,
+            discord_user=discord_user_obj,
+            data=metadata or {},
         )
 
+        session.add(scheduled_call)
         session.commit()
 
         return {

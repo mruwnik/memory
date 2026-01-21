@@ -1,290 +1,260 @@
 """
-Discord API server.
+Discord collector API server.
 
-FastAPI server that owns and manages a Discord collector instance,
-providing HTTP endpoints for sending Discord messages.
+Provides HTTP endpoints for sending messages via the Discord collector bots.
+This runs alongside the collector and exposes its functionality via REST API.
 """
 
-import asyncio
 import logging
-import traceback
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import Any
 
-import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from memory.common import settings
-from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBotUser
-from memory.discord.collector import MessageCollector
+from memory.common.celery_app import app as celery_app
+from memory.discord.collector import CollectorManager
 
 logger = logging.getLogger(__name__)
+
+# Global collector manager
+manager: CollectorManager | None = None
 
 
 class SendDMRequest(BaseModel):
     bot_id: int
-    user: str  # Discord user ID or username
+    user: str | int  # User ID or username
     message: str
 
 
 class SendChannelRequest(BaseModel):
     bot_id: int
-    channel: int | str  # Channel name or ID (ID supports threads)
+    channel: str | int  # Channel ID or name
     message: str
 
 
-class TypingDMRequest(BaseModel):
+class TypingRequest(BaseModel):
     bot_id: int
-    user: int | str
+    user: str | int | None = None
+    channel: str | int | None = None
 
 
-class TypingChannelRequest(BaseModel):
+class ReactionRequest(BaseModel):
     bot_id: int
-    channel: int | str  # Channel name or ID (ID supports threads)
-
-
-class AddReactionRequest(BaseModel):
-    bot_id: int
-    channel: int | str  # Channel name or ID (ID supports threads)
+    channel: str | int
     message_id: int
     emoji: str
 
 
-class Collector:
-    collector: MessageCollector
-    collector_task: asyncio.Task
-    bot_id: int
-    bot_token: str
-    bot_name: str
-
-    def __init__(self, collector: MessageCollector, bot: DiscordBotUser):
-        logger.info(f"Initialized collector for {bot.name}")
-        self.collector = collector
-        self.collector_task = asyncio.create_task(collector.start(str(bot.api_key)))
-        self.bot_id = cast(int, bot.id)
-        self.bot_token = str(bot.api_key)
-        self.bot_name = str(bot.name)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage Discord collector lifecycle"""
+    """Manage collector lifecycle."""
+    global manager
 
-    def make_collector(bot: DiscordBotUser):
-        collector = MessageCollector()
-        return Collector(collector=collector, bot=bot)
+    manager = CollectorManager(celery_app)
 
-    with make_session() as session:
-        bots = session.query(DiscordBotUser).all()
-        app.state.bots = {bot.id: make_collector(bot) for bot in bots}
-
-    logger.info(
-        f"Discord collectors started for {len(app.state.bots)} bots: {list(app.state.bots.keys())}"
-    )
+    # Start all bots
+    await manager.start_all()
+    logger.info("Discord collector API started")
 
     yield
 
-    # Cleanup
-    for bot in app.state.bots.values():
-        if not bot.collector.is_closed():
-            await bot.collector.close()
-        if bot.collector_task:
-            bot.collector_task.cancel()
-            try:
-                await bot.collector_task
-            except asyncio.CancelledError:
-                pass
-    logger.info(f"Discord collectors stopped for {len(app.state.bots)} bots")
+    # Stop all bots
+    await manager.stop_all()
+    logger.info("Discord collector API stopped")
 
 
-# FastAPI app with lifespan management
-app = FastAPI(title="Discord Collector API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Discord Collector API", lifespan=lifespan)
 
 
-@app.post("/send_dm")
-async def send_dm_endpoint(request: SendDMRequest):
-    """Send a DM via the collector's Discord client"""
-    collector = app.state.bots.get(request.bot_id)
-    if not collector:
-        logger.error(f"Bot not found: {request.bot_id}")
-        raise HTTPException(status_code=404, detail="Bot not found")
+def get_manager() -> CollectorManager:
+    """Get the collector manager."""
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Collector not initialized")
+    return manager
 
+
+async def resolve_channel_id(channel: str | int) -> int:
+    """Resolve a channel name or ID to an ID."""
+    if isinstance(channel, int):
+        return channel
+
+    # Try to parse as int first
     try:
-        success = await collector.collector.send_dm(request.user, request.message)
-    except Exception as e:
-        traceback.print_exc()
-        logger.error(f"Failed to send DM: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return int(channel)
+    except ValueError:
+        pass
 
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to send DM to {request.user}",
-        )
-    return {
-        "success": True,
-        "message": f"DM sent to {request.user}",
-        "user": request.user,
-    }
+    # Look up by name in database
+    from memory.common.db.connection import make_session
+    from memory.common.db.models import DiscordChannel
+
+    with make_session() as session:
+        ch = session.query(DiscordChannel).filter_by(name=channel).first()
+        if ch:
+            return ch.id
+
+    raise HTTPException(status_code=404, detail=f"Channel '{channel}' not found")
 
 
-@app.post("/typing/dm")
-async def trigger_dm_typing(request: TypingDMRequest):
-    """Trigger a typing indicator for a DM via the collector"""
-    collector = app.state.bots.get(request.bot_id)
-    if not collector:
-        raise HTTPException(status_code=404, detail="Bot not found")
+async def resolve_user_id(user: str | int) -> int:
+    """Resolve a username or ID to an ID."""
+    if isinstance(user, int):
+        return user
 
+    # Try to parse as int first
     try:
-        success = await collector.collector.trigger_typing_dm(request.user)
-    except Exception as e:
-        logger.error(f"Failed to trigger DM typing: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return int(user)
+    except ValueError:
+        pass
 
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to trigger typing for {request.user}",
-        )
+    # Look up by username in database
+    from memory.common.db.connection import make_session
+    from memory.common.db.models import DiscordUser
 
-    return {
-        "success": True,
-        "user": request.user,
-        "message": f"Typing triggered for {request.user}",
-    }
+    with make_session() as session:
+        u = session.query(DiscordUser).filter_by(username=user).first()
+        if u:
+            return u.id
 
-
-@app.post("/send_channel")
-async def send_channel_endpoint(request: SendChannelRequest):
-    """Send a message to a channel via the collector's Discord client"""
-    collector = app.state.bots.get(request.bot_id)
-    if not collector:
-        raise HTTPException(status_code=404, detail="Bot not found")
-
-    try:
-        success = await collector.collector.send_to_channel(
-            request.channel, request.message
-        )
-    except Exception as e:
-        logger.error(f"Failed to send channel message: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if success:
-        return {
-            "success": True,
-            "message": f"Message sent to channel {request.channel}",
-            "channel": request.channel,
-        }
-
-    raise HTTPException(
-        status_code=400,
-        detail=f"Failed to send message to channel {request.channel}",
-    )
-
-
-@app.post("/typing/channel")
-async def trigger_channel_typing(request: TypingChannelRequest):
-    """Trigger a typing indicator for a channel via the collector"""
-    collector = app.state.bots.get(request.bot_id)
-    if not collector:
-        raise HTTPException(status_code=404, detail="Bot not found")
-
-    try:
-        success = await collector.collector.trigger_typing_channel(request.channel)
-    except Exception as e:
-        logger.error(f"Failed to trigger channel typing: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to trigger typing for channel {request.channel}",
-        )
-
-    return {
-        "success": True,
-        "channel": request.channel,
-        "message": f"Typing triggered for channel {request.channel}",
-    }
+    raise HTTPException(status_code=404, detail=f"User '{user}' not found")
 
 
 @app.get("/health")
-async def health_check():
-    """Check if the Discord collector is running and healthy"""
-    if not app.state.bots:
-        raise HTTPException(status_code=503, detail="Discord collector not running")
-
-    return {
-        bot.bot_name: {
-            "status": "healthy",
-            "connected": not bot.collector.is_closed(),
-            "user": str(bot.collector.user) if bot.collector.user else None,
-            "guilds": len(bot.collector.guilds) if bot.collector.guilds else 0,
+async def health() -> dict[str, Any]:
+    """Check health of all bots."""
+    mgr = get_manager()
+    result = {}
+    for bot_id, collector in mgr.collectors.items():
+        result[str(bot_id)] = {
+            "connected": collector.is_ready(),
+            "name": collector.bot_info.name,
         }
-        for bot in app.state.bots.values()
-    }
+    return result
+
+
+@app.post("/send_dm")
+async def send_dm(request: SendDMRequest) -> dict[str, Any]:
+    """Send a DM to a user."""
+    mgr = get_manager()
+    user_id = await resolve_user_id(request.user)
+    success = await mgr.send_dm(request.bot_id, user_id, request.message)
+    return {"success": success}
+
+
+@app.post("/send_channel")
+async def send_channel(request: SendChannelRequest) -> dict[str, Any]:
+    """Send a message to a channel."""
+    mgr = get_manager()
+    channel_id = await resolve_channel_id(request.channel)
+    success = await mgr.send_message(request.bot_id, channel_id, request.message)
+    return {"success": success}
+
+
+@app.post("/typing/dm")
+async def typing_dm(request: TypingRequest) -> dict[str, Any]:
+    """Trigger typing indicator in a DM."""
+    mgr = get_manager()
+    if request.user is None:
+        raise HTTPException(status_code=400, detail="user is required")
+
+    user_id = await resolve_user_id(request.user)
+    collector = mgr.get_collector(request.bot_id)
+    if not collector:
+        return {"success": False}
+
+    try:
+        user = collector.get_user(user_id)
+        if user is None:
+            user = await collector.fetch_user(user_id)
+        if user:
+            dm_channel = user.dm_channel or await user.create_dm()
+            await dm_channel.typing()
+            return {"success": True}
+    except Exception:
+        logger.exception(f"Failed to trigger typing for user {user_id}")
+
+    return {"success": False}
+
+
+@app.post("/typing/channel")
+async def typing_channel(request: TypingRequest) -> dict[str, Any]:
+    """Trigger typing indicator in a channel."""
+    mgr = get_manager()
+    if request.channel is None:
+        raise HTTPException(status_code=400, detail="channel is required")
+
+    channel_id = await resolve_channel_id(request.channel)
+    collector = mgr.get_collector(request.bot_id)
+    if not collector:
+        return {"success": False}
+
+    try:
+        channel = collector.get_channel(channel_id)
+        if channel is None:
+            channel = await collector.fetch_channel(channel_id)
+        if channel and hasattr(channel, "typing"):
+            await channel.typing()
+            return {"success": True}
+    except Exception:
+        logger.exception(f"Failed to trigger typing for channel {channel_id}")
+
+    return {"success": False}
 
 
 @app.post("/add_reaction")
-async def add_reaction_endpoint(request: AddReactionRequest):
-    """Add a reaction to a message via the collector's Discord client"""
-    collector = app.state.bots.get(request.bot_id)
+async def add_reaction(request: ReactionRequest) -> dict[str, Any]:
+    """Add a reaction to a message."""
+    mgr = get_manager()
+    channel_id = await resolve_channel_id(request.channel)
+    collector = mgr.get_collector(request.bot_id)
     if not collector:
-        raise HTTPException(status_code=404, detail="Bot not found")
+        return {"success": False}
 
-    try:
-        success = await collector.collector.add_reaction(
-            request.channel, request.message_id, request.emoji
-        )
-    except Exception as e:
-        logger.error(f"Failed to add reaction: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to add reaction to message {request.message_id}",
-        )
-
-    return {
-        "success": True,
-        "channel": request.channel,
-        "message_id": request.message_id,
-        "emoji": request.emoji,
-        "message": f"Added reaction {request.emoji} to message {request.message_id}",
-    }
+    success = await collector.add_reaction(channel_id, request.message_id, request.emoji)
+    return {"success": success}
 
 
 @app.post("/refresh_metadata")
-async def refresh_metadata():
-    """Refresh Discord server/channel/user metadata from Discord API"""
-    if not app.state.bots:
-        raise HTTPException(status_code=503, detail="Discord collector not running")
+async def refresh_metadata() -> dict[str, Any]:
+    """Refresh Discord metadata from API."""
+    mgr = get_manager()
 
-    try:
-        result = {
-            bot.bot_name: await bot.collector.refresh_metadata()
-            for bot in app.state.bots.values()
-        }
-        return {
-            "success": True,
-            "message": f"Metadata refreshed successfully for {len(app.state.bots)} bots",
-            "results": result,
-        }
-    except Exception as e:
-        logger.error(f"Failed to refresh metadata: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    from memory.common.db.connection import make_session
+    from memory.discord.collector import ensure_channel, ensure_server, ensure_user
 
+    updated = {"servers": 0, "channels": 0, "users": 0}
 
-def run_discord_api_server(host: str = "127.0.0.1", port: int = 8001):
-    """Run the Discord API server"""
-    uvicorn.run(app, host=host, port=port, log_level="debug")
+    for collector in mgr.collectors.values():
+        with make_session() as session:
+            # Update servers
+            for guild in collector.guilds:
+                ensure_server(session, guild)
+                updated["servers"] += 1
+
+                # Update channels
+                for channel in guild.channels:
+                    if hasattr(channel, "send"):  # Text-like channels
+                        ensure_channel(session, channel, guild.id)
+                        updated["channels"] += 1
+
+                # Update users
+                for member in guild.members:
+                    ensure_user(session, member)
+                    updated["users"] += 1
+
+            session.commit()
+
+    return {"success": True, "updated": updated}
 
 
 if __name__ == "__main__":
-    # For testing the API server standalone
-    host = settings.DISCORD_COLLECTOR_SERVER_URL
-    port = settings.DISCORD_COLLECTOR_PORT
-    run_discord_api_server(host, port)
+    import uvicorn
+    from memory.common import settings
+
+    uvicorn.run(
+        "memory.discord.api:app",
+        host="0.0.0.0",
+        port=settings.DISCORD_COLLECTOR_PORT,
+        reload=False,
+    )

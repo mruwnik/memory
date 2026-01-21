@@ -1,8 +1,12 @@
 """Tests for Discord database models."""
 
-from types import SimpleNamespace
-
-from memory.common.db.models import DiscordServer, DiscordChannel, DiscordUser
+from memory.common.db.models import (
+    DiscordBot,
+    DiscordChannel,
+    DiscordServer,
+    DiscordUser,
+    HumanUser,
+)
 
 
 def test_create_discord_server(db_session):
@@ -20,54 +24,20 @@ def test_create_discord_server(db_session):
     assert server.name == "Test Server"
     assert server.description == "A test Discord server"
     assert server.member_count == 100
-    assert server.ignore_messages is False  # default value
+    assert server.collect_messages is False  # default value
 
 
-def test_discord_server_as_xml(db_session):
-    """Test DiscordServer.to_xml() method."""
+def test_discord_server_collect_messages(db_session):
+    """Test Discord server message collection flag."""
     server = DiscordServer(
         id=123456789,
         name="Test Server",
-        summary="This is a test server for gaming",
+        collect_messages=True,
     )
     db_session.add(server)
     db_session.commit()
 
-    xml = server.to_xml("name", "summary")
-    assert "<server>" in xml  # tablename is discord_servers, strips to "server"
-    assert "<name>" in xml and "Test Server" in xml
-    assert "<summary>" in xml and "This is a test server for gaming" in xml
-    assert "</server>" in xml
-
-
-def test_discord_server_message_tracking(db_session):
-    """Test Discord server message tracking flags."""
-    server = DiscordServer(
-        id=123456789,
-        name="Test Server",
-        ignore_messages=True,
-    )
-    db_session.add(server)
-    db_session.commit()
-
-    assert server.ignore_messages is True
-
-
-def test_discord_server_allowed_tools(db_session):
-    """Test Discord server allowed/disallowed tools."""
-    server = DiscordServer(
-        id=123456789,
-        name="Test Server",
-        allowed_tools=["search", "schedule"],
-        disallowed_tools=["delete", "ban"],
-    )
-    db_session.add(server)
-    db_session.commit()
-
-    assert "search" in server.allowed_tools
-    assert "schedule" in server.allowed_tools
-    assert "delete" in server.disallowed_tools
-    assert "ban" in server.disallowed_tools
+    assert server.collect_messages is True
 
 
 def test_create_discord_channel(db_session):
@@ -109,39 +79,67 @@ def test_discord_channel_without_server(db_session):
     assert channel.channel_type == "dm"
 
 
-def test_discord_channel_as_xml(db_session):
-    """Test DiscordChannel.to_xml() method."""
-    channel = DiscordChannel(
-        id=111222333,
-        name="general",
-        channel_type="text",
-        summary="Main discussion channel",
-    )
-    db_session.add(channel)
-    db_session.commit()
-
-    xml = channel.to_xml("name", "summary")
-    assert "<channel>" in xml  # tablename is discord_channels, strips to "channel"
-    assert "<name>" in xml and "general" in xml
-    assert "<summary>" in xml and "Main discussion channel" in xml
-    assert "</channel>" in xml
-
-
-def test_discord_channel_inherits_server_settings(db_session):
-    """Test that channels can have their own or inherit server settings."""
-    server = DiscordServer(id=987654321, name="Server", ignore_messages=False)
+def test_discord_channel_should_collect_inherits_from_server(db_session):
+    """Test that channel inherits collect_messages from server when not set."""
+    server = DiscordServer(id=987654321, name="Server", collect_messages=True)
     channel = DiscordChannel(
         id=111222333,
         server_id=server.id,
-        name="announcements",
+        name="general",
         channel_type="text",
-        ignore_messages=True,  # Override server setting
+        collect_messages=None,  # Inherit from server
     )
     db_session.add_all([server, channel])
     db_session.commit()
 
-    assert server.ignore_messages is False
-    assert channel.ignore_messages is True
+    assert channel.should_collect is True
+
+
+def test_discord_channel_should_collect_explicit_override(db_session):
+    """Test that channel can override server's collect_messages setting."""
+    server = DiscordServer(id=987654321, name="Server", collect_messages=True)
+    channel = DiscordChannel(
+        id=111222333,
+        server_id=server.id,
+        name="private",
+        channel_type="text",
+        collect_messages=False,  # Explicit override
+    )
+    db_session.add_all([server, channel])
+    db_session.commit()
+
+    assert server.collect_messages is True
+    assert channel.should_collect is False
+
+
+def test_discord_channel_dm_defaults_to_not_collect(db_session):
+    """Test that DM channels (no server) default to not collecting."""
+    channel = DiscordChannel(
+        id=111222333,
+        name="dm-channel",
+        channel_type="dm",
+        server_id=None,
+        collect_messages=None,
+    )
+    db_session.add(channel)
+    db_session.commit()
+
+    assert channel.should_collect is False
+
+
+def test_discord_channel_dm_can_be_explicitly_enabled(db_session):
+    """Test that DM channels can be explicitly enabled for collection."""
+    channel = DiscordChannel(
+        id=111222333,
+        name="dm-channel",
+        channel_type="dm",
+        server_id=None,
+        collect_messages=True,
+    )
+    db_session.add(channel)
+    db_session.commit()
+
+    assert channel.should_collect is True
 
 
 def test_create_discord_user(db_session):
@@ -160,10 +158,27 @@ def test_create_discord_user(db_session):
     assert user.system_user_id is None
 
 
+def test_discord_user_name_property(db_session):
+    """Test DiscordUser.name property returns display_name or username."""
+    user_with_display = DiscordUser(
+        id=555666777,
+        username="testuser",
+        display_name="Test User",
+    )
+    user_without_display = DiscordUser(
+        id=555666778,
+        username="another_user",
+        display_name=None,
+    )
+    db_session.add_all([user_with_display, user_without_display])
+    db_session.commit()
+
+    assert user_with_display.name == "Test User"
+    assert user_without_display.name == "another_user"
+
+
 def test_discord_user_with_system_user(db_session):
     """Test Discord user linked to a system user."""
-    from memory.common.db.models import HumanUser
-
     system_user = HumanUser.create_with_password(
         email="user@example.com", name="System User", password="password123"
     )
@@ -183,35 +198,6 @@ def test_discord_user_with_system_user(db_session):
     assert discord_user.system_user.email == "user@example.com"
 
 
-def test_discord_user_as_xml(db_session):
-    """Test DiscordUser.to_xml() method."""
-    user = DiscordUser(
-        id=555666777,
-        username="testuser",
-        summary="Friendly and helpful community member",
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    xml = user.to_xml("summary")
-    assert "<user>" in xml  # tablename is discord_users, strips to "user"
-    assert "<summary>" in xml and "Friendly and helpful community member" in xml
-    assert "</user>" in xml
-
-
-def test_discord_user_message_preferences(db_session):
-    """Test Discord user message tracking preferences."""
-    user = DiscordUser(
-        id=555666777,
-        username="testuser",
-        ignore_messages=False,
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    assert user.ignore_messages is False
-
-
 def test_discord_server_channel_relationship(db_session):
     """Test the relationship between servers and channels."""
     server = DiscordServer(id=987654321, name="Test Server")
@@ -227,24 +213,6 @@ def test_discord_server_channel_relationship(db_session):
     assert len(server.channels) == 2
     assert channel1 in server.channels
     assert channel2 in server.channels
-
-
-def test_discord_processor_xml_mcp_servers():
-    """Test xml_mcp_servers includes assigned MCP server XML."""
-    from unittest.mock import patch, PropertyMock
-
-    server = DiscordServer(id=111, name="Server")
-    mcp_stub = SimpleNamespace(
-        as_xml=lambda: "<mcp_server><name>Example</name></mcp_server>"
-    )
-
-    # Mock the mcp_servers property to return our test stub
-    with patch.object(DiscordServer, "mcp_servers", new_callable=PropertyMock) as mock_prop:
-        mock_prop.return_value = [mcp_stub]
-        xml_output = server.xml_mcp_servers()
-
-    assert "<mcp_server>" in xml_output
-    assert "Example" in xml_output
 
 
 def test_discord_server_cascade_delete(db_session):
@@ -265,3 +233,102 @@ def test_discord_server_cascade_delete(db_session):
     # Channel should be deleted too
     deleted_channel = db_session.get(DiscordChannel, channel_id)
     assert deleted_channel is None
+
+
+def test_create_discord_bot(db_session):
+    """Test creating a Discord bot."""
+    bot = DiscordBot(
+        id=123456789,
+        name="Test Bot",
+        is_active=True,
+    )
+    db_session.add(bot)
+    db_session.commit()
+
+    assert bot.id == 123456789
+    assert bot.name == "Test Bot"
+    assert bot.is_active is True
+    assert bot.token is None
+
+
+def test_discord_bot_token_encryption(db_session):
+    """Test that bot token is encrypted and decrypted correctly."""
+    bot = DiscordBot(
+        id=123456789,
+        name="Test Bot",
+    )
+    bot.token = "my_secret_token"
+    db_session.add(bot)
+    db_session.commit()
+
+    # Token should be encrypted in storage
+    assert bot.token_encrypted is not None
+    assert bot.token_encrypted != b"my_secret_token"
+
+    # But should decrypt correctly via property
+    assert bot.token == "my_secret_token"
+
+
+def test_discord_bot_user_authorization(db_session):
+    """Test many-to-many relationship between bots and users."""
+    user1 = HumanUser.create_with_password(
+        email="user1@example.com", name="User 1", password="password123"
+    )
+    user2 = HumanUser.create_with_password(
+        email="user2@example.com", name="User 2", password="password123"
+    )
+    db_session.add_all([user1, user2])
+    db_session.commit()
+
+    bot = DiscordBot(id=123456789, name="Test Bot")
+    bot.authorized_users.append(user1)
+    db_session.add(bot)
+    db_session.commit()
+
+    assert bot.is_authorized(user1) is True
+    assert bot.is_authorized(user2) is False
+
+    # User should have the bot in their discord_bots list
+    assert bot in user1.discord_bots
+    assert bot not in user2.discord_bots
+
+
+def test_discord_bot_multiple_users(db_session):
+    """Test that multiple users can be authorized for a bot."""
+    user1 = HumanUser.create_with_password(
+        email="user1@example.com", name="User 1", password="password123"
+    )
+    user2 = HumanUser.create_with_password(
+        email="user2@example.com", name="User 2", password="password123"
+    )
+    db_session.add_all([user1, user2])
+    db_session.commit()
+
+    bot = DiscordBot(id=123456789, name="Test Bot")
+    bot.authorized_users.extend([user1, user2])
+    db_session.add(bot)
+    db_session.commit()
+
+    assert len(bot.authorized_users) == 2
+    assert bot.is_authorized(user1) is True
+    assert bot.is_authorized(user2) is True
+
+
+def test_user_multiple_bots(db_session):
+    """Test that a user can be authorized for multiple bots."""
+    user = HumanUser.create_with_password(
+        email="user@example.com", name="User", password="password123"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    bot1 = DiscordBot(id=111111111, name="Bot 1")
+    bot2 = DiscordBot(id=222222222, name="Bot 2")
+    bot1.authorized_users.append(user)
+    bot2.authorized_users.append(user)
+    db_session.add_all([bot1, bot2])
+    db_session.commit()
+
+    assert len(user.discord_bots) == 2
+    assert bot1 in user.discord_bots
+    assert bot2 in user.discord_bots

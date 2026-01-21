@@ -40,9 +40,11 @@ from memory.common.db.models.source_items import (
     Meeting,
 )
 from memory.common.db.models.discord import (
+    DiscordBot,
     DiscordServer,
     DiscordChannel,
     DiscordUser,
+    discord_bot_users,
 )
 from memory.common.db.models.mcp import (
     MCPServer,
@@ -77,7 +79,6 @@ from memory.common.db.models.users import (
     User,
     HumanUser,
     BotUser,
-    DiscordBotUser,
     UserSession,
     OAuthClientInformation,
     OAuthState,
@@ -209,16 +210,17 @@ __all__ = [
     "CalendarAccount",
     "CalendarEvent",
     "CalendarEventPayload",
+    "DiscordBot",
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",
+    "discord_bot_users",
     "MCPServer",
     "MCPServerAssignment",
     # Users
     "User",
     "HumanUser",
     "BotUser",
-    "DiscordBotUser",
     "UserSession",
     "OAuthClientInformation",
     "OAuthState",

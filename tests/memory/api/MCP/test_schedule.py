@@ -1,4 +1,5 @@
 """Tests for MCP schedule server."""
+# pyright: reportFunctionMemberAccess=false
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -55,65 +56,58 @@ def test_get_current_user_configured():
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.schedule.get_current_user")
 @patch("memory.api.MCP.servers.schedule.make_session")
-@patch("memory.api.MCP.servers.schedule.schedule_discord_message")
-async def test_message_success(
-    mock_schedule_discord, mock_make_session, mock_get_user, mock_auth_user
-):
+async def test_message_success(mock_make_session, mock_get_user, mock_auth_user):
     """Schedule message succeeds with required fields."""
     mock_get_user.return_value = mock_auth_user
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
-    mock_bot = MagicMock()
-    mock_bot.id = 99
-    mock_session.query.return_value.first.return_value = mock_bot
-
-    mock_call = MagicMock()
-    mock_call.id = "call-123"
-    mock_schedule_discord.return_value = mock_call
+    # Mock DiscordUser query
+    mock_discord_user = MagicMock()
+    mock_discord_user.id = 12345
+    mock_session.query.return_value.filter.return_value.first.return_value = (
+        mock_discord_user
+    )
 
     result = await message.fn(
-        scheduled_time="2026-01-20T15:30:00Z",
+        scheduled_time="2027-01-20T15:30:00Z",
         message="Test message",
     )
 
     assert result["success"] is True
-    assert result["scheduled_call_id"] == "call-123"
-    assert "2026-01-20" in result["scheduled_time"]
+    assert "scheduled_call_id" in result
+    assert "2027-01-20" in result["scheduled_time"]
+    mock_session.add.assert_called_once()
     mock_session.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.schedule.get_current_user")
 @patch("memory.api.MCP.servers.schedule.make_session")
-@patch("memory.api.MCP.servers.schedule.schedule_discord_message")
-async def test_message_with_model(
-    mock_schedule_discord, mock_make_session, mock_get_user, mock_auth_user
-):
+async def test_message_with_model(mock_make_session, mock_get_user, mock_auth_user):
     """Schedule message with LLM model."""
     mock_get_user.return_value = mock_auth_user
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
-    mock_bot = MagicMock()
-    mock_session.query.return_value.first.return_value = mock_bot
-
-    mock_call = MagicMock()
-    mock_call.id = "call-456"
-    mock_schedule_discord.return_value = mock_call
+    # Mock DiscordUser query
+    mock_discord_user = MagicMock()
+    mock_session.query.return_value.filter.return_value.first.return_value = (
+        mock_discord_user
+    )
 
     result = await message.fn(
-        scheduled_time="2026-01-20T15:30:00Z",
+        scheduled_time="2027-01-20T15:30:00Z",
         message="What's the weather?",
         model="anthropic/claude-3-5-sonnet-20241022",
         system_prompt="You are a weather assistant",
     )
 
     assert result["success"] is True
-    # Verify model was passed to schedule_discord_message
-    call_kwargs = mock_schedule_discord.call_args.kwargs
-    assert call_kwargs["model"] == "anthropic/claude-3-5-sonnet-20241022"
-    assert call_kwargs["system_prompt"] == "You are a weather assistant"
+    # Verify ScheduledLLMCall was created with correct params
+    add_call = mock_session.add.call_args[0][0]
+    assert add_call.model == "anthropic/claude-3-5-sonnet-20241022"
+    assert add_call.system_prompt == "You are a weather assistant"
 
 
 @pytest.mark.asyncio
@@ -121,7 +115,7 @@ async def test_message_empty_message_raises():
     """Schedule message without message raises ValueError."""
     with pytest.raises(ValueError, match="You must provide `message`"):
         await message.fn(
-            scheduled_time="2026-01-20T15:30:00Z",
+            scheduled_time="2027-01-20T15:30:00Z",
             message="",
         )
 
@@ -134,7 +128,7 @@ async def test_message_not_authenticated_raises(mock_get_user):
 
     with pytest.raises(ValueError, match="Not authenticated"):
         await message.fn(
-            scheduled_time="2026-01-20T15:30:00Z",
+            scheduled_time="2027-01-20T15:30:00Z",
             message="Test",
         )
 
@@ -147,7 +141,7 @@ async def test_message_no_user_id_raises(mock_get_user):
 
     with pytest.raises(ValueError, match="User not found"):
         await message.fn(
-            scheduled_time="2026-01-20T15:30:00Z",
+            scheduled_time="2027-01-20T15:30:00Z",
             message="Test",
         )
 
@@ -163,7 +157,7 @@ async def test_message_no_discord_user_or_channel_raises(mock_get_user):
 
     with pytest.raises(ValueError, match="Either discord_user or discord_channel must be provided"):
         await message.fn(
-            scheduled_time="2026-01-20T15:30:00Z",
+            scheduled_time="2027-01-20T15:30:00Z",
             message="Test",
         )
 
@@ -184,56 +178,53 @@ async def test_message_invalid_datetime_raises(mock_get_user, mock_auth_user):
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.schedule.get_current_user")
 @patch("memory.api.MCP.servers.schedule.make_session")
-async def test_message_no_bot_returns_error(
+async def test_message_no_discord_target_returns_error(
     mock_make_session, mock_get_user, mock_auth_user
 ):
-    """Schedule message without bot returns error."""
+    """Schedule message without discord user or channel returns error."""
     mock_get_user.return_value = mock_auth_user
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
-    # No bot found
-    mock_session.query.return_value.first.return_value = None
+    # No discord user/channel found
+    mock_session.query.return_value.filter.return_value.first.return_value = None
 
     result = await message.fn(
-        scheduled_time="2026-01-20T15:30:00Z",
+        scheduled_time="2027-01-20T15:30:00Z",
         message="Test",
     )
 
     assert "error" in result
-    assert result["error"] == "No bot found"
+    assert result["error"] == "Could not resolve discord_user or discord_channel"
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.schedule.get_current_user")
 @patch("memory.api.MCP.servers.schedule.make_session")
-@patch("memory.api.MCP.servers.schedule.schedule_discord_message")
-async def test_message_with_metadata(
-    mock_schedule_discord, mock_make_session, mock_get_user, mock_auth_user
-):
+async def test_message_with_metadata(mock_make_session, mock_get_user, mock_auth_user):
     """Schedule message with metadata."""
     mock_get_user.return_value = mock_auth_user
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
-    mock_bot = MagicMock()
-    mock_session.query.return_value.first.return_value = mock_bot
-
-    mock_call = MagicMock()
-    mock_call.id = "call-789"
-    mock_schedule_discord.return_value = mock_call
+    # Mock DiscordUser query
+    mock_discord_user = MagicMock()
+    mock_session.query.return_value.filter.return_value.first.return_value = (
+        mock_discord_user
+    )
 
     metadata = {"source": "test", "priority": "high"}
 
     result = await message.fn(
-        scheduled_time="2026-01-20T15:30:00Z",
+        scheduled_time="2027-01-20T15:30:00Z",
         message="Test",
         metadata=metadata,
     )
 
     assert result["success"] is True
-    call_kwargs = mock_schedule_discord.call_args.kwargs
-    assert call_kwargs["metadata"] == metadata
+    # Verify ScheduledLLMCall was created with correct metadata
+    add_call = mock_session.add.call_args[0][0]
+    assert add_call.data == metadata
 
 
 # ====== list_calls tests ======

@@ -7,7 +7,6 @@ from __future__ import annotations
 import pathlib
 import textwrap
 from datetime import datetime
-from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, Annotated, Sequence
 
 from PIL import Image
@@ -44,13 +43,13 @@ from memory.common.db.models.source_item import (
     clean_filename,
     chunk_mixed,
 )
-from memory.common.db.models.mcp import (
-    MCPServer,
-    MCPServerAssignment,
-)
-
 if TYPE_CHECKING:
-    from memory.common.db.models.discord import DiscordChannel, DiscordServer, DiscordUser
+    from memory.common.db.models.discord import (
+        DiscordBot,
+        DiscordChannel,
+        DiscordServer,
+        DiscordUser,
+    )
     from memory.common.db.models.sources import (
         Book,
         CalendarAccount,
@@ -305,7 +304,11 @@ class ChatMessage(SourceItem):
 
 
 class DiscordMessage(SourceItem):
-    """Discord-specific chat message with rich metadata"""
+    """Discord message collected from a channel or DM.
+
+    This is a simplified model focused on data collection. Messages are
+    stored with their metadata and embedded for semantic search.
+    """
 
     __tablename__ = "discord_message"
 
@@ -313,110 +316,77 @@ class DiscordMessage(SourceItem):
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
 
-    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    server_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("discord_servers.id"), nullable=True
-    )
+    # Discord IDs
+    message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # Discord snowflake
     channel_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("discord_channels.id"), nullable=False
     )
-    from_id: Mapped[int] = mapped_column(
+    server_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_servers.id"), nullable=True
+    )
+    author_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("discord_users.id"), nullable=False
     )
-    recipient_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("discord_users.id"), nullable=False
+    # Nullable because existing messages from before bot system was added won't have this
+    bot_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_bots.id"), nullable=True
     )
-    message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # Discord message snowflake ID
 
-    # Discord-specific metadata
+    # Timestamps
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Threading/replies
+    reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # Message metadata
     message_type: Mapped[str] = mapped_column(
         Text, server_default="default"
-    )  # "default", "reply", "thread_starter"
-    reply_to_message_id: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True
-    )  # Discord message snowflake ID if replying
-    thread_id: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True
-    )  # Discord thread snowflake ID if in thread
-    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)  # List of image URLs
+    )  # "default", "reply", "thread_starter", "system"
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Transient attribute for context during processing (not persisted)
-    messages_before: list[str]
+    # Attachments - local paths to downloaded images
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
+    # Rich content stored as JSON
+    # reactions: [{"emoji": "👍", "count": 3, "users": [123, 456]}]
+    reactions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # embeds: Discord embed objects (link previews, etc.)
+    embeds: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    # attachments: Non-image attachments metadata
+    attachments: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+
+    # Relationships
     channel: Mapped[DiscordChannel | None] = relationship("DiscordChannel", foreign_keys=[channel_id])
     server: Mapped[DiscordServer | None] = relationship("DiscordServer", foreign_keys=[server_id])
-    from_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[from_id])
-    recipient_user: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[recipient_id])
+    author: Mapped[DiscordUser | None] = relationship("DiscordUser", foreign_keys=[author_id])
+    bot: Mapped[DiscordBot | None] = relationship("DiscordBot", foreign_keys=[bot_id])
 
-    @property
-    def allowed_tools(self) -> set[str]:
-        return set(
-            (self.channel.allowed_tools if self.channel else [])
-            + (self.from_user.allowed_tools if self.from_user else [])
-            + (self.server.allowed_tools if self.server else [])
-        )
+    __mapper_args__ = {
+        "polymorphic_identity": "discord_message",
+    }
 
-    @property
-    def disallowed_tools(self) -> set[str]:
-        return set(
-            (self.channel.disallowed_tools if self.channel else [])
-            + (self.from_user.disallowed_tools if self.from_user else [])
-            + (self.server.disallowed_tools if self.server else [])
-        )
-
-    def tool_allowed(self, tool: str) -> bool:
-        return not (self.disallowed_tools and tool in self.disallowed_tools) and (
-            not self.allowed_tools or tool in self.allowed_tools
-        )
-
-    def filter_tools(self, tools: Collection[str] | None = None) -> set[str]:
-        if tools is None:
-            return self.allowed_tools - self.disallowed_tools
-        return set(tools) - self.disallowed_tools & self.allowed_tools
-
-    @property
-    def ignore_messages(self) -> bool:
-        return bool(
-            (self.server and self.server.ignore_messages)
-            or (self.channel and self.channel.ignore_messages)
-            or (self.from_user and self.from_user.ignore_messages)
-        )
-
-    @property
-    def system_prompt(self) -> str:
-        prompts = [
-            (self.from_user and self.from_user.system_prompt),
-            (self.channel and self.channel.system_prompt),
-            (self.server and self.server.system_prompt),
-        ]
-        return "\n\n".join(p for p in prompts if p)
-
-    @property
-    def chattiness_threshold(self) -> int:
-        vals = [
-            (self.from_user and self.from_user.chattiness_threshold),
-            (self.channel and self.channel.chattiness_threshold),
-            (self.server and self.server.chattiness_threshold),
-            90,
-        ]
-        return min(val for val in vals if val is not None)
+    __table_args__ = (
+        Index("discord_message_discord_id_idx", "message_id", unique=True),
+        Index("discord_message_channel_idx", "channel_id", "sent_at"),
+        Index("discord_message_author_idx", "author_id"),
+        Index("discord_message_bot_idx", "bot_id"),
+    )
 
     @property
     def title(self) -> str:
-        return textwrap.dedent("""
-            <message>
-                <id>{message_id}</id>
-                <from>{from_user}</from>
-                <sent_at>{sent_at}</sent_at>
-                <content>{content}</content>
-            </message>
-        """).format(
-            message_id=self.message_id,
-            from_user=self.from_user.username if self.from_user else "unknown",
-            sent_at=self.sent_at.isoformat()[:19],
-            content=self.content,
-        )
+        """Format message for display."""
+        author_name = self.author.username if self.author else "unknown"
+        return f"{author_name}: {self.content}"
+
+    @property
+    def embedding_text(self) -> str:
+        """Text to use for embedding. Returns empty string for short messages."""
+        if not self.content or len(self.content) < 20:
+            return ""  # Skip embedding for very short messages
+        author_name = self.author.username if self.author else "unknown"
+        return f"{author_name}: {self.content}"
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""
@@ -429,54 +399,14 @@ class DiscordMessage(SourceItem):
                     content["images"].append(image)
             except Exception:
                 pass  # Skip failed image loads
-
         return content
 
-    def get_mcp_servers(self, session: Any) -> list[MCPServer] | None:
-        entity_ids = list(
-            filter(
-                None,
-                [
-                    self.recipient_id,
-                    self.from_id,
-                    self.channel_id,
-                    self.server_id,
-                ],
-            )
-        )
-        if not entity_ids:
-            return None
-
-        return (
-            session.query(MCPServer)
-            .filter(
-                MCPServerAssignment.entity_id.in_(entity_ids),
-            )
-            .all()
-        )
-
-    __mapper_args__ = {
-        "polymorphic_identity": "discord_message",
-    }
-
-    __table_args__ = (
-        Index("discord_message_discord_id_idx", "message_id", unique=True),
-        Index(
-            "discord_message_server_channel_idx",
-            "server_id",
-            "channel_id",
-        ),
-        Index("discord_message_from_idx", "from_id"),
-        Index("discord_message_recipient_idx", "recipient_id"),
-    )
-
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = self.content
-        if not content:
-            return []
-        prev = getattr(self, "messages_before", [])
-        content = "\n\n".join(prev) + "\n\n" + self.title
-        return extract.extract_text(content)
+        """Generate chunks for embedding."""
+        text = self.embedding_text
+        if not text:
+            return []  # Don't embed short messages
+        return extract.extract_text(text)
 
 
 class GitCommit(SourceItem):
