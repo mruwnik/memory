@@ -1,4 +1,4 @@
-"""Tests for MCP meta tools: metadata, utilities, and forecasting."""
+"""Tests for MCP meta tools: metadata and utilities."""
 # pyright: reportFunctionMemberAccess=false
 
 import pytest
@@ -10,14 +10,26 @@ from memory.api.MCP.servers.meta import (
     get_metadata_schemas,
     get_current_time,
     get_user,
-    get_forecasts,
     from_annotation,
     get_schema,
+)
+from memory.api.MCP.servers.forecast import (
+    get_forecasts,
+    get_market_history,
+    get_market_depth,
+    compare_forecasts,
+    get_resolved_markets,
+)
+from memory.common.markets import (
     format_manifold_market,
     search_polymarket_markets,
     search_kalshi_markets,
     search_markets,
     filter_kalshi_market,
+    calculate_liquidity_score,
+    _search_cache,
+    _history_cache,
+    _depth_cache,
 )
 
 
@@ -287,8 +299,9 @@ async def test_get_user_returns_none_when_no_ssh_key(mock_make_session, mock_get
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_returns_markets(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_returns_markets(mock_search, mock_scope):
     """Get forecasts returns prediction market data."""
     mock_search.return_value = [
         {
@@ -314,8 +327,9 @@ async def test_get_forecasts_returns_markets(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_with_default_params(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_with_default_params(mock_search, mock_scope):
     """Get forecasts uses default parameters."""
     mock_search.return_value = []
 
@@ -325,8 +339,9 @@ async def test_get_forecasts_with_default_params(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_empty_results(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_empty_results(mock_search, mock_scope):
     """Get forecasts returns empty list when no markets found."""
     mock_search.return_value = []
 
@@ -527,7 +542,7 @@ async def test_search_polymarket_markets_parses_events(mock_aiohttp_session):
         ]
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_polymarket_markets("AI AGI", min_volume=1000)
 
     assert len(result) == 1
@@ -558,7 +573,7 @@ async def test_search_polymarket_markets_handles_multiple_choice(mock_aiohttp_se
         ]
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_polymarket_markets("election", min_volume=1000, binary=False)
 
     assert len(result) == 1
@@ -579,7 +594,7 @@ async def test_search_polymarket_markets_filters_by_volume(mock_aiohttp_session)
         ]
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_polymarket_markets("test", min_volume=1000)
 
     assert len(result) == 1
@@ -785,7 +800,7 @@ async def test_search_kalshi_markets_filters_by_term(mock_aiohttp_session):
         "cursor": None,
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_kalshi_markets("bitcoin", min_volume=1000)
 
     assert len(result) == 1
@@ -806,7 +821,7 @@ async def test_search_kalshi_markets_filters_by_volume(mock_aiohttp_session):
         "cursor": None,
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_kalshi_markets("market", min_volume=1000)
 
     assert len(result) == 1
@@ -817,9 +832,9 @@ async def test_search_kalshi_markets_filters_by_volume(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
-@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
-@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+@patch("memory.common.markets.search_kalshi_markets")
+@patch("memory.common.markets.search_polymarket_markets")
+@patch("memory.common.markets.search_manifold_markets")
 async def test_search_markets_aggregates_all_sources(mock_manifold, mock_polymarket, mock_kalshi):
     """search_markets aggregates results from all sources by default."""
     mock_manifold.return_value = [{"source": "manifold", "id": "m1", "question": "Manifold market"}]
@@ -834,9 +849,9 @@ async def test_search_markets_aggregates_all_sources(mock_manifold, mock_polymar
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
-@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
-@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+@patch("memory.common.markets.search_kalshi_markets")
+@patch("memory.common.markets.search_polymarket_markets")
+@patch("memory.common.markets.search_manifold_markets")
 async def test_search_markets_respects_sources_param(mock_manifold, mock_polymarket, mock_kalshi):
     """search_markets only queries specified sources."""
     mock_manifold.return_value = [{"source": "manifold", "id": "m1"}]
@@ -852,9 +867,9 @@ async def test_search_markets_respects_sources_param(mock_manifold, mock_polymar
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_kalshi_markets")
-@patch("memory.api.MCP.servers.meta.search_polymarket_markets")
-@patch("memory.api.MCP.servers.meta.search_manifold_markets")
+@patch("memory.common.markets.search_kalshi_markets")
+@patch("memory.common.markets.search_polymarket_markets")
+@patch("memory.common.markets.search_manifold_markets")
 async def test_search_markets_handles_source_errors(mock_manifold, mock_polymarket, mock_kalshi):
     """search_markets gracefully handles errors from individual sources."""
     mock_manifold.return_value = [{"source": "manifold", "id": "m1"}]
@@ -873,8 +888,9 @@ async def test_search_markets_handles_source_errors(mock_manifold, mock_polymark
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_passes_sources_param(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_passes_sources_param(mock_search, mock_scope):
     """get_forecasts passes sources parameter to search_markets."""
     mock_search.return_value = []
 
@@ -884,10 +900,11 @@ async def test_get_forecasts_passes_sources_param(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_defaults_to_all_sources(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_defaults_to_all_sources(mock_search, mock_scope):
     """get_forecasts uses all sources when none specified."""
-    from memory.api.MCP.servers.meta import _search_cache
+    from memory.common.markets import _search_cache
 
     # Clear cache to ensure mock is called
     _search_cache.clear()
@@ -902,10 +919,11 @@ async def test_get_forecasts_defaults_to_all_sources(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_get_forecasts_caches_results(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_get_forecasts_caches_results(mock_search, mock_scope):
     """get_forecasts caches search results."""
-    from memory.api.MCP.servers.meta import _search_cache
+    from memory.common.markets import _search_cache
 
     mock_search.return_value = [{"id": "m1", "question": "Test market"}]
     _search_cache.clear()
@@ -926,14 +944,14 @@ async def test_get_forecasts_caches_results(mock_search):
 
 def test_calculate_liquidity_score_zero_volume():
     """Liquidity score is 0 for zero volume."""
-    from memory.api.MCP.servers.meta import calculate_liquidity_score
+    from memory.common.markets import calculate_liquidity_score
 
     assert calculate_liquidity_score(0, None) == 0.0
 
 
 def test_calculate_liquidity_score_high_volume():
     """Liquidity score approaches 1 for high volume."""
-    from memory.api.MCP.servers.meta import calculate_liquidity_score
+    from memory.common.markets import calculate_liquidity_score
 
     # $10k/day for 1 day = 1.0
     score = calculate_liquidity_score(10000, None)
@@ -942,7 +960,7 @@ def test_calculate_liquidity_score_high_volume():
 
 def test_calculate_liquidity_score_with_spread():
     """Liquidity score factors in spread when provided."""
-    from memory.api.MCP.servers.meta import calculate_liquidity_score
+    from memory.common.markets import calculate_liquidity_score
 
     # Good spread (1%) should boost score
     score_good = calculate_liquidity_score(5000, None, spread=0.01)
@@ -954,7 +972,7 @@ def test_calculate_liquidity_score_with_spread():
 
 def test_calculate_liquidity_score_with_created_time():
     """Liquidity score uses created time for volume/day calculation."""
-    from memory.api.MCP.servers.meta import calculate_liquidity_score
+    from memory.common.markets import calculate_liquidity_score
     from datetime import datetime, timedelta, timezone
 
     # Market created 10 days ago with $10k volume = $1k/day = 0.1 score
@@ -1010,9 +1028,11 @@ def test_filter_kalshi_market_includes_liquidity_score():
 
 
 @pytest.mark.asyncio
-async def test_get_market_history_kalshi():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_market_history_kalshi(mock_scope):
     """get_market_history fetches Kalshi candlesticks."""
-    from memory.api.MCP.servers.meta import get_market_history, _history_cache
+    from memory.api.MCP.servers.forecast import get_market_history
+    from memory.common.markets import _history_cache
 
     _history_cache.clear()
 
@@ -1023,7 +1043,7 @@ async def test_get_market_history_kalshi():
             {"timestamp": "2025-01-02T00:00:00Z", "probability": 0.60, "volume": 2000},
         ]
 
-    with patch("memory.api.MCP.servers.meta.get_kalshi_history", mock_kalshi_history):
+    with patch("memory.common.markets.get_kalshi_history", mock_kalshi_history):
         result = await get_market_history.fn(market_id="TEST", source="kalshi", period="7d")
 
     assert result["market_id"] == "TEST"
@@ -1033,9 +1053,11 @@ async def test_get_market_history_kalshi():
 
 
 @pytest.mark.asyncio
-async def test_get_market_history_caches_results(mock_aiohttp_session):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_market_history_caches_results(mock_scope, mock_aiohttp_session):
     """get_market_history caches results."""
-    from memory.api.MCP.servers.meta import get_market_history, _history_cache
+    from memory.api.MCP.servers.forecast import get_market_history
+    from memory.common.markets import _history_cache
 
     mock_session_cm, mock_response = mock_aiohttp_session
     _history_cache.clear()
@@ -1053,7 +1075,7 @@ async def test_get_market_history_caches_results(mock_aiohttp_session):
         call_count += 1
         return await original_get(*args, **kwargs)
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         # First call
         await get_market_history.fn(market_id="CACHE", source="kalshi", period="7d")
         # Second call - should use cache
@@ -1067,9 +1089,11 @@ async def test_get_market_history_caches_results(mock_aiohttp_session):
 
 
 @pytest.mark.asyncio
-async def test_get_market_depth_kalshi():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_market_depth_kalshi(mock_scope):
     """get_market_depth fetches Kalshi order book."""
-    from memory.api.MCP.servers.meta import get_market_depth, _depth_cache
+    from memory.api.MCP.servers.forecast import get_market_depth
+    from memory.common.markets import _depth_cache
 
     _depth_cache.clear()
 
@@ -1094,7 +1118,7 @@ async def test_get_market_depth_kalshi():
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await get_market_depth.fn(market_id="TEST", source="kalshi")
 
     assert result["market_id"] == "TEST"
@@ -1107,9 +1131,10 @@ async def test_get_market_depth_kalshi():
 
 
 @pytest.mark.asyncio
-async def test_get_market_depth_unsupported_source():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_market_depth_unsupported_source(mock_scope):
     """get_market_depth returns error for unsupported sources."""
-    from memory.api.MCP.servers.meta import get_market_depth
+    from memory.api.MCP.servers.forecast import get_market_depth
 
     result = await get_market_depth.fn(market_id="test", source="manifold")
 
@@ -1121,10 +1146,11 @@ async def test_get_market_depth_unsupported_source():
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_compare_forecasts_calculates_consensus(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_compare_forecasts_calculates_consensus(mock_search, mock_scope):
     """compare_forecasts calculates volume-weighted consensus."""
-    from memory.api.MCP.servers.meta import compare_forecasts
+    from memory.api.MCP.servers.forecast import compare_forecasts
 
     mock_search.return_value = [
         {"source": "manifold", "id": "m1", "probability": 0.60, "volume": 10000},
@@ -1139,10 +1165,12 @@ async def test_compare_forecasts_calculates_consensus(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_compare_forecasts_finds_arbitrage(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_compare_forecasts_finds_arbitrage(mock_search, mock_scope):
     """compare_forecasts identifies arbitrage opportunities."""
-    from memory.api.MCP.servers.meta import compare_forecasts, _search_cache
+    from memory.api.MCP.servers.forecast import compare_forecasts
+    from memory.common.markets import _search_cache
 
     # Clear cache to avoid stale data from other tests
     _search_cache.clear()
@@ -1160,10 +1188,11 @@ async def test_compare_forecasts_finds_arbitrage(mock_search):
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.search_markets")
-async def test_compare_forecasts_empty_results(mock_search):
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+@patch("memory.common.markets.search_markets")
+async def test_compare_forecasts_empty_results(mock_search, mock_scope):
     """compare_forecasts handles empty results."""
-    from memory.api.MCP.servers.meta import compare_forecasts
+    from memory.api.MCP.servers.forecast import compare_forecasts
 
     mock_search.return_value = []
 
@@ -1178,9 +1207,10 @@ async def test_compare_forecasts_empty_results(mock_search):
 
 
 @pytest.mark.asyncio
-async def test_get_resolved_markets_manifold():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_resolved_markets_manifold(mock_scope):
     """get_resolved_markets fetches resolved Manifold markets."""
-    from memory.api.MCP.servers.meta import get_resolved_markets
+    from memory.api.MCP.servers.forecast import get_resolved_markets
 
     # Mock the manifold resolved helper
     async def mock_manifold_resolved(term, since):
@@ -1196,7 +1226,7 @@ async def test_get_resolved_markets_manifold():
             }
         ]
 
-    with patch("memory.api.MCP.servers.meta.get_manifold_resolved", mock_manifold_resolved):
+    with patch("memory.common.markets.get_manifold_resolved", mock_manifold_resolved):
         result = await get_resolved_markets.fn(term="test", sources=["manifold"])
 
     assert len(result) == 1
@@ -1226,7 +1256,7 @@ async def test_search_polymarket_includes_liquidity_score(mock_aiohttp_session):
         ]
     })
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await search_polymarket_markets("test", min_volume=1000)
 
     assert len(result) == 1
@@ -1265,7 +1295,7 @@ async def test_format_manifold_market_includes_liquidity_score():
 @pytest.mark.asyncio
 async def test_fetch_market_info_manifold():
     """fetch_market_info fetches market details from Manifold."""
-    from memory.api.MCP.servers.meta import fetch_market_info
+    from memory.common.markets import fetch_market_info
 
     mock_response = MagicMock()
     mock_response.status = 200
@@ -1288,7 +1318,7 @@ async def test_fetch_market_info_manifold():
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await fetch_market_info("m1", "manifold")
 
     assert result is not None
@@ -1299,7 +1329,7 @@ async def test_fetch_market_info_manifold():
 @pytest.mark.asyncio
 async def test_fetch_market_info_kalshi():
     """fetch_market_info fetches market details from Kalshi."""
-    from memory.api.MCP.servers.meta import fetch_market_info
+    from memory.common.markets import fetch_market_info
 
     mock_response = MagicMock()
     mock_response.status = 200
@@ -1323,7 +1353,7 @@ async def test_fetch_market_info_kalshi():
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await fetch_market_info("k1", "kalshi")
 
     assert result is not None
@@ -1334,7 +1364,7 @@ async def test_fetch_market_info_kalshi():
 @pytest.mark.asyncio
 async def test_fetch_market_info_not_found():
     """fetch_market_info returns None for 404."""
-    from memory.api.MCP.servers.meta import fetch_market_info
+    from memory.common.markets import fetch_market_info
 
     mock_response = MagicMock()
     mock_response.status = 404
@@ -1350,7 +1380,7 @@ async def test_fetch_market_info_not_found():
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         result = await fetch_market_info("nonexistent", "manifold")
 
     assert result is None
@@ -1359,14 +1389,14 @@ async def test_fetch_market_info_not_found():
 @pytest.mark.asyncio
 async def test_watch_market_unauthenticated():
     """watch_market returns error when not authenticated."""
-    from memory.api.MCP.servers.meta import watch_market
+    from memory.api.MCP.servers.forecast import watch_market
 
     mock_session = MagicMock()
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=None):
             result = await watch_market.fn(market_id="m1", source="manifold")
 
     assert "error" in result
@@ -1376,7 +1406,7 @@ async def test_watch_market_unauthenticated():
 @pytest.mark.asyncio
 async def test_watch_market_already_watching():
     """watch_market returns already_watching status when market exists."""
-    from memory.api.MCP.servers.meta import watch_market
+    from memory.api.MCP.servers.forecast import watch_market
     from datetime import datetime, timezone
 
     mock_user = MagicMock()
@@ -1390,10 +1420,10 @@ async def test_watch_market_already_watching():
     mock_db_session = MagicMock()
     mock_db_session.query.return_value.filter.return_value.first.return_value = mock_existing
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=mock_user_session):
             result = await watch_market.fn(market_id="m1", source="manifold")
 
     assert result["status"] == "already_watching"
@@ -1403,14 +1433,14 @@ async def test_watch_market_already_watching():
 @pytest.mark.asyncio
 async def test_get_watchlist_unauthenticated():
     """get_watchlist returns empty list when not authenticated."""
-    from memory.api.MCP.servers.meta import get_watchlist
+    from memory.api.MCP.servers.forecast import get_watchlist
 
     mock_session = MagicMock()
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=None):
             result = await get_watchlist.fn()
 
     assert result == []
@@ -1419,7 +1449,7 @@ async def test_get_watchlist_unauthenticated():
 @pytest.mark.asyncio
 async def test_get_watchlist_empty():
     """get_watchlist returns empty list when no watched markets."""
-    from memory.api.MCP.servers.meta import get_watchlist
+    from memory.api.MCP.servers.forecast import get_watchlist
 
     mock_user = MagicMock()
     mock_user.id = 1
@@ -1429,10 +1459,10 @@ async def test_get_watchlist_empty():
     mock_db_session = MagicMock()
     mock_db_session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=mock_user_session):
             result = await get_watchlist.fn()
 
     assert result == []
@@ -1441,14 +1471,14 @@ async def test_get_watchlist_empty():
 @pytest.mark.asyncio
 async def test_unwatch_market_unauthenticated():
     """unwatch_market returns error when not authenticated."""
-    from memory.api.MCP.servers.meta import unwatch_market
+    from memory.api.MCP.servers.forecast import unwatch_market
 
     mock_session = MagicMock()
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=None):
             result = await unwatch_market.fn(market_id="m1", source="manifold")
 
     assert "error" in result
@@ -1458,7 +1488,7 @@ async def test_unwatch_market_unauthenticated():
 @pytest.mark.asyncio
 async def test_unwatch_market_not_found():
     """unwatch_market returns not_found when market not in watchlist."""
-    from memory.api.MCP.servers.meta import unwatch_market
+    from memory.api.MCP.servers.forecast import unwatch_market
 
     mock_user = MagicMock()
     mock_user.id = 1
@@ -1468,10 +1498,10 @@ async def test_unwatch_market_not_found():
     mock_db_session = MagicMock()
     mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=mock_user_session):
             result = await unwatch_market.fn(market_id="nonexistent", source="manifold")
 
     assert result["status"] == "not_found"
@@ -1481,7 +1511,7 @@ async def test_unwatch_market_not_found():
 @pytest.mark.asyncio
 async def test_unwatch_market_success():
     """unwatch_market removes market from watchlist."""
-    from memory.api.MCP.servers.meta import unwatch_market
+    from memory.api.MCP.servers.forecast import unwatch_market
 
     mock_user = MagicMock()
     mock_user.id = 1
@@ -1492,10 +1522,10 @@ async def test_unwatch_market_success():
     mock_db_session = MagicMock()
     mock_db_session.query.return_value.filter.return_value.first.return_value = mock_watched
 
-    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+    with patch("memory.api.MCP.servers.forecast.make_session") as mock_make_session:
         mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
         mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+        with patch("memory.api.MCP.servers.forecast._get_user_session_from_token", return_value=mock_user_session):
             result = await unwatch_market.fn(market_id="m1", source="manifold")
 
     assert result["status"] == "removed"
