@@ -898,6 +898,8 @@ async def compare_forecasts_data(
     by_source: dict[str, list[dict]] = {}
     for m in markets:
         source = m.get("source")
+        if not source:
+            continue
         if source not in by_source:
             by_source[source] = []
         by_source[source].append(m)
