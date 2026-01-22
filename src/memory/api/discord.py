@@ -1,5 +1,7 @@
 """API endpoints for Discord bot, server, and channel management."""
 
+import base64
+import binascii
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -38,7 +40,7 @@ class DiscordBotUpdate(BaseModel):
 
 
 class DiscordBotResponse(BaseModel):
-    id: int
+    id: str  # String to avoid JavaScript precision loss on large snowflake IDs
     name: str
     is_active: bool
     created_at: str | None
@@ -50,7 +52,7 @@ class DiscordBotResponse(BaseModel):
 
 
 class DiscordServerResponse(BaseModel):
-    id: int
+    id: str  # String to avoid JavaScript precision loss on large snowflake IDs
     name: str
     description: str | None
     member_count: int | None
@@ -67,8 +69,8 @@ class DiscordServerUpdate(BaseModel):
 
 
 class DiscordChannelResponse(BaseModel):
-    id: int
-    server_id: int | None
+    id: str  # String to avoid JavaScript precision loss on large snowflake IDs
+    server_id: str | None
     server_name: str | None
     name: str
     channel_type: str
@@ -130,7 +132,7 @@ def require_discord_access(
 def bot_to_response(bot: DiscordBot, connected: bool | None = None) -> DiscordBotResponse:
     """Convert a DiscordBot model to a response."""
     return DiscordBotResponse(
-        id=cast(int, bot.id),
+        id=str(bot.id),
         name=cast(str, bot.name),
         is_active=cast(bool, bot.is_active),
         created_at=bot.created_at.isoformat() if bot.created_at else None,
@@ -142,7 +144,7 @@ def bot_to_response(bot: DiscordBot, connected: bool | None = None) -> DiscordBo
 def server_to_response(server: DiscordServer) -> DiscordServerResponse:
     """Convert a DiscordServer model to a response."""
     return DiscordServerResponse(
-        id=cast(int, server.id),
+        id=str(server.id),
         name=cast(str, server.name),
         description=cast(str | None, server.description),
         member_count=cast(int | None, server.member_count),
@@ -155,8 +157,8 @@ def server_to_response(server: DiscordServer) -> DiscordServerResponse:
 def channel_to_response(channel: DiscordChannel) -> DiscordChannelResponse:
     """Convert a DiscordChannel model to a response."""
     return DiscordChannelResponse(
-        id=cast(int, channel.id),
-        server_id=cast(int | None, channel.server_id),
+        id=str(channel.id),
+        server_id=str(channel.server_id) if channel.server_id else None,
         server_name=channel.server.name if channel.server else None,
         name=cast(str, channel.name),
         channel_type=cast(str, channel.channel_type),
@@ -196,10 +198,13 @@ def create_bot(
     The bot ID is extracted from the token. The user is automatically
     authorized to use the bot.
     """
-    # Extract bot ID from token (format: bot_id.timestamp.hmac)
+    # Extract bot ID from token (format: base64(user_id).timestamp.hmac)
     try:
-        bot_id = int(data.token.split(".")[0])
-    except (ValueError, IndexError):
+        encoded_id = data.token.split(".")[0]
+        # Add padding if needed for base64 decoding
+        padded = encoded_id + "=" * (-len(encoded_id) % 4)
+        bot_id = int(base64.b64decode(padded).decode())
+    except (ValueError, IndexError, binascii.Error):
         raise HTTPException(status_code=400, detail="Invalid bot token format")
 
     # Check if bot already exists
@@ -291,6 +296,23 @@ def refresh_bot_metadata(
     if result is None:
         raise HTTPException(status_code=503, detail="Failed to refresh metadata")
     return {"success": True, **result}
+
+
+@router.get("/bots/{bot_id}/invite")
+def get_bot_invite_url(
+    bot_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Generate a Discord invite URL for the bot.
+
+    Returns a URL that can be used to add the bot to a Discord server.
+    Permissions: Send Messages (2048) + Read Message History (65536) + View Channels (1024)
+    """
+    get_user_bot(db, bot_id, user)  # Verify authorization
+    permissions = 2048 + 65536 + 1024  # send messages, read history, view channels
+    invite_url = f"https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions={permissions}"
+    return {"invite_url": invite_url}
 
 
 @router.post("/bots/{bot_id}/users", response_model=UserStatusResponse)

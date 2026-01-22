@@ -134,7 +134,7 @@ def fetch_channel_history(
 
 def fetch_channels(
     session: DBSession,
-    server_id: int | None,
+    server_id: int | str | None,
     server_name: str | None,
     include_dms: bool,
 ) -> dict[str, Any]:
@@ -143,7 +143,7 @@ def fetch_channels(
 
     Args:
         session: Database session
-        server_id: Filter by server ID
+        server_id: Filter by server ID (accepts string for JavaScript compatibility)
         server_name: Filter by server name
         include_dms: Include DM channels
 
@@ -152,9 +152,10 @@ def fetch_channels(
     """
     query = session.query(DiscordChannel)
 
-    # Filter by server if specified
+    # Filter by server if specified (convert string to int if needed)
     if server_id is not None:
-        query = query.filter(DiscordChannel.server_id == server_id)
+        server_id_int = int(server_id) if isinstance(server_id, str) else server_id
+        query = query.filter(DiscordChannel.server_id == server_id_int)
     elif server_name is not None:
         server = (
             session.query(DiscordServer)
@@ -175,10 +176,10 @@ def fetch_channels(
     formatted = []
     for ch in channels:
         formatted.append({
-            "id": ch.id,
+            "id": str(ch.id),  # String to avoid JS precision loss
             "name": ch.name,
             "type": ch.channel_type,
-            "server_id": ch.server_id,
+            "server_id": str(ch.server_id) if ch.server_id else None,
             "collect_messages": ch.should_collect,
         })
 

@@ -115,12 +115,18 @@ async def resolve_user_id(user: str | int, mgr: CollectorManager | None = None) 
     except ValueError:
         pass
 
-    # Look up by username in database
+    # Look up by username or display_name in database
+    from sqlalchemy import or_
+
     from memory.common.db.connection import make_session
     from memory.common.db.models import DiscordUser
 
     with make_session() as session:
-        u = session.query(DiscordUser).filter_by(username=user).first()
+        u = (
+            session.query(DiscordUser)
+            .filter(or_(DiscordUser.username == user, DiscordUser.display_name == user))
+            .first()
+        )
         if u:
             return u.id
 

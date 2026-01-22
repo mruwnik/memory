@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
+from sqlalchemy import or_
 from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -153,10 +154,15 @@ async def send_message(
         if user_id is not None:
             target = str(user_id)
         else:
-            # Look up user by username
+            # Look up user by username or display_name
             discord_user = (
                 session.query(DiscordUser)
-                .filter(DiscordUser.username == username)
+                .filter(
+                    or_(
+                        DiscordUser.username == username,
+                        DiscordUser.display_name == username,
+                    )
+                )
                 .first()
             )
             if not discord_user:
@@ -237,7 +243,7 @@ async def get_channel_history(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def list_channels(
-    server_id: int | None = None,
+    server_id: int | str | None = None,
     server_name: str | None = None,
     include_dms: bool = False,
 ) -> dict[str, Any]:
