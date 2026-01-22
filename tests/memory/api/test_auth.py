@@ -162,7 +162,7 @@ async def test_oauth_callback_discord_validates_query_params():
 
 def test_authenticate_bot_finds_matching_bot_via_api_key_table():
     """Test authenticate_bot finds bot via new api_keys table."""
-    from memory.common.db.models import APIKey, BotUser
+    from memory.common.db.models import APIKey
 
     db = MagicMock()
 
@@ -375,8 +375,6 @@ def test_authenticate_by_api_key_accepts_matching_key_type():
 
 def test_handle_api_key_use_updates_last_used():
     """Test handle_api_key_use updates last_used_at timestamp."""
-    from datetime import datetime, timezone
-
     db = MagicMock()
     key_record = MagicMock()
     key_record.is_one_time = False

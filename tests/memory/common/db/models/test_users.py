@@ -453,7 +453,6 @@ def test_api_key_cascade_delete(db_session):
     )
     db_session.add(user)
     db_session.commit()
-    user_id = user.id
 
     api_key = APIKey.create(user_id=user.id, name="Will Be Deleted")
     db_session.add(api_key)
