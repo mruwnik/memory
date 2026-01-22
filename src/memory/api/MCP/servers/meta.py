@@ -44,6 +44,21 @@ def _cache_key(*args: str) -> str:
     """Generate a cache key from arguments."""
     return ":".join(str(a) for a in args)
 
+
+def clear_all_caches() -> dict:
+    """Clear all prediction market caches.
+
+    Useful for debugging or when you know data has changed.
+    """
+    with _search_cache_lock:
+        _search_cache.clear()
+    with _history_cache_lock:
+        _history_cache.clear()
+    with _depth_cache_lock:
+        _depth_cache.clear()
+    return {"cleared": True}
+
+
 logger = logging.getLogger(__name__)
 
 meta_mcp = FastMCP("memory-meta")
@@ -647,6 +662,19 @@ async def get_forecasts(
     with _search_cache_lock:
         _search_cache[cache_key] = results
     return results
+
+
+@meta_mcp.tool()
+async def clear_forecast_cache() -> dict:
+    """Clear all cached forecast data.
+
+    Useful for debugging or when you need fresh data immediately.
+    Clears search results, market history, and order book depth caches.
+
+    Returns:
+        Dict confirming caches were cleared.
+    """
+    return clear_all_caches()
 
 
 # --- Market History ---
