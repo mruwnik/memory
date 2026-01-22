@@ -300,9 +300,12 @@ async def test_get_user_returns_none_when_no_ssh_key(mock_make_session, mock_get
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_returns_markets(mock_search, mock_scope):
     """Get forecasts returns prediction market data."""
+    from memory.common.markets import _search_cache
+    _search_cache.clear()
+
     mock_search.return_value = [
         {
             "id": "market1",
@@ -328,9 +331,12 @@ async def test_get_forecasts_returns_markets(mock_search, mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_with_default_params(mock_search, mock_scope):
     """Get forecasts uses default parameters."""
+    from memory.common.markets import _search_cache
+    _search_cache.clear()
+
     mock_search.return_value = []
 
     await get_forecasts.fn(term="test")
@@ -340,9 +346,12 @@ async def test_get_forecasts_with_default_params(mock_search, mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_empty_results(mock_search, mock_scope):
     """Get forecasts returns empty list when no markets found."""
+    from memory.common.markets import _search_cache
+    _search_cache.clear()
+
     mock_search.return_value = []
 
     result = await get_forecasts.fn(term="nonexistent term")
@@ -889,9 +898,12 @@ async def test_search_markets_handles_source_errors(mock_manifold, mock_polymark
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_passes_sources_param(mock_search, mock_scope):
     """get_forecasts passes sources parameter to search_markets."""
+    from memory.common.markets import _search_cache
+    _search_cache.clear()
+
     mock_search.return_value = []
 
     await get_forecasts.fn(term="test", sources=["kalshi"])
@@ -901,7 +913,7 @@ async def test_get_forecasts_passes_sources_param(mock_search, mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_defaults_to_all_sources(mock_search, mock_scope):
     """get_forecasts uses all sources when none specified."""
     from memory.common.markets import _search_cache
@@ -920,7 +932,7 @@ async def test_get_forecasts_defaults_to_all_sources(mock_search, mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
+@patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_caches_results(mock_search, mock_scope):
     """get_forecasts caches search results."""
     from memory.common.markets import _search_cache
@@ -1043,7 +1055,7 @@ async def test_get_market_history_kalshi(mock_scope):
             {"timestamp": "2025-01-02T00:00:00Z", "probability": 0.60, "volume": 2000},
         ]
 
-    with patch("memory.common.markets.get_kalshi_history", mock_kalshi_history):
+    with patch("memory.api.MCP.servers.forecast.get_kalshi_history", mock_kalshi_history):
         result = await get_market_history.fn(market_id="TEST", source="kalshi", period="7d")
 
     assert result["market_id"] == "TEST"
@@ -1147,38 +1159,48 @@ async def test_get_market_depth_unsupported_source(mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
-async def test_compare_forecasts_calculates_consensus(mock_search, mock_scope):
+@patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
+async def test_compare_forecasts_calculates_consensus(mock_compare_data, mock_scope):
     """compare_forecasts calculates volume-weighted consensus."""
     from memory.api.MCP.servers.forecast import compare_forecasts
 
-    mock_search.return_value = [
-        {"source": "manifold", "id": "m1", "probability": 0.60, "volume": 10000},
-        {"source": "kalshi", "id": "k1", "probability": 0.40, "volume": 10000},
-    ]
+    mock_compare_data.return_value = {
+        "term": "test",
+        "markets": [
+            {"source": "manifold", "id": "m1", "probability": 0.60, "volume": 10000},
+            {"source": "kalshi", "id": "k1", "probability": 0.40, "volume": 10000},
+        ],
+        "consensus": 0.5,  # (0.6*10k + 0.4*10k) / 20k = 0.5
+        "disagreement": 0.14,
+        "arbitrage_opportunities": [],
+    }
 
     result = await compare_forecasts.fn(term="test")
 
-    assert result["consensus"] == 0.5  # (0.6*10k + 0.4*10k) / 20k = 0.5
+    assert result["consensus"] == 0.5
     assert result["disagreement"] is not None
     assert result["disagreement"] > 0.1  # Should show disagreement
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
-async def test_compare_forecasts_finds_arbitrage(mock_search, mock_scope):
+@patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
+async def test_compare_forecasts_finds_arbitrage(mock_compare_data, mock_scope):
     """compare_forecasts identifies arbitrage opportunities."""
     from memory.api.MCP.servers.forecast import compare_forecasts
-    from memory.common.markets import _search_cache
 
-    # Clear cache to avoid stale data from other tests
-    _search_cache.clear()
-
-    mock_search.return_value = [
-        {"source": "manifold", "id": "m1", "question": "Test A", "probability": 0.70, "volume": 5000},
-        {"source": "kalshi", "id": "k1", "question": "Test B", "probability": 0.55, "volume": 5000},
-    ]
+    mock_compare_data.return_value = {
+        "term": "test_arbitrage",
+        "markets": [
+            {"source": "manifold", "id": "m1", "question": "Test A", "probability": 0.70, "volume": 5000},
+            {"source": "kalshi", "id": "k1", "question": "Test B", "probability": 0.55, "volume": 5000},
+        ],
+        "consensus": 0.625,
+        "disagreement": 0.075,
+        "arbitrage_opportunities": [
+            {"market_a": {"source": "manifold", "id": "m1"}, "market_b": {"source": "kalshi", "id": "k1"}, "difference": 0.15}
+        ],
+    }
 
     result = await compare_forecasts.fn(term="test_arbitrage")
 
@@ -1189,12 +1211,18 @@ async def test_compare_forecasts_finds_arbitrage(mock_search, mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-@patch("memory.common.markets.search_markets")
-async def test_compare_forecasts_empty_results(mock_search, mock_scope):
+@patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
+async def test_compare_forecasts_empty_results(mock_compare_data, mock_scope):
     """compare_forecasts handles empty results."""
     from memory.api.MCP.servers.forecast import compare_forecasts
 
-    mock_search.return_value = []
+    mock_compare_data.return_value = {
+        "term": "nonexistent",
+        "markets": [],
+        "consensus": None,
+        "disagreement": None,
+        "arbitrage_opportunities": [],
+    }
 
     result = await compare_forecasts.fn(term="nonexistent")
 
@@ -1226,7 +1254,7 @@ async def test_get_resolved_markets_manifold(mock_scope):
             }
         ]
 
-    with patch("memory.common.markets.get_manifold_resolved", mock_manifold_resolved):
+    with patch("memory.api.MCP.servers.forecast.get_manifold_resolved", mock_manifold_resolved):
         result = await get_resolved_markets.fn(term="test", sources=["manifold"])
 
     assert len(result) == 1
@@ -1387,7 +1415,8 @@ async def test_fetch_market_info_not_found():
 
 
 @pytest.mark.asyncio
-async def test_watch_market_unauthenticated():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_watch_market_unauthenticated(mock_scope):
     """watch_market returns error when not authenticated."""
     from memory.api.MCP.servers.forecast import watch_market
 
@@ -1404,7 +1433,8 @@ async def test_watch_market_unauthenticated():
 
 
 @pytest.mark.asyncio
-async def test_watch_market_already_watching():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_watch_market_already_watching(mock_scope):
     """watch_market returns already_watching status when market exists."""
     from memory.api.MCP.servers.forecast import watch_market
     from datetime import datetime, timezone
@@ -1431,7 +1461,8 @@ async def test_watch_market_already_watching():
 
 
 @pytest.mark.asyncio
-async def test_get_watchlist_unauthenticated():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_watchlist_unauthenticated(mock_scope):
     """get_watchlist returns empty list when not authenticated."""
     from memory.api.MCP.servers.forecast import get_watchlist
 
@@ -1447,7 +1478,8 @@ async def test_get_watchlist_unauthenticated():
 
 
 @pytest.mark.asyncio
-async def test_get_watchlist_empty():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_get_watchlist_empty(mock_scope):
     """get_watchlist returns empty list when no watched markets."""
     from memory.api.MCP.servers.forecast import get_watchlist
 
@@ -1469,7 +1501,8 @@ async def test_get_watchlist_empty():
 
 
 @pytest.mark.asyncio
-async def test_unwatch_market_unauthenticated():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_unwatch_market_unauthenticated(mock_scope):
     """unwatch_market returns error when not authenticated."""
     from memory.api.MCP.servers.forecast import unwatch_market
 
@@ -1486,7 +1519,8 @@ async def test_unwatch_market_unauthenticated():
 
 
 @pytest.mark.asyncio
-async def test_unwatch_market_not_found():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_unwatch_market_not_found(mock_scope):
     """unwatch_market returns not_found when market not in watchlist."""
     from memory.api.MCP.servers.forecast import unwatch_market
 
@@ -1509,7 +1543,8 @@ async def test_unwatch_market_not_found():
 
 
 @pytest.mark.asyncio
-async def test_unwatch_market_success():
+@patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
+async def test_unwatch_market_success(mock_scope):
     """unwatch_market removes market from watchlist."""
     from memory.api.MCP.servers.forecast import unwatch_market
 
