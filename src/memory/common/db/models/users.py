@@ -241,10 +241,8 @@ class APIKey(Base):
     key_type: Mapped[str] = mapped_column(
         String, nullable=False, default=APIKeyType.INTERNAL
     )
-    # Scopes override - RESERVED FOR FUTURE USE
-    # Currently, authentication uses the user's scopes directly.
-    # This field is intended for future per-key scope restrictions but is not
-    # yet enforced. If None, uses user's default scopes (current behavior).
+    # Scopes override - if set, these scopes are used instead of the user's scopes.
+    # If None, authentication falls back to the user's default scopes.
     scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
