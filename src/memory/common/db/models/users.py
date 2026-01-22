@@ -246,7 +246,6 @@ class APIKey(Base):
     # This field is intended for future per-key scope restrictions but is not
     # yet enforced. If None, uses user's default scopes (current behavior).
     scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
-    is_one_time: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -256,6 +255,11 @@ class APIKey(Base):
 
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="api_keys")
+
+    @property
+    def is_one_time(self) -> bool:
+        """Check if this is a one-time use key (derived from key_type)."""
+        return self.key_type == APIKeyType.ONE_TIME
 
     @classmethod
     def generate_key(cls, prefix: str = "key") -> str:
@@ -269,20 +273,21 @@ class APIKey(Base):
         key_type: str = APIKeyType.INTERNAL,
         name: str | None = None,
         scopes: list[str] | None = None,
-        is_one_time: bool = False,
         expires_at: datetime | None = None,
         prefix: str | None = None,
     ) -> "APIKey":
-        """Create a new API key for a user."""
+        """Create a new API key for a user.
+
+        For one-time use keys, set key_type=APIKeyType.ONE_TIME.
+        """
         if prefix is None:
-            prefix = "ot" if is_one_time else key_type
+            prefix = "ot" if key_type == APIKeyType.ONE_TIME else key_type
         return cls(
             user_id=user_id,
             key=cls.generate_key(prefix),
             name=name,
             key_type=key_type,
             scopes=scopes,
-            is_one_time=is_one_time,
             expires_at=expires_at,
         )
 

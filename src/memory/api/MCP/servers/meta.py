@@ -163,7 +163,6 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
                         user_id=user_session.user.id,
                         key_type=APIKeyType.ONE_TIME,
                         name="MCP Client Operation",
-                        is_one_time=True,
                     )
                     session.add(one_time_key)
                     session.commit()

@@ -283,7 +283,6 @@ def test_api_key_create_one_time(db_session):
     api_key = APIKey.create(
         user_id=user.id,
         key_type=APIKeyType.ONE_TIME,
-        is_one_time=True,
     )
     db_session.add(api_key)
     db_session.commit()

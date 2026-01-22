@@ -329,13 +329,15 @@ def reset_password(
 
 
 class APIKeyCreate(BaseModel):
-    """Request model for creating a new API key."""
+    """Request model for creating a new API key.
+
+    For one-time use keys, set key_type="one_time".
+    """
 
     name: str | None = None
     key_type: str = APIKeyType.INTERNAL
     scopes: list[str] | None = None
     expires_in_days: int | None = None
-    is_one_time: bool = False
 
     @field_validator("key_type")
     @classmethod
@@ -400,7 +402,6 @@ def create_my_api_key(
         key_type=data.key_type,
         name=data.name,
         scopes=data.scopes,
-        is_one_time=data.is_one_time,
         expires_at=expires_at,
     )
     db.add(api_key)
@@ -495,7 +496,6 @@ def create_user_api_key(
         key_type=data.key_type,
         name=data.name,
         scopes=data.scopes,
-        is_one_time=data.is_one_time,
         expires_at=expires_at,
     )
     db.add(api_key)

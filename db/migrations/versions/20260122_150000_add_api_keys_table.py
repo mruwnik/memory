@@ -36,7 +36,6 @@ def upgrade() -> None:
         sa.Column("name", sa.String(), nullable=True),
         sa.Column("key_type", sa.String(), nullable=False, server_default="internal"),
         sa.Column("scopes", postgresql.ARRAY(sa.String()), nullable=True),
-        sa.Column("is_one_time", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
