@@ -1203,19 +1203,6 @@ async def test_get_resolved_markets_manifold():
     assert result[0]["was_correct"] is True
 
 
-@pytest.mark.asyncio
-async def test_get_resolved_markets_filters_by_since():
-    """get_resolved_markets filters by since date."""
-    from memory.api.MCP.servers.meta import get_manifold_resolved
-    from datetime import datetime, timezone
-
-    # Mock would be needed here - just test the filtering logic works
-    since = datetime(2024, 6, 1, tzinfo=timezone.utc)
-
-    # The function should filter markets resolved before this date
-    # This is a logic test - in practice we'd mock the API response
-
-
 # ====== Polymarket search enhancements ======
 
 
