@@ -97,8 +97,14 @@ async def resolve_channel_id(channel: str | int) -> int:
     raise HTTPException(status_code=404, detail=f"Channel '{channel}' not found")
 
 
-async def resolve_user_id(user: str | int) -> int:
-    """Resolve a username or ID to an ID."""
+async def resolve_user_id(user: str | int, mgr: CollectorManager | None = None) -> int:
+    """Resolve a username or ID to an ID.
+
+    Tries in order:
+    1. Parse as integer ID
+    2. Look up in local database
+    3. Search Discord guild members (if manager provided)
+    """
     if isinstance(user, int):
         return user
 
@@ -116,6 +122,15 @@ async def resolve_user_id(user: str | int) -> int:
         u = session.query(DiscordUser).filter_by(username=user).first()
         if u:
             return u.id
+
+    # Fall back to Discord API - search guild members
+    if mgr:
+        for collector in mgr.collectors.values():
+            for guild in collector.guilds:
+                # Search by username (case-insensitive)
+                member = guild.get_member_named(user)
+                if member:
+                    return member.id
 
     raise HTTPException(status_code=404, detail=f"User '{user}' not found")
 
@@ -137,7 +152,7 @@ async def health() -> dict[str, Any]:
 async def send_dm(request: SendDMRequest) -> dict[str, Any]:
     """Send a DM to a user."""
     mgr = get_manager()
-    user_id = await resolve_user_id(request.user)
+    user_id = await resolve_user_id(request.user, mgr)
     success = await mgr.send_dm(request.bot_id, user_id, request.message)
     return {"success": success}
 
@@ -158,7 +173,7 @@ async def typing_dm(request: TypingRequest) -> dict[str, Any]:
     if request.user is None:
         raise HTTPException(status_code=400, detail="user is required")
 
-    user_id = await resolve_user_id(request.user)
+    user_id = await resolve_user_id(request.user, mgr)
     collector = mgr.get_collector(request.bot_id)
     if not collector:
         return {"success": False}

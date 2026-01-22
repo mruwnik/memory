@@ -43,6 +43,7 @@ from memory.api.claude_environments import router as claude_environments_router
 from memory.api.cloud_claude import router as cloud_claude_router
 from memory.api.secrets import router as secrets_router
 from memory.api.users import router as users_router
+from memory.api.discord import router as discord_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
@@ -219,6 +220,7 @@ app.include_router(claude_environments_router)
 app.include_router(cloud_claude_router)
 app.include_router(secrets_router)
 app.include_router(users_router)
+app.include_router(discord_router)
 
 
 # Add health check to MCP server instead of main app

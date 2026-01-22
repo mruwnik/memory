@@ -12,10 +12,11 @@ import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
 import { SecretsPanel } from './panels/SecretsPanel'
+import { DiscordPanel } from './panels/DiscordPanel'
 
-type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'secrets'
+type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'discord' | 'secrets'
 
-const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'secrets']
+const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'discord', 'secrets']
 
 const Sources = () => {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -74,6 +75,9 @@ const Sources = () => {
         <button className={tabClass('photos')} onClick={() => setActiveTab('photos')}>
           Photos
         </button>
+        <button className={tabClass('discord')} onClick={() => setActiveTab('discord')}>
+          Discord
+        </button>
         <button className={tabClass('secrets')} onClick={() => setActiveTab('secrets')}>
           Secrets
         </button>
@@ -89,6 +93,7 @@ const Sources = () => {
         {activeTab === 'books' && <BooksPanel />}
         {activeTab === 'forums' && <ForumsPanel />}
         {activeTab === 'photos' && <PhotosPanel />}
+        {activeTab === 'discord' && <DiscordPanel />}
         {activeTab === 'secrets' && <SecretsPanel />}
       </div>
     </div>

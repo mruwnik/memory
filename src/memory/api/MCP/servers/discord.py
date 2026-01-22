@@ -62,6 +62,147 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
+def fetch_channel_history(
+    session: DBSession,
+    channel_id: int | None,
+    channel_name: str | None,
+    before_dt: datetime | None,
+    after_dt: datetime | None,
+    limit: int,
+) -> dict[str, Any]:
+    """
+    Fetch message history from a Discord channel.
+
+    Args:
+        session: Database session
+        channel_id: Discord channel ID (snowflake)
+        channel_name: Discord channel name
+        before_dt: Only get messages before this time
+        after_dt: Only get messages after this time
+        limit: Maximum number of messages to return
+
+    Returns:
+        Dict with channel info, messages list, and metadata
+    """
+    # Resolve channel
+    if channel_id is not None:
+        resolved_channel_id = channel_id
+        channel = session.get(DiscordChannel, channel_id)
+        channel_info = {
+            "id": channel_id,
+            "name": channel.name if channel else "unknown",
+        }
+    else:
+        channel = (
+            session.query(DiscordChannel)
+            .filter(DiscordChannel.name == channel_name)
+            .first()
+        )
+        if not channel:
+            raise ValueError(f"Channel '{channel_name}' not found")
+        resolved_channel_id = channel.id
+        channel_info = {"id": channel.id, "name": channel.name}
+
+    # Build query
+    query = session.query(DiscordMessage).filter(
+        DiscordMessage.channel_id == resolved_channel_id
+    )
+
+    if before_dt:
+        query = query.filter(DiscordMessage.sent_at < before_dt)
+    if after_dt:
+        query = query.filter(DiscordMessage.sent_at > after_dt)
+
+    # Order by sent_at descending (newest first), then limit
+    query = query.order_by(desc(DiscordMessage.sent_at)).limit(limit)
+
+    messages = query.all()
+
+    # Format messages
+    formatted = []
+    for msg in messages:
+        # Get author info
+        author = session.get(DiscordUser, msg.author_id)
+        author_name = author.name if author else f"user_{msg.author_id}"
+
+        formatted.append({
+            "id": msg.message_id,
+            "author": author_name,
+            "author_id": msg.author_id,
+            "content": msg.content,
+            "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
+            "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
+            "is_pinned": msg.is_pinned,
+            "reactions": msg.reactions,
+            "reply_to": msg.reply_to_message_id,
+        })
+
+    # Reverse to get chronological order
+    formatted.reverse()
+
+    return {
+        "channel": channel_info,
+        "messages": formatted,
+        "count": len(formatted),
+        "limit": limit,
+    }
+
+
+def fetch_channels(
+    session: DBSession,
+    server_id: int | None,
+    server_name: str | None,
+    include_dms: bool,
+) -> dict[str, Any]:
+    """
+    List Discord channels the bot has access to.
+
+    Args:
+        session: Database session
+        server_id: Filter by server ID
+        server_name: Filter by server name
+        include_dms: Include DM channels
+
+    Returns:
+        Dict with channels list and count
+    """
+    from memory.common.db.models import DiscordServer
+
+    query = session.query(DiscordChannel)
+
+    # Filter by server if specified
+    if server_id is not None:
+        query = query.filter(DiscordChannel.server_id == server_id)
+    elif server_name is not None:
+        server = (
+            session.query(DiscordServer)
+            .filter(DiscordServer.name == server_name)
+            .first()
+        )
+        if server:
+            query = query.filter(DiscordChannel.server_id == server.id)
+        else:
+            return {"channels": [], "count": 0, "error": f"Server '{server_name}' not found"}
+
+    # Filter out DMs unless requested
+    if not include_dms:
+        query = query.filter(DiscordChannel.channel_type != "dm")
+
+    channels = query.all()
+
+    formatted = []
+    for ch in channels:
+        formatted.append({
+            "id": ch.id,
+            "name": ch.name,
+            "type": ch.channel_type,
+            "server_id": ch.server_id,
+            "collect_messages": ch.should_collect,
+        })
+
+    return {"channels": formatted, "count": len(formatted)}
+
+
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def send_message(
@@ -220,72 +361,16 @@ async def get_channel_history(
         except ValueError:
             raise ValueError(f"Invalid 'after' datetime format: {after}")
 
-    def _fetch_history(session: DBSession) -> dict[str, Any]:
-        # Resolve channel
-        if channel_id is not None:
-            resolved_channel_id = channel_id
-            channel = session.get(DiscordChannel, channel_id)
-            channel_info = {
-                "id": channel_id,
-                "name": channel.name if channel else "unknown",
-            }
-        else:
-            channel = (
-                session.query(DiscordChannel)
-                .filter(DiscordChannel.name == channel_name)
-                .first()
-            )
-            if not channel:
-                raise ValueError(f"Channel '{channel_name}' not found")
-            resolved_channel_id = channel.id
-            channel_info = {"id": channel.id, "name": channel.name}
-
-        # Build query
-        query = session.query(DiscordMessage).filter(
-            DiscordMessage.channel_id == resolved_channel_id
-        )
-
-        if before_dt:
-            query = query.filter(DiscordMessage.sent_at < before_dt)
-        if after_dt:
-            query = query.filter(DiscordMessage.sent_at > after_dt)
-
-        # Order by sent_at descending (newest first), then limit
-        query = query.order_by(desc(DiscordMessage.sent_at)).limit(limit)
-
-        messages = query.all()
-
-        # Format messages
-        formatted = []
-        for msg in messages:
-            # Get author info
-            author = session.get(DiscordUser, msg.author_id)
-            author_name = author.name if author else f"user_{msg.author_id}"
-
-            formatted.append({
-                "id": msg.message_id,
-                "author": author_name,
-                "author_id": msg.author_id,
-                "content": msg.content,
-                "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
-                "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
-                "is_pinned": msg.is_pinned,
-                "reactions": msg.reactions,
-                "reply_to": msg.reply_to_message_id,
-            })
-
-        # Reverse to get chronological order
-        formatted.reverse()
-
-        return {
-            "channel": channel_info,
-            "messages": formatted,
-            "count": len(formatted),
-            "limit": limit,
-        }
-
     with make_session() as session:
-        return await asyncio.to_thread(_fetch_history, session)
+        return await asyncio.to_thread(
+            fetch_channel_history,
+            session,
+            channel_id,
+            channel_name,
+            before_dt,
+            after_dt,
+            limit,
+        )
 
 
 @discord_mcp.tool()
@@ -306,42 +391,7 @@ async def list_channels(
     Returns:
         Dict with channels list
     """
-
-    def _list_channels(session: DBSession) -> dict[str, Any]:
-        query = session.query(DiscordChannel)
-
-        # Filter by server if specified
-        if server_id is not None:
-            query = query.filter(DiscordChannel.server_id == server_id)
-        elif server_name is not None:
-            from memory.common.db.models import DiscordServer
-            server = (
-                session.query(DiscordServer)
-                .filter(DiscordServer.name == server_name)
-                .first()
-            )
-            if server:
-                query = query.filter(DiscordChannel.server_id == server.id)
-            else:
-                return {"channels": [], "count": 0, "error": f"Server '{server_name}' not found"}
-
-        # Filter out DMs unless requested
-        if not include_dms:
-            query = query.filter(DiscordChannel.channel_type != "dm")
-
-        channels = query.all()
-
-        formatted = []
-        for ch in channels:
-            formatted.append({
-                "id": ch.id,
-                "name": ch.name,
-                "type": ch.channel_type,
-                "server_id": ch.server_id,
-                "collect_messages": ch.should_collect,
-            })
-
-        return {"channels": formatted, "count": len(formatted)}
-
     with make_session() as session:
-        return await asyncio.to_thread(_list_channels, session)
+        return await asyncio.to_thread(
+            fetch_channels, session, server_id, server_name, include_dms
+        )

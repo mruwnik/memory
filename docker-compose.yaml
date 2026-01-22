@@ -219,6 +219,9 @@ services:
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      # Discord collector API (running in ingest-hub)
+      DISCORD_COLLECTOR_SERVER_URL: ingest-hub
+      DISCORD_COLLECTOR_PORT: 8003
       # Claude session orchestrator (Unix socket)
       ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
       MEMORY_STACK: ${MEMORY_STACK:-prod}

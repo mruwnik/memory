@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
-from sqlalchemy.orm import Session
+from memory.common.db.connection import DBSession
 from discord.ext import commands
 
 from memory.common.db.connection import make_session
@@ -26,7 +26,7 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
 )
-from memory.common.celery_app import ADD_DISCORD_MESSAGE
+from memory.common.celery_app import ADD_DISCORD_MESSAGE, UPDATE_REACTIONS
 
 if TYPE_CHECKING:
     from celery import Celery
@@ -58,7 +58,7 @@ def get_channel_type(channel: discord.abc.Messageable) -> str:
     return getattr(getattr(channel, "type", None), "name", "unknown")
 
 
-def ensure_server(session: Session, guild: discord.Guild) -> DiscordServer:
+def ensure_server(session: DBSession, guild: discord.Guild) -> DiscordServer:
     """Ensure a Discord server record exists."""
     server = session.get(DiscordServer, guild.id)
     if server is None:
@@ -83,7 +83,7 @@ def ensure_server(session: Session, guild: discord.Guild) -> DiscordServer:
 
 
 def ensure_channel(
-    session: Session,
+    session: DBSession,
     channel: discord.abc.Messageable,
     guild_id: int | None,
 ) -> DiscordChannel:
@@ -109,7 +109,7 @@ def ensure_channel(
     return channel_model
 
 
-def ensure_user(session: Session, discord_user: discord.abc.User) -> DiscordUser:
+def ensure_user(session: DBSession, discord_user: discord.abc.User) -> DiscordUser:
     """Ensure a Discord user record exists."""
     user = session.get(DiscordUser, discord_user.id)
     display_name = getattr(discord_user, "display_name", discord_user.name)
@@ -148,6 +148,7 @@ class MessageCollector(commands.Bot):
         intents.message_content = True
         intents.members = True
         intents.guilds = True
+        intents.reactions = True
 
         super().__init__(command_prefix="!", intents=intents)
 
@@ -160,20 +161,42 @@ class MessageCollector(commands.Bot):
         logger.info(f"Bot {self.user} (ID: {self.bot_info.id}) is ready")
         self._ready.set()
 
+        # Sync all guild members to database
+        await self._sync_guild_metadata()
+
     async def wait_until_ready(self) -> None:
         """Wait until the bot is ready."""
         await self._ready.wait()
 
+    async def _sync_guild_metadata(self) -> None:
+        """Sync all servers, channels, and users to the database."""
+        user_count = 0
+        server_count = 0
+        channel_count = 0
+
+        with make_session() as session:
+            for guild in self.guilds:
+                ensure_server(session, guild)
+                server_count += 1
+
+                for channel in guild.channels:
+                    if hasattr(channel, "send"):  # Text-like channels
+                        ensure_channel(session, channel, guild.id)  # type: ignore[arg-type]
+                        channel_count += 1
+
+                for member in guild.members:
+                    ensure_user(session, member)
+                    user_count += 1
+
+            session.commit()
+
+        logger.info(
+            f"Synced metadata: {server_count} servers, "
+            f"{channel_count} channels, {user_count} users"
+        )
+
     async def on_message(self, message: discord.Message) -> None:
-        """Handle incoming messages."""
-        # Ignore our own messages
-        if message.author.id == self.bot_info.id:
-            return
-
-        # Ignore bot messages (optional, could be configurable)
-        if message.author.bot:
-            return
-
+        """Handle incoming messages (including our own for complete history)."""
         try:
             await self._process_message(message)
         except Exception:
@@ -182,14 +205,59 @@ class MessageCollector(commands.Bot):
     async def on_message_edit(
         self, _before: discord.Message, after: discord.Message
     ) -> None:
-        """Handle message edits."""
-        if after.author.id == self.bot_info.id:
-            return
-
+        """Handle message edits (including our own for complete history)."""
         try:
             await self._process_message(after, is_edit=True)
         except Exception:
             logger.exception(f"Error processing message edit {after.id}")
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Handle reaction additions."""
+        await self._process_reaction_update(payload)
+
+    async def on_raw_reaction_remove(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Handle reaction removals."""
+        await self._process_reaction_update(payload)
+
+    async def _process_reaction_update(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Fetch current reactions and queue update."""
+        try:
+            channel = self.get_channel(payload.channel_id)
+            if channel is None:
+                channel = await self.fetch_channel(payload.channel_id)
+            if channel is None or not hasattr(channel, "fetch_message"):
+                return
+
+            message = await channel.fetch_message(payload.message_id)
+
+            # Build reactions list from message
+            reactions = []
+            for reaction in message.reactions:
+                emoji_str = (
+                    str(reaction.emoji)
+                    if isinstance(reaction.emoji, str)
+                    else reaction.emoji.name
+                )
+                reactions.append(
+                    {
+                        "emoji": emoji_str,
+                        "count": reaction.count,
+                    }
+                )
+
+            self.celery_app.send_task(
+                UPDATE_REACTIONS,
+                kwargs={
+                    "message_id": payload.message_id,
+                    "reactions": reactions,
+                },
+            )
+        except Exception:
+            logger.exception(f"Error processing reaction update for {payload.message_id}")
 
     async def _process_message(
         self, message: discord.Message, is_edit: bool = False
