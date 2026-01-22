@@ -192,54 +192,22 @@ def test_authenticate_bot_finds_matching_bot_via_api_key_table():
     assert result is bot
 
 
-def test_authenticate_bot_finds_matching_bot_via_legacy_field():
-    """Test authenticate_bot falls back to legacy User.api_key field."""
-    from memory.common.db.models import APIKey, BotUser
-
-    db = MagicMock()
-    bot = MagicMock()
-    bot.api_key = "bot_test123"
-
-    def mock_query(model):
-        if model == APIKey:
-            query_mock = MagicMock()
-            query_mock.filter.return_value.all.return_value = []
-            return query_mock
-        elif model == BotUser:
-            query_mock = MagicMock()
-            query_mock.all.return_value = [bot]
-            return query_mock
-        return MagicMock()
-
-    db.query.side_effect = mock_query
-
-    result = auth.authenticate_bot("bot_test123", db)
-
-    assert result is bot
-
-
 def test_authenticate_bot_returns_none_for_invalid_key():
     """Test authenticate_bot returns None for invalid API key."""
-    from memory.common.db.models import APIKey, BotUser
+    from memory.common.db.models import APIKey
 
     db = MagicMock()
-    bot = MagicMock()
-    bot.api_key = "bot_test123"
 
     def mock_query(model):
         if model == APIKey:
             query_mock = MagicMock()
-            query_mock.filter.return_value.all.return_value = []
-            return query_mock
-        elif model == BotUser:
-            query_mock = MagicMock()
-            query_mock.all.return_value = [bot]
+            query_mock.all.return_value = []  # No matching keys
             return query_mock
         return MagicMock()
 
     db.query.side_effect = mock_query
 
-    result = auth.authenticate_bot("bot_wrong", db)
+    result = auth.authenticate_bot("nonexistent_key", db)
 
     assert result is None
 
@@ -399,28 +367,31 @@ def test_handle_api_key_use_deletes_one_time_key():
     db.commit.assert_called_once()
 
 
-def test_get_session_user_uses_api_key_auth_for_bot_tokens():
-    """Test that get_session_user authenticates API keys via both new table and legacy fallback."""
-    from memory.common.db.models import APIKey, User
+def test_get_session_user_uses_api_key_auth_for_api_key_tokens():
+    """Test that get_session_user authenticates API keys via the api_keys table."""
+    from memory.common.db.models import APIKey
 
+    # Use a token with a valid API key prefix
     request = SimpleNamespace(
-        headers={"Authorization": "Bearer bot_test123"},
+        headers={"Authorization": "Bearer internal_test123"},
         cookies={},
     )
     db = MagicMock()
-    bot = MagicMock()
-    bot.api_key = "bot_test123"
 
-    # The new authenticate_by_api_key queries APIKey table first, then falls back to User table.
-    # Set up mock to return empty list for APIKey query and the bot for User query.
+    # Mock API key record
+    api_key_record = MagicMock()
+    api_key_record.key = "internal_test123"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+    api_key_record.key_type = "internal"
+
+    user = MagicMock()
+    api_key_record.user = user
+
     def mock_query(model):
         if model == APIKey:
             query_mock = MagicMock()
-            query_mock.filter.return_value.all.return_value = []
-            return query_mock
-        elif model == User:
-            query_mock = MagicMock()
-            query_mock.filter.return_value.all.return_value = [bot]
+            query_mock.all.return_value = [api_key_record]
             return query_mock
         return MagicMock()
 
@@ -428,7 +399,7 @@ def test_get_session_user_uses_api_key_auth_for_bot_tokens():
 
     result = auth.get_session_user(cast(Any, request), db)
 
-    assert result is bot
+    assert result is user
 
 
 @patch("memory.api.auth.get_user_session")

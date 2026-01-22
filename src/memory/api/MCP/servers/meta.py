@@ -26,14 +26,43 @@ logger = logging.getLogger(__name__)
 meta_mcp = FastMCP("memory-meta")
 
 
-def _get_current_user(session: DBSession) -> dict:
-    """Get the current authenticated user from the access token."""
+def _get_user_session_from_token(session: DBSession) -> UserSession | None:
+    """Get the UserSession from the current access token.
+
+    Returns None if no token or user session found.
+    """
     access_token = get_access_token()
     if not access_token:
-        return {"authenticated": False}
+        return None
 
     user_session = session.get(UserSession, access_token.token)
     if not user_session or not user_session.user:
+        return None
+    return user_session
+
+
+def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
+    """Create a one-time API key for the user.
+
+    Returns the key string (only available at creation time).
+    """
+    one_time_key = APIKey.create(
+        user_id=user_session.user.id,
+        key_type=APIKeyType.ONE_TIME,
+        name="MCP Client Operation",
+    )
+    session.add(one_time_key)
+    session.commit()
+    return one_time_key.key
+
+
+def _get_current_user(session: DBSession) -> dict:
+    """Get the current authenticated user from the access token."""
+    user_session = _get_user_session_from_token(session)
+    if not user_session:
+        access_token = get_access_token()
+        if not access_token:
+            return {"authenticated": False}
         return {"authenticated": False, "error": "User not found"}
 
     user_info = user_session.user.serialize()
@@ -55,11 +84,12 @@ def _get_current_user(session: DBSession) -> dict:
         for a in email_accounts
     ]
 
+    access_token = get_access_token()
     return {
         "authenticated": True,
         "token_type": "Bearer",
-        "scopes": access_token.scopes,
-        "client_id": access_token.client_id,
+        "scopes": access_token.scopes if access_token else [],
+        "client_id": access_token.client_id if access_token else None,
         "user": user_info,
         "public_key": user_session.user.ssh_public_key,
     }
@@ -154,19 +184,8 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
         result = _get_current_user(session)
 
         if generate_one_time_key and result.get("authenticated"):
-            access_token = get_access_token()
-            if access_token:
-                user_session = session.get(UserSession, access_token.token)
-                if user_session and user_session.user:
-                    # Create a one-time API key
-                    one_time_key = APIKey.create(
-                        user_id=user_session.user.id,
-                        key_type=APIKeyType.ONE_TIME,
-                        name="MCP Client Operation",
-                    )
-                    session.add(one_time_key)
-                    session.commit()
-                    result["one_time_key"] = one_time_key.key
+            if user_session := _get_user_session_from_token(session):
+                result["one_time_key"] = _create_one_time_key(session, user_session)
 
         return result
 

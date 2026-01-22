@@ -30,6 +30,7 @@ from memory.common.db.models.users import (
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
 )
+from memory.api.auth import lookup_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -181,13 +182,14 @@ class SimpleOAuthProvider(OAuthProvider):
                     scopes=scopes or ["read"],
                 )
 
-            # Try as bot API key
-            bot = session.query(User).filter(User.api_key == token).first()
-            if bot:
-                logger.info(f"Bot {bot.name} (id={bot.id}) authenticated via API key")
+            # Try as API key (bot or user)
+            api_key_record = lookup_api_key(token, session)
+            if api_key_record and api_key_record.is_valid():
+                user = api_key_record.user
+                logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
                 return FastMCPAccessToken(
                     token=token,
-                    client_id=cast(str, bot.name or bot.email),
+                    client_id=cast(str, user.name or user.email),
                     scopes=["read", "write"],
                 )
 
@@ -392,14 +394,15 @@ class SimpleOAuthProvider(OAuthProvider):
                     expires_at=int(user_session.expires_at.timestamp()),
                 )
 
-            # Try as bot API key
-            bot = session.query(User).filter(User.api_key == token).first()
-            if bot:
-                logger.info(f"Bot {bot.name} (id={bot.id}) authenticated via API key")
+            # Try as API key (bot or user)
+            api_key_record = lookup_api_key(token, session)
+            if api_key_record and api_key_record.is_valid():
+                user = api_key_record.user
+                logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
                 return AccessToken(
                     token=token,
-                    client_id=cast(str, bot.name or bot.email),
-                    scopes=["read", "write"],  # Bots get full access
+                    client_id=cast(str, user.name or user.email),
+                    scopes=["read", "write"],  # API key access
                     expires_at=2147483647,  # Far future (2038)
                 )
 

@@ -48,10 +48,9 @@ WHITELIST = {
 }
 
 # Prefixes that identify a token as an API key (vs a session token)
-# Includes both new key type prefixes and legacy prefixes for backwards compatibility
 API_KEY_PREFIXES = (
-    "bot_", "user_", "key_", "ot_",  # Legacy prefixes
-    "internal_", "discord_", "google_", "github_", "mcp_", "one_time_",  # New key type prefixes
+    "user_",  # Legacy prefix for migrated user keys
+    "internal_", "discord_", "google_", "github_", "mcp_", "ot_",  # Key type prefixes
 )
 
 
@@ -102,42 +101,43 @@ def get_user_session(
     return session
 
 
-def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
-    """Authenticate a bot by API key.
+def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
+    """Look up an API key in the database using constant-time comparison.
 
-    Uses constant-time comparison to prevent timing attacks.
-    First checks the new api_keys table, then falls back to legacy User.api_key.
-
-    Note: Iterates through ALL keys before returning to prevent timing attacks
+    Iterates through ALL keys before returning to prevent timing attacks
     that could reveal information about key position in the list.
+
+    Args:
+        api_key: The API key string to look up.
+        db: Database session.
+
+    Returns:
+        The matching APIKey record, or None if not found.
     """
-    # First, check the new api_keys table (including revoked to prevent fallback bypass)
-    # Iterate ALL keys before returning to prevent timing attacks
     all_api_keys = db.query(APIKey).all()
     matched_key: APIKey | None = None
     for key_record in all_api_keys:
         if secrets.compare_digest(key_record.key, api_key):
             matched_key = key_record
+    return matched_key
 
-    if matched_key is not None:
-        # Key found in new table - don't fall back to legacy even if invalid/revoked
-        if not matched_key.is_valid():
-            return None
-        user = matched_key.user
-        if user.user_type == "bot":
-            handle_api_key_use(matched_key, db)
-            return cast(BotUser, user)
-        return None
 
-    # Fall back to legacy api_key on User model for backwards compatibility
-    # Only reached if key not found in api_keys table at all
-    # Iterate ALL bots before returning to prevent timing attacks
-    bots = db.query(BotUser).all()
-    matched_bot: BotUser | None = None
-    for bot in bots:
-        if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
-            matched_bot = bot
-    return matched_bot
+def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
+    """Authenticate a bot by API key.
+
+    This is a convenience wrapper around authenticate_by_api_key() for bot-only auth.
+
+    Args:
+        api_key: The API key to authenticate.
+        db: Database session.
+
+    Returns:
+        The BotUser if authenticated and is a bot, None otherwise.
+    """
+    user, _ = authenticate_by_api_key(api_key, db)
+    if user is not None and user.user_type == "bot":
+        return cast(BotUser, user)
+    return None
 
 
 def authenticate_by_api_key(
@@ -145,11 +145,7 @@ def authenticate_by_api_key(
 ) -> tuple[User | None, APIKey | None]:
     """Authenticate any user by API key.
 
-    Supports both the new api_keys table and legacy User.api_key field.
     Uses constant-time comparison to prevent timing attacks.
-
-    Note: Iterates through ALL keys before returning to prevent timing attacks
-    that could reveal information about key position in the list.
 
     Args:
         api_key: The API key to authenticate.
@@ -157,39 +153,18 @@ def authenticate_by_api_key(
         allowed_key_types: Optional list of allowed key types. If None, all types allowed.
 
     Returns:
-        Tuple of (user, api_key_record). api_key_record is None for legacy keys.
+        Tuple of (user, api_key_record).
     """
-    # First, check the new api_keys table (including revoked to prevent fallback bypass)
-    # Iterate ALL keys before returning to prevent timing attacks
-    all_api_keys = db.query(APIKey).all()
-    matched_key: APIKey | None = None
-    for key_record in all_api_keys:
-        if secrets.compare_digest(key_record.key, api_key):
-            matched_key = key_record
-
-    if matched_key is not None:
-        # Key found in new table - don't fall back to legacy even if invalid/revoked
-        if not matched_key.is_valid():
-            return None, None
-        # Check key type restriction if specified
-        if allowed_key_types and matched_key.key_type not in allowed_key_types:
-            return None, None
-        handle_api_key_use(matched_key, db)
-        return matched_key.user, matched_key
-
-    # Fall back to legacy api_key on User model for backwards compatibility
-    # Only reached if key not found in api_keys table at all
-    # Legacy keys are treated as "internal" type
-    if allowed_key_types and "internal" not in allowed_key_types:
+    matched_key = lookup_api_key(api_key, db)
+    if matched_key is None or not matched_key.is_valid():
         return None, None
 
-    # Iterate ALL users before returning to prevent timing attacks
-    users = db.query(User).filter(User.api_key.isnot(None)).all()
-    matched_user: User | None = None
-    for user in users:
-        if user.api_key and secrets.compare_digest(user.api_key, api_key):
-            matched_user = user
-    return matched_user, None
+    # Check key type restriction if specified
+    if allowed_key_types and matched_key.key_type not in allowed_key_types:
+        return None, None
+
+    handle_api_key_use(matched_key, db)
+    return matched_key.user, matched_key
 
 
 def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
@@ -217,7 +192,7 @@ def get_session_user(
 
     Supports two authentication methods:
     - Session tokens (UUIDs from UserSession table)
-    - API keys (from api_keys table or legacy User.api_key field)
+    - API keys (from api_keys table)
 
     Args:
         request: The HTTP request.
