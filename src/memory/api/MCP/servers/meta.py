@@ -767,7 +767,7 @@ async def get_polymarket_history(
         # Try to get history from Polymarket's CLOB timeseries endpoint
         # Note: This endpoint may require different parameters
         async with session.get(
-            f"https://clob.polymarket.com/prices-history",
+            "https://clob.polymarket.com/prices-history",
             params={
                 "market": market_id,
                 "interval": "1d" if days > 7 else "1h",
