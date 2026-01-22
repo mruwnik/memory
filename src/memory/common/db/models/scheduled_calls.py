@@ -25,7 +25,7 @@ class ScheduledLLMCall(Base):
     __tablename__ = "scheduled_llm_calls"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     topic: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Scheduling info

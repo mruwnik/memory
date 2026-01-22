@@ -62,7 +62,7 @@ class Project(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this project
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", lazy="select")
 
     # Directory information
@@ -124,7 +124,7 @@ class Session(Base):
     id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
 
     # User who owns this session
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", lazy="select")
 
     # Optional project association
