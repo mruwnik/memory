@@ -6,14 +6,12 @@ This module provides a Discord bot that:
 - Queues messages for storage and embedding via Celery
 - Provides methods for sending messages (used by MCP tools)
 """
-# pyright: reportAttributeAccessIssue=false
-
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from memory.common.db.connection import DBSession
@@ -316,9 +314,7 @@ class MessageCollector(commands.Bot):
                     message.reference.message_id if message.reference else None
                 ),
                 "thread_id": (
-                    message.thread.id
-                    if hasattr(message, "thread") and message.thread
-                    else None
+                    getattr(getattr(message, "thread", None), "id", None)
                 ),
                 "message_type": self._get_message_type(message),
                 "is_pinned": message.pinned,
@@ -335,7 +331,7 @@ class MessageCollector(commands.Bot):
         """Determine the message type."""
         if message.reference:
             return "reply"
-        if hasattr(message, "thread") and message.thread:
+        if getattr(message, "thread", None):
             return "thread_starter"
         if message.type != discord.MessageType.default:
             return "system"
@@ -348,7 +344,7 @@ class MessageCollector(commands.Bot):
             if channel is None:
                 channel = await self.fetch_channel(channel_id)
             if channel and hasattr(channel, "send"):
-                await channel.send(content)
+                await channel.send(content)  # type: ignore[union-attr]
                 return True
         except Exception:
             logger.exception(f"Failed to send message to channel {channel_id}")
@@ -376,7 +372,7 @@ class MessageCollector(commands.Bot):
             if channel is None:
                 channel = await self.fetch_channel(channel_id)
             if channel and hasattr(channel, "fetch_message"):
-                message = await channel.fetch_message(message_id)
+                message = await channel.fetch_message(message_id)  # type: ignore[union-attr]
                 await message.add_reaction(emoji)
                 return True
         except Exception:
