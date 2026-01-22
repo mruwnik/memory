@@ -400,6 +400,47 @@ def test_make_identifier_numbers():
 
 
 # ============================================================================
+# normalize_attendee_names tests
+# ============================================================================
+
+
+def test_normalize_attendee_names_simple_list():
+    """Test basic list of names passes through."""
+    result = meetings.normalize_attendee_names(["Alice", "Bob", "Charlie"])
+    assert result == ["Alice", "Bob", "Charlie"]
+
+
+def test_normalize_attendee_names_splits_comma_separated():
+    """Test comma-separated values get split into individual names."""
+    result = meetings.normalize_attendee_names(["alice@x.com,bob@y.com,charlie@z.com"])
+    assert result == ["alice@x.com", "bob@y.com", "charlie@z.com"]
+
+
+def test_normalize_attendee_names_mixed_input():
+    """Test mix of individual names and comma-separated values."""
+    result = meetings.normalize_attendee_names(["Alice", "bob@x.com,charlie@y.com", "Dave"])
+    assert result == ["Alice", "bob@x.com", "charlie@y.com", "Dave"]
+
+
+def test_normalize_attendee_names_strips_whitespace():
+    """Test whitespace is stripped from names."""
+    result = meetings.normalize_attendee_names(["  Alice  ", "bob@x.com , charlie@y.com "])
+    assert result == ["Alice", "bob@x.com", "charlie@y.com"]
+
+
+def test_normalize_attendee_names_skips_empty():
+    """Test empty strings and None values are skipped."""
+    result = meetings.normalize_attendee_names(["Alice", "", None, "  ", "Bob"])
+    assert result == ["Alice", "Bob"]
+
+
+def test_normalize_attendee_names_handles_trailing_commas():
+    """Test trailing commas don't create empty entries."""
+    result = meetings.normalize_attendee_names(["alice@x.com,bob@y.com,"])
+    assert result == ["alice@x.com", "bob@y.com"]
+
+
+# ============================================================================
 # Tests for _find_or_create_person
 # ============================================================================
 

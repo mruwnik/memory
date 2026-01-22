@@ -34,6 +34,13 @@ export interface ApiKeyResponse {
   api_key: string
 }
 
+export interface ScopeInfo {
+  value: string
+  label: string
+  description: string
+  category: string
+}
+
 export const useUsers = () => {
   const { apiCall } = useAuth()
 
@@ -42,6 +49,15 @@ export const useUsers = () => {
     if (!response.ok) {
       if (response.status === 403) throw new Error('Insufficient permissions')
       throw new Error('Failed to fetch users')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const listScopes = useCallback(async (): Promise<ScopeInfo[]> => {
+    const response = await apiCall('/users/scopes')
+    if (!response.ok) {
+      if (response.status === 403) throw new Error('Insufficient permissions')
+      throw new Error('Failed to fetch available scopes')
     }
     return response.json()
   }, [apiCall])
@@ -116,6 +132,7 @@ export const useUsers = () => {
 
   return {
     listUsers,
+    listScopes,
     getUser,
     getCurrentUser,
     createUser,

@@ -13,7 +13,7 @@ fi
 
 # Configuration (can be overridden in .env)
 REMOTE_HOST="${DEPLOY_HOST:-memory}"
-REMOTE_DIR="${DEPLOY_DIR:-/home/ec2-user/memory}"
+REMOTE_DIR="${DEPLOY_DIR:-/home/ec2-user/chris}"
 
 # Colors for output
 RED='\033[0;31m'

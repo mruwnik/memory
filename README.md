@@ -93,14 +93,6 @@ to get an url that can be used to connect your Discord bot.
 
 Next you'll have to set at least the following in your `.env` file:
 
-```
-DISCORD_BOT_TOKEN=<your bot token>
-DISCORD_NOTIFICATIONS_ENABLED=True
-```
-
-When the worker starts it will automatically attempt to create the appropriate channels. You
-can change what they will be called by setting the various `DISCORD_*_CHANNEL` settings.
-
 ## MCP Proxy Setup
 
 Since MCP doesn't support basic authentication, use the included proxy for AI assistants that need to connect:

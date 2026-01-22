@@ -6,6 +6,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
@@ -16,7 +17,9 @@ from memory.common.db.models.discord import (
     DiscordBot,
     DiscordChannel,
     DiscordServer,
+    DiscordUser,
 )
+from memory.common.db.models.people import Person
 from memory.common.discord_data import (
     fetch_servers,
     get_bot_for_user,
@@ -103,6 +106,27 @@ class AddUserRequest(BaseModel):
     """Request model for adding a user to a bot's authorized users."""
 
     user_id: int
+
+
+# --- Discord User Models ---
+
+
+class DiscordUserResponse(BaseModel):
+    """Response model for Discord user accounts."""
+
+    id: str  # String to avoid JavaScript precision loss
+    username: str
+    display_name: str | None
+    system_user_id: int | None
+    person_id: int | None
+    person_identifier: str | None
+
+
+class DiscordUserLinkRequest(BaseModel):
+    """Request model for linking a Discord user to a system user or person."""
+
+    system_user_id: int | None = None
+    person_id: int | None = None
 
 
 # --- Helper Functions ---
@@ -298,6 +322,23 @@ def refresh_bot_metadata(
     return {"success": True, **result}
 
 
+@router.get("/bots/{bot_id}/invite")
+def get_bot_invite_url(
+    bot_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Generate a Discord invite URL for the bot.
+
+    Returns a URL that can be used to add the bot to a Discord server.
+    Permissions: Send Messages (2048) + Read Message History (65536) + View Channels (1024)
+    """
+    get_user_bot(db, bot_id, user)  # Verify authorization
+    permissions = 2048 + 65536 + 1024  # send messages, read history, view channels
+    invite_url = f"https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions={permissions}"
+    return {"invite_url": invite_url}
+
+
 @router.post("/bots/{bot_id}/users", response_model=UserStatusResponse)
 def add_user_to_bot(
     bot_id: int,
@@ -442,3 +483,108 @@ def update_channel(
     db.refresh(channel)
 
     return channel_to_response(channel)
+
+
+# --- Discord User Endpoints ---
+
+
+def discord_user_to_response(user: DiscordUser) -> DiscordUserResponse:
+    """Convert a DiscordUser model to a response."""
+    return DiscordUserResponse(
+        id=str(user.id),
+        username=user.username,
+        display_name=user.display_name,
+        system_user_id=user.system_user_id,
+        person_id=user.person_id,
+        person_identifier=user.person.identifier if user.person else None,
+    )
+
+
+@router.get("/users")
+def list_discord_users(
+    search: str | None = None,
+    linked_only: bool = False,
+    auth: tuple[User, Session] = Depends(require_discord_access),
+) -> list[DiscordUserResponse]:
+    """List Discord users known to the system.
+
+    Args:
+        search: Optional search term (matches username or display_name)
+        linked_only: If True, only return users linked to a system user or person
+    """
+    _, db = auth
+    query = db.query(DiscordUser)
+
+    if search:
+        search_term = f"%{search.lower()}%"
+        query = query.filter(
+            or_(
+                DiscordUser.username.ilike(search_term),
+                DiscordUser.display_name.ilike(search_term),
+            )
+        )
+
+    if linked_only:
+        query = query.filter(
+            or_(
+                DiscordUser.system_user_id.isnot(None),
+                DiscordUser.person_id.isnot(None),
+            )
+        )
+
+    users = query.order_by(DiscordUser.display_name, DiscordUser.username).limit(100).all()
+    return [discord_user_to_response(u) for u in users]
+
+
+@router.get("/users/{discord_user_id}")
+def get_discord_user(
+    discord_user_id: int,
+    auth: tuple[User, Session] = Depends(require_discord_access),
+) -> DiscordUserResponse:
+    """Get a specific Discord user by ID."""
+    _, db = auth
+    user = db.get(DiscordUser, discord_user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Discord user not found")
+    return discord_user_to_response(user)
+
+
+@router.patch("/users/{discord_user_id}")
+def link_discord_user(
+    discord_user_id: int,
+    data: DiscordUserLinkRequest,
+    auth: tuple[User, Session] = Depends(require_discord_access),
+) -> DiscordUserResponse:
+    """Link a Discord user to a system user and/or person.
+
+    Set system_user_id or person_id to link, or set to null to unlink.
+    """
+    _, db = auth
+    discord_user = db.get(DiscordUser, discord_user_id)
+    if not discord_user:
+        raise HTTPException(status_code=404, detail="Discord user not found")
+
+    # Validate and link system user
+    if data.system_user_id is not None:
+        system_user = db.get(User, data.system_user_id)
+        if not system_user:
+            raise HTTPException(status_code=404, detail="System user not found")
+        discord_user.system_user_id = data.system_user_id
+    elif data.system_user_id is None and "system_user_id" in (data.model_fields_set or set()):
+        # Explicitly set to None = unlink
+        discord_user.system_user_id = None
+
+    # Validate and link person
+    if data.person_id is not None:
+        person = db.get(Person, data.person_id)
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+        discord_user.person_id = data.person_id
+    elif data.person_id is None and "person_id" in (data.model_fields_set or set()):
+        # Explicitly set to None = unlink
+        discord_user.person_id = None
+
+    db.commit()
+    db.refresh(discord_user)
+
+    return discord_user_to_response(discord_user)

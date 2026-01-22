@@ -1,17 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useUsers, type User, type UserCreate, type UserUpdate } from '../../hooks/useUsers'
+import {
+  useUsers,
+  type User,
+  type UserCreate,
+  type UserUpdate,
+  type ScopeInfo,
+} from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-
-// Common scopes that can be assigned to users
-const AVAILABLE_SCOPES = [
-  { value: 'read', label: 'Read', description: 'View knowledge base content' },
-  { value: 'observe', label: 'Observe', description: 'Record observations' },
-  { value: 'github', label: 'GitHub', description: 'GitHub integration access' },
-  { value: 'email', label: 'Email', description: 'Email integration access' },
-  { value: 'admin:users', label: 'User Admin', description: 'Manage users' },
-  { value: '*', label: 'Full Access', description: 'Access to all features' },
-]
 
 interface UserFormData {
   name: string
@@ -22,10 +18,12 @@ interface UserFormData {
 }
 
 const UserManagement = () => {
-  const { listUsers, createUser, updateUser, deleteUser, regenerateApiKey } = useUsers()
+  const { listUsers, listScopes, createUser, updateUser, deleteUser, regenerateApiKey } =
+    useUsers()
   const { user: currentUser } = useAuth()
 
   const [users, setUsers] = useState<User[]>([])
+  const [availableScopes, setAvailableScopes] = useState<ScopeInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,22 +54,32 @@ const UserManagement = () => {
   const [newApiKey, setNewApiKey] = useState<string | null>(null)
   const [apiKeyLoading, setApiKeyLoading] = useState(false)
 
-  const loadUsers = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
+    try {
+      const [usersData, scopesData] = await Promise.all([listUsers(), listScopes()])
+      setUsers(usersData)
+      setAvailableScopes(scopesData)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load data')
+    } finally {
+      setLoading(false)
+    }
+  }, [listUsers, listScopes])
+
+  const loadUsers = useCallback(async () => {
     try {
       const data = await listUsers()
       setUsers(data)
-      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load users')
-    } finally {
-      setLoading(false)
     }
   }, [listUsers])
 
   useEffect(() => {
-    loadUsers()
-  }, [loadUsers])
+    loadData()
+  }, [loadData])
 
   const handleCreate = async () => {
     setCreateLoading(true)
@@ -361,7 +369,7 @@ const UserManagement = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Scopes</label>
                 <div className="space-y-2">
-                  {AVAILABLE_SCOPES.map((scope) => (
+                  {availableScopes.map((scope) => (
                     <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
                       <input
                         type="checkbox"
@@ -441,7 +449,7 @@ const UserManagement = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Scopes</label>
                 <div className="space-y-2">
-                  {AVAILABLE_SCOPES.map((scope) => (
+                  {availableScopes.map((scope) => (
                     <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
                       <input
                         type="checkbox"

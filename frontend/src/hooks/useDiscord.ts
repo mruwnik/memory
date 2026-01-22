@@ -3,8 +3,9 @@ import { useAuth } from './useAuth'
 import { useMCP } from './useMCP'
 
 // Types for Discord Bots
+// Note: IDs are strings to avoid JavaScript precision loss on large Discord snowflake IDs
 export interface DiscordBot {
-  id: number
+  id: string
   name: string
   is_active: boolean
   created_at: string | null
@@ -24,7 +25,7 @@ export interface DiscordBotUpdate {
 
 // Types for Discord Servers
 export interface DiscordServer {
-  id: number
+  id: string
   name: string
   description: string | null
   member_count: number | null
@@ -39,8 +40,8 @@ export interface DiscordServerUpdate {
 
 // Types for Discord Channels
 export interface DiscordChannel {
-  id: number
-  server_id: number | null
+  id: string
+  server_id: string | null
   server_name: string | null
   name: string
   channel_type: string
@@ -52,12 +53,18 @@ export interface DiscordChannelUpdate {
   collect_messages?: boolean | null
 }
 
-// MCP list_channels response type
-interface MCPChannelResponse {
+// Types for Bot Users
+export interface BotUser {
   id: number
   name: string
+}
+
+// MCP list_channels response type
+interface MCPChannelResponse {
+  id: string | number  // MCP may return either
+  name: string
   type: string
-  server_id: number | null
+  server_id: string | number | null
   collect_messages: boolean
 }
 
@@ -85,7 +92,7 @@ export const useDiscord = () => {
     return response.json()
   }, [apiCall])
 
-  const updateBot = useCallback(async (botId: number, data: DiscordBotUpdate): Promise<DiscordBot> => {
+  const updateBot = useCallback(async (botId: string, data: DiscordBotUpdate): Promise<DiscordBot> => {
     const response = await apiCall(`/discord/bots/${botId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -97,7 +104,7 @@ export const useDiscord = () => {
     return response.json()
   }, [apiCall])
 
-  const deleteBot = useCallback(async (botId: number): Promise<void> => {
+  const deleteBot = useCallback(async (botId: string): Promise<void> => {
     const response = await apiCall(`/discord/bots/${botId}`, {
       method: 'DELETE',
     })
@@ -107,13 +114,13 @@ export const useDiscord = () => {
     }
   }, [apiCall])
 
-  const getBotHealth = useCallback(async (botId: number): Promise<{ bot_id: number; connected: boolean }> => {
+  const getBotHealth = useCallback(async (botId: string): Promise<{ bot_id: string; connected: boolean }> => {
     const response = await apiCall(`/discord/bots/${botId}/health`)
     if (!response.ok) throw new Error('Failed to get bot health')
     return response.json()
   }, [apiCall])
 
-  const refreshBotMetadata = useCallback(async (botId: number): Promise<{ success: boolean }> => {
+  const refreshBotMetadata = useCallback(async (botId: string): Promise<{ success: boolean }> => {
     const response = await apiCall(`/discord/bots/${botId}/refresh`, {
       method: 'POST',
     })
@@ -124,16 +131,53 @@ export const useDiscord = () => {
     return response.json()
   }, [apiCall])
 
+  const getBotInviteUrl = useCallback(async (botId: string): Promise<{ invite_url: string }> => {
+    const response = await apiCall(`/discord/bots/${botId}/invite`)
+    if (!response.ok) throw new Error('Failed to get bot invite URL')
+    return response.json()
+  }, [apiCall])
+
+  // === Bot User Operations ===
+
+  const listBotUsers = useCallback(async (botId: string): Promise<BotUser[]> => {
+    const response = await apiCall(`/discord/bots/${botId}/users`)
+    if (!response.ok) throw new Error('Failed to fetch bot users')
+    return response.json()
+  }, [apiCall])
+
+  const addBotUser = useCallback(async (botId: string, userId: number): Promise<{ status: string; user_id: number }> => {
+    const response = await apiCall(`/discord/bots/${botId}/users`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId }),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to add user to bot')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const removeBotUser = useCallback(async (botId: string, userId: number): Promise<{ status: string; user_id: number }> => {
+    const response = await apiCall(`/discord/bots/${botId}/users/${userId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to remove user from bot')
+    }
+    return response.json()
+  }, [apiCall])
+
   // === Server Operations ===
 
-  const listServers = useCallback(async (botId?: number): Promise<DiscordServer[]> => {
+  const listServers = useCallback(async (botId?: string): Promise<DiscordServer[]> => {
     const url = botId ? `/discord/servers?bot_id=${botId}` : '/discord/servers'
     const response = await apiCall(url)
     if (!response.ok) throw new Error('Failed to fetch Discord servers')
     return response.json()
   }, [apiCall])
 
-  const updateServer = useCallback(async (serverId: number, data: DiscordServerUpdate): Promise<DiscordServer> => {
+  const updateServer = useCallback(async (serverId: string, data: DiscordServerUpdate): Promise<DiscordServer> => {
     const response = await apiCall(`/discord/servers/${serverId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -147,7 +191,7 @@ export const useDiscord = () => {
 
   // === Channel Operations (using MCP for list, REST for update) ===
 
-  const listChannels = useCallback(async (serverId?: number, serverName?: string): Promise<DiscordChannel[]> => {
+  const listChannels = useCallback(async (serverId?: string, serverName?: string): Promise<DiscordChannel[]> => {
     // Use MCP tool for listing channels
     const params: Record<string, unknown> = {}
     if (serverId) params.server_id = serverId
@@ -165,8 +209,8 @@ export const useDiscord = () => {
     // Transform MCP response to our DiscordChannel type
     const mcpChannels: MCPChannelResponse[] = response.channels || []
     return mcpChannels.map((ch: MCPChannelResponse) => ({
-      id: ch.id,
-      server_id: ch.server_id,
+      id: String(ch.id),
+      server_id: ch.server_id != null ? String(ch.server_id) : null,
       server_name: null, // MCP doesn't return this
       name: ch.name,
       channel_type: ch.type,
@@ -175,7 +219,7 @@ export const useDiscord = () => {
     }))
   }, [mcpCall])
 
-  const updateChannel = useCallback(async (channelId: number, data: DiscordChannelUpdate): Promise<DiscordChannel> => {
+  const updateChannel = useCallback(async (channelId: string, data: DiscordChannelUpdate): Promise<DiscordChannel> => {
     const response = await apiCall(`/discord/channels/${channelId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -195,6 +239,11 @@ export const useDiscord = () => {
     deleteBot,
     getBotHealth,
     refreshBotMetadata,
+    getBotInviteUrl,
+    // Bot Users
+    listBotUsers,
+    addBotUser,
+    removeBotUser,
     // Servers
     listServers,
     updateServer,

@@ -10,14 +10,18 @@ from sqlalchemy.orm import Session
 from memory.common.db.connection import get_session
 from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
 from memory.common.db.models.users import hash_password, verify_password
+from memory.common.scopes import (
+    ADMIN_SCOPE,
+    VALID_SCOPES,
+    WILDCARD_SCOPE,
+    validate_scopes,
+)
 from memory.api.auth import get_current_user, require_scope
 
 # Valid API key types for validation (derived from APIKeyType constants)
 VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-ADMIN_SCOPE = "admin:users"
 
 
 class UserCreate(BaseModel):
@@ -109,9 +113,17 @@ def create_user(
     if existing:
         raise HTTPException(status_code=400, detail="User with this email already exists")
 
+    # Validate that all scopes are known
+    invalid_scopes = validate_scopes(data.scopes)
+    if invalid_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scopes: {', '.join(invalid_scopes)}",
+        )
+
     # Prevent scope escalation: only users with * scope can grant * scope
     user_scopes = user.scopes or []
-    if "*" in data.scopes and "*" not in user_scopes:
+    if WILDCARD_SCOPE in data.scopes and WILDCARD_SCOPE not in user_scopes:
         raise HTTPException(
             status_code=403,
             detail="Only users with full admin (*) scope can grant full admin scope",
@@ -147,6 +159,23 @@ def get_current_user_details(
 ) -> UserResponse:
     """Get current user's details."""
     return user_to_response(user)
+
+
+class ScopeResponse(BaseModel):
+    """Response model for scope information."""
+
+    value: str
+    label: str
+    description: str
+    category: str
+
+
+@router.get("/scopes")
+def list_available_scopes(
+    user: User = require_scope(ADMIN_SCOPE),
+) -> list[ScopeResponse]:
+    """List all available scopes. Requires admin:users scope."""
+    return [ScopeResponse(**scope) for scope in VALID_SCOPES]
 
 
 @router.get("/{user_id}")
@@ -199,9 +228,17 @@ def update_user(
         if not is_admin:
             raise HTTPException(status_code=403, detail="Only admins can modify scopes")
 
+        # Validate that all scopes are known
+        invalid_scopes = validate_scopes(updates.scopes)
+        if invalid_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid scopes: {', '.join(invalid_scopes)}",
+            )
+
         # Prevent scope escalation: only users with * scope can grant * scope
         user_scopes = user.scopes or []
-        if "*" in updates.scopes and "*" not in user_scopes:
+        if WILDCARD_SCOPE in updates.scopes and WILDCARD_SCOPE not in user_scopes:
             raise HTTPException(
                 status_code=403,
                 detail="Only users with full admin (*) scope can grant full admin scope",

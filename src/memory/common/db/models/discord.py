@@ -32,6 +32,7 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
+    from memory.common.db.models.people import Person
     from memory.common.db.models.users import User
 
 
@@ -171,7 +172,7 @@ class DiscordChannel(Base):
 class DiscordUser(Base):
     """Discord user account metadata.
 
-    May optionally be linked to a Memory system user.
+    May optionally be linked to a Memory system user and/or a Person contact.
     A Memory user can have multiple Discord accounts.
     """
 
@@ -186,6 +187,11 @@ class DiscordUser(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Optional link to a Person contact
+    person_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -196,7 +202,13 @@ class DiscordUser(Base):
     # Relationship to Memory user
     system_user: Mapped[User | None] = relationship("User", back_populates="discord_accounts")
 
-    __table_args__ = (Index("discord_users_system_user_idx", "system_user_id"),)
+    # Relationship to Person contact
+    person: Mapped[Person | None] = relationship("Person", back_populates="discord_accounts")
+
+    __table_args__ = (
+        Index("discord_users_system_user_idx", "system_user_id"),
+        Index("discord_users_person_idx", "person_id"),
+    )
 
     @property
     def name(self) -> str:
