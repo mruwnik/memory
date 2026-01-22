@@ -299,3 +299,88 @@ def test_get_current_user_shows_api_key_count(client: TestClient, admin_user, db
     data = response.json()
     assert "api_key_count" in data
     assert data["api_key_count"] >= 2
+
+
+# --- Scopes Tests ---
+
+
+def test_list_available_scopes(client: TestClient, admin_user):
+    """Test listing available scopes."""
+    response = client.get("/users/scopes")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+
+    # Check structure of scope info
+    scope = data[0]
+    assert "value" in scope
+    assert "label" in scope
+    assert "description" in scope
+    assert "category" in scope
+
+    # Check some expected scopes are present
+    scope_values = [s["value"] for s in data]
+    assert "read" in scope_values
+    assert "*" in scope_values
+    assert "discord" in scope_values
+
+
+def test_create_user_with_invalid_scope(client: TestClient, admin_user, db_session):
+    """Test that creating a user with invalid scopes fails."""
+    response = client.post(
+        "/users",
+        json={
+            "name": "Test User",
+            "email": "invalid_scope_user@example.com",
+            "password": "testpass123",
+            "scopes": ["read", "invalid_scope"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid scopes" in response.json()["detail"]
+    assert "invalid_scope" in response.json()["detail"]
+
+
+def test_update_user_with_invalid_scope(client: TestClient, admin_user, db_session):
+    """Test that updating a user with invalid scopes fails."""
+    # Create a valid user first
+    create_response = client.post(
+        "/users",
+        json={
+            "name": "Test User",
+            "email": "valid_user@example.com",
+            "password": "testpass123",
+            "scopes": ["read"],
+        },
+    )
+    assert create_response.status_code == 200
+    user_id = create_response.json()["id"]
+
+    # Try to update with invalid scope
+    response = client.patch(
+        f"/users/{user_id}",
+        json={"scopes": ["read", "nonexistent_scope"]},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid scopes" in response.json()["detail"]
+
+
+def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_session):
+    """Test that creating a user with valid scopes succeeds."""
+    response = client.post(
+        "/users",
+        json={
+            "name": "Test User",
+            "email": "valid_scopes_user@example.com",
+            "password": "testpass123",
+            "scopes": ["read", "observe", "discord", "github"],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data["scopes"]) == {"read", "observe", "discord", "github"}

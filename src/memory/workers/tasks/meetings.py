@@ -192,16 +192,34 @@ def _find_or_create_person(session, name: str) -> tuple[Person, bool]:
     return person, True
 
 
+def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:
+    """Flatten and normalize attendee names, splitting comma-separated values."""
+    result = []
+    for name in attendee_names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        # Split comma-separated values (handles malformed input like "a@x.com,b@y.com")
+        if "," in name:
+            for part in name.split(","):
+                part = part.strip()
+                if part:
+                    result.append(part)
+        else:
+            result.append(name)
+    return result
+
+
 def link_attendees(
     session, meeting: Meeting, attendee_names: Sequence[str | None], create_missing: bool = True
 ) -> dict:
     """Link attendee names to Person records, optionally creating new ones."""
-    logger.info(f"Processing {len(attendee_names)} attendees: {attendee_names}")
+    normalized_names = normalize_attendee_names(attendee_names)
+    logger.info(f"Processing {len(normalized_names)} attendees: {normalized_names}")
 
     linked, created, skipped = 0, 0, []
 
-    for name in attendee_names:
-        name = (name or "").strip()
+    for name in normalized_names:
         if not name:
             continue
 
