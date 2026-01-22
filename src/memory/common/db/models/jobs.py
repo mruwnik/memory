@@ -95,7 +95,7 @@ class PendingJob(Base):
     attempts: Mapped[int] = mapped_column(default=0)
 
     # User association
-    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"))
     user: Mapped[User | None] = relationship("User", backref="jobs")
 
     __table_args__ = (

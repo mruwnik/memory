@@ -9,8 +9,8 @@ Creates a dedicated table for API keys with support for:
 
 Migrates existing api_key values from the users table.
 
-Revision ID: 20260122_120000
-Revises: 20260121_120000
+Revision ID: 20260122_150000
+Revises: 20260122_120000
 Create Date: 2026-01-22
 
 """
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = "20260122_120000"
-down_revision = "20260121_120000"
+revision = "20260122_150000"
+down_revision = "20260122_120000"
 branch_labels = None
 depends_on = None
 

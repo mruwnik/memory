@@ -51,7 +51,7 @@ class ClaudeConfigSnapshot(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this snapshot
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", backref="claude_snapshots", lazy="select")
 
     # Snapshot metadata
@@ -121,7 +121,7 @@ class ClaudeEnvironment(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # User who owns this environment
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", backref="claude_environments", lazy="select")
 
     # Environment metadata
