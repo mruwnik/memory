@@ -1251,4 +1251,6 @@ async def test_format_manifold_market_includes_liquidity_score():
     result = await format_manifold_market(mock_session, cast(Any, market))
 
     assert "liquidity_score" in result
-    assert result["liquidity_score"] > 0
+    liquidity_score = result["liquidity_score"]
+    assert isinstance(liquidity_score, (int, float))
+    assert liquidity_score > 0
