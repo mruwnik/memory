@@ -4,13 +4,23 @@ import secrets
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
-from memory.common.db.models import BotUser, HumanUser, User
+from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
 from memory.common.db.models.users import hash_password, verify_password
 from memory.api.auth import get_current_user, require_scope
+
+# Valid API key types for validation
+VALID_KEY_TYPES = frozenset({
+    APIKeyType.INTERNAL,
+    APIKeyType.DISCORD,
+    APIKeyType.GOOGLE,
+    APIKeyType.GITHUB,
+    APIKeyType.MCP,
+    APIKeyType.ONE_TIME,
+})
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -59,24 +69,33 @@ class UserResponse(BaseModel):
     user_type: str
     scopes: list[str]
     has_api_key: bool
+    api_key_count: int = 0
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-class ApiKeyResponse(BaseModel):
+class LegacyApiKeyResponse(BaseModel):
+    """Response model for legacy API key regeneration."""
+
     api_key: str
 
 
 def user_to_response(user: User) -> UserResponse:
     """Convert a User model to a response model."""
+    # Count API keys from both legacy field and new table
+    legacy_has_key = user.api_key is not None
+    new_key_count = len([k for k in user.api_keys if not k.revoked]) if user.api_keys else 0
+    total_count = (1 if legacy_has_key else 0) + new_key_count
+
     return UserResponse(
         id=cast(int, user.id),
         name=cast(str, user.name),
         email=cast(str, user.email),
         user_type=cast(str, user.user_type),
         scopes=list(user.scopes or []),
-        has_api_key=user.api_key is not None,
+        has_api_key=legacy_has_key or new_key_count > 0,
+        api_key_count=total_count,
     )
 
 
@@ -239,8 +258,14 @@ def regenerate_api_key(
     user_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-) -> ApiKeyResponse:
-    """Regenerate API key for a user. Admins can regenerate any user's key, others only their own."""
+) -> LegacyApiKeyResponse:
+    """Regenerate the legacy API key for a user.
+
+    This endpoint manages the legacy api_key field on the User model.
+    For more flexible key management, use the /api-keys endpoints.
+
+    Admins can regenerate any user's key, others only their own.
+    """
     is_admin = has_admin_scope(user)
     is_self = user_id == user.id
 
@@ -258,7 +283,7 @@ def regenerate_api_key(
 
     db.commit()
 
-    return ApiKeyResponse(api_key=new_key)
+    return LegacyApiKeyResponse(api_key=new_key)
 
 
 @router.post("/me/change-password")
@@ -305,3 +330,207 @@ def reset_password(
     db.commit()
 
     return {"status": "password_reset"}
+
+
+# --- API Key Management ---
+
+
+class APIKeyCreate(BaseModel):
+    """Request model for creating a new API key."""
+
+    name: str | None = None
+    key_type: str = APIKeyType.INTERNAL
+    scopes: list[str] | None = None
+    expires_in_days: int | None = None
+    is_one_time: bool = False
+
+    @field_validator("key_type")
+    @classmethod
+    def validate_key_type(cls, v: str) -> str:
+        if v not in VALID_KEY_TYPES:
+            raise ValueError(f"Invalid key_type. Must be one of: {', '.join(sorted(VALID_KEY_TYPES))}")
+        return v
+
+
+class APIKeyResponse(BaseModel):
+    """Response model for API key details (excludes the actual key)."""
+
+    id: int
+    name: str | None
+    key_type: str
+    scopes: list[str] | None
+    is_one_time: bool
+    created_at: str | None
+    expires_at: str | None
+    last_used_at: str | None
+    revoked: bool
+    key_preview: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class APIKeyCreateResponse(APIKeyResponse):
+    """Response model for newly created API key (includes the key once)."""
+
+    key: str
+
+
+def api_key_to_response(key: APIKey) -> APIKeyResponse:
+    """Convert an APIKey model to a response model."""
+    data = key.serialize()
+    return APIKeyResponse(**data)
+
+
+@router.get("/me/api-keys")
+def list_my_api_keys(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[APIKeyResponse]:
+    """List all API keys for the current user."""
+    keys = db.query(APIKey).filter(APIKey.user_id == user.id).all()
+    return [api_key_to_response(k) for k in keys]
+
+
+@router.post("/me/api-keys")
+def create_my_api_key(
+    data: APIKeyCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> APIKeyCreateResponse:
+    """Create a new API key for the current user."""
+    from datetime import datetime, timedelta, timezone
+
+    expires_at = None
+    if data.expires_in_days:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=data.key_type,
+        name=data.name,
+        scopes=data.scopes,
+        is_one_time=data.is_one_time,
+        expires_at=expires_at,
+    )
+    db.add(api_key)
+    db.commit()
+    db.refresh(api_key)
+
+    response_data = api_key.serialize()
+    response_data["key"] = api_key.key
+    return APIKeyCreateResponse(**response_data)
+
+
+@router.delete("/me/api-keys/{key_id}")
+def revoke_my_api_key(
+    key_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Revoke (soft-delete) an API key for the current user."""
+    api_key = db.get(APIKey, key_id)
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if api_key.user_id != user.id:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    api_key.revoked = True
+    db.commit()
+
+    return {"status": "revoked"}
+
+
+@router.delete("/me/api-keys/{key_id}/permanent")
+def delete_my_api_key(
+    key_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Permanently delete an API key for the current user."""
+    api_key = db.get(APIKey, key_id)
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if api_key.user_id != user.id:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    db.delete(api_key)
+    db.commit()
+
+    return {"status": "deleted"}
+
+
+# Admin endpoints for managing other users' API keys
+
+
+@router.get("/{user_id}/api-keys")
+def list_user_api_keys(
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[APIKeyResponse]:
+    """List all API keys for a user. Admins can list any user's keys."""
+    if user_id != user.id and not has_admin_scope(user):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    keys = db.query(APIKey).filter(APIKey.user_id == user_id).all()
+    return [api_key_to_response(k) for k in keys]
+
+
+@router.post("/{user_id}/api-keys")
+def create_user_api_key(
+    user_id: int,
+    data: APIKeyCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> APIKeyCreateResponse:
+    """Create an API key for a user. Admins can create keys for any user."""
+    if user_id != user.id and not has_admin_scope(user):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from datetime import datetime, timedelta, timezone
+
+    expires_at = None
+    if data.expires_in_days:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
+
+    api_key = APIKey.create(
+        user_id=user_id,
+        key_type=data.key_type,
+        name=data.name,
+        scopes=data.scopes,
+        is_one_time=data.is_one_time,
+        expires_at=expires_at,
+    )
+    db.add(api_key)
+    db.commit()
+    db.refresh(api_key)
+
+    response_data = api_key.serialize()
+    response_data["key"] = api_key.key
+    return APIKeyCreateResponse(**response_data)
+
+
+@router.delete("/{user_id}/api-keys/{key_id}")
+def revoke_user_api_key(
+    user_id: int,
+    key_id: int,
+    user: User = require_scope(ADMIN_SCOPE),
+    db: Session = Depends(get_session),
+):
+    """Revoke an API key for any user. Requires admin scope."""
+    api_key = db.get(APIKey, key_id)
+    if not api_key or api_key.user_id != user_id:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    api_key.revoked = True
+    db.commit()
+
+    return {"status": "revoked"}

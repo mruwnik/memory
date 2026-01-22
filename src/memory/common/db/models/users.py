@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -114,6 +114,9 @@ class User(Base):
     secrets: Mapped[list[Secret]] = relationship(
         "Secret", back_populates="user", cascade="all, delete-orphan"
     )
+    api_keys: Mapped[list[APIKey]] = relationship(
+        "APIKey", back_populates="user", cascade="all, delete-orphan"
+    )
 
     # Discord relationships
     discord_accounts: Mapped[list[DiscordUser]] = relationship(
@@ -191,6 +194,109 @@ class BotUser(User):
             api_key=api_key,
             user_type=cls.__mapper_args__["polymorphic_identity"],
         )
+
+
+class APIKeyType:
+    """API key type constants for categorization."""
+
+    INTERNAL = "internal"  # General-purpose internal API access
+    DISCORD = "discord"  # Discord bot integration
+    GOOGLE = "google"  # Google services integration
+    GITHUB = "github"  # GitHub integration
+    MCP = "mcp"  # MCP server access
+    ONE_TIME = "one_time"  # Single-use keys for client operations
+
+
+class APIKey(Base):
+    """API key for authenticating users and services.
+
+    Supports multiple keys per user with different types, expiration,
+    and one-time use keys that are deleted after first use.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    key_type: Mapped[str] = mapped_column(
+        String, nullable=False, default=APIKeyType.INTERNAL
+    )
+    # Scopes override - if None, uses user's default scopes
+    scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    is_one_time: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Relationship to user
+    user: Mapped[User] = relationship("User", back_populates="api_keys")
+
+    @classmethod
+    def generate_key(cls, prefix: str = "key") -> str:
+        """Generate a new API key with the given prefix."""
+        return f"{prefix}_{secrets.token_hex(32)}"
+
+    @classmethod
+    def create(
+        cls,
+        user_id: int,
+        key_type: str = APIKeyType.INTERNAL,
+        name: str | None = None,
+        scopes: list[str] | None = None,
+        is_one_time: bool = False,
+        expires_at: datetime | None = None,
+        prefix: str | None = None,
+    ) -> "APIKey":
+        """Create a new API key for a user."""
+        if prefix is None:
+            prefix = "ot" if is_one_time else key_type
+        return cls(
+            user_id=user_id,
+            key=cls.generate_key(prefix),
+            name=name,
+            key_type=key_type,
+            scopes=scopes,
+            is_one_time=is_one_time,
+            expires_at=expires_at,
+        )
+
+    def is_valid(self) -> bool:
+        """Check if the key is valid (not revoked, not expired)."""
+        if self.revoked:
+            return False
+        if self.expires_at:
+            now = datetime.now(timezone.utc)
+            # Handle both tz-aware and tz-naive datetimes
+            expires = self.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires < now:
+                return False
+        return True
+
+    def serialize(self) -> dict[str, Any]:
+        """Serialize the API key for API responses (excluding the key itself)."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "key_type": self.key_type,
+            "scopes": self.scopes,
+            "is_one_time": self.is_one_time,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "last_used_at": (
+                self.last_used_at.isoformat() if self.last_used_at else None
+            ),
+            "revoked": self.revoked,
+            "key_preview": f"{self.key[:8]}...{self.key[-4:]}" if self.key else None,
+        }
 
 
 class UserSession(Base):

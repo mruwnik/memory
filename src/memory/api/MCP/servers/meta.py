@@ -14,6 +14,8 @@ from fastmcp.server.dependencies import get_access_token
 from memory.common import qdrant
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
+    APIKey,
+    APIKeyType,
     EmailAccount,
     SourceItem,
     UserSession,
@@ -141,10 +143,33 @@ async def get_current_time() -> dict:
 
 
 @meta_mcp.tool()
-async def get_user() -> dict:
-    """Get information about the authenticated user."""
+async def get_user(generate_one_time_key: bool = False) -> dict:
+    """Get information about the authenticated user.
+
+    Args:
+        generate_one_time_key: If True, generates a one-time API key for client operations.
+                               The key will be deleted after first use.
+    """
     with make_session() as session:
-        return _get_current_user(session)
+        result = _get_current_user(session)
+
+        if generate_one_time_key and result.get("authenticated"):
+            access_token = get_access_token()
+            if access_token:
+                user_session = session.get(UserSession, access_token.token)
+                if user_session and user_session.user:
+                    # Create a one-time API key
+                    one_time_key = APIKey.create(
+                        user_id=user_session.user.id,
+                        key_type=APIKeyType.ONE_TIME,
+                        name="MCP Client Operation",
+                        is_one_time=True,
+                    )
+                    session.add(one_time_key)
+                    session.commit()
+                    result["one_time_key"] = one_time_key.key
+
+        return result
 
 
 # --- Forecasting tools ---

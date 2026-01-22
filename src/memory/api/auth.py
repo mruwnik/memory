@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from memory.common import settings
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
+    APIKey,
     BotUser,
     MCPServer,
     HumanUser,
@@ -98,9 +99,23 @@ def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
     """Authenticate a bot by API key.
 
     Uses constant-time comparison to prevent timing attacks.
+    First checks the new api_keys table, then falls back to legacy User.api_key.
     """
-    # Get all bot users and compare with constant-time function
-    # This prevents timing attacks on API key discovery
+    # First, check the new api_keys table (including revoked to prevent fallback bypass)
+    all_api_keys = db.query(APIKey).all()
+    for key_record in all_api_keys:
+        if secrets.compare_digest(key_record.key, api_key):
+            # Key found in new table - don't fall back to legacy even if invalid/revoked
+            if not key_record.is_valid():
+                return None
+            user = key_record.user
+            if user.user_type == "bot":
+                handle_api_key_use(key_record, db)
+                return user  # type: ignore[return-value]
+            return None
+
+    # Fall back to legacy api_key on User model for backwards compatibility
+    # Only reached if key not found in api_keys table at all
     bots = db.query(BotUser).all()
     for bot in bots:
         if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
@@ -108,34 +123,80 @@ def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
     return None
 
 
-def authenticate_by_api_key(api_key: str, db: DBSession) -> User | None:
+def authenticate_by_api_key(
+    api_key: str, db: DBSession, allowed_key_types: list[str] | None = None
+) -> tuple[User | None, APIKey | None]:
     """Authenticate any user by API key.
 
-    Supports both bot users (bot_* keys) and human users (user_* keys).
+    Supports both the new api_keys table and legacy User.api_key field.
     Uses constant-time comparison to prevent timing attacks.
+
+    Args:
+        api_key: The API key to authenticate.
+        db: Database session.
+        allowed_key_types: Optional list of allowed key types. If None, all types allowed.
+
+    Returns:
+        Tuple of (user, api_key_record). api_key_record is None for legacy keys.
     """
-    # Query all users with API keys and compare with constant-time function
+    # First, check the new api_keys table (including revoked to prevent fallback bypass)
+    all_api_keys = db.query(APIKey).all()
+    for key_record in all_api_keys:
+        if secrets.compare_digest(key_record.key, api_key):
+            # Key found in new table - don't fall back to legacy even if invalid/revoked
+            if not key_record.is_valid():
+                return None, None
+            # Check key type restriction if specified
+            if allowed_key_types and key_record.key_type not in allowed_key_types:
+                return None, None
+            handle_api_key_use(key_record, db)
+            return key_record.user, key_record
+
+    # Fall back to legacy api_key on User model for backwards compatibility
+    # Only reached if key not found in api_keys table at all
+    # Legacy keys are treated as "internal" type
+    if allowed_key_types and "internal" not in allowed_key_types:
+        return None, None
+
     users = db.query(User).filter(User.api_key.isnot(None)).all()
     for user in users:
         if user.api_key and secrets.compare_digest(user.api_key, api_key):
-            return user
-    return None
+            return user, None
+    return None, None
 
 
-def get_session_user(request: Request, db: DBSession) -> User | None:
+def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
+    """Handle API key usage: update last_used_at and delete one-time keys."""
+    key_record.last_used_at = datetime.now(timezone.utc)
+    if key_record.is_one_time:
+        db.delete(key_record)
+    db.commit()
+
+
+def get_session_user(
+    request: Request, db: DBSession, allowed_key_types: list[str] | None = None
+) -> User | None:
     """Get user from session ID or API key if valid.
 
     Supports two authentication methods:
     - Session tokens (UUIDs from UserSession table)
-    - API keys (prefixed with 'bot_' for BotUser accounts)
+    - API keys (from api_keys table or legacy User.api_key field)
+
+    Args:
+        request: The HTTP request.
+        db: Database session.
+        allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
     """
     token = get_token(request)
     if not token:
         return None
 
-    # Check if this is an API key (for bot or human users with API keys)
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this looks like an API key (various prefixes)
+    api_key_prefixes = ("bot_", "user_", "key_", "ot_", "internal_", "discord_",
+                        "google_", "github_", "mcp_", "one_time_")
+    if any(token.startswith(prefix) for prefix in api_key_prefixes):
+        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
+        return user
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
@@ -152,18 +213,28 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def get_user_from_token(token: str, db: DBSession) -> User | None:
+def get_user_from_token(
+    token: str, db: DBSession, allowed_key_types: list[str] | None = None
+) -> User | None:
     """Authenticate user from a token string.
 
     Supports both session tokens (UUIDs) and API keys.
     Useful for WebSocket authentication where tokens are passed via query params.
+
+    Args:
+        token: The token to authenticate.
+        db: Database session.
+        allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
     """
     if not token:
         return None
 
-    # Check if this is an API key
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this looks like an API key
+    api_key_prefixes = ("bot_", "user_", "key_", "ot_", "internal_", "discord_",
+                        "google_", "github_", "mcp_", "one_time_")
+    if any(token.startswith(prefix) for prefix in api_key_prefixes):
+        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
+        return user
 
     # Otherwise treat as session token
     session = db.get(UserSession, token)
@@ -190,6 +261,38 @@ def require_scope(scope: str):
         if "*" in user_scopes or scope in user_scopes:
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    return Depends(checker)
+
+
+def require_key_types(*allowed_types: str):
+    """Dependency that restricts authentication to specific API key types.
+
+    By default, all key types are allowed. Use this to restrict endpoints
+    to only accept certain key types.
+
+    Usage:
+        @router.get("/discord-only")
+        def discord_endpoint(user: User = require_key_types("discord", "internal")):
+            # Only accepts discord or internal API keys (and session tokens)
+            ...
+
+    Args:
+        allowed_types: Key types to allow (e.g., "discord", "internal", "mcp").
+                      Session tokens (non-API-key auth) are always allowed.
+    """
+    allowed_list = list(allowed_types)
+
+    def checker(
+        request: Request, db: DBSession = Depends(get_session)
+    ) -> User:
+        user = get_session_user(request, db, allowed_key_types=allowed_list)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Authentication required with key type: {', '.join(allowed_list)}",
+            )
+        return user
 
     return Depends(checker)
 
