@@ -187,10 +187,12 @@ class SimpleOAuthProvider(OAuthProvider):
             if api_key_record and api_key_record.is_valid():
                 user = api_key_record.user
                 logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
+                # Use API key scopes if set, otherwise fall back to user scopes
+                scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
                 return FastMCPAccessToken(
                     token=token,
                     client_id=cast(str, user.name or user.email),
-                    scopes=["read", "write"],
+                    scopes=scopes,
                 )
 
             return None
@@ -399,10 +401,12 @@ class SimpleOAuthProvider(OAuthProvider):
             if api_key_record and api_key_record.is_valid():
                 user = api_key_record.user
                 logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
+                # Use API key scopes if set, otherwise fall back to user scopes
+                scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
                 return AccessToken(
                     token=token,
                     client_id=cast(str, user.name or user.email),
-                    scopes=["read", "write"],  # API key access
+                    scopes=scopes,
                     expires_at=2147483647,  # Far future (2038)
                 )
 
