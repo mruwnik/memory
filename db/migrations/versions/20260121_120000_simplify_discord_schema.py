@@ -40,7 +40,7 @@ def column_exists(table_name: str, column_name: str) -> bool:
         """),
         {"table": table_name, "column": column_name},
     )
-    return result.scalar()
+    return bool(result.scalar())
 
 
 def index_exists(index_name: str) -> bool:
@@ -56,7 +56,7 @@ def index_exists(index_name: str) -> bool:
         """),
         {"index_name": index_name},
     )
-    return result.scalar()
+    return bool(result.scalar())
 
 
 def constraint_exists(table_name: str, constraint_name: str) -> bool:
@@ -72,7 +72,7 @@ def constraint_exists(table_name: str, constraint_name: str) -> bool:
         """),
         {"table": table_name, "constraint": constraint_name},
     )
-    return result.scalar()
+    return bool(result.scalar())
 
 
 def table_exists(table_name: str) -> bool:
@@ -88,7 +88,7 @@ def table_exists(table_name: str) -> bool:
         """),
         {"table": table_name},
     )
-    return result.scalar()
+    return bool(result.scalar())
 
 
 def drop_column_if_exists(table_name: str, column_name: str) -> None:

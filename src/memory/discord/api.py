@@ -7,8 +7,9 @@ This runs alongside the collector and exposes its functionality via REST API.
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
+import discord
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -194,7 +195,7 @@ async def typing_channel(request: TypingRequest) -> dict[str, Any]:
         if channel is None:
             channel = await collector.fetch_channel(channel_id)
         if channel and hasattr(channel, "typing"):
-            await channel.typing()
+            await channel.typing()  # type: ignore[union-attr]
             return {"success": True}
     except Exception:
         logger.exception(f"Failed to trigger typing for channel {channel_id}")
@@ -235,7 +236,7 @@ async def refresh_metadata() -> dict[str, Any]:
                 # Update channels
                 for channel in guild.channels:
                     if hasattr(channel, "send"):  # Text-like channels
-                        ensure_channel(session, channel, guild.id)
+                        ensure_channel(session, cast(discord.abc.Messageable, channel), guild.id)
                         updated["channels"] += 1
 
                 # Update users

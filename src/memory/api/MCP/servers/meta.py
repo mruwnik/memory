@@ -338,6 +338,48 @@ async def search_polymarket_markets(
         return results
 
 
+def filter_kalshi_market(market: dict, term: str, min_volume: int) -> dict | None:
+    """Filter and format a Kalshi market if it matches the search criteria.
+
+    Args:
+        market: Raw market data from Kalshi API.
+        term: Search term (case-insensitive).
+        min_volume: Minimum volume threshold.
+
+    Returns:
+        Formatted market dict if it matches criteria, None otherwise.
+    """
+    title = market.get("title", "")
+    subtitle = market.get("subtitle", "")
+    event_title = market.get("event_title", "")
+
+    # Check if term matches title, subtitle, or event title
+    searchable = f"{title} {subtitle} {event_title}".lower()
+    if term.lower() not in searchable:
+        return None
+
+    volume = market.get("volume", 0) or 0
+    if volume < min_volume:
+        return None
+
+    # Kalshi markets are binary (yes/no)
+    # Prefer last_price (actual trade price) over yes_bid (current bid)
+    # for more accurate probability in illiquid markets
+    yes_price = market.get("last_price") or market.get("yes_bid") or 0
+    # Kalshi prices are in cents (0-100)
+    probability = yes_price / 100 if yes_price else None
+
+    return {
+        "source": "kalshi",
+        "id": market.get("ticker"),
+        "question": title,
+        "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
+        "volume": volume,
+        "probability": round(probability, 3) if probability else None,
+        "createdAt": market.get("open_time"),
+    }
+
+
 async def search_kalshi_markets(
     term: str, min_volume: int = 1000, binary: bool = False  # noqa: ARG001
 ) -> list[dict]:
@@ -348,7 +390,7 @@ async def search_kalshi_markets(
     all Kalshi markets are binary (yes/no) by design.
     """
     async with aiohttp.ClientSession() as session:
-        all_markets = []
+        all_markets: list[dict] = []
         cursor = None
 
         # Paginate through markets (up to a reasonable limit)
@@ -374,42 +416,12 @@ async def search_kalshi_markets(
             if not cursor or not markets:
                 break
 
-        # Filter by search term (case-insensitive)
-        term_lower = term.lower()
-        results = []
-
-        for market in all_markets:
-            title = market.get("title", "")
-            subtitle = market.get("subtitle", "")
-            event_title = market.get("event_title", "")
-
-            # Check if term matches title, subtitle, or event title
-            searchable = f"{title} {subtitle} {event_title}".lower()
-            if term_lower not in searchable:
-                continue
-
-            volume = market.get("volume", 0) or 0
-            if volume < min_volume:
-                continue
-
-            # Kalshi markets are binary (yes/no)
-            # Prefer last_price (actual trade price) over yes_bid (current bid)
-            # for more accurate probability in illiquid markets
-            yes_price = market.get("last_price") or market.get("yes_bid") or 0
-            # Kalshi prices are in cents (0-100)
-            probability = yes_price / 100 if yes_price else None
-
-            results.append(
-                {
-                    "source": "kalshi",
-                    "id": market.get("ticker"),
-                    "question": title,
-                    "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
-                    "volume": volume,
-                    "probability": round(probability, 3) if probability else None,
-                    "createdAt": market.get("open_time"),
-                }
-            )
+        # Filter markets using the helper function
+        results = [
+            result
+            for market in all_markets
+            if (result := filter_kalshi_market(market, term, min_volume)) is not None
+        ]
 
         return results
 

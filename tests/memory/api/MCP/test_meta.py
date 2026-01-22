@@ -17,6 +17,7 @@ from memory.api.MCP.servers.meta import (
     search_polymarket_markets,
     search_kalshi_markets,
     search_markets,
+    filter_kalshi_market,
 )
 
 
@@ -583,6 +584,174 @@ async def test_search_polymarket_markets_filters_by_volume(mock_aiohttp_session)
 
     assert len(result) == 1
     assert result[0]["question"] == "High volume"
+
+
+# ====== filter_kalshi_market helper tests ======
+
+
+def test_filter_kalshi_market_matches_title():
+    """filter_kalshi_market matches search term in title."""
+    market = {
+        "ticker": "BITCOIN-100K",
+        "title": "Bitcoin reaches $100k",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 50000,
+        "last_price": 45,
+        "open_time": "2024-01-01T00:00:00Z",
+    }
+
+    result = filter_kalshi_market(market, "bitcoin", min_volume=1000)
+
+    assert result is not None
+    assert result["source"] == "kalshi"
+    assert result["id"] == "BITCOIN-100K"
+    assert result["question"] == "Bitcoin reaches $100k"
+    assert result["probability"] == 0.45
+    assert result["volume"] == 50000
+
+
+def test_filter_kalshi_market_matches_subtitle():
+    """filter_kalshi_market matches search term in subtitle."""
+    market = {
+        "ticker": "TEST",
+        "title": "Some market",
+        "subtitle": "About cryptocurrency trends",
+        "event_title": "",
+        "volume": 5000,
+        "yes_bid": 30,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "crypto", min_volume=1000)
+
+    assert result is not None
+    assert result["id"] == "TEST"
+
+
+def test_filter_kalshi_market_matches_event_title():
+    """filter_kalshi_market matches search term in event_title."""
+    market = {
+        "ticker": "ELECTION-2024",
+        "title": "Will candidate win?",
+        "subtitle": "",
+        "event_title": "2024 Presidential Election",
+        "volume": 100000,
+        "last_price": 55,
+        "open_time": "2024-01-01T00:00:00Z",
+    }
+
+    result = filter_kalshi_market(market, "election", min_volume=1000)
+
+    assert result is not None
+    assert result["id"] == "ELECTION-2024"
+
+
+def test_filter_kalshi_market_returns_none_no_match():
+    """filter_kalshi_market returns None when term doesn't match."""
+    market = {
+        "ticker": "BITCOIN",
+        "title": "Bitcoin market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 50000,
+        "last_price": 50,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "ethereum", min_volume=1000)
+
+    assert result is None
+
+
+def test_filter_kalshi_market_returns_none_low_volume():
+    """filter_kalshi_market returns None when volume is below threshold."""
+    market = {
+        "ticker": "LOW-VOL",
+        "title": "Low volume market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 500,
+        "last_price": 50,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "volume", min_volume=1000)
+
+    assert result is None
+
+
+def test_filter_kalshi_market_case_insensitive():
+    """filter_kalshi_market search is case-insensitive."""
+    market = {
+        "ticker": "TEST",
+        "title": "BITCOIN Market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 5000,
+        "last_price": 50,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "bitcoin", min_volume=1000)
+
+    assert result is not None
+    assert result["id"] == "TEST"
+
+
+def test_filter_kalshi_market_prefers_last_price():
+    """filter_kalshi_market prefers last_price over yes_bid for probability."""
+    market = {
+        "ticker": "TEST",
+        "title": "Test market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 5000,
+        "last_price": 75,
+        "yes_bid": 50,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "test", min_volume=1000)
+
+    assert result is not None
+    assert result["probability"] == 0.75  # Uses last_price, not yes_bid
+
+
+def test_filter_kalshi_market_falls_back_to_yes_bid():
+    """filter_kalshi_market uses yes_bid when last_price is not available."""
+    market = {
+        "ticker": "TEST",
+        "title": "Test market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": 5000,
+        "yes_bid": 60,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "test", min_volume=1000)
+
+    assert result is not None
+    assert result["probability"] == 0.6  # Uses yes_bid
+
+
+def test_filter_kalshi_market_handles_zero_volume():
+    """filter_kalshi_market handles missing or zero volume correctly."""
+    market = {
+        "ticker": "TEST",
+        "title": "Test market",
+        "subtitle": "",
+        "event_title": "",
+        "volume": None,
+        "last_price": 50,
+        "open_time": None,
+    }
+
+    result = filter_kalshi_market(market, "test", min_volume=0)
+
+    assert result is not None
+    assert result["volume"] == 0
 
 
 # ====== Kalshi search tests ======

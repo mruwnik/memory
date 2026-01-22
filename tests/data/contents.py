@@ -150,10 +150,10 @@ TWO_PAGE_CHUNKS: list[str] = [
 The Evolution of Programming Languages
 ====================================== 
 Programming languages have undergone tremendous evolution since the early days of computing. 
- From the machine code and assembly languages of the 1940s to the high\-level, expressive languages 
+ From the machine code and assembly languages of the 1940s to the high\\-level, expressive languages
  we use today, each generation has built upon the lessons learned from its predecessors. Languages 
- like FORTRAN and COBOL pioneered the concept of human\-readable code, while later innovations like 
- object\-oriented programming in languages such as Smalltalk and C\+\+ revolutionized how we structure 
+ like FORTRAN and COBOL pioneered the concept of human\\-readable code, while later innovations like
+ object\\-oriented programming in languages such as Smalltalk and C\\+\\+ revolutionized how we structure
  and organize our programs. 
 ![Timeline of programming language evolution]({DATA_DIR / "lang_timeline.png"})
 The rise of functional programming paradigms has brought mathematical rigor and immutability 
@@ -161,13 +161,13 @@ The rise of functional programming paradigms has brought mathematical rigor and 
  and Elm have demonstrated the power of pure functions and type systems in creating more reliable 
  and maintainable code. These paradigms emphasize the elimination of side effects and the treatment 
  of computation as the evaluation of mathematical functions. 
-Modern development has also seen the emergence of domain\-specific languages and the resurgence 
+Modern development has also seen the emergence of domain\\-specific languages and the resurgence
  of interest in memory safety. The advent of languages like Python and JavaScript has democratized 
  programming by lowering the barrier to entry, while systems languages like Rust have proven that 
  performance and safety need not be mutually exclusive. The ongoing development of WebAssembly 
- promises to bring high\-performance computing to web browsers in ways previously unimaginable. 
+ promises to bring high\\-performance computing to web browsers in ways previously unimaginable.
 ![Visual representation of code complexity over time]({DATA_DIR / "code_complexity.jpg"})
-Looking toward the future, we see emerging trends in quantum programming languages, AI\-assisted 
+Looking toward the future, we see emerging trends in quantum programming languages, AI\\-assisted
  code generation, and the continued evolution toward more expressive type systems. The challenge 
  for tomorrow's language designers will be balancing expressiveness with simplicity, performance 
  with safety, and innovation with backward compatibility. As computing continues to permeate every 
@@ -183,7 +183,7 @@ The emergence of cloud computing and distributed systems has also driven new par
  concurrent and distributed environments, while the rise of microservices has renewed interest 
  in polyglot programming approaches. These developments reflect a broader shift toward languages 
  that are not just powerful tools for individual developers, but robust foundations for building 
- scalable, resilient systems that can handle the demands of modern internet\-scale applications. 
+ scalable, resilient systems that can handle the demands of modern internet\\-scale applications.
 Perhaps most intriguingly, the intersection of programming languages with artificial intelligence 
  is opening entirely new frontiers. Differentiable programming languages are enabling new forms of 
  machine learning research, while large language models are beginning to reshape how we think about 
@@ -196,8 +196,8 @@ The open source movement has fundamentally transformed how programming languages
  distributed, and evolved. Unlike the proprietary languages of earlier decades, modern language 
  development often occurs in public repositories where thousands of contributors can participate 
  in the design process. Languages like Python, JavaScript, and Rust have benefited enormously 
- from this collaborative approach, with their ecosystems growing rapidly through community\-driven 
- package managers and extensive third\-party libraries. 
+ from this collaborative approach, with their ecosystems growing rapidly through community\\-driven
+ package managers and extensive third\\-party libraries.
 This democratization of language development has led to faster innovation cycles and more 
  responsive adaptation to developer needs. When a language feature proves problematic or a new 
  paradigm emerges, open source languages can quickly incorporate changes through their community 
@@ -208,7 +208,7 @@ This democratization of language development has led to faster innovation cycles
 The result has been an unprecedented period of language experimentation 
  and refinement, where ideas can be tested, refined, and adopted across multiple language 
  communities simultaneously. 
-Furthermore, the open source model has enabled the rise of domain\-specific languages that 
+Furthermore, the open source model has enabled the rise of domain\\-specific languages that
  might never have been commercially viable under traditional development models. From specialized 
  query languages for databases to configuration management tools, the low barrier to entry for 
  language creation has fostered an explosion of linguistic diversity in computing, each tool 
@@ -222,10 +222,10 @@ The collaborative nature of open source development has also revolutionized lang
 Version control systems like Git have enabled unprecedented transparency in language evolution, 
  allowing developers to trace the reasoning behind every design decision through detailed commit 
  histories and issue discussions. This historical record serves not only as documentation but as 
- a learning resource for future language designers, helping them understand the trade\-offs and 
+ a learning resource for future language designers, helping them understand the trade\\-offs and
  considerations that shaped successful language features. 
 The economic implications of open source language development cannot be overstated. By removing 
- licensing barriers and vendor lock\-in, open source languages have democratized access to powerful 
+ licensing barriers and vendor lock\\-in, open source languages have democratized access to powerful
  programming tools across the globe. This has enabled innovation in regions and sectors that might 
  otherwise have been excluded from the software revolution, fostering a truly global community of 
  software creators and problem solvers.

@@ -19,7 +19,7 @@ import socket
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import hashlib
 import re
@@ -27,6 +27,10 @@ import time
 
 import docker
 from docker.errors import APIError, ImageNotFound, NotFound
+from docker.models.containers import Container
+from docker.models.images import Image
+from docker.models.networks import Network
+from docker.models.volumes import Volume
 
 
 # Docker volume name validation pattern
@@ -228,7 +232,7 @@ class Orchestrator:
         needs_build = False
 
         try:
-            img = self.docker.images.get(image)
+            img = cast(Image, self.docker.images.get(image))
             # Check if source files have changed since image was built
             image_hash = img.labels.get("source-hash", "")
             if source_hash and image_hash != source_hash:
@@ -266,16 +270,18 @@ class Orchestrator:
         if source_hash:
             labels["source-hash"] = source_hash
 
-        _, logs = self.docker.images.build(
+        result = self.docker.images.build(
             path=str(INSTALL_DIR),
             dockerfile=dockerfile,
             tag=image,
             rm=True,
             labels=labels,
         )
+        # Result is tuple of (Image, logs_generator)
+        logs = result[1] if isinstance(result, tuple) else iter([])
 
         # Log build output
-        for chunk in logs:
+        for chunk in list(logs):
             if isinstance(chunk, dict) and "stream" in chunk:
                 line = str(chunk["stream"]).strip()
                 if line:
@@ -328,24 +334,27 @@ class Orchestrator:
             volumes[session_log_dir] = {"bind": "/var/log/claude", "mode": "rw"}
 
             # Create container on shared network
-            container = self.docker.containers.run(
-                config.image,
-                name=container_name,
-                detach=True,
-                tty=True,
-                stdin_open=True,
-                network=CLAUDE_NETWORK_NAME,
-                environment=environment,
-                volumes=volumes,
-                labels={
-                    "claude-session": config.session_id,
-                    "memory-stack": config.memory_stack or "none",
-                },
-                # Security hardening
-                security_opt=["no-new-privileges:true"],
-                mem_limit=CONTAINER_MEMORY_LIMIT,
-                cpu_period=100000,
-                cpu_quota=CONTAINER_CPU_LIMIT * 100000,
+            container = cast(
+                Container,
+                self.docker.containers.run(
+                    config.image,
+                    name=container_name,
+                    detach=True,
+                    tty=True,
+                    stdin_open=True,
+                    network=CLAUDE_NETWORK_NAME,
+                    environment=environment,
+                    volumes=volumes,
+                    labels={
+                        "claude-session": config.session_id,
+                        "memory-stack": config.memory_stack or "none",
+                    },
+                    # Security hardening
+                    security_opt=["no-new-privileges:true"],
+                    mem_limit=CONTAINER_MEMORY_LIMIT,
+                    cpu_period=100000,
+                    cpu_quota=CONTAINER_CPU_LIMIT * 100000,
+                ),
             )
             logger.info(f"Created container: {container_name} ({container.short_id})")
 
@@ -353,7 +362,7 @@ class Orchestrator:
             if config.memory_stack:
                 memory_network_name = f"memory-api-{config.memory_stack}"
                 try:
-                    memory_network = self.docker.networks.get(memory_network_name)
+                    memory_network = cast(Network, self.docker.networks.get(memory_network_name))
                     memory_network.connect(container)
                     logger.info(f"Connected to network: {memory_network_name}")
                 except NotFound:
@@ -389,8 +398,9 @@ class Orchestrator:
 
     def list_sessions(self) -> dict[str, Any]:
         """List all Claude session containers."""
-        containers = self.docker.containers.list(
-            all=True, filters={"label": "claude-session"}
+        containers = cast(
+            list[Container],
+            self.docker.containers.list(all=True, filters={"label": "claude-session"}),
         )
         return {
             "sessions": [
@@ -409,7 +419,7 @@ class Orchestrator:
         """Get details of a specific Claude session."""
         container_name = f"claude-{session_id}"
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             return {
                 "session_id": session_id,
                 "container_id": container.id,
@@ -454,7 +464,7 @@ class Orchestrator:
         # Fall back to container logs if container exists
         container_name = f"claude-{session_id}"
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             logs = container.logs(tail=tail).decode("utf-8", errors="replace")
             return {
                 "session_id": session_id,
@@ -472,7 +482,7 @@ class Orchestrator:
         """Capture current tmux screen content for a session."""
         container_name = f"claude-{session_id}"
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             if container.status != "running":
                 return {
                     "session_id": session_id,
@@ -569,7 +579,7 @@ class Orchestrator:
         """
         container_name = f"claude-{session_id}"
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             if container.status != "running":
                 return {
                     "session_id": session_id,
@@ -616,7 +626,7 @@ class Orchestrator:
         """
         container_name = f"claude-{session_id}"
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             if container.status != "running":
                 return {
                     "session_id": session_id,
@@ -644,7 +654,7 @@ class Orchestrator:
                 # Force refresh
                 tmux refresh-client -t {TMUX_SESSION_NAME} 2>/dev/null || true
             """
-            exit_code, output = container.exec_run(
+            container.exec_run(
                 ["bash", "-c", resize_script],
                 demux=False,
                 user="claude",
@@ -678,12 +688,15 @@ class Orchestrator:
             return {"status": "error", "error": f"Invalid volume name: {error_msg}"}
 
         try:
-            volume = self.docker.volumes.create(
-                name=volume_name,
-                labels={
-                    "managed-by": "claude-orchestrator",
-                    "type": "environment",
-                },
+            volume = cast(
+                Volume,
+                self.docker.volumes.create(
+                    name=volume_name,
+                    labels={
+                        "managed-by": "claude-orchestrator",
+                        "type": "environment",
+                    },
+                ),
             )
             # Set ownership of the volume root to claude user (UID 10000)
             # This is needed so the container can write to /home/claude
@@ -711,7 +724,7 @@ class Orchestrator:
             return {"status": "error", "error": f"Invalid volume name: {error_msg}"}
 
         try:
-            volume = self.docker.volumes.get(volume_name)
+            volume = cast(Volume, self.docker.volumes.get(volume_name))
             volume.remove(force=True)
             logger.info(f"Deleted environment volume: {volume_name}")
             return {"status": "deleted", "volume_name": volume_name}
@@ -800,7 +813,7 @@ class Orchestrator:
     def _stop_container(self, container_name: str) -> bool:
         """Stop and remove a container. Returns True if successful."""
         try:
-            container = self.docker.containers.get(container_name)
+            container = cast(Container, self.docker.containers.get(container_name))
             container.stop(timeout=10)
             container.remove()
             logger.info(f"Stopped and removed container: {container_name}")
@@ -814,17 +827,21 @@ class Orchestrator:
 
     def cleanup_dead_containers(self) -> dict[str, Any]:
         """Clean up dead/exited Claude containers."""
-        cleaned_containers = []
+        cleaned_containers: list[str] = []
 
         try:
-            containers = self.docker.containers.list(
-                all=True, filters={"label": "claude-session", "status": "exited"}
+            containers = cast(
+                list[Container],
+                self.docker.containers.list(
+                    all=True, filters={"label": "claude-session", "status": "exited"}
+                ),
             )
             for container in containers:
                 try:
                     container.remove()
-                    cleaned_containers.append(container.name)
-                    logger.info(f"Cleaned up dead container: {container.name}")
+                    name = container.name or "unknown"
+                    cleaned_containers.append(name)
+                    logger.info(f"Cleaned up dead container: {name}")
                 except APIError as e:
                     logger.warning(
                         f"Failed to remove dead container {container.name}: {e}"
