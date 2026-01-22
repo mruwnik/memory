@@ -126,7 +126,7 @@ def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
         user = matched_key.user
         if user.user_type == "bot":
             handle_api_key_use(matched_key, db)
-            return user  # type: ignore[return-value]
+            return cast(BotUser, user)
         return None
 
     # Fall back to legacy api_key on User model for backwards compatibility
