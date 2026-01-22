@@ -8,8 +8,8 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import desc
-from sqlalchemy.orm import Session
 
+from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
@@ -21,7 +21,7 @@ from memory.common.db.models import (
 )
 
 
-def get_user_bots(session: Session, user_id: int) -> list[DiscordBot]:
+def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
     """Get all Discord bots authorized for a user."""
     return (
         session.query(DiscordBot)
@@ -31,7 +31,7 @@ def get_user_bots(session: Session, user_id: int) -> list[DiscordBot]:
     )
 
 
-def get_bot_for_user(session: Session, bot_id: int, user: User) -> DiscordBot | None:
+def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot | None:
     """Get a bot by ID if the user is authorized to use it."""
     bot = session.get(DiscordBot, bot_id)
     if not bot or not bot.is_authorized(user):
@@ -40,7 +40,7 @@ def get_bot_for_user(session: Session, bot_id: int, user: User) -> DiscordBot | 
 
 
 def fetch_channel_history(
-    session: Session,
+    session: DBSession,
     channel_id: int | None,
     channel_name: str | None,
     before_dt: datetime | None,
@@ -133,7 +133,7 @@ def fetch_channel_history(
 
 
 def fetch_channels(
-    session: Session,
+    session: DBSession,
     server_id: int | None,
     server_name: str | None,
     include_dms: bool,
@@ -185,6 +185,6 @@ def fetch_channels(
     return {"channels": formatted, "count": len(formatted)}
 
 
-def fetch_servers(session: Session) -> list[DiscordServer]:
+def fetch_servers(session: DBSession) -> list[DiscordServer]:
     """Fetch all Discord servers ordered by name."""
     return session.query(DiscordServer).order_by(DiscordServer.name).all()
