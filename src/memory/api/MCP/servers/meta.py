@@ -1,7 +1,6 @@
 """MCP subserver for metadata, utilities, and forecasting."""
 
 import asyncio
-import hashlib
 import json
 import logging
 import statistics
@@ -26,18 +25,24 @@ from memory.common.db.models import (
 )
 
 # --- Caching infrastructure ---
+# TTLCache is not thread-safe, so we use locks for concurrent access
+
+import threading
 
 # Search results cache: 5 minute TTL
 _search_cache: TTLCache[str, list[dict]] = TTLCache(maxsize=500, ttl=300)
+_search_cache_lock = threading.Lock()
 # Market details/history cache: 10 minute TTL
 _history_cache: TTLCache[str, dict] = TTLCache(maxsize=100, ttl=600)
+_history_cache_lock = threading.Lock()
 # Market depth cache: 1 minute TTL (more volatile)
 _depth_cache: TTLCache[str, dict] = TTLCache(maxsize=100, ttl=60)
+_depth_cache_lock = threading.Lock()
 
 
 def _cache_key(*args: str) -> str:
     """Generate a cache key from arguments."""
-    return hashlib.md5(":".join(str(a) for a in args).encode()).hexdigest()
+    return ":".join(str(a) for a in args)
 
 logger = logging.getLogger(__name__)
 
@@ -634,11 +639,13 @@ async def get_forecasts(
     """
     # Check cache first
     cache_key = _cache_key("search", term, str(min_volume), str(binary), str(sources))
-    if cache_key in _search_cache:
-        return _search_cache[cache_key]
+    with _search_cache_lock:
+        if cache_key in _search_cache:
+            return _search_cache[cache_key]
 
     results = await search_markets(term, min_volume, binary, sources)
-    _search_cache[cache_key] = results
+    with _search_cache_lock:
+        _search_cache[cache_key] = results
     return results
 
 
@@ -762,6 +769,10 @@ async def get_polymarket_history(
     """Get price history for a Polymarket market.
 
     Uses the Polymarket CLOB API for historical prices.
+
+    Note: This endpoint may not be publicly available or may require
+    authentication. If history cannot be fetched, returns an empty list.
+    Polymarket price history is less reliable than Manifold or Kalshi.
     """
     async with aiohttp.ClientSession() as session:
         # Try to get history from Polymarket's CLOB timeseries endpoint
@@ -810,10 +821,15 @@ async def get_market_history(
     Returns:
         Dict with market_id, source, history (list of timestamp/probability/volume),
         current price, and price changes (24h, 7d).
+
+    Note:
+        Polymarket history may not be available (returns empty history if
+        the endpoint is inaccessible). Manifold and Kalshi are more reliable.
     """
     cache_key = _cache_key("history", market_id, source, period)
-    if cache_key in _history_cache:
-        return _history_cache[cache_key]
+    with _history_cache_lock:
+        if cache_key in _history_cache:
+            return _history_cache[cache_key]
 
     days_map = {"1d": 1, "7d": 7, "30d": 30, "all": 365}
     days = days_map.get(period, 7)
@@ -886,7 +902,8 @@ async def get_market_history(
         "change_7d": change_7d,
     }
 
-    _history_cache[cache_key] = result
+    with _history_cache_lock:
+        _history_cache[cache_key] = result
     return result
 
 
@@ -918,8 +935,9 @@ async def get_market_depth(
         }
 
     cache_key = _cache_key("depth", market_id, source)
-    if cache_key in _depth_cache:
-        return _depth_cache[cache_key]
+    with _depth_cache_lock:
+        if cache_key in _depth_cache:
+            return _depth_cache[cache_key]
 
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -980,7 +998,8 @@ async def get_market_depth(
             "depth_at_1pct": depth_at_1pct,
         }
 
-        _depth_cache[cache_key] = result
+        with _depth_cache_lock:
+            _depth_cache[cache_key] = result
         return result
 
 
@@ -1009,7 +1028,17 @@ async def compare_forecasts(
         - disagreement: Standard deviation of probabilities
         - arbitrage_opportunities: Markets with significant price gaps
     """
-    markets = await search_markets(term, min_volume, binary=True)
+    # Check cache first
+    cache_key = _cache_key("compare", term, str(min_volume))
+    with _search_cache_lock:
+        if cache_key in _search_cache:
+            markets = _search_cache[cache_key]
+        else:
+            markets = None
+    if markets is None:
+        markets = await search_markets(term, min_volume, binary=True)
+        with _search_cache_lock:
+            _search_cache[cache_key] = markets
 
     if not markets:
         return {
@@ -1054,11 +1083,21 @@ async def compare_forecasts(
             by_source[source] = []
         by_source[source].append(m)
 
+    # Early exit once we have enough opportunities (limit O(n^4) impact)
+    MAX_OPPORTUNITIES = 20  # Collect up to 20, return top 10
     sources = list(by_source.keys())
     for i, s1 in enumerate(sources):
+        if len(arbitrage_opportunities) >= MAX_OPPORTUNITIES:
+            break
         for s2 in sources[i + 1:]:
+            if len(arbitrage_opportunities) >= MAX_OPPORTUNITIES:
+                break
             for m1 in by_source[s1]:
+                if len(arbitrage_opportunities) >= MAX_OPPORTUNITIES:
+                    break
                 for m2 in by_source[s2]:
+                    if len(arbitrage_opportunities) >= MAX_OPPORTUNITIES:
+                        break
                     p1 = m1.get("probability")
                     p2 = m2.get("probability")
                     if p1 is not None and p2 is not None:

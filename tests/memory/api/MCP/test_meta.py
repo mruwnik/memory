@@ -1142,14 +1142,17 @@ async def test_compare_forecasts_calculates_consensus(mock_search):
 @patch("memory.api.MCP.servers.meta.search_markets")
 async def test_compare_forecasts_finds_arbitrage(mock_search):
     """compare_forecasts identifies arbitrage opportunities."""
-    from memory.api.MCP.servers.meta import compare_forecasts
+    from memory.api.MCP.servers.meta import compare_forecasts, _search_cache
+
+    # Clear cache to avoid stale data from other tests
+    _search_cache.clear()
 
     mock_search.return_value = [
         {"source": "manifold", "id": "m1", "question": "Test A", "probability": 0.70, "volume": 5000},
         {"source": "kalshi", "id": "k1", "question": "Test B", "probability": 0.55, "volume": 5000},
     ]
 
-    result = await compare_forecasts.fn(term="test")
+    result = await compare_forecasts.fn(term="test_arbitrage")
 
     assert len(result["arbitrage_opportunities"]) >= 1
     arb = result["arbitrage_opportunities"][0]
@@ -1254,3 +1257,248 @@ async def test_format_manifold_market_includes_liquidity_score():
     liquidity_score = result["liquidity_score"]
     assert isinstance(liquidity_score, (int, float))
     assert liquidity_score > 0
+
+
+# ====== Watchlist tools tests ======
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_info_manifold():
+    """fetch_market_info fetches market details from Manifold."""
+    from memory.api.MCP.servers.meta import fetch_market_info
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value={
+        "id": "m1",
+        "question": "Test market?",
+        "url": "https://manifold.markets/test",
+        "probability": 0.65,
+        "volume": 5000,
+    })
+
+    mock_get_cm = MagicMock()
+    mock_get_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_get_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await fetch_market_info("m1", "manifold")
+
+    assert result is not None
+    assert result["question"] == "Test market?"
+    assert result["probability"] == 0.65
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_info_kalshi():
+    """fetch_market_info fetches market details from Kalshi."""
+    from memory.api.MCP.servers.meta import fetch_market_info
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value={
+        "market": {
+            "ticker": "k1",
+            "title": "Kalshi market?",
+            "last_price": 60,  # Kalshi uses last_price
+            "volume": 10000,
+        }
+    })
+
+    mock_get_cm = MagicMock()
+    mock_get_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_get_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await fetch_market_info("k1", "kalshi")
+
+    assert result is not None
+    assert result["question"] == "Kalshi market?"
+    assert result["probability"] == 0.60
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_info_not_found():
+    """fetch_market_info returns None for 404."""
+    from memory.api.MCP.servers.meta import fetch_market_info
+
+    mock_response = MagicMock()
+    mock_response.status = 404
+
+    mock_get_cm = MagicMock()
+    mock_get_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_get_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("memory.api.MCP.servers.meta.aiohttp.ClientSession", return_value=mock_session_cm):
+        result = await fetch_market_info("nonexistent", "manifold")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_watch_market_unauthenticated():
+    """watch_market returns error when not authenticated."""
+    from memory.api.MCP.servers.meta import watch_market
+
+    mock_session = MagicMock()
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+            result = await watch_market.fn(market_id="m1", source="manifold")
+
+    assert "error" in result
+    assert result["error"] == "Not authenticated"
+
+
+@pytest.mark.asyncio
+async def test_watch_market_already_watching():
+    """watch_market returns already_watching status when market exists."""
+    from memory.api.MCP.servers.meta import watch_market
+    from datetime import datetime, timezone
+
+    mock_user = MagicMock()
+    mock_user.id = 1
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+
+    mock_existing = MagicMock()
+    mock_existing.added_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    mock_db_session = MagicMock()
+    mock_db_session.query.return_value.filter.return_value.first.return_value = mock_existing
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+            result = await watch_market.fn(market_id="m1", source="manifold")
+
+    assert result["status"] == "already_watching"
+    assert result["market_id"] == "m1"
+
+
+@pytest.mark.asyncio
+async def test_get_watchlist_unauthenticated():
+    """get_watchlist returns empty list when not authenticated."""
+    from memory.api.MCP.servers.meta import get_watchlist
+
+    mock_session = MagicMock()
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+            result = await get_watchlist.fn()
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_watchlist_empty():
+    """get_watchlist returns empty list when no watched markets."""
+    from memory.api.MCP.servers.meta import get_watchlist
+
+    mock_user = MagicMock()
+    mock_user.id = 1
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+
+    mock_db_session = MagicMock()
+    mock_db_session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+            result = await get_watchlist.fn()
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_unwatch_market_unauthenticated():
+    """unwatch_market returns error when not authenticated."""
+    from memory.api.MCP.servers.meta import unwatch_market
+
+    mock_session = MagicMock()
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=None):
+            result = await unwatch_market.fn(market_id="m1", source="manifold")
+
+    assert "error" in result
+    assert result["error"] == "Not authenticated"
+
+
+@pytest.mark.asyncio
+async def test_unwatch_market_not_found():
+    """unwatch_market returns not_found when market not in watchlist."""
+    from memory.api.MCP.servers.meta import unwatch_market
+
+    mock_user = MagicMock()
+    mock_user.id = 1
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+
+    mock_db_session = MagicMock()
+    mock_db_session.query.return_value.filter.return_value.first.return_value = None
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+            result = await unwatch_market.fn(market_id="nonexistent", source="manifold")
+
+    assert result["status"] == "not_found"
+    assert result["market_id"] == "nonexistent"
+
+
+@pytest.mark.asyncio
+async def test_unwatch_market_success():
+    """unwatch_market removes market from watchlist."""
+    from memory.api.MCP.servers.meta import unwatch_market
+
+    mock_user = MagicMock()
+    mock_user.id = 1
+    mock_user_session = MagicMock()
+    mock_user_session.user = mock_user
+
+    mock_watched = MagicMock()
+    mock_db_session = MagicMock()
+    mock_db_session.query.return_value.filter.return_value.first.return_value = mock_watched
+
+    with patch("memory.api.MCP.servers.meta.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
+        mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+        with patch("memory.api.MCP.servers.meta._get_user_session_from_token", return_value=mock_user_session):
+            result = await unwatch_market.fn(market_id="m1", source="manifold")
+
+    assert result["status"] == "removed"
+    assert result["market_id"] == "m1"
+    mock_db_session.delete.assert_called_once_with(mock_watched)
+    mock_db_session.commit.assert_called_once()

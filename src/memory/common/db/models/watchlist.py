@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -33,7 +33,7 @@ class WatchedMarket(Base):
 
     __tablename__ = "watched_markets"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Market identification
     market_id: Mapped[str] = mapped_column(String(255))
@@ -57,7 +57,7 @@ class WatchedMarket(Base):
 
     # User association
     user_id: Mapped[int] = mapped_column(
-        BigInteger,
+        Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
@@ -73,11 +73,6 @@ class WatchedMarket(Base):
             f"<WatchedMarket(id={self.id}, market_id={self.market_id}, "
             f"source={self.source}, user_id={self.user_id})>"
         )
-
-    def update_price(self, price: float) -> None:
-        """Update the last known price."""
-        self.last_price = price
-        self.last_updated = datetime.now(timezone.utc)
 
 
 class WatchedMarketPayload(BaseModel):
