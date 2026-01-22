@@ -5,9 +5,10 @@ Database models for tracking people.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Sequence
+from typing import TYPE_CHECKING, Annotated, Any, Sequence
 
 import yaml
+
 from sqlalchemy import (
     ARRAY,
     BigInteger,
@@ -16,7 +17,10 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from memory.common.db.models.discord import DiscordUser
 
 import memory.common.extract as extract
 from memory.common import settings
@@ -49,6 +53,11 @@ class Person(SourceItem):
     )
     contact_info: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default="{}", nullable=False
+    )
+
+    # Relationship to linked Discord accounts
+    discord_accounts: Mapped[list[DiscordUser]] = relationship(
+        "DiscordUser", back_populates="person"
     )
 
     __mapper_args__ = {

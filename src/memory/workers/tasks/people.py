@@ -4,9 +4,12 @@ Celery tasks for tracking people.
 
 import logging
 
+from sqlalchemy import or_
+
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Person
+from memory.common.db.models.discord import DiscordUser
 from memory.common.celery_app import app, SYNC_PERSON, UPDATE_PERSON, SYNC_PROFILE_FROM_FILE
 from memory.common.content_processing import (
     check_content_exists,
@@ -29,6 +32,82 @@ def _deep_merge(base: dict, updates: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+def link_discord_from_contact_info(person_id: int, contact_info: dict | None) -> list[int]:
+    """Link Discord users to a Person based on contact_info.
+
+    Looks for discord info in contact_info and links matching DiscordUser records.
+    Supports various formats:
+    - {"discord": "username"} - matches by username or display_name
+    - {"discord": "12345678901234567"} - matches by Discord user ID
+    - {"discord": ["username1", "username2"]} - multiple accounts
+
+    Args:
+        person_id: The Person's database ID
+        contact_info: The contact_info dict from the Person
+
+    Returns:
+        List of Discord user IDs that were linked
+    """
+    if not contact_info:
+        return []
+
+    discord_info = contact_info.get("discord")
+    if not discord_info:
+        return []
+
+    # Normalize to list
+    if isinstance(discord_info, str):
+        discord_identifiers = [discord_info]
+    elif isinstance(discord_info, list):
+        discord_identifiers = discord_info
+    else:
+        logger.warning(f"Unexpected discord contact_info type: {type(discord_info)}")
+        return []
+
+    linked_ids = []
+
+    with make_session() as session:
+        for identifier in discord_identifiers:
+            identifier = str(identifier).strip()
+            if not identifier:
+                continue
+
+            # Try to find existing Discord user
+            discord_user = None
+
+            # Check if it's a numeric ID
+            if identifier.isdigit():
+                discord_user = session.get(DiscordUser, int(identifier))
+
+            # If not found by ID, search by username/display_name
+            if not discord_user:
+                discord_user = (
+                    session.query(DiscordUser)
+                    .filter(
+                        or_(
+                            DiscordUser.username == identifier,
+                            DiscordUser.display_name == identifier,
+                        )
+                    )
+                    .first()
+                )
+
+            if discord_user:
+                # Link to person if not already linked
+                if discord_user.person_id != person_id:
+                    discord_user.person_id = person_id
+                    session.commit()
+                    logger.info(
+                        f"Linked Discord user {discord_user.username} ({discord_user.id}) "
+                        f"to person {person_id}"
+                    )
+                linked_ids.append(discord_user.id)
+            else:
+                logger.debug(f"Discord user not found for identifier: {identifier}")
+
+    return linked_ids
 
 
 def _save_profile_note(person_id: int, save_to_file: bool = True) -> None:
@@ -111,6 +190,10 @@ def sync_person(
     person_id = result.get("person_id")
     if result.get("status") == "processed" and isinstance(person_id, int):
         _save_profile_note(person_id, save_to_file)
+        # Auto-link Discord users from contact_info
+        linked_discord = link_discord_from_contact_info(person_id, contact_info)
+        if linked_discord:
+            result["linked_discord_users"] = linked_discord
 
     return result
 
@@ -187,12 +270,18 @@ def update_person(
         person.size = len(person.content or "")
         person.embed_status = "RAW"  # Re-embed with updated content
 
+        # Capture merged contact_info for discord linking
+        merged_contact_info = dict(person.contact_info or {})
         result = process_content_item(person, session)
 
     # Save profile note outside transaction (git operations are slow)
     person_id = result.get("person_id")
     if result.get("status") == "processed" and isinstance(person_id, int):
         _save_profile_note(person_id, save_to_file)
+        # Auto-link Discord users from contact_info
+        linked_discord = link_discord_from_contact_info(person_id, merged_contact_info)
+        if linked_discord:
+            result["linked_discord_users"] = linked_discord
 
     return result
 
@@ -256,15 +345,18 @@ def sync_profile_from_file(filename: str):
             person.size = len(person.content or "")
             person.embed_status = "RAW"
 
-            return process_content_item(person, session)
+            # Capture contact_info for discord linking
+            final_contact_info = dict(person.contact_info or {})
+            result = process_content_item(person, session)
         else:
             # Create new person
             sha256 = create_content_hash(f"person:{identifier}")
+            final_contact_info = data.get("contact_info", {})
             person = Person(
                 identifier=identifier,
                 display_name=data.get("display_name", identifier),
                 aliases=data.get("aliases", []),
-                contact_info=data.get("contact_info", {}),
+                contact_info=final_contact_info,
                 tags=data.get("tags", []),
                 content=data.get("notes"),
                 modality="person",
@@ -273,4 +365,13 @@ def sync_profile_from_file(filename: str):
                 size=len(data.get("notes") or ""),
             )
 
-            return process_content_item(person, session)
+            result = process_content_item(person, session)
+
+    # Auto-link Discord users from contact_info
+    person_id = result.get("person_id")
+    if result.get("status") == "processed" and isinstance(person_id, int):
+        linked_discord = link_discord_from_contact_info(person_id, final_contact_info)
+        if linked_discord:
+            result["linked_discord_users"] = linked_discord
+
+    return result
