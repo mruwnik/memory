@@ -138,6 +138,10 @@ from memory.common.db.models.claude_config import (
     ClaudeEnvironment,
     ClaudeEnvironmentPayload,
 )
+from memory.common.db.models.watchlist import (
+    WatchedMarket,
+    WatchedMarketPayload,
+)
 
 Payload = (
     SourceItemPayload
@@ -277,4 +281,7 @@ __all__ = [
     "decrypt_value",
     # Payloads
     "Payload",
+    # Watchlist
+    "WatchedMarket",
+    "WatchedMarketPayload",
 ]
