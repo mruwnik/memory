@@ -4,6 +4,7 @@ from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.discord import discord_mcp
 from memory.api.MCP.servers.email import email_mcp
+from memory.api.MCP.servers.forecast import forecast_mcp
 from memory.api.MCP.servers.github import github_mcp
 from memory.api.MCP.servers.meta import meta_mcp
 from memory.api.MCP.servers.organizer import organizer_mcp
@@ -16,6 +17,7 @@ __all__ = [
     "core_mcp",
     "discord_mcp",
     "email_mcp",
+    "forecast_mcp",
     "github_mcp",
     "meta_mcp",
     "organizer_mcp",

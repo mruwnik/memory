@@ -75,6 +75,13 @@ VALID_SCOPES: list[ScopeInfo] = [
         "description": "Send messages and access Discord channels",
         "category": "integrations",
     },
+    # Research & Analysis
+    {
+        "value": "forecast",
+        "label": "Forecasts",
+        "description": "Access prediction market data and analysis tools",
+        "category": "research",
+    },
     # Organization & Planning
     {
         "value": "organizer",
