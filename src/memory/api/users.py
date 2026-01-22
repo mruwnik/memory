@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
-from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
+from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, Person, User
 from memory.common.db.models.users import hash_password, verify_password
 from memory.common.scopes import (
     ADMIN_SCOPE,
@@ -91,6 +91,33 @@ def has_admin_scope(user: User) -> bool:
     return "*" in user_scopes or ADMIN_SCOPE in user_scopes
 
 
+def link_person_to_user(db: Session, user: User) -> Person | None:
+    """Auto-link a Person to this User based on matching email in contact_info.
+
+    Returns the linked Person if found, else None.
+    """
+    if not user.email:
+        return None
+
+    email = user.email.strip().lower()
+
+    # Find Person with matching email in contact_info
+    # PostgreSQL JSONB query: contact_info->>'email' ILIKE email
+    person = (
+        db.query(Person)
+        .filter(Person.contact_info["email"].astext.ilike(email))
+        .filter(Person.user_id.is_(None))  # Only link if not already linked
+        .first()
+    )
+
+    if person:
+        person.user_id = user.id
+        db.commit()
+        return person
+
+    return None
+
+
 @router.get("")
 def list_users(
     user: User = require_scope(ADMIN_SCOPE),
@@ -149,6 +176,9 @@ def create_user(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Auto-link to Person record if one exists with matching email
+    link_person_to_user(db, new_user)
 
     return user_to_response(new_user)
 

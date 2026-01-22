@@ -22,7 +22,7 @@ people_mcp = FastMCP("memory-people")
 
 def _person_to_dict(person: Person) -> dict[str, Any]:
     """Convert a Person model to a dictionary for API responses."""
-    return {
+    result = {
         "identifier": person.identifier,
         "display_name": person.display_name,
         "aliases": list(person.aliases or []),
@@ -31,6 +31,12 @@ def _person_to_dict(person: Person) -> dict[str, Any]:
         "notes": person.content,
         "created_at": person.inserted_at.isoformat() if person.inserted_at else None,
     }
+    if person.user_id:
+        result["user_id"] = person.user_id
+        if person.user:
+            result["user_email"] = person.user.email
+            result["user_name"] = person.user.name
+    return result
 
 
 @people_mcp.tool()

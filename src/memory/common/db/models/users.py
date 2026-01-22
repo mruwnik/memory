@@ -28,6 +28,7 @@ from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot, DiscordUser
+    from memory.common.db.models.people import Person
     from memory.common.db.models.secrets import Secret
 
 
@@ -127,6 +128,9 @@ class User(Base):
         secondary="discord_bot_users",
         back_populates="authorized_users",
     )
+
+    # Link to Person record (for rich contact info about this user)
+    person: Mapped["Person | None"] = relationship("Person", back_populates="user")
 
     __mapper_args__: dict[str, Any] = {
         "polymorphic_on": user_type,

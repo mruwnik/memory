@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
+    from memory.common.db.models.users import User
 
 import memory.common.extract as extract
 from memory.common import settings
@@ -36,6 +37,7 @@ class PersonPayload(SourceItemPayload):
     display_name: Annotated[str, "Display name of the person"]
     aliases: Annotated[list[str], "Alternative names/handles for the person"]
     contact_info: Annotated[dict, "Contact information (email, phone, etc.)"]
+    user_id: Annotated[int | None, "Linked system user ID, if any"]
 
 
 class Person(SourceItem):
@@ -54,6 +56,12 @@ class Person(SourceItem):
     contact_info: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default="{}", nullable=False
     )
+
+    # Optional link to system user account
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    user: Mapped["User | None"] = relationship("User", back_populates="person")
 
     # Relationship to linked Discord accounts
     discord_accounts: Mapped[list[DiscordUser]] = relationship(
@@ -77,11 +85,12 @@ class Person(SourceItem):
             display_name=self.display_name,
             aliases=self.aliases or [],
             contact_info=self.contact_info or {},
+            user_id=self.user_id,
         )
 
     @property
     def display_contents(self) -> dict:
-        return {
+        result = {
             "identifier": self.identifier,
             "display_name": self.display_name,
             "aliases": self.aliases,
@@ -89,6 +98,12 @@ class Person(SourceItem):
             "notes": self.content,
             "tags": self.tags,
         }
+        if self.user_id:
+            result["user_id"] = self.user_id
+            if self.user:
+                result["user_email"] = self.user.email
+                result["user_name"] = self.user.name
+        return result
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         """Create searchable chunks from person data."""

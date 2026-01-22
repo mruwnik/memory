@@ -8,7 +8,7 @@ from sqlalchemy import or_
 
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import Person
+from memory.common.db.models import Person, User
 from memory.common.db.models.discord import DiscordUser
 from memory.common.celery_app import app, SYNC_PERSON, UPDATE_PERSON, SYNC_PROFILE_FROM_FILE
 from memory.common.content_processing import (
@@ -32,6 +32,49 @@ def _deep_merge(base: dict, updates: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+def link_user_from_contact_info(person_id: int, contact_info: dict | None) -> int | None:
+    """Link a User to a Person based on email in contact_info.
+
+    Looks for email in contact_info and links matching User records.
+
+    Args:
+        person_id: The Person's database ID
+        contact_info: The contact_info dict from the Person
+
+    Returns:
+        User ID that was linked, or None if no match found
+    """
+    if not contact_info:
+        return None
+
+    email = contact_info.get("email")
+    if not email or not isinstance(email, str):
+        return None
+
+    email = email.strip().lower()
+    if not email:
+        return None
+
+    with make_session() as session:
+        person = session.get(Person, person_id)
+        if not person:
+            return None
+
+        # Already linked?
+        if person.user_id:
+            return person.user_id
+
+        # Find user by email
+        user = session.query(User).filter(User.email.ilike(email)).first()
+        if user:
+            person.user_id = user.id
+            session.commit()
+            logger.info(f"Linked Person {person.identifier} to User {user.email} (id={user.id})")
+            return user.id
+
+    return None
 
 
 def link_discord_from_contact_info(person_id: int, contact_info: dict | None) -> list[int]:
@@ -190,6 +233,10 @@ def sync_person(
     person_id = result.get("person_id")
     if result.get("status") == "processed" and isinstance(person_id, int):
         _save_profile_note(person_id, save_to_file)
+        # Auto-link User from contact_info email
+        linked_user = link_user_from_contact_info(person_id, contact_info)
+        if linked_user:
+            result["linked_user_id"] = linked_user
         # Auto-link Discord users from contact_info
         linked_discord = link_discord_from_contact_info(person_id, contact_info)
         if linked_discord:
@@ -278,6 +325,10 @@ def update_person(
     person_id = result.get("person_id")
     if result.get("status") == "processed" and isinstance(person_id, int):
         _save_profile_note(person_id, save_to_file)
+        # Auto-link User from contact_info email
+        linked_user = link_user_from_contact_info(person_id, merged_contact_info)
+        if linked_user:
+            result["linked_user_id"] = linked_user
         # Auto-link Discord users from contact_info
         linked_discord = link_discord_from_contact_info(person_id, merged_contact_info)
         if linked_discord:
@@ -367,9 +418,14 @@ def sync_profile_from_file(filename: str):
 
             result = process_content_item(person, session)
 
-    # Auto-link Discord users from contact_info
+    # Auto-link from contact_info
     person_id = result.get("person_id")
     if result.get("status") == "processed" and isinstance(person_id, int):
+        # Auto-link User from contact_info email
+        linked_user = link_user_from_contact_info(person_id, final_contact_info)
+        if linked_user:
+            result["linked_user_id"] = linked_user
+        # Auto-link Discord users from contact_info
         linked_discord = link_discord_from_contact_info(person_id, final_contact_info)
         if linked_discord:
             result["linked_discord_users"] = linked_discord
