@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import discord
 from memory.common.db.connection import DBSession
@@ -230,7 +230,7 @@ class MessageCollector(commands.Bot):
             if channel is None or not hasattr(channel, "fetch_message"):
                 return
 
-            message = await channel.fetch_message(payload.message_id)
+            message = await channel.fetch_message(payload.message_id)  # type: ignore[union-attr]
 
             # Build reactions list from message
             reactions = []

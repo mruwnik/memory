@@ -160,11 +160,32 @@ async def test_oauth_callback_discord_validates_query_params():
     assert "Missing authorization code" in body
 
 
-def test_authenticate_bot_finds_matching_bot():
+def test_authenticate_bot_finds_matching_bot_via_api_key_table():
+    """Test authenticate_bot finds bot via new api_keys table."""
+    from memory.common.db.models import APIKey
+
     db = MagicMock()
+
+    # Mock API key record
+    api_key_record = MagicMock()
+    api_key_record.key = "bot_test123"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+
+    # Mock user
     bot = MagicMock()
-    bot.api_key = "bot_test123"
-    db.query.return_value.all.return_value = [bot]
+    bot.user_type = "bot"
+    api_key_record.user = bot
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            # Now queries all keys (not filtering by revoked)
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
 
     result = auth.authenticate_bot("bot_test123", db)
 
@@ -172,29 +193,213 @@ def test_authenticate_bot_finds_matching_bot():
 
 
 def test_authenticate_bot_returns_none_for_invalid_key():
-    db = MagicMock()
-    bot = MagicMock()
-    bot.api_key = "bot_test123"
-    db.query.return_value.all.return_value = [bot]
+    """Test authenticate_bot returns None for invalid API key."""
+    from memory.common.db.models import APIKey
 
-    result = auth.authenticate_bot("bot_wrong", db)
+    db = MagicMock()
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            query_mock.all.return_value = []  # No matching keys
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
+
+    result = auth.authenticate_bot("nonexistent_key", db)
 
     assert result is None
 
 
-def test_get_session_user_uses_api_key_auth_for_bot_tokens():
+def test_authenticate_bot_rejects_non_bot_user_from_api_key_table():
+    """Test authenticate_bot rejects keys belonging to non-bot users."""
+    from memory.common.db.models import APIKey
+
+    db = MagicMock()
+
+    # Mock API key belonging to a human user
+    api_key_record = MagicMock()
+    api_key_record.key = "human_key123"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+
+    human_user = MagicMock()
+    human_user.user_type = "human"
+    api_key_record.user = human_user
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            # Now queries all keys (not filtering by revoked)
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
+
+    result = auth.authenticate_bot("human_key123", db)
+
+    assert result is None
+
+
+def test_authenticate_by_api_key_returns_user_and_key_record():
+    """Test authenticate_by_api_key returns both user and key record."""
+    from memory.common.db.models import APIKey
+
+    db = MagicMock()
+
+    api_key_record = MagicMock()
+    api_key_record.key = "key_test123"
+    api_key_record.key_type = "internal"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+
+    user = MagicMock()
+    api_key_record.user = user
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            # Now queries all keys (not filtering by revoked)
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
+
+    result_user, result_key = auth.authenticate_by_api_key("key_test123", db)
+
+    assert result_user is user
+    assert result_key is api_key_record
+
+
+def test_authenticate_by_api_key_respects_allowed_key_types():
+    """Test authenticate_by_api_key rejects keys of wrong type."""
+    from memory.common.db.models import APIKey
+
+    db = MagicMock()
+
+    api_key_record = MagicMock()
+    api_key_record.key = "discord_key123"
+    api_key_record.key_type = "discord"
+    api_key_record.is_valid.return_value = True
+
+    user = MagicMock()
+    api_key_record.user = user
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            # Now queries all keys (not filtering by revoked)
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
+
+    # Should reject when only "internal" is allowed
+    result_user, result_key = auth.authenticate_by_api_key(
+        "discord_key123", db, allowed_key_types=["internal"]
+    )
+
+    assert result_user is None
+    assert result_key is None
+
+
+def test_authenticate_by_api_key_accepts_matching_key_type():
+    """Test authenticate_by_api_key accepts keys of correct type."""
+    from memory.common.db.models import APIKey
+
+    db = MagicMock()
+
+    api_key_record = MagicMock()
+    api_key_record.key = "discord_key123"
+    api_key_record.key_type = "discord"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+
+    user = MagicMock()
+    api_key_record.user = user
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            # Now queries all keys (not filtering by revoked)
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
+
+    # Should accept when "discord" is in allowed types
+    result_user, result_key = auth.authenticate_by_api_key(
+        "discord_key123", db, allowed_key_types=["internal", "discord"]
+    )
+
+    assert result_user is user
+    assert result_key is api_key_record
+
+
+def test_handle_api_key_use_updates_last_used():
+    """Test handle_api_key_use updates last_used_at timestamp."""
+    db = MagicMock()
+    key_record = MagicMock()
+    key_record.is_one_time = False
+    key_record.last_used_at = None
+
+    auth.handle_api_key_use(key_record, db)
+
+    assert key_record.last_used_at is not None
+    db.commit.assert_called_once()
+    db.delete.assert_not_called()
+
+
+def test_handle_api_key_use_deletes_one_time_key():
+    """Test handle_api_key_use deletes one-time keys after use."""
+    db = MagicMock()
+    key_record = MagicMock()
+    key_record.is_one_time = True
+
+    auth.handle_api_key_use(key_record, db)
+
+    db.delete.assert_called_once_with(key_record)
+    db.commit.assert_called_once()
+
+
+def test_get_session_user_uses_api_key_auth_for_api_key_tokens():
+    """Test that get_session_user authenticates API keys via the api_keys table."""
+    from memory.common.db.models import APIKey
+
+    # Use a token with a valid API key prefix
     request = SimpleNamespace(
-        headers={"Authorization": "Bearer bot_test123"},
+        headers={"Authorization": "Bearer internal_test123"},
         cookies={},
     )
     db = MagicMock()
-    bot = MagicMock()
-    bot.api_key = "bot_test123"
-    db.query.return_value.filter.return_value.all.return_value = [bot]
+
+    # Mock API key record
+    api_key_record = MagicMock()
+    api_key_record.key = "internal_test123"
+    api_key_record.is_valid.return_value = True
+    api_key_record.is_one_time = False
+    api_key_record.key_type = "internal"
+
+    user = MagicMock()
+    api_key_record.user = user
+
+    def mock_query(model):
+        if model == APIKey:
+            query_mock = MagicMock()
+            query_mock.all.return_value = [api_key_record]
+            return query_mock
+        return MagicMock()
+
+    db.query.side_effect = mock_query
 
     result = auth.get_session_user(cast(Any, request), db)
 
-    assert result is bot
+    assert result is user
 
 
 @patch("memory.api.auth.get_user_session")

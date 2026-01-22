@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from memory.common import settings
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
+    APIKey,
     BotUser,
     MCPServer,
     HumanUser,
@@ -45,6 +46,12 @@ WHITELIST = {
     # which generates IDs like "u{user_id}-{hex}". If that format changes, update this.
     "/claude/u",
 }
+
+# Prefixes that identify a token as an API key (vs a session token)
+API_KEY_PREFIXES = (
+    "user_",  # Legacy prefix for migrated user keys
+    "internal_", "discord_", "google_", "github_", "mcp_", "ot_",  # Key type prefixes
+)
 
 
 def get_bearer_token(request: Request) -> str | None:
@@ -94,48 +101,112 @@ def get_user_session(
     return session
 
 
+def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
+    """Look up an API key in the database using constant-time comparison.
+
+    Iterates through ALL keys before returning to prevent timing attacks
+    that could reveal information about key position in the list.
+
+    Args:
+        api_key: The API key string to look up.
+        db: Database session.
+
+    Returns:
+        The matching APIKey record, or None if not found.
+    """
+    all_api_keys = db.query(APIKey).all()
+    matched_key: APIKey | None = None
+    for key_record in all_api_keys:
+        if secrets.compare_digest(key_record.key, api_key):
+            matched_key = key_record
+    return matched_key
+
+
 def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
     """Authenticate a bot by API key.
 
-    Uses constant-time comparison to prevent timing attacks.
+    This is a convenience wrapper around authenticate_by_api_key() for bot-only auth.
+
+    Args:
+        api_key: The API key to authenticate.
+        db: Database session.
+
+    Returns:
+        The BotUser if authenticated and is a bot, None otherwise.
     """
-    # Get all bot users and compare with constant-time function
-    # This prevents timing attacks on API key discovery
-    bots = db.query(BotUser).all()
-    for bot in bots:
-        if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
-            return bot
+    user, _ = authenticate_by_api_key(api_key, db)
+    if user is not None and user.user_type == "bot":
+        return cast(BotUser, user)
     return None
 
 
-def authenticate_by_api_key(api_key: str, db: DBSession) -> User | None:
+def authenticate_by_api_key(
+    api_key: str, db: DBSession, allowed_key_types: list[str] | None = None
+) -> tuple[User | None, APIKey | None]:
     """Authenticate any user by API key.
 
-    Supports both bot users (bot_* keys) and human users (user_* keys).
     Uses constant-time comparison to prevent timing attacks.
+
+    Args:
+        api_key: The API key to authenticate.
+        db: Database session.
+        allowed_key_types: Optional list of allowed key types. If None, all types allowed.
+
+    Returns:
+        Tuple of (user, api_key_record).
     """
-    # Query all users with API keys and compare with constant-time function
-    users = db.query(User).filter(User.api_key.isnot(None)).all()
-    for user in users:
-        if user.api_key and secrets.compare_digest(user.api_key, api_key):
-            return user
-    return None
+    matched_key = lookup_api_key(api_key, db)
+    if matched_key is None or not matched_key.is_valid():
+        return None, None
+
+    # Check key type restriction if specified
+    if allowed_key_types and matched_key.key_type not in allowed_key_types:
+        return None, None
+
+    handle_api_key_use(matched_key, db)
+    return matched_key.user, matched_key
 
 
-def get_session_user(request: Request, db: DBSession) -> User | None:
+def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
+    """Handle API key usage: update last_used_at and delete one-time keys.
+
+    Warning: This function commits the database session. This is intentional
+    to ensure one-time keys are deleted before request processing begins,
+    preventing replay attacks. For regular keys, this updates the last_used_at
+    timestamp immediately.
+
+    For one-time keys specifically, the key is deleted and committed before
+    the request completes. If the subsequent request fails, the key is still
+    gone - this is by design for security (single use).
+    """
+    key_record.last_used_at = datetime.now(timezone.utc)
+    if key_record.is_one_time:
+        db.delete(key_record)
+    db.commit()
+
+
+def get_session_user(
+    request: Request, db: DBSession, allowed_key_types: list[str] | None = None
+) -> User | None:
     """Get user from session ID or API key if valid.
 
     Supports two authentication methods:
     - Session tokens (UUIDs from UserSession table)
-    - API keys (prefixed with 'bot_' for BotUser accounts)
+    - API keys (from api_keys table)
+
+    Args:
+        request: The HTTP request.
+        db: Database session.
+        allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
     """
     token = get_token(request)
     if not token:
         return None
 
-    # Check if this is an API key (for bot or human users with API keys)
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this looks like an API key (various prefixes)
+    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
+        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
+        return user
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
@@ -152,18 +223,26 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def get_user_from_token(token: str, db: DBSession) -> User | None:
+def get_user_from_token(
+    token: str, db: DBSession, allowed_key_types: list[str] | None = None
+) -> User | None:
     """Authenticate user from a token string.
 
     Supports both session tokens (UUIDs) and API keys.
     Useful for WebSocket authentication where tokens are passed via query params.
+
+    Args:
+        token: The token to authenticate.
+        db: Database session.
+        allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
     """
     if not token:
         return None
 
-    # Check if this is an API key
-    if token.startswith("bot_") or token.startswith("user_"):
-        return authenticate_by_api_key(token, db)
+    # Check if this looks like an API key
+    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
+        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
+        return user
 
     # Otherwise treat as session token
     session = db.get(UserSession, token)
@@ -190,6 +269,38 @@ def require_scope(scope: str):
         if "*" in user_scopes or scope in user_scopes:
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    return Depends(checker)
+
+
+def require_key_types(*allowed_types: str):
+    """Dependency that restricts authentication to specific API key types.
+
+    By default, all key types are allowed. Use this to restrict endpoints
+    to only accept certain key types.
+
+    Usage:
+        @router.get("/discord-only")
+        def discord_endpoint(user: User = require_key_types("discord", "internal")):
+            # Only accepts discord or internal API keys (and session tokens)
+            ...
+
+    Args:
+        allowed_types: Key types to allow (e.g., "discord", "internal", "mcp").
+                      Session tokens (non-API-key auth) are always allowed.
+    """
+    allowed_list = list(allowed_types)
+
+    def checker(
+        request: Request, db: DBSession = Depends(get_session)
+    ) -> User:
+        user = get_session_user(request, db, allowed_key_types=allowed_list)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Authentication required with key type: {', '.join(allowed_list)}",
+            )
+        return user
 
     return Depends(checker)
 
