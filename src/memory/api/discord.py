@@ -14,7 +14,11 @@ from memory.common.db.models.discord import (
     DiscordBot,
     DiscordChannel,
     DiscordServer,
-    discord_bot_users,
+)
+from memory.common.discord_data import (
+    fetch_servers,
+    get_bot_for_user,
+    get_user_bots,
 )
 
 router = APIRouter(prefix="/discord", tags=["discord"])
@@ -76,13 +80,36 @@ class DiscordChannelUpdate(BaseModel):
     collect_messages: bool | None = None
 
 
+# --- Bot User Models ---
+
+
+class BotUserResponse(BaseModel):
+    """Response model for bot authorized users (excludes email for privacy)."""
+
+    id: int
+    name: str
+
+
+class UserStatusResponse(BaseModel):
+    """Response model for user add/remove operations."""
+
+    status: str
+    user_id: int
+
+
+class AddUserRequest(BaseModel):
+    """Request model for adding a user to a bot's authorized users."""
+
+    user_id: int
+
+
 # --- Helper Functions ---
 
 
 def get_user_bot(db: Session, bot_id: int, user: User) -> DiscordBot:
     """Get a bot by ID, ensuring user is authorized."""
-    bot = db.get(DiscordBot, bot_id)
-    if not bot or not bot.is_authorized(user):
+    bot = get_bot_for_user(db, bot_id, user)
+    if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     return bot
 
@@ -95,13 +122,7 @@ def require_discord_access(
 
     Use as a dependency to gate access to server/channel endpoints.
     """
-    user_bots = (
-        db.query(DiscordBot)
-        .join(discord_bot_users)
-        .filter(discord_bot_users.c.user_id == user.id)
-        .count()
-    )
-    if user_bots == 0:
+    if not get_user_bots(db, user.id):
         raise HTTPException(status_code=403, detail="No authorized Discord bots")
     return user, db
 
@@ -153,12 +174,7 @@ def list_bots(
     db: Session = Depends(get_session),
 ) -> list[DiscordBotResponse]:
     """List Discord bots the user is authorized to use."""
-    bots = (
-        db.query(DiscordBot)
-        .join(discord_bot_users)
-        .filter(discord_bot_users.c.user_id == user.id)
-        .all()
-    )
+    bots = get_user_bots(db, user.id)
 
     # Check connection status for each bot
     responses = []
@@ -277,6 +293,83 @@ def refresh_bot_metadata(
     return {"success": True, **result}
 
 
+@router.post("/bots/{bot_id}/users", response_model=UserStatusResponse)
+def add_user_to_bot(
+    bot_id: int,
+    data: AddUserRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> UserStatusResponse:
+    """Add another user to a bot's authorized users.
+
+    Only existing authorized users can add new users.
+    """
+    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
+
+    # Get the target user
+    target_user = db.get(User, data.user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if already authorized
+    if bot.is_authorized(target_user):
+        return UserStatusResponse(status="already_authorized", user_id=data.user_id)
+
+    bot.authorized_users.append(target_user)
+    db.commit()
+
+    return UserStatusResponse(status="added", user_id=data.user_id)
+
+
+@router.delete("/bots/{bot_id}/users/{user_id}", response_model=UserStatusResponse)
+def remove_user_from_bot(
+    bot_id: int,
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> UserStatusResponse:
+    """Remove a user from a bot's authorized users.
+
+    Users can remove themselves. Otherwise, only authorized users can remove others.
+    Cannot remove the last authorized user (use delete bot instead).
+    """
+    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
+
+    # Get the target user
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not bot.is_authorized(target_user):
+        raise HTTPException(status_code=404, detail="User not authorized for this bot")
+
+    if len(bot.authorized_users) == 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove the last authorized user. Delete the bot instead.",
+        )
+
+    bot.authorized_users.remove(target_user)
+    db.commit()
+
+    return UserStatusResponse(status="removed", user_id=user_id)
+
+
+@router.get("/bots/{bot_id}/users", response_model=list[BotUserResponse])
+def list_bot_users(
+    bot_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[BotUserResponse]:
+    """List users authorized to use a bot."""
+    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
+
+    return [
+        BotUserResponse(id=cast(int, u.id), name=cast(str, u.name))
+        for u in bot.authorized_users
+    ]
+
+
 # --- Server Endpoints ---
 
 
@@ -291,7 +384,7 @@ def list_servers(
     by which servers the bot is in.
     """
     _, db = auth
-    servers = db.query(DiscordServer).order_by(DiscordServer.name).all()
+    servers = fetch_servers(db)
     return [server_to_response(server) for server in servers]
 
 
