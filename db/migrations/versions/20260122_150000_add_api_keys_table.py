@@ -5,7 +5,7 @@ Creates a dedicated table for API keys with support for:
 - Key types (discord, google, internal, etc.)
 - Expiration dates
 - One-time use keys
-- Scopes override
+- Scopes override (reserved for future use)
 
 Migrates existing api_key values from the users table.
 
