@@ -56,15 +56,12 @@ def upgrade() -> None:
 
     # Migrate existing api_key values from users table
     # We insert into api_keys for each user that has an api_key
+    # All legacy keys are treated as 'internal' type
     connection = op.get_bind()
     connection.execute(
         sa.text("""
             INSERT INTO api_keys (user_id, key, name, key_type)
-            SELECT id, api_key, 'Legacy API Key',
-                   CASE
-                       WHEN user_type = 'bot' THEN 'internal'
-                       ELSE 'internal'
-                   END
+            SELECT id, api_key, 'Legacy API Key', 'internal'
             FROM users
             WHERE api_key IS NOT NULL
         """)

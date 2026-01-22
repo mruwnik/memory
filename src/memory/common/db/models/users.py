@@ -196,15 +196,31 @@ class BotUser(User):
         )
 
 
-class APIKeyType:
-    """API key type constants for categorization."""
+class APIKeyType(str):
+    """API key type constants for categorization.
 
-    INTERNAL = "internal"  # General-purpose internal API access
-    DISCORD = "discord"  # Discord bot integration
-    GOOGLE = "google"  # Google services integration
-    GITHUB = "github"  # GitHub integration
-    MCP = "mcp"  # MCP server access
-    ONE_TIME = "one_time"  # Single-use keys for client operations
+    Implemented as str subclass (not enum.StrEnum) to allow storing
+    arbitrary string values in the database for forward compatibility.
+    Use the class constants for type-safe access to standard key types.
+
+    Standard key types:
+        INTERNAL: General-purpose internal API access
+        DISCORD: Discord bot integration
+        GOOGLE: Google services integration
+        GITHUB: GitHub integration
+        MCP: MCP server access
+        ONE_TIME: Single-use keys for client operations
+    """
+
+    INTERNAL = "internal"
+    DISCORD = "discord"
+    GOOGLE = "google"
+    GITHUB = "github"
+    MCP = "mcp"
+    ONE_TIME = "one_time"
+
+    # Tuple of all standard key types for validation
+    ALL_TYPES = (INTERNAL, DISCORD, GOOGLE, GITHUB, MCP, ONE_TIME)
 
 
 class APIKey(Base):
@@ -225,7 +241,10 @@ class APIKey(Base):
     key_type: Mapped[str] = mapped_column(
         String, nullable=False, default=APIKeyType.INTERNAL
     )
-    # Scopes override - if None, uses user's default scopes
+    # Scopes override - RESERVED FOR FUTURE USE
+    # Currently, authentication uses the user's scopes directly.
+    # This field is intended for future per-key scope restrictions but is not
+    # yet enforced. If None, uses user's default scopes (current behavior).
     scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     is_one_time: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime | None] = mapped_column(

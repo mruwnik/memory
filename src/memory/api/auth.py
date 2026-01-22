@@ -47,6 +47,13 @@ WHITELIST = {
     "/claude/u",
 }
 
+# Prefixes that identify a token as an API key (vs a session token)
+# Includes both new key type prefixes and legacy prefixes for backwards compatibility
+API_KEY_PREFIXES = (
+    "bot_", "user_", "key_", "ot_",  # Legacy prefixes
+    "internal_", "discord_", "google_", "github_", "mcp_", "one_time_",  # New key type prefixes
+)
+
 
 def get_bearer_token(request: Request) -> str | None:
     """Get bearer token from request"""
@@ -100,27 +107,37 @@ def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
 
     Uses constant-time comparison to prevent timing attacks.
     First checks the new api_keys table, then falls back to legacy User.api_key.
+
+    Note: Iterates through ALL keys before returning to prevent timing attacks
+    that could reveal information about key position in the list.
     """
     # First, check the new api_keys table (including revoked to prevent fallback bypass)
+    # Iterate ALL keys before returning to prevent timing attacks
     all_api_keys = db.query(APIKey).all()
+    matched_key: APIKey | None = None
     for key_record in all_api_keys:
         if secrets.compare_digest(key_record.key, api_key):
-            # Key found in new table - don't fall back to legacy even if invalid/revoked
-            if not key_record.is_valid():
-                return None
-            user = key_record.user
-            if user.user_type == "bot":
-                handle_api_key_use(key_record, db)
-                return user  # type: ignore[return-value]
+            matched_key = key_record
+
+    if matched_key is not None:
+        # Key found in new table - don't fall back to legacy even if invalid/revoked
+        if not matched_key.is_valid():
             return None
+        user = matched_key.user
+        if user.user_type == "bot":
+            handle_api_key_use(matched_key, db)
+            return user  # type: ignore[return-value]
+        return None
 
     # Fall back to legacy api_key on User model for backwards compatibility
     # Only reached if key not found in api_keys table at all
+    # Iterate ALL bots before returning to prevent timing attacks
     bots = db.query(BotUser).all()
+    matched_bot: BotUser | None = None
     for bot in bots:
         if bot.api_key and secrets.compare_digest(bot.api_key, api_key):
-            return bot
-    return None
+            matched_bot = bot
+    return matched_bot
 
 
 def authenticate_by_api_key(
@@ -131,6 +148,9 @@ def authenticate_by_api_key(
     Supports both the new api_keys table and legacy User.api_key field.
     Uses constant-time comparison to prevent timing attacks.
 
+    Note: Iterates through ALL keys before returning to prevent timing attacks
+    that could reveal information about key position in the list.
+
     Args:
         api_key: The API key to authenticate.
         db: Database session.
@@ -140,17 +160,22 @@ def authenticate_by_api_key(
         Tuple of (user, api_key_record). api_key_record is None for legacy keys.
     """
     # First, check the new api_keys table (including revoked to prevent fallback bypass)
+    # Iterate ALL keys before returning to prevent timing attacks
     all_api_keys = db.query(APIKey).all()
+    matched_key: APIKey | None = None
     for key_record in all_api_keys:
         if secrets.compare_digest(key_record.key, api_key):
-            # Key found in new table - don't fall back to legacy even if invalid/revoked
-            if not key_record.is_valid():
-                return None, None
-            # Check key type restriction if specified
-            if allowed_key_types and key_record.key_type not in allowed_key_types:
-                return None, None
-            handle_api_key_use(key_record, db)
-            return key_record.user, key_record
+            matched_key = key_record
+
+    if matched_key is not None:
+        # Key found in new table - don't fall back to legacy even if invalid/revoked
+        if not matched_key.is_valid():
+            return None, None
+        # Check key type restriction if specified
+        if allowed_key_types and matched_key.key_type not in allowed_key_types:
+            return None, None
+        handle_api_key_use(matched_key, db)
+        return matched_key.user, matched_key
 
     # Fall back to legacy api_key on User model for backwards compatibility
     # Only reached if key not found in api_keys table at all
@@ -158,15 +183,27 @@ def authenticate_by_api_key(
     if allowed_key_types and "internal" not in allowed_key_types:
         return None, None
 
+    # Iterate ALL users before returning to prevent timing attacks
     users = db.query(User).filter(User.api_key.isnot(None)).all()
+    matched_user: User | None = None
     for user in users:
         if user.api_key and secrets.compare_digest(user.api_key, api_key):
-            return user, None
-    return None, None
+            matched_user = user
+    return matched_user, None
 
 
 def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
-    """Handle API key usage: update last_used_at and delete one-time keys."""
+    """Handle API key usage: update last_used_at and delete one-time keys.
+
+    Warning: This function commits the database session. This is intentional
+    to ensure one-time keys are deleted before request processing begins,
+    preventing replay attacks. For regular keys, this updates the last_used_at
+    timestamp immediately.
+
+    For one-time keys specifically, the key is deleted and committed before
+    the request completes. If the subsequent request fails, the key is still
+    gone - this is by design for security (single use).
+    """
     key_record.last_used_at = datetime.now(timezone.utc)
     if key_record.is_one_time:
         db.delete(key_record)
@@ -192,9 +229,7 @@ def get_session_user(
         return None
 
     # Check if this looks like an API key (various prefixes)
-    api_key_prefixes = ("bot_", "user_", "key_", "ot_", "internal_", "discord_",
-                        "google_", "github_", "mcp_", "one_time_")
-    if any(token.startswith(prefix) for prefix in api_key_prefixes):
+    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
         user, _ = authenticate_by_api_key(token, db, allowed_key_types)
         return user
 
@@ -230,9 +265,7 @@ def get_user_from_token(
         return None
 
     # Check if this looks like an API key
-    api_key_prefixes = ("bot_", "user_", "key_", "ot_", "internal_", "discord_",
-                        "google_", "github_", "mcp_", "one_time_")
-    if any(token.startswith(prefix) for prefix in api_key_prefixes):
+    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
         user, _ = authenticate_by_api_key(token, db, allowed_key_types)
         return user
 

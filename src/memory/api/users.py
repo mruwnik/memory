@@ -1,6 +1,7 @@
 """API endpoints for User management."""
 
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,15 +13,8 @@ from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
 from memory.common.db.models.users import hash_password, verify_password
 from memory.api.auth import get_current_user, require_scope
 
-# Valid API key types for validation
-VALID_KEY_TYPES = frozenset({
-    APIKeyType.INTERNAL,
-    APIKeyType.DISCORD,
-    APIKeyType.GOOGLE,
-    APIKeyType.GITHUB,
-    APIKeyType.MCP,
-    APIKeyType.ONE_TIME,
-})
+# Valid API key types for validation (derived from APIKeyType constants)
+VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -84,9 +78,8 @@ class LegacyApiKeyResponse(BaseModel):
 def user_to_response(user: User) -> UserResponse:
     """Convert a User model to a response model."""
     # Count API keys from both legacy field and new table
-    legacy_has_key = user.api_key is not None
-    new_key_count = len([k for k in user.api_keys if not k.revoked]) if user.api_keys else 0
-    total_count = (1 if legacy_has_key else 0) + new_key_count
+    new_key_count = sum(1 for k in (user.api_keys or []) if not k.revoked)
+    total_count = int(user.api_key is not None) + new_key_count
 
     return UserResponse(
         id=cast(int, user.id),
@@ -94,7 +87,7 @@ def user_to_response(user: User) -> UserResponse:
         email=cast(str, user.email),
         user_type=cast(str, user.user_type),
         scopes=list(user.scopes or []),
-        has_api_key=legacy_has_key or new_key_count > 0,
+        has_api_key=total_count > 0,
         api_key_count=total_count,
     )
 
@@ -398,8 +391,6 @@ def create_my_api_key(
     db: Session = Depends(get_session),
 ) -> APIKeyCreateResponse:
     """Create a new API key for the current user."""
-    from datetime import datetime, timedelta, timezone
-
     expires_at = None
     if data.expires_in_days:
         expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
@@ -494,8 +485,6 @@ def create_user_api_key(
     target_user = db.get(User, user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    from datetime import datetime, timedelta, timezone
 
     expires_at = None
     if data.expires_in_days:
