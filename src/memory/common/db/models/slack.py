@@ -9,7 +9,7 @@ This module provides models for:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -125,7 +125,12 @@ class SlackWorkspace(Base):
         """Check if the access token has expired."""
         if self.token_expires_at is None:
             return False  # No expiration = valid
-        return datetime.now(self.token_expires_at.tzinfo) >= self.token_expires_at
+        now = datetime.now(timezone.utc)
+        expires = self.token_expires_at
+        # Handle naive datetime (assume UTC)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return now >= expires
 
 
 class SlackChannel(Base):

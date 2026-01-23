@@ -105,7 +105,7 @@ def upgrade() -> None:
         sa.Column("message_ts", sa.Text(), nullable=False),
         sa.Column("channel_id", sa.Text(), nullable=False),
         sa.Column("workspace_id", sa.Text(), nullable=False),
-        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=True),
         sa.Column("thread_ts", sa.Text(), nullable=True),
         sa.Column("reply_count", sa.Integer(), nullable=True),
         sa.Column("message_type", sa.Text(), server_default="message"),
@@ -116,9 +116,9 @@ def upgrade() -> None:
         sa.Column("images", postgresql.ARRAY(sa.Text()), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["id"], ["source_item.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["channel_id"], ["slack_channels.id"]),
-        sa.ForeignKeyConstraint(["workspace_id"], ["slack_workspaces.id"]),
-        sa.ForeignKeyConstraint(["author_id"], ["slack_users.id"]),
+        sa.ForeignKeyConstraint(["channel_id"], ["slack_channels.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["workspace_id"], ["slack_workspaces.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["author_id"], ["slack_users.id"], ondelete="SET NULL"),
     )
     op.create_index("slack_message_ts_workspace_idx", "slack_message", ["message_ts", "workspace_id"], unique=True)
     op.create_index("slack_message_channel_idx", "slack_message", ["channel_id"])

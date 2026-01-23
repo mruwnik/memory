@@ -304,6 +304,13 @@ async def slack_callback(
         existing.scopes = authed_user.get("scope", "").split()
         existing.name = team_name
         existing.sync_error = None
+        # Update token expiration if present
+        if expires_in := authed_user.get("expires_in"):
+            existing.token_expires_at = datetime.now(timezone.utc).replace(
+                microsecond=0
+            ) + timedelta(seconds=expires_in)
+        else:
+            existing.token_expires_at = None
         workspace = existing
     else:
         # Create new workspace

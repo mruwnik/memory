@@ -429,13 +429,13 @@ class SlackMessage(SourceItem):
     # Slack IDs (strings, unlike Discord snowflakes)
     message_ts: Mapped[str] = mapped_column(Text, nullable=False)  # Slack timestamp (message ID)
     channel_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("slack_channels.id"), nullable=False
+        Text, ForeignKey("slack_channels.id", ondelete="CASCADE"), nullable=False
     )
     workspace_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("slack_workspaces.id"), nullable=False
+        Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
     )
-    author_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("slack_users.id"), nullable=False
+    author_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("slack_users.id", ondelete="SET NULL"), nullable=True
     )
 
     # Threading

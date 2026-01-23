@@ -32,7 +32,6 @@ from memory.common.db.models.slack import (
     SlackWorkspace,
 )
 from memory.common.content_processing import (
-    check_content_exists,
     process_content_item,
     safe_task_execution,
 )
@@ -463,6 +462,13 @@ def fetch_thread_replies(
         )
         messages = response.get("messages", [])
 
+        # Warn if thread has more replies than we fetched
+        if response.get("has_more"):
+            logger.warning(
+                f"Thread {thread_ts} in channel {channel_id} has more than 100 replies, "
+                "only first 100 will be synced"
+            )
+
         for msg in messages:
             msg_ts = msg.get("ts")
             # Skip the parent message (same ts as thread_ts)
@@ -517,11 +523,11 @@ def add_slack_message(
         return {"status": "skipped", "reason": "no_author"}
 
     with make_session() as session:
-        # Check if message exists
-        existing = check_content_exists(
-            session, SlackMessage,
-            message_ts=message_ts, workspace_id=workspace_id
-        )
+        # Check if message exists (need AND logic for exact match)
+        existing = session.query(SlackMessage).filter(
+            SlackMessage.message_ts == message_ts,
+            SlackMessage.workspace_id == workspace_id,
+        ).first()
 
         if existing:
             # Update if edited
