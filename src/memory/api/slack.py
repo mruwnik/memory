@@ -8,10 +8,7 @@ Multi-user design:
 - Sending messages uses the caller's own credentials
 """
 
-import hashlib
-import hmac
 import logging
-import secrets
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
@@ -26,11 +23,18 @@ from memory.api.auth import get_current_user
 from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
 from memory.common.db.connection import get_session
-from memory.common.db.models import User, OAuthClientState
+from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
+)
+from memory.common.db.models.source_items import SlackMessage
+from memory.common.oauth_client import (
+    generate_state,
+    sign_state,
+    validate_and_consume_state,
+    store_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,25 +188,6 @@ def require_slack_configured() -> None:
 # --- OAuth Endpoints ---
 
 
-def _sign_state(state: str, user_id: int) -> str:
-    """Create HMAC signature for OAuth state to prevent tampering."""
-    message = f"{state}:{user_id}".encode()
-    key = settings.SLACK_CLIENT_SECRET.encode()
-    signature = hmac.new(key, message, hashlib.sha256).hexdigest()[:16]
-    return f"{state}.{signature}"
-
-
-def _verify_state_signature(signed_state: str, user_id: int) -> str | None:
-    """Verify HMAC signature and return original state if valid."""
-    if "." not in signed_state:
-        return None
-    state, signature = signed_state.rsplit(".", 1)
-    expected = _sign_state(state, user_id).rsplit(".", 1)[1]
-    if not hmac.compare_digest(signature, expected):
-        return None
-    return state
-
-
 @router.get("/authorize")
 def authorize_slack(
     user: User = Depends(get_current_user),
@@ -214,28 +199,12 @@ def authorize_slack(
     """
     require_slack_configured()
 
-    # Generate state for CSRF protection
-    state = secrets.token_urlsafe(32)
-
-    # Clean up expired states for this user
-    db.query(OAuthClientState).filter(
-        OAuthClientState.user_id == user.id,
-        OAuthClientState.provider == "slack",
-        OAuthClientState.expires_at < datetime.now(timezone.utc),
-    ).delete()
-
-    # Store state in database with 10-minute expiration
-    oauth_state = OAuthClientState(
-        state=state,
-        provider="slack",
-        user_id=user.id,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
-    )
-    db.add(oauth_state)
-    db.commit()
+    # Generate and store state for CSRF protection
+    state = generate_state()
+    store_state(db, state, "slack", user.id)
 
     # Sign state with user-specific data to prevent interception attacks
-    signed_state = _sign_state(state, user.id)
+    signed_state = sign_state(state, user.id)
 
     # Build authorization URL
     params = {
@@ -268,44 +237,15 @@ async def slack_callback(
     if error:
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
 
-    # Extract original state from signed state (format: "state.signature")
-    if "." not in state:
-        raise HTTPException(status_code=400, detail="Invalid state format")
-    original_state = state.rsplit(".", 1)[0]
-
-    # Validate state from database (CSRF protection)
-    oauth_state = db.query(OAuthClientState).filter(
-        OAuthClientState.state == original_state,
-        OAuthClientState.provider == "slack",
-    ).first()
-
-    if not oauth_state:
+    # Validate and consume state (handles expiration, signature verification, one-time use)
+    user_id = validate_and_consume_state(db, state, "slack")
+    if not user_id:
         raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
-
-    # Check expiration
-    if oauth_state.expires_at < datetime.now(timezone.utc):
-        db.delete(oauth_state)
-        db.commit()
-        raise HTTPException(status_code=400, detail="State parameter expired")
-
-    # Verify HMAC signature matches the user from database
-    user_id = oauth_state.user_id
-    verified_state = _verify_state_signature(state, user_id)
-    if verified_state != original_state:
-        db.delete(oauth_state)
-        db.commit()
-        raise HTTPException(status_code=400, detail="Invalid state signature")
 
     # Get user from the stored state
     user = db.get(User, user_id)
     if not user:
-        db.delete(oauth_state)
-        db.commit()
         raise HTTPException(status_code=400, detail="User not found")
-
-    # Delete the state (one-time use)
-    db.delete(oauth_state)
-    db.commit()
 
     # Exchange code for tokens
     async with httpx.AsyncClient() as client:
@@ -488,8 +428,9 @@ def disconnect_workspace(
 ):
     """Disconnect user's credentials from a Slack workspace.
 
-    This removes the user's OAuth credentials but doesn't delete the workspace
-    if other users are still connected.
+    This removes the user's OAuth credentials. The workspace and its messages
+    are preserved if there are ingested messages (to avoid data loss) or if
+    other users are still connected.
     """
     # Get user's credentials
     credentials = get_user_credentials(db, workspace_id, user)
@@ -499,19 +440,30 @@ def disconnect_workspace(
     db.delete(credentials)
     db.commit()
 
-    # Check if workspace should be deleted (no more connected users)
+    # Check remaining users and messages
     remaining_users = db.query(func.count(SlackUserCredentials.id)).filter(
         SlackUserCredentials.workspace_id == workspace_id
     ).scalar() or 0
 
-    if remaining_users == 0:
-        # No more users - delete workspace and its channels
+    message_count = db.query(func.count(SlackMessage.id)).filter(
+        SlackMessage.workspace_id == workspace_id
+    ).scalar() or 0
+
+    workspace_deleted = False
+    if remaining_users == 0 and message_count == 0:
+        # No users and no messages - safe to delete workspace
         workspace = db.get(SlackWorkspace, workspace_id)
         if workspace:
             db.delete(workspace)
             db.commit()
+            workspace_deleted = True
 
-    return {"status": "disconnected", "workspace_id": workspace_id}
+    return {
+        "status": "disconnected",
+        "workspace_id": workspace_id,
+        "workspace_deleted": workspace_deleted,
+        "messages_preserved": message_count,
+    }
 
 
 @router.post("/workspaces/{workspace_id}/sync")
