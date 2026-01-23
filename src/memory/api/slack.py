@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
 from memory.common import settings
+from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
@@ -522,10 +523,6 @@ def trigger_sync(
     """Trigger a manual sync for a workspace."""
     # Verify user has access
     get_workspace_with_access(db, workspace_id, user)
-
-    # Import here to avoid circular imports
-    from memory.common.celery_app import SYNC_SLACK_WORKSPACE
-    from memory.common.celery_app import app as celery_app
 
     celery_app.send_task(SYNC_SLACK_WORKSPACE, args=[workspace_id])
 
