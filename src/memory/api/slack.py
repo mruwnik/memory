@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -366,9 +366,31 @@ async def slack_callback(
 
     db.commit()
 
-    # Redirect to frontend with success
+    # Return HTML that notifies opener via BroadcastChannel and redirects
     frontend_url = f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
-    return RedirectResponse(url=frontend_url)
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Slack Connected</title></head>
+    <body>
+        <p>Slack workspace connected successfully. Redirecting...</p>
+        <script>
+            // Notify any listening windows via BroadcastChannel
+            const channel = new BroadcastChannel('slack-oauth');
+            channel.postMessage({{ type: 'oauth-complete', workspaceId: '{team_id}' }});
+            channel.close();
+
+            // If opened as popup, try to close; otherwise redirect
+            if (window.opener) {{
+                window.close();
+            }} else {{
+                window.location.href = '{frontend_url}';
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 
 # --- Workspace Endpoints ---

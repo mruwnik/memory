@@ -224,11 +224,13 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
         except SlackAPIError as e:
             workspace.sync_error = str(e)
             session.commit()
+            logger.error(f"Slack API error syncing workspace {workspace_id}: {e}")
             return {"status": "error", "error": str(e)}
         except Exception as e:
             workspace.sync_error = str(e)
             session.commit()
-            raise
+            logger.exception(f"Unexpected error syncing workspace {workspace_id}: {e}")
+            return {"status": "error", "error": str(e)}
 
 
 def sync_workspace_users(client: httpx.Client, workspace: SlackWorkspace, session) -> int:
@@ -591,9 +593,11 @@ def add_slack_message(
             session.add(channel)
             session.flush()
 
-        # Create content hash
+        # Create content hash - includes content intentionally so edits create different hashes.
+        # Deduplication is handled via the unique index on (message_ts, workspace_id, channel_id),
+        # while the hash is used for content-based operations like embeddings.
         content_hash = hashlib.sha256(
-            f"{workspace_id}:{message_ts}:{content}".encode()
+            f"{workspace_id}:{channel_id}:{message_ts}:{content}".encode()
         ).digest()
 
         # Create message

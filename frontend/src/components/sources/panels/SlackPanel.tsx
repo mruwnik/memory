@@ -45,6 +45,17 @@ export const SlackPanel = () => {
     loadData()
   }, [loadData])
 
+  // Listen for OAuth completion via BroadcastChannel
+  useEffect(() => {
+    const channel = new BroadcastChannel('slack-oauth')
+    channel.onmessage = (event) => {
+      if (event.data?.type === 'oauth-complete') {
+        loadData()
+      }
+    }
+    return () => channel.close()
+  }, [loadData])
+
   const loadChannels = async (workspaceId: string) => {
     if (channelsByWorkspace[workspaceId]) return
 
