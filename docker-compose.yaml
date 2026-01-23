@@ -55,6 +55,9 @@ x-worker-base: &worker-base
     VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
     DISCORD_COLLECTOR_PORT: 8003
+    SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+    SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+    SLACK_REDIRECT_URI: ${SLACK_REDIRECT_URI:-}
   secrets:
     [
       postgres_password,
@@ -260,7 +263,7 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,verification"
+      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,slack,verification"
 
   ingest-hub:
     <<: *worker-base
