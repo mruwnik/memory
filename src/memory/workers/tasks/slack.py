@@ -484,12 +484,14 @@ def add_slack_message(
         if files and access_token:
             headers = {"Authorization": f"Bearer {access_token}"}
             for file_info in files:
-                if file_info.get("mimetype", "").startswith("image/"):
-                    url = file_info.get("url_private_download") or file_info.get("url_private")
-                    if url:
-                        path = download_slack_file(url, headers, message_ts, workspace_id)
-                        if path:
-                            saved_images.append(path)
+                if not file_info.get("mimetype", "").startswith("image/"):
+                    continue
+                url = file_info.get("url_private_download") or file_info.get("url_private")
+                if not url:
+                    continue
+                path = download_slack_file(url, headers, message_ts, workspace_id)
+                if path:
+                    saved_images.append(path)
 
         # Ensure channel exists
         channel = session.get(SlackChannel, channel_id)
