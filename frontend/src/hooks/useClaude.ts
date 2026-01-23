@@ -162,23 +162,11 @@ export const useClaude = () => {
   }, [apiCall])
 
   // GitHub repos (for selecting repo when spawning)
+  // Admins see all repos, others see only their own
   const listUserRepos = useCallback(async (): Promise<GithubRepoBasic[]> => {
-    const response = await apiCall('/github/accounts')
-    if (!response.ok) throw new Error('Failed to list GitHub accounts')
-    const accounts = await response.json()
-    // Flatten repos from all accounts
-    const repos: GithubRepoBasic[] = []
-    for (const account of accounts) {
-      for (const repo of account.repos || []) {
-        repos.push({
-          id: repo.id,
-          owner: repo.owner,
-          name: repo.name,
-          repo_path: repo.repo_path,
-        })
-      }
-    }
-    return repos
+    const response = await apiCall('/github/repos')
+    if (!response.ok) throw new Error('Failed to list GitHub repos')
+    return response.json()
   }, [apiCall])
 
   // Session logs

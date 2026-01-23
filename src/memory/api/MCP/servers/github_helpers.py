@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Text, desc, func
+from sqlalchemy import Text, any_, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
@@ -128,7 +128,7 @@ def list_issues(
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
         if assignee:
-            query = query.filter(GithubItem.assignees.contains([assignee]))
+            query = query.filter(assignee == any_(GithubItem.assignees))
         if author:
             query = query.filter(GithubItem.author == author)
         if state:

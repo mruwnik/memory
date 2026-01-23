@@ -782,56 +782,45 @@ def test_filter_kalshi_market_handles_zero_volume():
 
 
 @pytest.mark.asyncio
-async def test_search_kalshi_markets_filters_by_term(mock_aiohttp_session):
-    """search_kalshi_markets filters markets by search term."""
-    mock_session_cm, mock_response = mock_aiohttp_session
-    mock_response.json = AsyncMock(return_value={
-        "markets": [
-            {
-                "ticker": "TRUMP-2024",
-                "title": "Trump wins 2024 election",
-                "subtitle": "",
-                "event_title": "2024 Presidential Election",
-                "volume": 100000,
-                "yes_bid": 55,
-                "open_time": "2024-01-01T00:00:00Z",
-            },
-            {
-                "ticker": "BITCOIN-100K",
-                "title": "Bitcoin reaches $100k",
-                "subtitle": "",
-                "event_title": "Crypto markets",
-                "volume": 50000,
-                "yes_bid": 30,
-                "open_time": "2024-01-01T00:00:00Z",
-            },
-        ],
-        "cursor": None,
-    })
+@patch("memory.common.markets.search_kalshi_events")
+async def test_search_kalshi_markets_filters_by_term(mock_search_events):
+    """search_kalshi_markets uses search_kalshi_events and filters by term."""
+    mock_search_events.return_value = [
+        {
+            "source": "kalshi",
+            "id": "BITCOIN-100K-YES",
+            "question": "Bitcoin reaches $100k",
+            "url": "https://kalshi.com/markets/BITCOIN-100K-YES",
+            "volume": 50000,
+            "probability": 0.3,
+            "createdAt": "2024-01-01T00:00:00Z",
+            "liquidity_score": 0.5,
+        },
+    ]
 
-    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
-        result = await search_kalshi_markets("bitcoin", min_volume=1000)
+    result = await search_kalshi_markets("bitcoin", min_volume=1000)
 
     assert len(result) == 1
     assert result[0]["source"] == "kalshi"
-    assert result[0]["id"] == "BITCOIN-100K"
-    assert result[0]["probability"] == 0.3  # 30 cents / 100
+    assert result[0]["id"] == "BITCOIN-100K-YES"
+    assert result[0]["probability"] == 0.3
 
 
 @pytest.mark.asyncio
-async def test_search_kalshi_markets_filters_by_volume(mock_aiohttp_session):
-    """search_kalshi_markets filters out low volume markets."""
-    mock_session_cm, mock_response = mock_aiohttp_session
-    mock_response.json = AsyncMock(return_value={
-        "markets": [
-            {"ticker": "HIGH", "title": "High volume market", "subtitle": "", "event_title": "", "volume": 50000, "yes_bid": 50, "open_time": None},
-            {"ticker": "LOW", "title": "Low volume market", "subtitle": "", "event_title": "", "volume": 100, "yes_bid": 50, "open_time": None},
-        ],
-        "cursor": None,
-    })
+@patch("memory.common.markets.search_kalshi_events")
+async def test_search_kalshi_markets_filters_by_volume(mock_search_events):
+    """search_kalshi_markets passes min_volume to search_kalshi_events."""
+    mock_search_events.return_value = [
+        {"source": "kalshi", "id": "HIGH", "question": "High volume market", "volume": 50000},
+    ]
 
-    with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
-        result = await search_kalshi_markets("market", min_volume=1000)
+    result = await search_kalshi_markets("market", min_volume=1000)
+
+    # Verify min_volume was passed to search_kalshi_events
+    mock_search_events.assert_called_once()
+    call_args = mock_search_events.call_args
+    assert call_args[0][1] == "market"  # term
+    assert call_args[0][2] == 1000  # min_volume
 
     assert len(result) == 1
     assert result[0]["id"] == "HIGH"

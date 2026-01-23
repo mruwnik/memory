@@ -134,9 +134,11 @@ async def get_market_history(
         Dict with market_id, source, history (list of timestamp/probability/volume),
         current price, and price changes (24h, 7d).
 
-    Note:
-        Polymarket history may not be available (returns empty history if
-        the endpoint is inaccessible). Manifold and Kalshi are more reliable.
+    Source-specific notes:
+        - **Manifold**: Reliable history via bet aggregation. Good for all periods.
+        - **Kalshi**: Reliable history via candlestick API. Good for all periods.
+        - **Polymarket**: History often unavailable (requires auth). Returns empty
+          history in most cases. Use Manifold/Kalshi for historical analysis.
     """
     if not _check_forecast_scope():
         return {"error": "Missing 'forecast' scope"}
@@ -268,16 +270,21 @@ async def get_market_depth(
                 }
             data = await resp.json()
 
-    orderbook = data.get("orderbook", {})
+    orderbook = data.get("orderbook") or {}
 
-    # Parse yes and no sides
+    # Parse yes and no sides (handle None or missing keys gracefully)
+    yes_levels = orderbook.get("yes") or []
+    no_levels = orderbook.get("no") or []
+
     yes_bids = [
         {"price": float(level[0]) / 100, "quantity": int(level[1])}
-        for level in orderbook.get("yes", [])
+        for level in yes_levels
+        if level and len(level) >= 2
     ]
     no_bids = [
         {"price": float(level[0]) / 100, "quantity": int(level[1])}
-        for level in orderbook.get("no", [])
+        for level in no_levels
+        if level and len(level) >= 2
     ]
 
     # Calculate spread and midpoint

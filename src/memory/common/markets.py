@@ -8,6 +8,7 @@ and helper functions used by the forecast MCP server.
 import asyncio
 import json
 import logging
+import re
 import statistics
 import threading
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,40 @@ import aiohttp
 from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
+
+
+def question_similarity(q1: str, q2: str) -> float:
+    """Calculate simple word-based similarity between two questions.
+
+    Returns a value between 0 and 1, where 1 means identical word sets.
+    """
+    if not q1 or not q2:
+        return 0.0
+
+    # Normalize: lowercase, remove punctuation, split into words
+    def normalize(text: str) -> set[str]:
+        text = text.lower()
+        text = re.sub(r"[^\w\s]", " ", text)
+        words = set(text.split())
+        # Remove common stop words
+        stop_words = {
+            "the", "a", "an", "will", "be", "is", "are", "was", "were",
+            "to", "of", "in", "on", "at", "by", "for", "with", "or", "and",
+            "this", "that", "it", "as", "if", "when", "than", "but", "not",
+            "what", "which", "who", "how", "before", "after", "during",
+        }
+        return words - stop_words
+
+    words1 = normalize(q1)
+    words2 = normalize(q2)
+
+    if not words1 or not words2:
+        return 0.0
+
+    # Jaccard similarity
+    intersection = len(words1 & words2)
+    union = len(words1 | words2)
+    return intersection / union if union > 0 else 0.0
 
 # --- Type definitions ---
 
@@ -457,9 +492,19 @@ async def get_polymarket_history(market_id: str, days: int = 7) -> list[dict]:
 
     Uses the Polymarket CLOB API for historical prices.
 
-    Note: This endpoint may not be publicly available or may require
-    authentication. If history cannot be fetched, returns an empty list.
-    Polymarket price history is less reliable than Manifold or Kalshi.
+    **Important limitations:**
+    - The CLOB timeseries endpoint requires authentication for most markets
+    - Public access is inconsistent and often returns 403 or empty data
+    - For reliable history, use Manifold or Kalshi markets instead
+    - This function returns an empty list when history cannot be fetched
+
+    Args:
+        market_id: The Polymarket market/condition ID.
+        days: Number of days of history to fetch.
+
+    Returns:
+        List of price points with timestamp, probability, and volume.
+        Returns empty list if history is unavailable (common for Polymarket).
     """
     async with aiohttp.ClientSession() as session:
         # Try to get history from Polymarket's CLOB timeseries endpoint
@@ -565,50 +610,114 @@ def filter_kalshi_market(market: dict, term: str, min_volume: int) -> dict | Non
     return result
 
 
+async def search_kalshi_events(
+    session: aiohttp.ClientSession, term: str, min_volume: int
+) -> list[dict]:
+    """Search Kalshi events API for matching markets.
+
+    Kalshi organizes political/event markets under /events, while /markets
+    contains mostly sports parlays. This function searches events and returns
+    the associated markets.
+    """
+    results: list[dict] = []
+    cursor = None
+
+    for _ in range(3):  # Max 3 pages of events
+        params: dict = {"status": "open", "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+
+        try:
+            async with session.get(
+                "https://api.elections.kalshi.com/trade-api/v2/events",
+                params=params,
+            ) as resp:
+                if resp.status != 200:
+                    break
+                data = await resp.json()
+        except aiohttp.ClientError:
+            break
+
+        events = data.get("events", [])
+        if not events:
+            break
+
+        for event in events:
+            title = event.get("title", "")
+            if term.lower() not in title.lower():
+                continue
+
+            # Get markets for this event
+            event_ticker = event.get("event_ticker")
+            if not event_ticker:
+                continue
+
+            try:
+                async with session.get(
+                    f"https://api.elections.kalshi.com/trade-api/v2/events/{event_ticker}"
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    event_data = await resp.json()
+            except aiohttp.ClientError:
+                continue
+
+            event_info = event_data.get("event", {})
+            markets = event_info.get("markets", [])
+
+            for market in markets:
+                volume = market.get("volume", 0) or 0
+                if volume < min_volume:
+                    continue
+
+                yes_price = market.get("last_price") or market.get("yes_bid") or 0
+                probability = yes_price / 100 if yes_price else None
+
+                yes_bid = market.get("yes_bid", 0) or 0
+                yes_ask = market.get("yes_ask", 0) or 0
+                spread = None
+                if yes_bid > 0 and yes_ask > 0:
+                    spread = (yes_ask - yes_bid) / 100
+
+                created_at = market.get("open_time")
+                liquidity_score = calculate_liquidity_score(volume, created_at, spread)
+
+                result = {
+                    "source": "kalshi",
+                    "id": market.get("ticker"),
+                    "question": title,  # Use event title for cleaner question
+                    "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
+                    "volume": volume,
+                    "probability": round(probability, 3) if probability else None,
+                    "createdAt": created_at,
+                    "liquidity_score": round(liquidity_score, 3),
+                }
+                if spread is not None:
+                    result["spread"] = round(spread, 3)
+                results.append(result)
+
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+
+    return results
+
+
 async def search_kalshi_markets(
     term: str, min_volume: int = 1000, binary: bool = False  # noqa: ARG001
 ) -> list[dict]:
     """Search Kalshi for prediction markets matching the term.
 
-    Kalshi doesn't have a text search API, so we fetch open markets and filter locally.
+    Uses the /events endpoint which contains political and event markets.
+    The /markets endpoint is skipped as it's mostly sports betting parlays.
+
     Note: The `binary` parameter is accepted for API consistency but ignored since
     all Kalshi markets are binary (yes/no) by design.
     """
     async with aiohttp.ClientSession() as session:
-        all_markets: list[dict] = []
-        cursor = None
-
-        # Paginate through markets (up to a reasonable limit)
-        for _ in range(5):  # Max 5 pages = 500 markets
-            params: dict = {
-                "status": "open",
-                "limit": 100,
-            }
-            if cursor:
-                params["cursor"] = cursor
-
-            async with session.get(
-                "https://api.elections.kalshi.com/trade-api/v2/markets",
-                params=params,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-
-            markets = data.get("markets", [])
-            all_markets.extend(markets)
-
-            cursor = data.get("cursor")
-            if not cursor or not markets:
-                break
-
-    # Filter markets using the helper function
-    results = [
-        result
-        for market in all_markets
-        if (result := filter_kalshi_market(market, term, min_volume)) is not None
-    ]
-
-    return results
+        results = await search_kalshi_events(session, term, min_volume)
+        logger.debug("Kalshi search for '%s': found %d markets", term, len(results))
+        return results
 
 
 async def get_kalshi_history(
@@ -894,6 +1003,8 @@ async def compare_forecasts_data(
             disagreement = round(statistics.stdev(probs), 3)
 
     # Find arbitrage opportunities (>5% price difference between platforms)
+    # Only flag arbitrage if questions are semantically similar (>40% word overlap)
+    SIMILARITY_THRESHOLD = 0.4
     arbitrage_opportunities = []
     by_source: dict[str, list[dict]] = {}
     for m in markets:
@@ -924,20 +1035,28 @@ async def compare_forecasts_data(
                     if p1 is not None and p2 is not None:
                         diff = abs(p1 - p2)
                         if diff >= 0.05:  # 5% difference threshold
+                            # Check if questions are semantically similar
+                            q1 = m1.get("question", "")
+                            q2 = m2.get("question", "")
+                            similarity = question_similarity(q1, q2)
+                            if similarity < SIMILARITY_THRESHOLD:
+                                continue  # Skip if questions are too different
+
                             arbitrage_opportunities.append({
                                 "market_1": {
                                     "source": s1,
                                     "id": m1.get("id"),
-                                    "question": m1.get("question"),
+                                    "question": q1,
                                     "probability": p1,
                                 },
                                 "market_2": {
                                     "source": s2,
                                     "id": m2.get("id"),
-                                    "question": m2.get("question"),
+                                    "question": q2,
                                     "probability": p2,
                                 },
                                 "difference": round(diff, 3),
+                                "similarity": round(similarity, 3),
                             })
 
     # Sort by largest difference

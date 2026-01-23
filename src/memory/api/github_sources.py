@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account
+from memory.api.auth import get_current_user, get_user_account, has_admin_scope
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
@@ -164,6 +164,44 @@ def list_accounts(
     """List GitHub accounts for the current user."""
     accounts = db.query(GithubAccount).filter(GithubAccount.user_id == user.id).all()
     return [account_to_response(account) for account in accounts]
+
+
+class GithubRepoBasic(BaseModel):
+    """Minimal repo info for selection dropdowns."""
+
+    id: int
+    owner: str
+    name: str
+    repo_path: str
+
+
+@router.get("/repos")
+def list_all_repos(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[GithubRepoBasic]:
+    """List all tracked repos. Admins see all repos, others see only their own."""
+    query = db.query(GithubRepo).filter(GithubRepo.active == True)  # noqa: E712
+
+    if not has_admin_scope(user):
+        # Non-admins only see repos from their own accounts
+        user_account_ids = [
+            acc.id
+            for acc in db.query(GithubAccount.id)
+            .filter(GithubAccount.user_id == user.id)
+            .all()
+        ]
+        query = query.filter(GithubRepo.account_id.in_(user_account_ids))
+
+    return [
+        GithubRepoBasic(
+            id=cast(int, repo.id),
+            owner=cast(str, repo.owner),
+            name=cast(str, repo.name),
+            repo_path=repo.repo_path,
+        )
+        for repo in query.all()
+    ]
 
 
 @router.post("/accounts")
