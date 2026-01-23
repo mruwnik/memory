@@ -1,6 +1,5 @@
 """API endpoints for Slack workspace, channel, and user management."""
 
-import hashlib
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -19,6 +18,7 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackChannel,
+    SlackOAuthState,
     SlackUser,
     SlackWorkspace,
 )
@@ -188,23 +188,33 @@ def authorize_slack(
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
 
-    # Store state in user session or a temporary table
-    # For simplicity, we'll encode the user ID in the state
-    state_with_user = f"{user.id}:{state}"
-    state_hash = hashlib.sha256(state_with_user.encode()).hexdigest()
+    # Clean up expired states for this user
+    db.query(SlackOAuthState).filter(
+        SlackOAuthState.user_id == user.id,
+        SlackOAuthState.expires_at < datetime.now(timezone.utc),
+    ).delete()
+
+    # Store state in database with 10-minute expiration
+    oauth_state = SlackOAuthState(
+        state=state,
+        user_id=user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    db.add(oauth_state)
+    db.commit()
 
     # Build authorization URL
     params = {
         "client_id": settings.SLACK_CLIENT_ID,
         "scope": " ".join(SLACK_SCOPES),
         "redirect_uri": settings.SLACK_REDIRECT_URI,
-        "state": f"{user.id}:{state_hash}",
+        "state": state,
         "user_scope": " ".join(SLACK_SCOPES),  # Request user token scopes
     }
 
     auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
 
-    return {"authorization_url": auth_url, "state": state_with_user}
+    return {"authorization_url": auth_url, "state": state}
 
 
 @router.get("/callback")
@@ -223,17 +233,31 @@ async def slack_callback(
     if error:
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
 
-    # Parse state to get user ID
-    try:
-        user_id_str, _ = state.split(":", 1)
-        user_id = int(user_id_str)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
+    # Validate state from database (CSRF protection)
+    oauth_state = db.query(SlackOAuthState).filter(
+        SlackOAuthState.state == state
+    ).first()
 
-    # Verify user exists
+    if not oauth_state:
+        raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
+
+    # Check expiration
+    if oauth_state.expires_at < datetime.now(timezone.utc):
+        db.delete(oauth_state)
+        db.commit()
+        raise HTTPException(status_code=400, detail="State parameter expired")
+
+    # Get user from the stored state
+    user_id = oauth_state.user_id
     user = db.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=400, detail="Invalid user in state")
+        db.delete(oauth_state)
+        db.commit()
+        raise HTTPException(status_code=400, detail="User not found")
+
+    # Delete the state (one-time use)
+    db.delete(oauth_state)
+    db.commit()
 
     # Exchange code for tokens
     async with httpx.AsyncClient() as client:
@@ -277,7 +301,7 @@ async def slack_callback(
         # Update existing workspace
         existing.access_token = access_token
         existing.refresh_token = authed_user.get("refresh_token")
-        existing.scopes = authed_user.get("scope", "").split(",")
+        existing.scopes = authed_user.get("scope", "").split()
         existing.name = team_name
         existing.sync_error = None
         workspace = existing
@@ -287,7 +311,7 @@ async def slack_callback(
             id=team_id,
             name=team_name,
             user_id=user_id,
-            scopes=authed_user.get("scope", "").split(","),
+            scopes=authed_user.get("scope", "").split(),
         )
         workspace.access_token = access_token
         workspace.refresh_token = authed_user.get("refresh_token")

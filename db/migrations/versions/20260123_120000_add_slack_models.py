@@ -43,6 +43,19 @@ def upgrade() -> None:
     op.create_index("slack_workspaces_user_idx", "slack_workspaces", ["user_id"])
     op.create_index("slack_workspaces_collect_idx", "slack_workspaces", ["collect_messages"])
 
+    # Create slack_oauth_states table for CSRF protection
+    op.create_table(
+        "slack_oauth_states",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
+        sa.PrimaryKeyConstraint("id"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+    )
+    op.create_index("slack_oauth_states_state_idx", "slack_oauth_states", ["state"], unique=True)
+
     # Create slack_channels table
     op.create_table(
         "slack_channels",
@@ -129,6 +142,9 @@ def downgrade() -> None:
     op.drop_index("slack_channels_type_idx", table_name="slack_channels")
     op.drop_index("slack_channels_workspace_idx", table_name="slack_channels")
     op.drop_table("slack_channels")
+
+    op.drop_index("slack_oauth_states_state_idx", table_name="slack_oauth_states")
+    op.drop_table("slack_oauth_states")
 
     op.drop_index("slack_workspaces_collect_idx", table_name="slack_workspaces")
     op.drop_index("slack_workspaces_user_idx", table_name="slack_workspaces")

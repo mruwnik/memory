@@ -51,6 +51,7 @@ from memory.common.db.models.slack import (
     SlackWorkspace,
     SlackChannel,
     SlackUser,
+    SlackOAuthState,
 )
 from memory.common.db.models.mcp import (
     MCPServer,

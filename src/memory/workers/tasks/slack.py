@@ -377,14 +377,21 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
                     if not messages:
                         break
 
+                    # Track the newest timestamp from this batch for pagination
+                    batch_newest_ts = None
+
                     for msg in messages:
                         msg_ts = msg.get("ts")
                         if not msg_ts:
                             continue
 
-                        # Track newest message for cursor
+                        # Track newest message for final cursor update
                         if not newest_ts or msg_ts > newest_ts:
                             newest_ts = msg_ts
+
+                        # Track newest in this batch for pagination
+                        if not batch_newest_ts or msg_ts > batch_newest_ts:
+                            batch_newest_ts = msg_ts
 
                         # Skip non-message subtypes we don't want
                         subtype = msg.get("subtype")
@@ -420,6 +427,10 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
                     # Check for more messages
                     if not response.get("has_more"):
                         break
+
+                    # Update oldest for next page to get messages after this batch
+                    if batch_newest_ts:
+                        oldest = batch_newest_ts
 
                 # Update cursor
                 if newest_ts:

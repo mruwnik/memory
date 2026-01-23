@@ -226,3 +226,23 @@ class SlackUser(Base):
     def name(self) -> str:
         """Return the best available name for display."""
         return self.display_name or self.real_name or self.username
+
+
+class SlackOAuthState(Base):
+    """Temporary storage for OAuth state tokens to prevent CSRF attacks.
+
+    States are created when initiating OAuth flow and consumed (deleted)
+    upon callback. They expire after 10 minutes if not used.
+    """
+
+    __tablename__ = "slack_oauth_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
