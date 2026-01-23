@@ -252,22 +252,15 @@ def sync_workspace_channels(client: SlackClient, workspace: SlackWorkspace, sess
         # Get channel name (DMs don't have names)
         name = channel.get("name") or channel.get("user") or channel_id
 
-        existing = session.get(SlackChannel, channel_id)
-        if existing:
-            existing.name = name
-            existing.channel_type = ch_type
-            existing.is_private = channel.get("is_private", False)
-            existing.is_archived = channel.get("is_archived", False)
-        else:
-            slack_channel = SlackChannel(
-                id=channel_id,
-                workspace_id=workspace.id,
-                name=name,
-                channel_type=ch_type,
-                is_private=channel.get("is_private", False),
-                is_archived=channel.get("is_archived", False),
-            )
-            session.add(slack_channel)
+        slack_channel = session.get(SlackChannel, channel_id)
+        if not slack_channel:
+            slack_channel = SlackChannel(id=channel_id, workspace_id=workspace.id)
+
+        slack_channel.name = name
+        slack_channel.channel_type = ch_type
+        slack_channel.is_private = channel.get("is_private", False)
+        slack_channel.is_archived = channel.get("is_archived", False)
+        session.add(slack_channel)
 
         synced += 1
 
