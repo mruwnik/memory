@@ -2,9 +2,11 @@
 Database models for the Slack integration.
 
 This module provides models for:
-- SlackWorkspace: OAuth credentials + workspace metadata (user's connected workspace)
+- SlackWorkspace: Workspace metadata (shared across users)
 - SlackChannel: Channels, DMs, group DMs, and MPIMs
-- SlackUser: Slack user accounts (may link to Memory users and Persons)
+- SlackUserCredentials: Per-user OAuth credentials for workspaces
+
+Note: Slack user data is stored in Person.contact_info instead of a separate table.
 """
 
 from __future__ import annotations
@@ -19,56 +21,50 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     Text,
+    UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
-    from memory.common.db.models.people import Person
     from memory.common.db.models.users import User
 
 
+# --- Helper for Secret-based token storage ---
+
+
+def _secret_name(workspace_id: str, token_type: str) -> str:
+    """Generate secret name for Slack tokens.
+
+    Uses format: slack-<workspace_id>-<token_type>
+    E.g.: slack-T12345678-access-token
+    """
+    return f"slack-{workspace_id}-{token_type}"
+
+
 class SlackWorkspace(Base):
-    """A Slack workspace connected via OAuth2 user token.
+    """A Slack workspace (team) metadata.
 
-    Each workspace represents a user's OAuth connection to Slack, allowing
-    access to their channels, DMs, and messages. Unlike Discord bots,
-    each workspace is owned by a single Memory user.
+    This represents a Slack workspace that one or more Memory users have connected to.
+    The workspace itself is shared - any user with credentials can read messages from
+    channels they have access to. Message collection is idempotent and user-agnostic.
 
-    Design Decision - Primary Key:
-        We use Slack's team_id as the primary key. This means:
-        - A workspace can only be connected by ONE user in the system
-        - If user A connects workspace X, user B cannot also connect workspace X
-        - If a user disconnects and reconnects, the existing row is updated (not duplicated)
-
-        This is intentional for this use case where each Memory user connects their
-        own personal Slack account. If multi-user-per-workspace is needed in the future,
-        use a composite key (team_id, user_id) or an auto-increment id with a unique
-        constraint on (team_id, user_id).
+    OAuth credentials are stored separately in SlackUserCredentials (per-user).
     """
 
     __tablename__ = "slack_workspaces"
 
-    # Use Slack team_id as primary key (see class docstring for design rationale)
+    # Use Slack team_id as primary key for deduplication
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # Slack team_id
     name: Mapped[str] = mapped_column(Text, nullable=False)
     domain: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Encrypted OAuth tokens
-    access_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    refresh_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # OAuth scopes granted (stored as JSON array)
-    scopes: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
-
-    # Collection settings
+    # Collection settings (shared across all users of this workspace)
     collect_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Default 5 minutes - more conservative to avoid Slack rate limits (tier 3/4)
     sync_interval_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
@@ -76,11 +72,6 @@ class SlackWorkspace(Base):
     # Sync status
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Owner - the Memory user who connected this workspace
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -90,17 +81,64 @@ class SlackWorkspace(Base):
     )
 
     # Relationships
-    user: Mapped[User] = relationship("User", back_populates="slack_workspaces")
     channels: Mapped[list[SlackChannel]] = relationship(
         "SlackChannel", back_populates="workspace", cascade="all, delete-orphan"
     )
-    users: Mapped[list[SlackUser]] = relationship(
-        "SlackUser", back_populates="workspace", cascade="all, delete-orphan"
+    user_credentials: Mapped[list[SlackUserCredentials]] = relationship(
+        "SlackUserCredentials", back_populates="workspace", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (Index("slack_workspaces_collect_idx", "collect_messages"),)
+
+
+class SlackUserCredentials(Base):
+    """Per-user OAuth credentials for a Slack workspace.
+
+    Each user who connects their Slack account to a workspace gets their own
+    credentials. This allows:
+    - Multiple users to connect to the same workspace
+    - Each user to send messages using their own identity
+    - Message collection to use any valid credential
+
+    Tokens are encrypted at rest using the same mechanism as the Secret table.
+    """
+
+    __tablename__ = "slack_user_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Encrypted OAuth tokens
+    access_token_encrypted: Mapped[bytes | None] = mapped_column(JSONB, nullable=True)
+    refresh_token_encrypted: Mapped[bytes | None] = mapped_column(JSONB, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # OAuth scopes granted
+    scopes: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
+    # Slack user info for this credential
+    slack_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    workspace: Mapped[SlackWorkspace] = relationship("SlackWorkspace", back_populates="user_credentials")
+    user: Mapped[User] = relationship("User", back_populates="slack_credentials")
+
     __table_args__ = (
-        Index("slack_workspaces_user_idx", "user_id"),
-        Index("slack_workspaces_collect_idx", "collect_messages"),
+        UniqueConstraint("workspace_id", "user_id", name="unique_slack_credential_per_user"),
+        Index("slack_credentials_workspace_idx", "workspace_id"),
+        Index("slack_credentials_user_idx", "user_id"),
     )
 
     @property
@@ -156,7 +194,7 @@ class SlackChannel(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Channel type: "channel", "dm", "group_dm", "mpim"
+    # Channel type: "channel", "dm", "private_channel", "mpim"
     channel_type: Mapped[str] = mapped_column(Text, nullable=False)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -193,53 +231,17 @@ class SlackChannel(Base):
         return self.workspace.collect_messages
 
 
-class SlackUser(Base):
-    """Slack user account metadata.
-
-    Used for resolving mentions (<@U123> -> @display_name) and
-    optionally linking to Memory users and Person contacts.
-    """
-
-    __tablename__ = "slack_users"
-
-    id: Mapped[str] = mapped_column(Text, primary_key=True)  # Slack user_id
-    workspace_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
-    )
-
-    username: Mapped[str] = mapped_column(Text, nullable=False)
-    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    real_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    email: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    # Optional links
-    system_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    person_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
-    )
-
-    created_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    # Relationships
-    workspace: Mapped[SlackWorkspace] = relationship("SlackWorkspace", back_populates="users")
-    system_user: Mapped[User | None] = relationship("User", foreign_keys=[system_user_id])
-    person: Mapped[Person | None] = relationship("Person", back_populates="slack_accounts")
-
-    __table_args__ = (
-        Index("slack_users_workspace_idx", "workspace_id"),
-        Index("slack_users_system_user_idx", "system_user_id"),
-        Index("slack_users_person_idx", "person_id"),
-    )
-
-    @property
-    def name(self) -> str:
-        """Return the best available name for display."""
-        return self.display_name or self.real_name or self.username
+# Note: SlackUser table has been removed. Slack user data (for mention resolution)
+# is now stored in Person.contact_info["slack"] as:
+# {
+#     "slack": {
+#         "<workspace_id>": {
+#             "user_id": "U12345",
+#             "username": "john.doe",
+#             "display_name": "John Doe"
+#         }
+#     }
+# }
+#
+# This allows a Person to have Slack identities across multiple workspaces
+# while avoiding a separate table that duplicates the Person concept.

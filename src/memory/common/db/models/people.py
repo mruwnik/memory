@@ -21,7 +21,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
-    from memory.common.db.models.slack import SlackUser
     from memory.common.db.models.users import User
 
 import memory.common.extract as extract
@@ -69,10 +68,9 @@ class Person(SourceItem):
         "DiscordUser", back_populates="person"
     )
 
-    # Relationship to linked Slack accounts
-    slack_accounts: Mapped[list[SlackUser]] = relationship(
-        "SlackUser", back_populates="person"
-    )
+    # Note: Slack user data is stored in contact_info["slack"] as:
+    # {"<workspace_id>": {"user_id": "U123", "username": "...", "display_name": "..."}}
+    # This avoids a separate table since Slack IDs are workspace-specific
 
     __mapper_args__ = {
         "polymorphic_identity": "person",

@@ -1,4 +1,12 @@
-"""API endpoints for Slack workspace, channel, and user management."""
+"""API endpoints for Slack workspace and channel management.
+
+Multi-user design:
+- Workspaces are shared resources identified by Slack team_id
+- Multiple users can connect their OAuth credentials to the same workspace
+- Each user's credentials are stored in SlackUserCredentials
+- Message collection uses any valid credential (collection is user-agnostic)
+- Sending messages uses the caller's own credentials
+"""
 
 import hashlib
 import hmac
@@ -11,7 +19,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
@@ -20,10 +28,9 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackUser,
+    SlackUserCredentials,
     SlackWorkspace,
 )
-from memory.common.db.models.people import Person
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +72,8 @@ class SlackWorkspaceResponse(BaseModel):
     last_sync_at: str | None
     sync_error: str | None
     channel_count: int
-    user_count: int
+    connected_users: int  # Number of users with credentials for this workspace
+    user_connected: bool  # Whether the current user has credentials
 
 
 class SlackWorkspaceUpdate(BaseModel):
@@ -89,50 +97,51 @@ class SlackChannelUpdate(BaseModel):
     collect_messages: bool | None = None
 
 
-class SlackUserResponse(BaseModel):
-    id: str
-    workspace_id: str
-    username: str
-    display_name: str | None
-    real_name: str | None
-    email: str | None
-    is_bot: bool
-    system_user_id: int | None
-    person_id: int | None
-    person_identifier: str | None
-
-
-class SlackUserLinkRequest(BaseModel):
-    system_user_id: int | None = None
-    person_id: int | None = None
-
-
 # --- Helper Functions ---
 
 
-def get_user_workspace(
+def get_user_credentials(
+    db: Session, workspace_id: str, user: User
+) -> SlackUserCredentials | None:
+    """Get the current user's credentials for a workspace."""
+    return db.query(SlackUserCredentials).filter(
+        SlackUserCredentials.workspace_id == workspace_id,
+        SlackUserCredentials.user_id == user.id,
+    ).first()
+
+
+def get_workspace_with_access(
     db: Session, workspace_id: str, user: User
 ) -> SlackWorkspace:
-    """Get a workspace, ensuring the user owns it."""
+    """Get a workspace, ensuring the user has credentials for it."""
     workspace = db.get(SlackWorkspace, workspace_id)
-    if not workspace or workspace.user_id != user.id:
+    if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # User must have credentials to access workspace
+    credentials = get_user_credentials(db, workspace_id, user)
+    if not credentials:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
     return workspace
 
 
-def workspace_to_response(ws: SlackWorkspace, db: Session | None = None) -> SlackWorkspaceResponse:
-    # Use SQL count queries if session available to avoid loading all related objects
-    if db:
-        channel_count = db.query(func.count(SlackChannel.id)).filter(
-            SlackChannel.workspace_id == ws.id
-        ).scalar() or 0
-        user_count = db.query(func.count(SlackUser.id)).filter(
-            SlackUser.workspace_id == ws.id
-        ).scalar() or 0
-    else:
-        # Fallback to len() if no session (loads all objects into memory)
-        channel_count = len(ws.channels)
-        user_count = len(ws.users)
+def workspace_to_response(
+    ws: SlackWorkspace, db: Session, current_user: User
+) -> SlackWorkspaceResponse:
+    """Convert workspace to response model."""
+    channel_count = db.query(func.count(SlackChannel.id)).filter(
+        SlackChannel.workspace_id == ws.id
+    ).scalar() or 0
+
+    connected_users = db.query(func.count(SlackUserCredentials.id)).filter(
+        SlackUserCredentials.workspace_id == ws.id
+    ).scalar() or 0
+
+    user_connected = db.query(SlackUserCredentials).filter(
+        SlackUserCredentials.workspace_id == ws.id,
+        SlackUserCredentials.user_id == current_user.id,
+    ).first() is not None
 
     return SlackWorkspaceResponse(
         id=ws.id,
@@ -143,7 +152,8 @@ def workspace_to_response(ws: SlackWorkspace, db: Session | None = None) -> Slac
         last_sync_at=ws.last_sync_at.isoformat() if ws.last_sync_at else None,
         sync_error=ws.sync_error,
         channel_count=channel_count,
-        user_count=user_count,
+        connected_users=connected_users,
+        user_connected=user_connected,
     )
 
 
@@ -158,21 +168,6 @@ def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
         collect_messages=channel.collect_messages,
         effective_collect=channel.should_collect,
         last_message_ts=channel.last_message_ts,
-    )
-
-
-def slack_user_to_response(user: SlackUser) -> SlackUserResponse:
-    return SlackUserResponse(
-        id=user.id,
-        workspace_id=user.workspace_id,
-        username=user.username,
-        display_name=user.display_name,
-        real_name=user.real_name,
-        email=user.email,
-        is_bot=user.is_bot,
-        system_user_id=user.system_user_id,
-        person_id=user.person_id,
-        person_identifier=user.person.identifier if user.person else None,
     )
 
 
@@ -264,7 +259,8 @@ async def slack_callback(
 ):
     """Handle Slack OAuth2 callback.
 
-    Exchanges the authorization code for tokens and creates/updates the workspace.
+    Exchanges the authorization code for tokens and creates/updates credentials.
+    If the workspace doesn't exist, creates it. If it does, just adds user's credentials.
     """
     require_slack_configured()
 
@@ -342,11 +338,18 @@ async def slack_callback(
     if not team_id:
         raise HTTPException(status_code=400, detail="No team ID in response")
 
-    # Check if workspace already exists for this user
-    existing = db.query(SlackWorkspace).filter(
-        SlackWorkspace.id == team_id,
-        SlackWorkspace.user_id == user_id,
-    ).first()
+    # Get or create workspace (workspaces are shared across users)
+    workspace = db.get(SlackWorkspace, team_id)
+    if not workspace:
+        workspace = SlackWorkspace(
+            id=team_id,
+            name=team_name,
+        )
+        db.add(workspace)
+        db.flush()
+    else:
+        # Update workspace name if changed
+        workspace.name = team_name
 
     # Calculate token expiration with 5-minute buffer to prevent race conditions
     token_expires_at = None
@@ -356,28 +359,34 @@ async def slack_callback(
             microsecond=0
         ) + timedelta(seconds=expires_in - 300)  # 5-minute buffer
 
-    if existing:
-        # Update existing workspace
-        existing.access_token = access_token
-        existing.refresh_token = authed_user.get("refresh_token")
-        existing.scopes = authed_user.get("scope", "").split()
-        existing.name = team_name
-        existing.sync_error = None
-        existing.token_expires_at = token_expires_at
-        workspace = existing
+    # Get or create user credentials for this workspace
+    existing_creds = db.query(SlackUserCredentials).filter(
+        SlackUserCredentials.workspace_id == team_id,
+        SlackUserCredentials.user_id == user_id,
+    ).first()
+
+    if existing_creds:
+        # Update existing credentials
+        existing_creds.access_token = access_token
+        existing_creds.refresh_token = authed_user.get("refresh_token")
+        existing_creds.scopes = authed_user.get("scope", "").split()
+        existing_creds.token_expires_at = token_expires_at
+        existing_creds.slack_user_id = authed_user.get("id")
     else:
-        # Create new workspace
-        workspace = SlackWorkspace(
-            id=team_id,
-            name=team_name,
+        # Create new credentials
+        credentials = SlackUserCredentials(
+            workspace_id=team_id,
             user_id=user_id,
             scopes=authed_user.get("scope", "").split(),
+            token_expires_at=token_expires_at,
+            slack_user_id=authed_user.get("id"),
         )
-        workspace.access_token = access_token
-        workspace.refresh_token = authed_user.get("refresh_token")
-        workspace.token_expires_at = token_expires_at
+        credentials.access_token = access_token
+        credentials.refresh_token = authed_user.get("refresh_token")
+        db.add(credentials)
 
-        db.add(workspace)
+    # Clear any sync errors since we have fresh credentials
+    workspace.sync_error = None
 
     db.commit()
 
@@ -416,11 +425,23 @@ def list_workspaces(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[SlackWorkspaceResponse]:
-    """List Slack workspaces connected by the current user."""
+    """List Slack workspaces the current user has credentials for."""
+    # Get workspace IDs where user has credentials
+    user_workspace_ids = [
+        cred.workspace_id
+        for cred in db.query(SlackUserCredentials).filter(
+            SlackUserCredentials.user_id == user.id
+        ).all()
+    ]
+
+    if not user_workspace_ids:
+        return []
+
     workspaces = db.query(SlackWorkspace).filter(
-        SlackWorkspace.user_id == user.id
+        SlackWorkspace.id.in_(user_workspace_ids)
     ).all()
-    return [workspace_to_response(w, db) for w in workspaces]
+
+    return [workspace_to_response(w, db, user) for w in workspaces]
 
 
 @router.get("/workspaces/{workspace_id}")
@@ -430,8 +451,8 @@ def get_workspace(
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
     """Get details of a specific workspace."""
-    workspace = get_user_workspace(db, workspace_id, user)
-    return workspace_to_response(workspace, db)
+    workspace = get_workspace_with_access(db, workspace_id, user)
+    return workspace_to_response(workspace, db, user)
 
 
 @router.patch("/workspaces/{workspace_id}")
@@ -441,8 +462,11 @@ def update_workspace(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
-    """Update workspace settings."""
-    workspace = get_user_workspace(db, workspace_id, user)
+    """Update workspace settings.
+
+    Any connected user can update workspace settings (settings are shared).
+    """
+    workspace = get_workspace_with_access(db, workspace_id, user)
 
     if updates.collect_messages is not None:
         workspace.collect_messages = updates.collect_messages
@@ -452,20 +476,41 @@ def update_workspace(
     db.commit()
     db.refresh(workspace)
 
-    return workspace_to_response(workspace, db)
+    return workspace_to_response(workspace, db, user)
 
 
 @router.delete("/workspaces/{workspace_id}")
-def delete_workspace(
+def disconnect_workspace(
     workspace_id: str,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Disconnect a Slack workspace."""
-    workspace = get_user_workspace(db, workspace_id, user)
-    db.delete(workspace)
+    """Disconnect user's credentials from a Slack workspace.
+
+    This removes the user's OAuth credentials but doesn't delete the workspace
+    if other users are still connected.
+    """
+    # Get user's credentials
+    credentials = get_user_credentials(db, workspace_id, user)
+    if not credentials:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    db.delete(credentials)
     db.commit()
-    return {"status": "deleted", "workspace_id": workspace_id}
+
+    # Check if workspace should be deleted (no more connected users)
+    remaining_users = db.query(func.count(SlackUserCredentials.id)).filter(
+        SlackUserCredentials.workspace_id == workspace_id
+    ).scalar() or 0
+
+    if remaining_users == 0:
+        # No more users - delete workspace and its channels
+        workspace = db.get(SlackWorkspace, workspace_id)
+        if workspace:
+            db.delete(workspace)
+            db.commit()
+
+    return {"status": "disconnected", "workspace_id": workspace_id}
 
 
 @router.post("/workspaces/{workspace_id}/sync")
@@ -475,8 +520,8 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Trigger a manual sync for a workspace."""
-    # Verify ownership
-    get_user_workspace(db, workspace_id, user)
+    # Verify user has access
+    get_workspace_with_access(db, workspace_id, user)
 
     # Import here to avoid circular imports
     from memory.common.celery_app import SYNC_SLACK_WORKSPACE
@@ -498,8 +543,8 @@ def list_channels(
     db: Session = Depends(get_session),
 ) -> list[SlackChannelResponse]:
     """List channels in a workspace."""
-    # Verify ownership
-    get_user_workspace(db, workspace_id, user)
+    # Verify user has access
+    get_workspace_with_access(db, workspace_id, user)
 
     query = db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id)
 
@@ -522,10 +567,8 @@ def update_channel(
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    # Verify user owns the workspace
-    workspace = db.get(SlackWorkspace, channel.workspace_id)
-    if not workspace or workspace.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Channel not found")
+    # Verify user has access to the workspace
+    get_workspace_with_access(db, channel.workspace_id, user)
 
     channel.collect_messages = updates.collect_messages
 
@@ -533,83 +576,3 @@ def update_channel(
     db.refresh(channel)
 
     return channel_to_response(channel)
-
-
-# --- User Endpoints ---
-
-
-@router.get("/workspaces/{workspace_id}/users")
-def list_slack_users(
-    workspace_id: str,
-    search: str | None = None,
-    linked_only: bool = False,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> list[SlackUserResponse]:
-    """List Slack users in a workspace."""
-    # Verify ownership
-    get_user_workspace(db, workspace_id, user)
-
-    query = db.query(SlackUser).filter(SlackUser.workspace_id == workspace_id)
-
-    if search:
-        search_term = f"%{search.lower()}%"
-        query = query.filter(
-            or_(
-                SlackUser.username.ilike(search_term),
-                SlackUser.display_name.ilike(search_term),
-                SlackUser.real_name.ilike(search_term),
-            )
-        )
-
-    if linked_only:
-        query = query.filter(
-            or_(
-                SlackUser.system_user_id.isnot(None),
-                SlackUser.person_id.isnot(None),
-            )
-        )
-
-    users = query.order_by(SlackUser.display_name, SlackUser.username).limit(100).all()
-    return [slack_user_to_response(u) for u in users]
-
-
-@router.patch("/users/{slack_user_id}")
-def link_slack_user(
-    slack_user_id: str,
-    data: SlackUserLinkRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> SlackUserResponse:
-    """Link a Slack user to a system user and/or person."""
-    slack_user = db.get(SlackUser, slack_user_id)
-    if not slack_user:
-        raise HTTPException(status_code=404, detail="Slack user not found")
-
-    # Verify user owns the workspace
-    workspace = db.get(SlackWorkspace, slack_user.workspace_id)
-    if not workspace or workspace.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Slack user not found")
-
-    # Validate and link system user
-    if data.system_user_id is not None:
-        system_user = db.get(User, data.system_user_id)
-        if not system_user:
-            raise HTTPException(status_code=404, detail="System user not found")
-        slack_user.system_user_id = data.system_user_id
-    elif data.system_user_id is None and "system_user_id" in (data.model_fields_set or set()):
-        slack_user.system_user_id = None
-
-    # Validate and link person
-    if data.person_id is not None:
-        person = db.get(Person, data.person_id)
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
-        slack_user.person_id = data.person_id
-    elif data.person_id is None and "person_id" in (data.model_fields_set or set()):
-        slack_user.person_id = None
-
-    db.commit()
-    db.refresh(slack_user)
-
-    return slack_user_to_response(slack_user)

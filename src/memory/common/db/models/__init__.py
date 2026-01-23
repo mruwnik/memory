@@ -50,7 +50,7 @@ from memory.common.db.models.discord import (
 from memory.common.db.models.slack import (
     SlackWorkspace,
     SlackChannel,
-    SlackUser,
+    SlackUserCredentials,
 )
 from memory.common.db.models.mcp import (
     MCPServer,
@@ -230,7 +230,7 @@ __all__ = [
     "discord_bot_users",
     "SlackWorkspace",
     "SlackChannel",
-    "SlackUser",
+    "SlackUserCredentials",
     "SlackMessage",
     "MCPServer",
     "MCPServerAssignment",

@@ -7,7 +7,7 @@ import pytest
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackUser,
+    SlackUserCredentials,
     SlackWorkspace,
 )
 from memory.common.db.models.source_items import SlackMessage
@@ -27,18 +27,31 @@ def slack_user(db_session):
 
 
 @pytest.fixture
-def slack_workspace(db_session, slack_user):
+def slack_workspace(db_session):
     """Create a Slack workspace for testing."""
     workspace = SlackWorkspace(
         id="T12345678",
         name="Test Workspace",
-        user_id=slack_user.id,
         collect_messages=True,
     )
-    workspace.access_token = "xoxp-test-token"
     db_session.add(workspace)
     db_session.commit()
     return workspace
+
+
+@pytest.fixture
+def slack_credentials(db_session, slack_workspace, slack_user):
+    """Create Slack credentials for testing."""
+    credentials = SlackUserCredentials(
+        workspace_id=slack_workspace.id,
+        user_id=slack_user.id,
+        scopes=["channels:read", "chat:write"],
+        slack_user_id="U_TEST_USER",
+    )
+    credentials.access_token = "xoxp-test-token"
+    db_session.add(credentials)
+    db_session.commit()
+    return credentials
 
 
 @pytest.fixture
@@ -59,29 +72,13 @@ def slack_channel(db_session, slack_workspace):
 
 
 @pytest.fixture
-def slack_author(db_session, slack_workspace):
-    """Create a Slack user for testing."""
-    user = SlackUser(
-        id="U12345678",
-        workspace_id=slack_workspace.id,
-        username="testuser",
-        display_name="Test User",
-        real_name="Test User",
-        is_bot=False,
-    )
-    db_session.add(user)
-    db_session.commit()
-    return user
-
-
-@pytest.fixture
-def sample_message_data(slack_workspace, slack_channel, slack_author):
+def sample_message_data(slack_workspace, slack_channel):
     """Sample message data for testing."""
     return {
         "workspace_id": slack_workspace.id,
         "channel_id": slack_channel.id,
         "message_ts": "1704067200.000100",
-        "author_id": slack_author.id,
+        "author_id": "U12345678",  # Just a Slack user ID
         "content": "This is a test Slack message with enough content to be processed properly.",
         "thread_ts": None,
         "reply_count": None,
@@ -92,8 +89,15 @@ def sample_message_data(slack_workspace, slack_channel, slack_author):
     }
 
 
-def test_add_slack_message_success(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_success(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test successful Slack message addition."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {"U12345678": "Test User"}
+
     result = slack.add_slack_message(**sample_message_data)
 
     assert result["status"] == "created"
@@ -110,10 +114,18 @@ def test_add_slack_message_success(db_session, sample_message_data, qdrant):
     assert message.workspace_id == sample_message_data["workspace_id"]
     assert message.channel_id == sample_message_data["channel_id"]
     assert message.author_id == sample_message_data["author_id"]
+    assert message.author_name == "Test User"
 
 
-def test_add_slack_message_already_exists(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_already_exists(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test adding a message that already exists."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {"U12345678": "Test User"}
+
     # Add the message once
     slack.add_slack_message(**sample_message_data)
 
@@ -132,8 +144,15 @@ def test_add_slack_message_already_exists(db_session, sample_message_data, qdran
     assert len(messages) == 1
 
 
-def test_add_slack_message_with_thread(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_with_thread(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test adding a Slack message that is part of a thread."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     sample_message_data["thread_ts"] = "1704067100.000000"
     sample_message_data["reply_count"] = 5
 
@@ -148,8 +167,15 @@ def test_add_slack_message_with_thread(db_session, sample_message_data, qdrant):
     assert message.reply_count == 5
 
 
-def test_add_slack_message_with_reactions(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_with_reactions(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test adding a Slack message with reactions."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     sample_message_data["reactions"] = [
         {"name": "thumbsup", "count": 5, "users": ["U1", "U2"]},
         {"name": "heart", "count": 3, "users": ["U3"]},
@@ -167,8 +193,15 @@ def test_add_slack_message_with_reactions(db_session, sample_message_data, qdran
     assert message.reactions[0]["name"] == "thumbsup"
 
 
-def test_add_slack_message_update_on_edit(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_update_on_edit(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test updating an existing message when edited."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     # Add the message first
     slack.add_slack_message(**sample_message_data)
 
@@ -199,8 +232,15 @@ def test_add_slack_message_no_author_skipped(db_session, sample_message_data, qd
     assert result["reason"] == "no_author"
 
 
-def test_add_slack_message_unique_per_channel(db_session, sample_message_data, slack_workspace, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_unique_per_channel(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_workspace, slack_credentials, qdrant
+):
     """Test that same message_ts in different channels creates separate messages."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     # Add first message
     slack.add_slack_message(**sample_message_data)
 
@@ -232,8 +272,15 @@ def test_add_slack_message_unique_per_channel(db_session, sample_message_data, s
     assert len(messages) == 2
 
 
-def test_add_slack_message_with_subtype(db_session, sample_message_data, qdrant):
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_with_subtype(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
+):
     """Test adding a Slack message with a subtype."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     sample_message_data["subtype"] = "channel_join"
 
     slack.add_slack_message(**sample_message_data)
@@ -246,19 +293,18 @@ def test_add_slack_message_with_subtype(db_session, sample_message_data, qdrant)
     assert message.message_type == "channel_join"
 
 
-def test_resolve_mentions(db_session, slack_workspace, slack_author):
+def test_resolve_mentions():
     """Test mention resolution in message content."""
-    # Add workspace users to be resolved
-    users_by_id = {slack_author.id: slack_author}
+    users_by_id = {"U12345678": "Test User"}
 
-    content = f"Hello <@{slack_author.id}>, how are you?"
+    content = "Hello <@U12345678>, how are you?"
     resolved = slack.resolve_mentions(content, users_by_id)
 
-    assert f"@{slack_author.display_name}" in resolved
-    assert f"<@{slack_author.id}>" not in resolved
+    assert "@Test User" in resolved
+    assert "<@U12345678>" not in resolved
 
 
-def test_resolve_mentions_unknown_user(db_session, slack_workspace):
+def test_resolve_mentions_unknown_user():
     """Test mention resolution with unknown user."""
     users_by_id = {}
 
@@ -269,16 +315,34 @@ def test_resolve_mentions_unknown_user(db_session, slack_workspace):
     assert "<@U_UNKNOWN>" in resolved
 
 
-@patch("memory.workers.tasks.slack.get_slack_client")
-def test_sync_slack_workspace_no_token(mock_client, db_session, slack_workspace):
-    """Test syncing workspace without access token returns error."""
-    slack_workspace.access_token = None
-    db_session.commit()
+def test_resolve_mentions_channel():
+    """Test channel mention resolution."""
+    users_by_id = {}
 
+    content = "Check out <#C12345|general>"
+    resolved = slack.resolve_mentions(content, users_by_id)
+
+    assert "#general" in resolved
+    assert "<#C12345|general>" not in resolved
+
+
+def test_resolve_mentions_url():
+    """Test URL resolution."""
+    users_by_id = {}
+
+    content = "Visit <https://example.com|Example Site>"
+    resolved = slack.resolve_mentions(content, users_by_id)
+
+    assert "Example Site" in resolved
+    assert "<https://example.com|Example Site>" not in resolved
+
+
+def test_sync_slack_workspace_no_credentials(db_session, slack_workspace):
+    """Test syncing workspace without credentials returns error."""
     result = slack.sync_slack_workspace(slack_workspace.id)
 
     assert result["status"] == "error"
-    assert "No access token" in result["error"]
+    assert "No valid credentials" in result["error"]
 
 
 def test_sync_slack_workspace_not_found(db_session):
@@ -289,41 +353,37 @@ def test_sync_slack_workspace_not_found(db_session):
     assert "Workspace not found" in result["error"]
 
 
-@patch("memory.workers.tasks.slack.get_slack_client")
-@patch("memory.workers.tasks.slack.slack_api_call")
-@patch("memory.workers.tasks.slack.sync_workspace_users")
+@patch("memory.workers.tasks.slack.SlackClient")
 @patch("memory.workers.tasks.slack.sync_workspace_channels")
 def test_sync_slack_workspace_success(
     mock_sync_channels,
-    mock_sync_users,
-    mock_api_call,
-    mock_client,
+    mock_client_class,
     db_session,
     slack_workspace,
+    slack_credentials,
 ):
     """Test successful workspace sync."""
-    mock_client.return_value.__enter__ = MagicMock(return_value=MagicMock())
-    mock_client.return_value.__exit__ = MagicMock(return_value=False)
-    mock_api_call.return_value = {"team": "Test Workspace"}
-    mock_sync_users.return_value = 5
+    mock_client = MagicMock()
+    mock_client.call.return_value = {"team": "Test Workspace"}
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
     mock_sync_channels.return_value = 3
 
     result = slack.sync_slack_workspace(slack_workspace.id)
 
     assert result["status"] == "completed"
-    assert result["users_synced"] == 5
     assert result["channels_synced"] == 3
 
 
-@patch("memory.workers.tasks.slack.get_slack_client")
-@patch("memory.workers.tasks.slack.slack_api_call")
+@patch("memory.workers.tasks.slack.SlackClient")
 def test_sync_slack_workspace_token_expired(
-    mock_api_call, mock_client, db_session, slack_workspace
+    mock_client_class, db_session, slack_workspace, slack_credentials
 ):
     """Test workspace sync with expired token."""
-    mock_client.return_value.__enter__ = MagicMock(return_value=MagicMock())
-    mock_client.return_value.__exit__ = MagicMock(return_value=False)
-    mock_api_call.side_effect = slack.SlackAPIError("token_expired")
+    mock_client = MagicMock()
+    mock_client.call.side_effect = slack.SlackAPIError("token_expired")
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
 
     result = slack.sync_slack_workspace(slack_workspace.id)
 
@@ -335,15 +395,15 @@ def test_sync_slack_workspace_token_expired(
     assert "Token invalid" in slack_workspace.sync_error
 
 
-@patch("memory.workers.tasks.slack.get_slack_client")
-@patch("memory.workers.tasks.slack.slack_api_call")
+@patch("memory.workers.tasks.slack.SlackClient")
 def test_sync_slack_workspace_unexpected_error(
-    mock_api_call, mock_client, db_session, slack_workspace
+    mock_client_class, db_session, slack_workspace, slack_credentials
 ):
     """Test workspace sync with unexpected error doesn't re-raise."""
-    mock_client.return_value.__enter__ = MagicMock(return_value=MagicMock())
-    mock_client.return_value.__exit__ = MagicMock(return_value=False)
-    mock_api_call.side_effect = Exception("Unexpected error")
+    mock_client = MagicMock()
+    mock_client.call.side_effect = Exception("Unexpected error")
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
 
     result = slack.sync_slack_workspace(slack_workspace.id)
 
@@ -365,10 +425,17 @@ def test_sync_slack_workspace_unexpected_error(
         ("group", "private_channel"),
     ],
 )
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
 def test_add_slack_message_creates_channel_if_missing(
-    db_session, sample_message_data, slack_workspace, slack_author, channel_type, expected_type, qdrant
+    mock_build_cache, mock_get_creds,
+    db_session, sample_message_data, slack_workspace, slack_credentials,
+    channel_type, expected_type, qdrant
 ):
     """Test that add_slack_message creates channel if it doesn't exist."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+
     # Use a channel ID that doesn't exist
     sample_message_data["channel_id"] = f"C_NEW_{channel_type}"
 
@@ -380,3 +447,19 @@ def test_add_slack_message_creates_channel_if_missing(
     channel = db_session.query(SlackChannel).filter_by(id=sample_message_data["channel_id"]).first()
     assert channel is not None
     assert channel.workspace_id == slack_workspace.id
+
+
+def test_get_workspace_credentials_returns_valid(db_session, slack_workspace, slack_credentials):
+    """Test that get_workspace_credentials returns valid credentials."""
+    result = slack.get_workspace_credentials(db_session, slack_workspace.id)
+
+    assert result is not None
+    assert result.workspace_id == slack_workspace.id
+    assert result.access_token == "xoxp-test-token"
+
+
+def test_get_workspace_credentials_returns_none_when_no_creds(db_session, slack_workspace):
+    """Test that get_workspace_credentials returns None when no credentials."""
+    result = slack.get_workspace_credentials(db_session, slack_workspace.id)
+
+    assert result is None

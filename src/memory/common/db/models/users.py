@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot, DiscordUser
     from memory.common.db.models.people import Person
     from memory.common.db.models.secrets import Secret
-    from memory.common.db.models.slack import SlackWorkspace
+    from memory.common.db.models.slack import SlackUserCredentials
 
 
 def hash_password(password: str) -> str:
@@ -130,9 +130,9 @@ class User(Base):
         back_populates="authorized_users",
     )
 
-    # Slack relationships
-    slack_workspaces: Mapped[list[SlackWorkspace]] = relationship(
-        "SlackWorkspace", back_populates="user", cascade="all, delete-orphan"
+    # Slack relationships (per-user OAuth credentials)
+    slack_credentials: Mapped[list[SlackUserCredentials]] = relationship(
+        "SlackUserCredentials", back_populates="user", cascade="all, delete-orphan"
     )
 
     # Link to Person record (for rich contact info about this user)

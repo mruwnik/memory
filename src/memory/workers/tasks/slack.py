@@ -5,6 +5,10 @@ This module provides tasks for:
 - Syncing all Slack workspaces (periodic task)
 - Syncing individual workspaces (channels, users, messages)
 - Processing individual messages
+
+Note: User data is not stored in a separate SlackUser table. Instead:
+- For mention resolution, we cache user info from the Slack API during sync
+- For linking users to People, store Slack IDs in Person.contact_info["slack"]
 """
 
 import hashlib
@@ -28,8 +32,17 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import SlackMessage
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackUser,
+    SlackUserCredentials,
     SlackWorkspace,
+)
+from memory.common.slack import (
+    SlackAPIError,
+    SlackClient,
+    get_channel_type,
+    iter_channels,
+    iter_messages,
+    iter_thread_replies,
+    iter_users,
 )
 from memory.common.content_processing import (
     process_content_item,
@@ -39,50 +52,18 @@ from memory.common.content_processing import (
 logger = logging.getLogger(__name__)
 
 
-class SlackAPIError(Exception):
-    """Error from Slack API."""
+def resolve_mentions(content: str, users_by_id: dict[str, str]) -> str:
+    """Replace Slack mention format <@U123> with @display_name.
 
-    def __init__(self, error: str, response: dict | None = None):
-        self.error = error
-        self.response = response
-        super().__init__(f"Slack API error: {error}")
-
-
-def get_slack_client(workspace: SlackWorkspace) -> httpx.Client:
-    """Create an HTTP client configured for Slack API calls."""
-    if not workspace.access_token:
-        raise SlackAPIError("No access token")
-
-    return httpx.Client(
-        base_url="https://slack.com/api/",
-        headers={
-            "Authorization": f"Bearer {workspace.access_token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-        timeout=30.0,
-    )
-
-
-def slack_api_call(client: httpx.Client, method: str, **kwargs) -> dict:
-    """Make a Slack API call and handle errors."""
-    response = client.post(method, json=kwargs if kwargs else None)
-    data = response.json()
-
-    if not data.get("ok"):
-        error = data.get("error", "unknown_error")
-        logger.error(f"Slack API error in {method}: {error}")
-        raise SlackAPIError(error, data)
-
-    return data
-
-
-def resolve_mentions(content: str, users_by_id: dict[str, SlackUser]) -> str:
-    """Replace Slack mention format <@U123> with @display_name."""
+    Args:
+        content: Raw message content with Slack-format mentions
+        users_by_id: Mapping of Slack user IDs to display names
+    """
     def replace_mention(match):
         user_id = match.group(1)
-        user = users_by_id.get(user_id)
-        if user:
-            return f"@{user.name}"
+        name = users_by_id.get(user_id)
+        if name:
+            return f"@{name}"
         return match.group(0)
 
     # Replace user mentions: <@U123> or <@U123|name>
@@ -129,6 +110,25 @@ def download_slack_file(url: str, headers: dict, message_ts: str, workspace_id: 
         return None
 
 
+def get_workspace_credentials(session, workspace_id: str) -> SlackUserCredentials | None:
+    """Get valid credentials for a workspace.
+
+    Returns the first non-expired credential, or None if none available.
+    Collection is user-agnostic - we just need any valid token.
+    """
+    credentials = (
+        session.query(SlackUserCredentials)
+        .filter(SlackUserCredentials.workspace_id == workspace_id)
+        .all()
+    )
+
+    for cred in credentials:
+        if not cred.is_token_expired() and cred.access_token:
+            return cred
+
+    return None
+
+
 @app.task(name=SYNC_ALL_SLACK_WORKSPACES)
 @safe_task_execution
 def sync_all_slack_workspaces() -> dict[str, Any]:
@@ -166,9 +166,9 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
     """
     Sync a single Slack workspace.
 
-    - Refresh token if expired
+    - Get valid credentials (any user's token will work for reading)
     - Sync channels list
-    - Sync users list
+    - Build user cache for mention resolution
     - Trigger channel syncs for channels with collection enabled
     """
     logger.info(f"Syncing Slack workspace {workspace_id}")
@@ -178,22 +178,24 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
         if not workspace:
             return {"status": "error", "error": "Workspace not found"}
 
-        if not workspace.access_token:
+        # Get valid credentials for this workspace
+        credentials = get_workspace_credentials(session, workspace_id)
+        if not credentials:
+            workspace.sync_error = "No valid credentials - users need to re-authorize"
+            session.commit()
+            return {"status": "error", "error": "No valid credentials"}
+
+        access_token = credentials.access_token
+        if not access_token:
             workspace.sync_error = "No access token"
             session.commit()
             return {"status": "error", "error": "No access token"}
 
-        # Check token expiration before making API calls
-        if workspace.is_token_expired():
-            workspace.sync_error = "Token expired - please re-authorize"
-            session.commit()
-            return {"status": "error", "error": "Token expired"}
-
         try:
-            with get_slack_client(workspace) as client:
+            with SlackClient(access_token) as client:
                 # Test token and get workspace info
                 try:
-                    auth_response = slack_api_call(client, "auth.test")
+                    auth_response = client.call("auth.test")
                     workspace.name = auth_response.get("team", workspace.name)
                 except SlackAPIError as e:
                     if e.error in ("token_expired", "invalid_auth", "token_revoked"):
@@ -201,9 +203,6 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
                         session.commit()
                         return {"status": "error", "error": e.error}
                     raise
-
-                # Sync users first (needed for mention resolution)
-                users_synced = sync_workspace_users(client, workspace, session)
 
                 # Sync channels
                 channels_synced = sync_workspace_channels(client, workspace, session)
@@ -223,7 +222,6 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
                 return {
                     "status": "completed",
                     "workspace_id": workspace_id,
-                    "users_synced": users_synced,
                     "channels_synced": channels_synced,
                     "channels_triggered": channels_triggered,
                 }
@@ -240,120 +238,66 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
             return {"status": "error", "error": str(e)}
 
 
-def sync_workspace_users(client: httpx.Client, workspace: SlackWorkspace, session) -> int:
-    """Sync users from Slack workspace to database."""
+def sync_workspace_channels(client: SlackClient, workspace: SlackWorkspace, session) -> int:
+    """Sync channels from Slack workspace to database using iterator."""
     synced = 0
-    cursor = None
 
-    while True:
-        params = {"limit": 200}
-        if cursor:
-            params["cursor"] = cursor
+    for channel in iter_channels(client):
+        channel_id = channel.get("id")
+        if not channel_id:
+            continue
 
-        response = slack_api_call(client, "users.list", **params)
-        members = response.get("members", [])
+        ch_type = get_channel_type(channel)
 
-        for member in members:
-            user_id = member.get("id")
-            if not user_id:
-                continue
+        # Get channel name (DMs don't have names)
+        name = channel.get("name") or channel.get("user") or channel_id
 
-            profile = member.get("profile", {})
+        existing = session.get(SlackChannel, channel_id)
+        if existing:
+            existing.name = name
+            existing.channel_type = ch_type
+            existing.is_private = channel.get("is_private", False)
+            existing.is_archived = channel.get("is_archived", False)
+        else:
+            slack_channel = SlackChannel(
+                id=channel_id,
+                workspace_id=workspace.id,
+                name=name,
+                channel_type=ch_type,
+                is_private=channel.get("is_private", False),
+                is_archived=channel.get("is_archived", False),
+            )
+            session.add(slack_channel)
 
-            existing = session.get(SlackUser, user_id)
-            if existing:
-                # Update existing user
-                existing.username = member.get("name", existing.username)
-                existing.display_name = profile.get("display_name") or None
-                existing.real_name = profile.get("real_name") or None
-                existing.email = profile.get("email") or None
-                existing.is_bot = member.get("is_bot", False)
-            else:
-                # Create new user
-                slack_user = SlackUser(
-                    id=user_id,
-                    workspace_id=workspace.id,
-                    username=member.get("name", user_id),
-                    display_name=profile.get("display_name") or None,
-                    real_name=profile.get("real_name") or None,
-                    email=profile.get("email") or None,
-                    is_bot=member.get("is_bot", False),
-                )
-                session.add(slack_user)
-
-            synced += 1
-
-        # Handle pagination
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
-        if not cursor:
-            break
+        synced += 1
 
     session.commit()
     return synced
 
 
-def sync_workspace_channels(client: httpx.Client, workspace: SlackWorkspace, session) -> int:
-    """Sync channels from Slack workspace to database."""
-    synced = 0
-    cursor = None
+def build_user_cache(client: SlackClient) -> dict[str, str]:
+    """Build user ID -> display name cache from Slack API.
 
-    while True:
-        params = {"types": "public_channel,private_channel,mpim,im", "limit": 200}
-        if cursor:
-            params["cursor"] = cursor
+    Returns a dict mapping Slack user IDs to their best display name.
+    """
+    users_by_id: dict[str, str] = {}
 
-        response = slack_api_call(client, "conversations.list", **params)
-        channels = response.get("channels", [])
+    for member in iter_users(client):
+        user_id = member.get("id")
+        if not user_id:
+            continue
 
-        for channel in channels:
-            channel_id = channel.get("id")
-            if not channel_id:
-                continue
+        profile = member.get("profile", {})
+        # Prefer display_name, then real_name, then username
+        name = (
+            profile.get("display_name")
+            or profile.get("real_name")
+            or member.get("name")
+            or user_id
+        )
+        users_by_id[user_id] = name
 
-            # Determine channel type based on Slack's terminology:
-            # - is_im = direct message
-            # - is_mpim = multi-person DM
-            # - is_private = private channel (includes legacy is_group)
-            # - else = public channel
-            if channel.get("is_im"):
-                ch_type = "dm"
-            elif channel.get("is_mpim"):
-                ch_type = "mpim"
-            elif channel.get("is_group") or channel.get("is_private"):
-                ch_type = "private_channel"
-            else:
-                ch_type = "channel"
-
-            # Get channel name (DMs don't have names)
-            name = channel.get("name") or channel.get("user") or channel_id
-
-            existing = session.get(SlackChannel, channel_id)
-            if existing:
-                existing.name = name
-                existing.channel_type = ch_type
-                existing.is_private = channel.get("is_private", False)
-                existing.is_archived = channel.get("is_archived", False)
-            else:
-                slack_channel = SlackChannel(
-                    id=channel_id,
-                    workspace_id=workspace.id,
-                    name=name,
-                    channel_type=ch_type,
-                    is_private=channel.get("is_private", False),
-                    is_archived=channel.get("is_archived", False),
-                )
-                session.add(slack_channel)
-
-            synced += 1
-
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
-        if not cursor:
-            break
-
-    session.commit()
-    return synced
+    return users_by_id
 
 
 @app.task(name=SYNC_SLACK_CHANNEL)
@@ -372,76 +316,61 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
             return {"status": "error", "error": "Channel not found"}
 
         workspace = channel.workspace
-        if not workspace or not workspace.access_token:
-            return {"status": "error", "error": "No workspace token"}
+        if not workspace:
+            return {"status": "error", "error": "No workspace"}
+
+        # Get valid credentials
+        credentials = get_workspace_credentials(session, workspace.id)
+        if not credentials or not credentials.access_token:
+            return {"status": "error", "error": "No valid workspace credentials"}
+
+        access_token = credentials.access_token
 
         try:
-            with get_slack_client(workspace) as client:
+            with SlackClient(access_token) as client:
                 messages_synced = 0
                 oldest = channel.last_message_ts
                 newest_ts = oldest
-                cursor = None
 
-                while True:
-                    params: dict[str, Any] = {"channel": channel_id, "limit": 100}
-                    if oldest:
-                        params["oldest"] = oldest
-                    if cursor:
-                        params["cursor"] = cursor
+                for msg in iter_messages(client, channel_id, oldest=oldest):
+                    msg_ts = msg.get("ts")
+                    if not msg_ts:
+                        continue
 
-                    response = slack_api_call(client, "conversations.history", **params)
-                    messages = response.get("messages", [])
+                    # Track newest message for final cursor update
+                    if not newest_ts or msg_ts > newest_ts:
+                        newest_ts = msg_ts
 
-                    if not messages:
-                        break
+                    # Skip non-message subtypes we don't want
+                    subtype = msg.get("subtype")
+                    if subtype in ("channel_join", "channel_leave", "bot_message"):
+                        continue
 
-                    for msg in messages:
-                        msg_ts = msg.get("ts")
-                        if not msg_ts:
-                            continue
+                    # Process message
+                    app.send_task(
+                        ADD_SLACK_MESSAGE,
+                        kwargs={
+                            "workspace_id": workspace.id,
+                            "channel_id": channel_id,
+                            "message_ts": msg_ts,
+                            "author_id": msg.get("user"),
+                            "content": msg.get("text", ""),
+                            "thread_ts": msg.get("thread_ts"),
+                            "reply_count": msg.get("reply_count"),
+                            "subtype": subtype,
+                            "edited_ts": msg.get("edited", {}).get("ts"),
+                            "reactions": msg.get("reactions"),
+                            "files": msg.get("files"),
+                        },
+                    )
+                    messages_synced += 1
 
-                        # Track newest message for final cursor update
-                        if not newest_ts or msg_ts > newest_ts:
-                            newest_ts = msg_ts
-
-                        # Skip non-message subtypes we don't want
-                        subtype = msg.get("subtype")
-                        if subtype in ("channel_join", "channel_leave", "bot_message"):
-                            continue
-
-                        # Process message
-                        app.send_task(
-                            ADD_SLACK_MESSAGE,
-                            kwargs={
-                                "workspace_id": workspace.id,
-                                "channel_id": channel_id,
-                                "message_ts": msg_ts,
-                                "author_id": msg.get("user"),
-                                "content": msg.get("text", ""),
-                                "thread_ts": msg.get("thread_ts"),
-                                "reply_count": msg.get("reply_count"),
-                                "subtype": subtype,
-                                "edited_ts": msg.get("edited", {}).get("ts"),
-                                "reactions": msg.get("reactions"),
-                                "files": msg.get("files"),
-                            },
+                    # Fetch thread replies if this is a thread parent
+                    if msg.get("reply_count", 0) > 0:
+                        thread_messages = fetch_thread_replies(
+                            client, channel_id, msg_ts, workspace.id
                         )
-                        messages_synced += 1
-
-                        # Fetch thread replies if this is a thread parent
-                        if msg.get("reply_count", 0) > 0:
-                            thread_messages = fetch_thread_replies(
-                                client, channel_id, msg_ts, workspace.id
-                            )
-                            messages_synced += thread_messages
-
-                    # Handle cursor-based pagination
-                    if not response.get("has_more"):
-                        break
-                    metadata = response.get("response_metadata", {})
-                    cursor = metadata.get("next_cursor")
-                    if not cursor:
-                        break
+                        messages_synced += thread_messages
 
                 # Update cursor
                 if newest_ts:
@@ -459,58 +388,36 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
 
 
 def fetch_thread_replies(
-    client: httpx.Client,
+    client: SlackClient,
     channel_id: str,
     thread_ts: str,
     workspace_id: str,
 ) -> int:
-    """Fetch and queue thread replies with pagination support."""
+    """Fetch and queue thread replies using iterator."""
     messages_queued = 0
-    cursor = None
 
     try:
-        while True:
-            params: dict[str, Any] = {
-                "channel": channel_id,
-                "ts": thread_ts,
-                "limit": 100,
-            }
-            if cursor:
-                params["cursor"] = cursor
+        for msg in iter_thread_replies(client, channel_id, thread_ts):
+            msg_ts = msg.get("ts")
+            if not msg_ts:
+                continue
 
-            response = slack_api_call(client, "conversations.replies", **params)
-            messages = response.get("messages", [])
-
-            for msg in messages:
-                msg_ts = msg.get("ts")
-                # Skip the parent message (same ts as thread_ts)
-                if not msg_ts or msg_ts == thread_ts:
-                    continue
-
-                app.send_task(
-                    ADD_SLACK_MESSAGE,
-                    kwargs={
-                        "workspace_id": workspace_id,
-                        "channel_id": channel_id,
-                        "message_ts": msg_ts,
-                        "author_id": msg.get("user"),
-                        "content": msg.get("text", ""),
-                        "thread_ts": thread_ts,
-                        "subtype": msg.get("subtype"),
-                        "edited_ts": msg.get("edited", {}).get("ts"),
-                        "reactions": msg.get("reactions"),
-                        "files": msg.get("files"),
-                    },
-                )
-                messages_queued += 1
-
-            # Handle pagination
-            if not response.get("has_more"):
-                break
-            metadata = response.get("response_metadata", {})
-            cursor = metadata.get("next_cursor")
-            if not cursor:
-                break
+            app.send_task(
+                ADD_SLACK_MESSAGE,
+                kwargs={
+                    "workspace_id": workspace_id,
+                    "channel_id": channel_id,
+                    "message_ts": msg_ts,
+                    "author_id": msg.get("user"),
+                    "content": msg.get("text", ""),
+                    "thread_ts": thread_ts,
+                    "subtype": msg.get("subtype"),
+                    "edited_ts": msg.get("edited", {}).get("ts"),
+                    "reactions": msg.get("reactions"),
+                    "files": msg.get("files"),
+                },
+            )
+            messages_queued += 1
 
     except SlackAPIError as e:
         logger.error(f"Failed to fetch thread replies for {thread_ts}: {e}")
@@ -559,19 +466,30 @@ def add_slack_message(
                 return {"status": "updated", "message_ts": message_ts}
             return {"status": "already_exists", "message_ts": message_ts}
 
-        # Get workspace for mention resolution
-        workspace = session.get(SlackWorkspace, workspace_id)
-        if not workspace:
-            return {"status": "error", "error": "Workspace not found"}
+        # Get credentials for file downloads and user resolution
+        credentials = get_workspace_credentials(session, workspace_id)
+        access_token = credentials.access_token if credentials else None
+
+        # Build user cache for mention resolution (done per-message to ensure fresh data)
+        # This is slightly inefficient but ensures we don't miss users
+        users_by_id: dict[str, str] = {}
+        if access_token:
+            try:
+                with SlackClient(access_token) as client:
+                    users_by_id = build_user_cache(client)
+            except SlackAPIError:
+                logger.warning("Failed to fetch user list for mention resolution")
 
         # Resolve mentions
-        users_by_id = {u.id: u for u in workspace.users}
         resolved_content = resolve_mentions(content, users_by_id)
+
+        # Get author name from cache
+        author_name = users_by_id.get(author_id)
 
         # Download images from files
         saved_images = []
-        if files and workspace.access_token:
-            headers = {"Authorization": f"Bearer {workspace.access_token}"}
+        if files and access_token:
+            headers = {"Authorization": f"Bearer {access_token}"}
             for file_info in files:
                 if file_info.get("mimetype", "").startswith("image/"):
                     url = file_info.get("url_private_download") or file_info.get("url_private")
@@ -579,18 +497,6 @@ def add_slack_message(
                         path = download_slack_file(url, headers, message_ts, workspace_id)
                         if path:
                             saved_images.append(path)
-
-        # Ensure author exists
-        author = session.get(SlackUser, author_id)
-        if not author:
-            # Create placeholder user
-            author = SlackUser(
-                id=author_id,
-                workspace_id=workspace_id,
-                username=author_id,
-            )
-            session.add(author)
-            session.flush()
 
         # Ensure channel exists
         channel = session.get(SlackChannel, channel_id)
@@ -620,6 +526,7 @@ def add_slack_message(
             channel_id=channel_id,
             workspace_id=workspace_id,
             author_id=author_id,
+            author_name=author_name,
             thread_ts=thread_ts,
             reply_count=reply_count,
             message_type=subtype or "message",

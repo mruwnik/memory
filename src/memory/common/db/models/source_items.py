@@ -52,7 +52,6 @@ if TYPE_CHECKING:
     )
     from memory.common.db.models.slack import (
         SlackChannel,
-        SlackUser,
         SlackWorkspace,
     )
     from memory.common.db.models.sources import (
@@ -434,9 +433,10 @@ class SlackMessage(SourceItem):
     workspace_id: Mapped[str] = mapped_column(
         Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
     )
-    author_id: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("slack_users.id", ondelete="SET NULL"), nullable=True
-    )
+    # Slack user ID (no FK - user info stored in Person.contact_info)
+    author_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Author display name (cached for display, resolved at ingest time)
+    author_name: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Threading
     thread_ts: Mapped[str | None] = mapped_column(Text, nullable=True)  # Parent message if in thread
@@ -458,10 +458,9 @@ class SlackMessage(SourceItem):
     # Local file paths for downloaded images
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
-    # Relationships
+    # Relationships (no author relationship - use author_name field)
     channel: Mapped[SlackChannel | None] = relationship("SlackChannel", foreign_keys=[channel_id])
     workspace: Mapped[SlackWorkspace | None] = relationship("SlackWorkspace", foreign_keys=[workspace_id])
-    author: Mapped[SlackUser | None] = relationship("SlackUser", foreign_keys=[author_id])
 
     __mapper_args__ = {
         "polymorphic_identity": "slack_message",
@@ -478,9 +477,9 @@ class SlackMessage(SourceItem):
     @property
     def title(self) -> str:
         """Format message for display."""
-        author_name = self.author.name if self.author else "unknown"
+        name = self.author_name or self.author_id or "unknown"
         content = self.resolved_content or self.content or ""
-        return f"{author_name}: {content}"
+        return f"{name}: {content}"
 
     @property
     def embedding_text(self) -> str:
@@ -488,8 +487,8 @@ class SlackMessage(SourceItem):
         content = self.resolved_content or self.content or ""
         if len(content) < 20:
             return ""  # Skip embedding for very short messages
-        author_name = self.author.name if self.author else "unknown"
-        return f"{author_name}: {content}"
+        name = self.author_name or self.author_id or "unknown"
+        return f"{name}: {content}"
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""

@@ -8,7 +8,7 @@ import pytest
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackUser,
+    SlackUserCredentials,
     SlackWorkspace,
 )
 
@@ -27,19 +27,32 @@ def other_user(db_session):
 
 
 @pytest.fixture
-def slack_workspace(db_session, user):
+def slack_workspace(db_session):
     """Create a Slack workspace for testing."""
     workspace = SlackWorkspace(
         id="T12345678",
         name="Test Workspace",
-        user_id=user.id,
         collect_messages=True,
         sync_interval_seconds=60,
     )
-    workspace.access_token = "xoxp-test-token"
     db_session.add(workspace)
     db_session.commit()
     return workspace
+
+
+@pytest.fixture
+def slack_credentials(db_session, slack_workspace, user):
+    """Create Slack credentials for the test user."""
+    credentials = SlackUserCredentials(
+        workspace_id=slack_workspace.id,
+        user_id=user.id,
+        scopes=["channels:read", "chat:write"],
+        slack_user_id="U_TEST_USER",
+    )
+    credentials.access_token = "xoxp-test-token"
+    db_session.add(credentials)
+    db_session.commit()
+    return credentials
 
 
 @pytest.fixture
@@ -59,28 +72,13 @@ def slack_channel(db_session, slack_workspace):
     return channel
 
 
-@pytest.fixture
-def slack_user_record(db_session, slack_workspace):
-    """Create a Slack user for testing."""
-    slack_user = SlackUser(
-        id="U12345678",
-        workspace_id=slack_workspace.id,
-        username="testuser",
-        display_name="Test User",
-        real_name="Test User",
-        email="slackuser@example.com",
-        is_bot=False,
-    )
-    db_session.add(slack_user)
-    db_session.commit()
-    return slack_user
-
-
 # ====== GET /slack/workspaces tests ======
 
 
-def test_list_workspaces_returns_user_workspaces(client, db_session, user, slack_workspace):
-    """List workspaces returns only workspaces belonging to current user."""
+def test_list_workspaces_returns_user_workspaces(
+    client, db_session, user, slack_workspace, slack_credentials
+):
+    """List workspaces returns only workspaces the user has credentials for."""
     response = client.get("/slack/workspaces")
 
     assert response.status_code == 200
@@ -89,26 +87,35 @@ def test_list_workspaces_returns_user_workspaces(client, db_session, user, slack
     assert data[0]["id"] == slack_workspace.id
     assert data[0]["name"] == "Test Workspace"
     assert data[0]["collect_messages"] is True
+    assert data[0]["user_connected"] is True
 
 
-def test_list_workspaces_empty_when_no_workspaces(client, db_session, user):
-    """List workspaces returns empty list when user has no workspaces."""
+def test_list_workspaces_empty_when_no_credentials(client, db_session, user):
+    """List workspaces returns empty list when user has no credentials."""
     response = client.get("/slack/workspaces")
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_list_workspaces_excludes_other_users_workspaces(client, db_session, user, other_user):
-    """List workspaces doesn't return workspaces from other users."""
-    # Create workspace for other user
-    other_workspace = SlackWorkspace(
+def test_list_workspaces_excludes_workspaces_without_credentials(
+    client, db_session, user, other_user
+):
+    """List workspaces doesn't return workspaces the user doesn't have credentials for."""
+    # Create workspace with credentials for other user only
+    workspace = SlackWorkspace(
         id="T_OTHER",
         name="Other Workspace",
+    )
+    db_session.add(workspace)
+    db_session.flush()
+
+    other_creds = SlackUserCredentials(
+        workspace_id=workspace.id,
         user_id=other_user.id,
     )
-    other_workspace.access_token = "xoxp-other-token"
-    db_session.add(other_workspace)
+    other_creds.access_token = "xoxp-other-token"
+    db_session.add(other_creds)
     db_session.commit()
 
     response = client.get("/slack/workspaces")
@@ -120,7 +127,9 @@ def test_list_workspaces_excludes_other_users_workspaces(client, db_session, use
 # ====== GET /slack/workspaces/{workspace_id} tests ======
 
 
-def test_get_workspace_success(client, db_session, user, slack_workspace):
+def test_get_workspace_success(
+    client, db_session, user, slack_workspace, slack_credentials
+):
     """Get workspace by ID returns workspace details."""
     response = client.get(f"/slack/workspaces/{slack_workspace.id}")
 
@@ -130,6 +139,7 @@ def test_get_workspace_success(client, db_session, user, slack_workspace):
     assert data["name"] == slack_workspace.name
     assert data["collect_messages"] is True
     assert data["sync_interval_seconds"] == 60
+    assert data["connected_users"] == 1
 
 
 def test_get_workspace_not_found(client, db_session, user):
@@ -139,18 +149,12 @@ def test_get_workspace_not_found(client, db_session, user):
     assert response.status_code == 404
 
 
-def test_get_workspace_access_denied(client, db_session, user, other_user):
-    """Get workspace returns 404 for workspace owned by another user."""
-    other_workspace = SlackWorkspace(
-        id="T_OTHER",
-        name="Other Workspace",
-        user_id=other_user.id,
-    )
-    other_workspace.access_token = "xoxp-other-token"
-    db_session.add(other_workspace)
-    db_session.commit()
-
-    response = client.get(f"/slack/workspaces/{other_workspace.id}")
+def test_get_workspace_access_denied_no_credentials(
+    client, db_session, user, slack_workspace
+):
+    """Get workspace returns 404 when user has no credentials for workspace."""
+    # Don't create credentials for user
+    response = client.get(f"/slack/workspaces/{slack_workspace.id}")
 
     assert response.status_code == 404
 
@@ -158,7 +162,9 @@ def test_get_workspace_access_denied(client, db_session, user, other_user):
 # ====== PATCH /slack/workspaces/{workspace_id} tests ======
 
 
-def test_update_workspace_collect_messages(client, db_session, user, slack_workspace):
+def test_update_workspace_collect_messages(
+    client, db_session, user, slack_workspace, slack_credentials
+):
     """Update workspace collect_messages setting."""
     response = client.patch(
         f"/slack/workspaces/{slack_workspace.id}",
@@ -173,7 +179,9 @@ def test_update_workspace_collect_messages(client, db_session, user, slack_works
     assert slack_workspace.collect_messages is False
 
 
-def test_update_workspace_sync_interval(client, db_session, user, slack_workspace):
+def test_update_workspace_sync_interval(
+    client, db_session, user, slack_workspace, slack_credentials
+):
     """Update workspace sync_interval_seconds setting."""
     response = client.patch(
         f"/slack/workspaces/{slack_workspace.id}",
@@ -198,26 +206,60 @@ def test_update_workspace_not_found(client, db_session, user):
 # ====== DELETE /slack/workspaces/{workspace_id} tests ======
 
 
-def test_delete_workspace_success(client, db_session, user, slack_workspace):
-    """Delete workspace succeeds."""
+def test_disconnect_workspace_success(
+    client, db_session, user, slack_workspace, slack_credentials
+):
+    """Disconnect workspace removes user's credentials."""
     response = client.delete(f"/slack/workspaces/{slack_workspace.id}")
 
     assert response.status_code == 200
 
-    # Verify workspace was deleted
+    # Verify credentials were deleted
+    creds = db_session.get(SlackUserCredentials, slack_credentials.id)
+    assert creds is None
+
+    # Workspace should also be deleted (no other users)
     workspace = db_session.get(SlackWorkspace, slack_workspace.id)
     assert workspace is None
 
 
-def test_delete_workspace_not_found(client, db_session, user):
-    """Delete workspace returns 404 when workspace doesn't exist."""
+def test_disconnect_workspace_keeps_for_other_users(
+    client, db_session, user, other_user, slack_workspace, slack_credentials
+):
+    """Disconnect doesn't delete workspace if other users have credentials."""
+    # Add credentials for other user
+    other_creds = SlackUserCredentials(
+        workspace_id=slack_workspace.id,
+        user_id=other_user.id,
+    )
+    other_creds.access_token = "xoxp-other-token"
+    db_session.add(other_creds)
+    db_session.commit()
+
+    response = client.delete(f"/slack/workspaces/{slack_workspace.id}")
+
+    assert response.status_code == 200
+
+    # User's credentials deleted
+    creds = db_session.get(SlackUserCredentials, slack_credentials.id)
+    assert creds is None
+
+    # Workspace still exists (other user has credentials)
+    workspace = db_session.get(SlackWorkspace, slack_workspace.id)
+    assert workspace is not None
+
+
+def test_disconnect_workspace_not_found(client, db_session, user):
+    """Disconnect workspace returns 404 when user has no credentials."""
     response = client.delete("/slack/workspaces/T_NONEXISTENT")
 
     assert response.status_code == 404
 
 
-def test_delete_workspace_cascades_channels(client, db_session, user, slack_workspace, slack_channel):
-    """Delete workspace also deletes associated channels."""
+def test_disconnect_workspace_cascades_channels(
+    client, db_session, user, slack_workspace, slack_credentials, slack_channel
+):
+    """Disconnect workspace also deletes channels when workspace is removed."""
     channel_id = slack_channel.id
 
     response = client.delete(f"/slack/workspaces/{slack_workspace.id}")
@@ -232,7 +274,9 @@ def test_delete_workspace_cascades_channels(client, db_session, user, slack_work
 # ====== GET /slack/workspaces/{workspace_id}/channels tests ======
 
 
-def test_list_channels_success(client, db_session, user, slack_workspace, slack_channel):
+def test_list_channels_success(
+    client, db_session, user, slack_workspace, slack_credentials, slack_channel
+):
     """List channels returns channels for workspace."""
     response = client.get(f"/slack/workspaces/{slack_workspace.id}/channels")
 
@@ -245,7 +289,7 @@ def test_list_channels_success(client, db_session, user, slack_workspace, slack_
 
 
 def test_list_channels_workspace_not_found(client, db_session, user):
-    """List channels returns 404 when workspace doesn't exist."""
+    """List channels returns 404 when user has no access."""
     response = client.get("/slack/workspaces/T_NONEXISTENT/channels")
 
     assert response.status_code == 404
@@ -254,7 +298,9 @@ def test_list_channels_workspace_not_found(client, db_session, user):
 # ====== PATCH /slack/channels/{channel_id} tests ======
 
 
-def test_update_channel_collect_messages(client, db_session, user, slack_workspace, slack_channel):
+def test_update_channel_collect_messages(
+    client, db_session, user, slack_workspace, slack_credentials, slack_channel
+):
     """Update channel collect_messages setting."""
     response = client.patch(
         f"/slack/channels/{slack_channel.id}",
@@ -269,7 +315,9 @@ def test_update_channel_collect_messages(client, db_session, user, slack_workspa
     assert slack_channel.collect_messages is False
 
 
-def test_update_channel_inherit_collect_messages(client, db_session, user, slack_workspace, slack_channel):
+def test_update_channel_inherit_collect_messages(
+    client, db_session, user, slack_workspace, slack_credentials, slack_channel
+):
     """Update channel to inherit collect_messages from workspace."""
     # First set explicit value
     slack_channel.collect_messages = False
@@ -303,43 +351,23 @@ def test_update_channel_not_found(client, db_session, user):
 
 
 @patch("memory.api.slack.app")
-def test_trigger_sync_success(mock_app, client, db_session, user, slack_workspace):
+def test_trigger_sync_success(
+    mock_app, client, db_session, user, slack_workspace, slack_credentials
+):
     """Trigger sync sends task to Celery."""
     response = client.post(f"/slack/workspaces/{slack_workspace.id}/sync")
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "queued"
+    assert data["status"] == "sync_triggered"
     assert data["workspace_id"] == slack_workspace.id
 
     mock_app.send_task.assert_called_once()
 
 
 def test_trigger_sync_workspace_not_found(client, db_session, user):
-    """Trigger sync returns 404 when workspace doesn't exist."""
+    """Trigger sync returns 404 when user has no access."""
     response = client.post("/slack/workspaces/T_NONEXISTENT/sync")
-
-    assert response.status_code == 404
-
-
-# ====== GET /slack/workspaces/{workspace_id}/users tests ======
-
-
-def test_list_users_success(client, db_session, user, slack_workspace, slack_user_record):
-    """List users returns Slack users for workspace."""
-    response = client.get(f"/slack/workspaces/{slack_workspace.id}/users")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["id"] == slack_user_record.id
-    assert data[0]["username"] == "testuser"
-    assert data[0]["display_name"] == "Test User"
-
-
-def test_list_users_workspace_not_found(client, db_session, user):
-    """List users returns 404 when workspace doesn't exist."""
-    response = client.get("/slack/workspaces/T_NONEXISTENT/users")
 
     assert response.status_code == 404
 
@@ -355,7 +383,7 @@ def test_authorize_not_configured(mock_settings, client, db_session, user):
 
     response = client.get("/slack/authorize")
 
-    assert response.status_code == 400
+    assert response.status_code == 503
     assert "not configured" in response.json()["detail"].lower()
 
 
@@ -411,49 +439,47 @@ def test_oauth_state_expiration(db_session, user):
 # ====== Model tests ======
 
 
-def test_slack_workspace_token_encryption(db_session, user):
+def test_slack_credentials_token_encryption(db_session, user, slack_workspace):
     """Test that tokens are encrypted when stored."""
-    workspace = SlackWorkspace(
-        id="T_TEST",
-        name="Test",
+    credentials = SlackUserCredentials(
+        workspace_id=slack_workspace.id,
         user_id=user.id,
     )
-    workspace.access_token = "xoxp-secret-token"
-    workspace.refresh_token = "xoxr-refresh-token"
-    db_session.add(workspace)
+    credentials.access_token = "xoxp-secret-token"
+    credentials.refresh_token = "xoxr-refresh-token"
+    db_session.add(credentials)
     db_session.commit()
 
     # Raw encrypted values should not equal plaintext
-    assert workspace.access_token_encrypted != b"xoxp-secret-token"
-    assert workspace.refresh_token_encrypted != b"xoxr-refresh-token"
+    assert credentials.access_token_encrypted != b"xoxp-secret-token"
+    assert credentials.refresh_token_encrypted != b"xoxr-refresh-token"
 
     # Decrypted values should match
-    assert workspace.access_token == "xoxp-secret-token"
-    assert workspace.refresh_token == "xoxr-refresh-token"
+    assert credentials.access_token == "xoxp-secret-token"
+    assert credentials.refresh_token == "xoxr-refresh-token"
 
 
-def test_slack_workspace_token_expiration(db_session, user):
+def test_slack_credentials_token_expiration(db_session, user, slack_workspace):
     """Test token expiration check."""
-    workspace = SlackWorkspace(
-        id="T_TEST",
-        name="Test",
+    credentials = SlackUserCredentials(
+        workspace_id=slack_workspace.id,
         user_id=user.id,
     )
-    db_session.add(workspace)
+    db_session.add(credentials)
     db_session.commit()
 
     # No expiration = not expired
-    assert workspace.is_token_expired() is False
+    assert credentials.is_token_expired() is False
 
     # Future expiration = not expired
-    workspace.token_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    credentials.token_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
     db_session.commit()
-    assert workspace.is_token_expired() is False
+    assert credentials.is_token_expired() is False
 
     # Past expiration = expired
-    workspace.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    credentials.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
     db_session.commit()
-    assert workspace.is_token_expired() is True
+    assert credentials.is_token_expired() is True
 
 
 def test_slack_channel_should_collect_inherit(db_session, slack_workspace):
@@ -489,34 +515,31 @@ def test_slack_channel_should_collect_explicit(db_session, slack_workspace):
     assert channel.should_collect is False
 
 
-def test_slack_user_name_property(db_session, slack_workspace):
-    """Test SlackUser.name returns best available name."""
-    # All names set
-    user1 = SlackUser(
-        id="U1",
+def test_multi_user_workspace_access(db_session, user, other_user, slack_workspace):
+    """Test multiple users can have credentials for the same workspace."""
+    # Create credentials for both users
+    creds1 = SlackUserCredentials(
         workspace_id=slack_workspace.id,
-        username="user1",
-        display_name="Display",
-        real_name="Real Name",
+        user_id=user.id,
     )
-    assert user1.name == "Display"
+    creds1.access_token = "xoxp-user1-token"
 
-    # No display name
-    user2 = SlackUser(
-        id="U2",
+    creds2 = SlackUserCredentials(
         workspace_id=slack_workspace.id,
-        username="user2",
-        display_name=None,
-        real_name="Real Name",
+        user_id=other_user.id,
     )
-    assert user2.name == "Real Name"
+    creds2.access_token = "xoxp-user2-token"
 
-    # Only username
-    user3 = SlackUser(
-        id="U3",
-        workspace_id=slack_workspace.id,
-        username="user3",
-        display_name=None,
-        real_name=None,
-    )
-    assert user3.name == "user3"
+    db_session.add_all([creds1, creds2])
+    db_session.commit()
+
+    # Both credentials should exist
+    all_creds = db_session.query(SlackUserCredentials).filter_by(
+        workspace_id=slack_workspace.id
+    ).all()
+    assert len(all_creds) == 2
+
+    # Verify user tokens are different
+    user_ids = {c.user_id for c in all_creds}
+    assert user.id in user_ids
+    assert other_user.id in user_ids
