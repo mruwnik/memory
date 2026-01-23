@@ -303,7 +303,6 @@ async def test_get_user_returns_none_when_no_ssh_key(mock_make_session, mock_get
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_returns_markets(mock_search, mock_scope):
     """Get forecasts returns prediction market data."""
-    from memory.common.markets import _search_cache
     _search_cache.clear()
 
     mock_search.return_value = [
@@ -334,7 +333,6 @@ async def test_get_forecasts_returns_markets(mock_search, mock_scope):
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_with_default_params(mock_search, mock_scope):
     """Get forecasts uses default parameters."""
-    from memory.common.markets import _search_cache
     _search_cache.clear()
 
     mock_search.return_value = []
@@ -349,7 +347,6 @@ async def test_get_forecasts_with_default_params(mock_search, mock_scope):
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_empty_results(mock_search, mock_scope):
     """Get forecasts returns empty list when no markets found."""
-    from memory.common.markets import _search_cache
     _search_cache.clear()
 
     mock_search.return_value = []
@@ -890,7 +887,6 @@ async def test_search_markets_handles_source_errors(mock_manifold, mock_polymark
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_passes_sources_param(mock_search, mock_scope):
     """get_forecasts passes sources parameter to search_markets."""
-    from memory.common.markets import _search_cache
     _search_cache.clear()
 
     mock_search.return_value = []
@@ -905,7 +901,6 @@ async def test_get_forecasts_passes_sources_param(mock_search, mock_scope):
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_defaults_to_all_sources(mock_search, mock_scope):
     """get_forecasts uses all sources when none specified."""
-    from memory.common.markets import _search_cache
 
     # Clear cache to ensure mock is called
     _search_cache.clear()
@@ -924,7 +919,6 @@ async def test_get_forecasts_defaults_to_all_sources(mock_search, mock_scope):
 @patch("memory.api.MCP.servers.forecast.search_markets")
 async def test_get_forecasts_caches_results(mock_search, mock_scope):
     """get_forecasts caches search results."""
-    from memory.common.markets import _search_cache
 
     mock_search.return_value = [{"id": "m1", "question": "Test market"}]
     _search_cache.clear()
@@ -945,14 +939,12 @@ async def test_get_forecasts_caches_results(mock_search, mock_scope):
 
 def test_calculate_liquidity_score_zero_volume():
     """Liquidity score is 0 for zero volume."""
-    from memory.common.markets import calculate_liquidity_score
 
     assert calculate_liquidity_score(0, None) == 0.0
 
 
 def test_calculate_liquidity_score_high_volume():
     """Liquidity score approaches 1 for high volume."""
-    from memory.common.markets import calculate_liquidity_score
 
     # $10k/day for 1 day = 1.0
     score = calculate_liquidity_score(10000, None)
@@ -961,7 +953,6 @@ def test_calculate_liquidity_score_high_volume():
 
 def test_calculate_liquidity_score_with_spread():
     """Liquidity score factors in spread when provided."""
-    from memory.common.markets import calculate_liquidity_score
 
     # Good spread (1%) should boost score
     score_good = calculate_liquidity_score(5000, None, spread=0.01)
@@ -973,7 +964,6 @@ def test_calculate_liquidity_score_with_spread():
 
 def test_calculate_liquidity_score_with_created_time():
     """Liquidity score uses created time for volume/day calculation."""
-    from memory.common.markets import calculate_liquidity_score
     from datetime import datetime, timedelta, timezone
 
     # Market created 10 days ago with $10k volume = $1k/day = 0.1 score
@@ -1032,8 +1022,6 @@ def test_filter_kalshi_market_includes_liquidity_score():
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
 async def test_get_market_history_kalshi(mock_scope):
     """get_market_history fetches Kalshi candlesticks."""
-    from memory.api.MCP.servers.forecast import get_market_history
-    from memory.common.markets import _history_cache
 
     _history_cache.clear()
 
@@ -1057,8 +1045,6 @@ async def test_get_market_history_kalshi(mock_scope):
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
 async def test_get_market_history_caches_results(mock_scope, mock_aiohttp_session):
     """get_market_history caches results."""
-    from memory.api.MCP.servers.forecast import get_market_history
-    from memory.common.markets import _history_cache
 
     mock_session_cm, mock_response = mock_aiohttp_session
     _history_cache.clear()
@@ -1093,8 +1079,6 @@ async def test_get_market_history_caches_results(mock_scope, mock_aiohttp_sessio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
 async def test_get_market_depth_kalshi(mock_scope):
     """get_market_depth fetches Kalshi order book."""
-    from memory.api.MCP.servers.forecast import get_market_depth
-    from memory.common.markets import _depth_cache
 
     _depth_cache.clear()
 
@@ -1135,7 +1119,6 @@ async def test_get_market_depth_kalshi(mock_scope):
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
 async def test_get_market_depth_unsupported_source(mock_scope):
     """get_market_depth returns error for unsupported sources."""
-    from memory.api.MCP.servers.forecast import get_market_depth
 
     result = await get_market_depth.fn(market_id="test", source="manifold")
 
@@ -1151,7 +1134,6 @@ async def test_get_market_depth_unsupported_source(mock_scope):
 @patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
 async def test_compare_forecasts_calculates_consensus(mock_compare_data, mock_scope):
     """compare_forecasts calculates volume-weighted consensus."""
-    from memory.api.MCP.servers.forecast import compare_forecasts
 
     mock_compare_data.return_value = {
         "term": "test",
@@ -1176,7 +1158,6 @@ async def test_compare_forecasts_calculates_consensus(mock_compare_data, mock_sc
 @patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
 async def test_compare_forecasts_finds_arbitrage(mock_compare_data, mock_scope):
     """compare_forecasts identifies arbitrage opportunities."""
-    from memory.api.MCP.servers.forecast import compare_forecasts
 
     mock_compare_data.return_value = {
         "term": "test_arbitrage",
@@ -1203,7 +1184,6 @@ async def test_compare_forecasts_finds_arbitrage(mock_compare_data, mock_scope):
 @patch("memory.api.MCP.servers.forecast.compare_forecasts_data")
 async def test_compare_forecasts_empty_results(mock_compare_data, mock_scope):
     """compare_forecasts handles empty results."""
-    from memory.api.MCP.servers.forecast import compare_forecasts
 
     mock_compare_data.return_value = {
         "term": "nonexistent",
@@ -1227,7 +1207,6 @@ async def test_compare_forecasts_empty_results(mock_compare_data, mock_scope):
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
 async def test_get_resolved_markets_manifold(mock_scope):
     """get_resolved_markets fetches resolved Manifold markets."""
-    from memory.api.MCP.servers.forecast import get_resolved_markets
 
     # Mock the manifold resolved helper
     async def mock_manifold_resolved(term, since):

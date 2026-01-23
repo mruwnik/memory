@@ -128,7 +128,7 @@ def list_issues(
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
         if assignee:
-            query = query.filter(assignee == any_(GithubItem.assignees))
+            query = query.filter(any_(GithubItem.assignees) == assignee)
         if author:
             query = query.filter(GithubItem.author == author)
         if state:
