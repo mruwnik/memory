@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
+    from memory.common.db.models.slack import SlackUser
     from memory.common.db.models.users import User
 
 import memory.common.extract as extract
@@ -66,6 +67,11 @@ class Person(SourceItem):
     # Relationship to linked Discord accounts
     discord_accounts: Mapped[list[DiscordUser]] = relationship(
         "DiscordUser", back_populates="person"
+    )
+
+    # Relationship to linked Slack accounts
+    slack_accounts: Mapped[list[SlackUser]] = relationship(
+        "SlackUser", back_populates="person"
     )
 
     __mapper_args__ = {

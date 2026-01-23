@@ -50,6 +50,11 @@ if TYPE_CHECKING:
         DiscordServer,
         DiscordUser,
     )
+    from memory.common.db.models.slack import (
+        SlackChannel,
+        SlackUser,
+        SlackWorkspace,
+    )
     from memory.common.db.models.sources import (
         Book,
         CalendarAccount,
@@ -387,6 +392,103 @@ class DiscordMessage(SourceItem):
             return ""  # Skip embedding for very short messages
         author_name = self.author.username if self.author else "unknown"
         return f"{author_name}: {self.content}"
+
+    def as_content(self) -> dict[str, Any]:
+        """Return message content ready for LLM (text + images from disk)."""
+        content: dict[str, Any] = {"text": self.title, "images": []}
+        for path in self.images or []:
+            try:
+                full_path = settings.FILE_STORAGE_DIR / path
+                if full_path.exists():
+                    image = Image.open(full_path)
+                    content["images"].append(image)
+            except Exception:
+                pass  # Skip failed image loads
+        return content
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        """Generate chunks for embedding."""
+        text = self.embedding_text
+        if not text:
+            return []  # Don't embed short messages
+        return extract.extract_text(text)
+
+
+class SlackMessage(SourceItem):
+    """Slack message collected from a channel or DM.
+
+    Stores messages with their metadata, resolved mentions, and attachments.
+    """
+
+    __tablename__ = "slack_message"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # Slack IDs (strings, unlike Discord snowflakes)
+    message_ts: Mapped[str] = mapped_column(Text, nullable=False)  # Slack timestamp (message ID)
+    channel_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_channels.id"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_workspaces.id"), nullable=False
+    )
+    author_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_users.id"), nullable=False
+    )
+
+    # Threading
+    thread_ts: Mapped[str | None] = mapped_column(Text, nullable=True)  # Parent message if in thread
+    reply_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Message metadata
+    message_type: Mapped[str] = mapped_column(
+        Text, server_default="message"
+    )  # "message", "thread_broadcast", "file_share", "channel_join", etc.
+    edited_ts: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Rich content
+    reactions: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    files: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)  # File metadata
+
+    # Resolved content (mentions replaced with display names)
+    resolved_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Local file paths for downloaded images
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
+    # Relationships
+    channel: Mapped[SlackChannel | None] = relationship("SlackChannel", foreign_keys=[channel_id])
+    workspace: Mapped[SlackWorkspace | None] = relationship("SlackWorkspace", foreign_keys=[workspace_id])
+    author: Mapped[SlackUser | None] = relationship("SlackUser", foreign_keys=[author_id])
+
+    __mapper_args__ = {
+        "polymorphic_identity": "slack_message",
+    }
+
+    __table_args__ = (
+        Index("slack_message_ts_workspace_idx", "message_ts", "workspace_id", unique=True),
+        Index("slack_message_channel_idx", "channel_id"),
+        Index("slack_message_author_idx", "author_id"),
+        Index("slack_message_thread_idx", "thread_ts"),
+    )
+
+    @property
+    def title(self) -> str:
+        """Format message for display."""
+        author_name = self.author.name if self.author else "unknown"
+        content = self.resolved_content or self.content or ""
+        return f"{author_name}: {content}"
+
+    @property
+    def embedding_text(self) -> str:
+        """Text to use for embedding. Returns empty string for short messages."""
+        content = self.resolved_content or self.content or ""
+        if len(content) < 20:
+            return ""  # Skip embedding for very short messages
+        author_name = self.author.name if self.author else "unknown"
+        return f"{author_name}: {content}"
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""

@@ -13,6 +13,7 @@ NOTES_ROOT = "memory.workers.tasks.notes"
 OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
 SCHEDULED_CALLS_ROOT = "memory.workers.tasks.scheduled_calls"
 DISCORD_ROOT = "memory.workers.tasks.discord"
+SLACK_ROOT = "memory.workers.tasks.slack"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
@@ -24,6 +25,12 @@ VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
+
+# Slack tasks
+SYNC_ALL_SLACK_WORKSPACES = f"{SLACK_ROOT}.sync_all_slack_workspaces"
+SYNC_SLACK_WORKSPACE = f"{SLACK_ROOT}.sync_slack_workspace"
+SYNC_SLACK_CHANNEL = f"{SLACK_ROOT}.sync_slack_channel"
+ADD_SLACK_MESSAGE = f"{SLACK_ROOT}.add_slack_message"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
@@ -148,6 +155,7 @@ app.conf.update(
         f"{BLOGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-blogs"},
         f"{COMIC_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-comic"},
         f"{DISCORD_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
+        f"{SLACK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack"},
         f"{EMAIL_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-email"},
         f"{FORUMS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-forums"},
         f"{MAINTENANCE_ROOT}.*": {

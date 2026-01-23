@@ -12,6 +12,7 @@ from memory.common.db.models.source_items import (
     AgentObservation,
     ChatMessage,
     DiscordMessage,
+    SlackMessage,
     BlogPost,
     Comic,
     BookSection,
@@ -45,6 +46,11 @@ from memory.common.db.models.discord import (
     DiscordChannel,
     DiscordUser,
     discord_bot_users,
+)
+from memory.common.db.models.slack import (
+    SlackWorkspace,
+    SlackChannel,
+    SlackUser,
 )
 from memory.common.db.models.mcp import (
     MCPServer,
@@ -221,6 +227,10 @@ __all__ = [
     "DiscordChannel",
     "DiscordUser",
     "discord_bot_users",
+    "SlackWorkspace",
+    "SlackChannel",
+    "SlackUser",
+    "SlackMessage",
     "MCPServer",
     "MCPServerAssignment",
     # Users
