@@ -86,23 +86,46 @@ async def async_slack_call(access_token: str, method: str, **params) -> dict:
 # --- Paginated Iterators ---
 
 
-def iter_users(client: SlackClient, limit: int = 200) -> Iterator[dict]:
-    """Iterate over all users in a workspace with automatic pagination."""
+def _paginate(
+    client: SlackClient,
+    method: str,
+    response_key: str,
+    params: dict[str, Any],
+    check_has_more: bool = False,
+) -> Iterator[dict]:
+    """Generic cursor-based pagination for Slack API.
+
+    Args:
+        client: SlackClient instance
+        method: Slack API method name
+        response_key: Key in response containing items (e.g., "members", "channels")
+        params: Initial API parameters (will be mutated to add cursor)
+        check_has_more: If True, also check "has_more" field (for conversations.*)
+    """
     cursor = None
     while True:
-        params: dict[str, Any] = {"limit": limit}
         if cursor:
             params["cursor"] = cursor
 
-        response = client.call("users.list", **params)
+        response = client.call(method, **params)
+        items = response.get(response_key, [])
 
-        for member in response.get("members", []):
-            yield member
+        if not items:
+            break
 
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
+        yield from items
+
+        if check_has_more and not response.get("has_more"):
+            break
+
+        cursor = response.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
+
+
+def iter_users(client: SlackClient, limit: int = 200) -> Iterator[dict]:
+    """Iterate over all users in a workspace with automatic pagination."""
+    yield from _paginate(client, "users.list", "members", {"limit": limit})
 
 
 def iter_channels(
@@ -111,21 +134,9 @@ def iter_channels(
     limit: int = 200,
 ) -> Iterator[dict]:
     """Iterate over all channels in a workspace with automatic pagination."""
-    cursor = None
-    while True:
-        params: dict[str, Any] = {"types": types, "limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-
-        response = client.call("conversations.list", **params)
-
-        for channel in response.get("channels", []):
-            yield channel
-
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
-        if not cursor:
-            break
+    yield from _paginate(
+        client, "conversations.list", "channels", {"types": types, "limit": limit}
+    )
 
 
 def iter_messages(
@@ -145,30 +156,12 @@ def iter_messages(
     Yields:
         Message dicts from newest to oldest
     """
-    cursor = None
-    while True:
-        params: dict[str, Any] = {"channel": channel_id, "limit": limit}
-        if oldest:
-            params["oldest"] = oldest
-        if cursor:
-            params["cursor"] = cursor
-
-        response = client.call("conversations.history", **params)
-        messages = response.get("messages", [])
-
-        if not messages:
-            break
-
-        for msg in messages:
-            yield msg
-
-        if not response.get("has_more"):
-            break
-
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
-        if not cursor:
-            break
+    params: dict[str, Any] = {"channel": channel_id, "limit": limit}
+    if oldest:
+        params["oldest"] = oldest
+    yield from _paginate(
+        client, "conversations.history", "messages", params, check_has_more=True
+    )
 
 
 def iter_thread_replies(
@@ -188,30 +181,13 @@ def iter_thread_replies(
     Yields:
         Reply message dicts (excludes parent message)
     """
-    cursor = None
-    while True:
-        params: dict[str, Any] = {
-            "channel": channel_id,
-            "ts": thread_ts,
-            "limit": limit,
-        }
-        if cursor:
-            params["cursor"] = cursor
-
-        response = client.call("conversations.replies", **params)
-
-        for msg in response.get("messages", []):
-            # Skip the parent message
-            if msg.get("ts") != thread_ts:
-                yield msg
-
-        if not response.get("has_more"):
-            break
-
-        metadata = response.get("response_metadata", {})
-        cursor = metadata.get("next_cursor")
-        if not cursor:
-            break
+    params: dict[str, Any] = {"channel": channel_id, "ts": thread_ts, "limit": limit}
+    for msg in _paginate(
+        client, "conversations.replies", "messages", params, check_has_more=True
+    ):
+        # Skip the parent message (it's always included in replies)
+        if msg.get("ts") != thread_ts:
+            yield msg
 
 
 # --- Channel Type Detection ---

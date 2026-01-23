@@ -216,19 +216,3 @@ class SlackChannel(Base):
         if self.collect_messages is not None:
             return self.collect_messages
         return self.workspace.collect_messages
-
-
-# Note: SlackUser table has been removed. Slack user data (for mention resolution)
-# is now stored in Person.contact_info["slack"] as:
-# {
-#     "slack": {
-#         "<workspace_id>": {
-#             "user_id": "U12345",
-#             "username": "john.doe",
-#             "display_name": "John Doe"
-#         }
-#     }
-# }
-#
-# This allows a Person to have Slack identities across multiple workspaces
-# while avoiding a separate table that duplicates the Person concept.
