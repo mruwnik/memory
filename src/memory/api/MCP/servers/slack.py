@@ -67,6 +67,51 @@ def _get_workspace_by_id(session: DBSession, token: str, workspace_id: str) -> S
     raise ValueError(f"Workspace {workspace_id} not found or not accessible")
 
 
+def _get_workspace_and_channel(
+    session: DBSession,
+    token: str,
+    workspace_id: str | None,
+    channel: str | None,
+) -> tuple[SlackWorkspace, str | None]:
+    """Get workspace and resolve channel identifier.
+
+    Args:
+        session: Database session
+        token: Access token string
+        workspace_id: Optional workspace ID (uses default if not specified)
+        channel: Channel ID (starts with C/D/G) or channel name
+
+    Returns:
+        Tuple of (workspace, resolved_channel_id)
+    """
+    # Get workspace
+    if workspace_id:
+        workspace = _get_workspace_by_id(session, token, workspace_id)
+    else:
+        workspace = _get_default_workspace(session, token)
+
+    if not channel:
+        return workspace, None
+
+    # Detect if channel is an ID or name
+    # Slack channel IDs start with C (public), D (DM), or G (private/group)
+    if channel[0] in "CDG" and channel[1:].isalnum():
+        return workspace, channel
+
+    # It's a name - look it up
+    db_channel = (
+        session.query(SlackChannel)
+        .filter(
+            SlackChannel.workspace_id == workspace.id,
+            SlackChannel.name == channel,
+        )
+        .first()
+    )
+    if not db_channel:
+        raise ValueError(f"Channel '{channel}' not found in workspace")
+    return workspace, db_channel.id
+
+
 async def slack_api_call(workspace: SlackWorkspace, method: str, **params) -> dict:
     """Make an async Slack API call."""
     if not workspace.access_token:
@@ -95,8 +140,7 @@ async def slack_api_call(workspace: SlackWorkspace, method: str, **params) -> di
 @visible_when(require_scopes("slack"), has_slack_workspaces)
 async def send_slack_message(
     message: str,
-    channel_id: str | None = None,
-    channel_name: str | None = None,
+    channel: str,
     workspace_id: str | None = None,
     thread_ts: str | None = None,
 ) -> dict[str, Any]:
@@ -105,8 +149,7 @@ async def send_slack_message(
 
     Args:
         message: The message content to send
-        channel_id: Slack channel ID to send to
-        channel_name: Channel name to send to (will search for it)
+        channel: Channel ID (e.g., C12345678) or channel name (e.g., "general")
         workspace_id: Optional workspace ID (uses default if not specified)
         thread_ts: Optional thread timestamp to reply to
 
@@ -116,8 +159,8 @@ async def send_slack_message(
     if not message:
         raise ValueError("Message cannot be empty")
 
-    if not channel_id and not channel_name:
-        raise ValueError("Must specify either channel_id or channel_name")
+    if not channel:
+        raise ValueError("Channel is required")
 
     # Get access token before entering sync context
     access_token = get_access_token()
@@ -125,30 +168,13 @@ async def send_slack_message(
         raise ValueError("Not authenticated")
 
     with make_session() as session:
-        # Get workspace
-        if workspace_id:
-            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
-        else:
-            workspace = _get_default_workspace(session, access_token.token)
-
-        # Resolve channel
-        target_channel_id = channel_id
-        if not target_channel_id:
-            channel = (
-                session.query(SlackChannel)
-                .filter(
-                    SlackChannel.workspace_id == workspace.id,
-                    SlackChannel.name == channel_name,
-                )
-                .first()
-            )
-            if not channel:
-                raise ValueError(f"Channel '{channel_name}' not found in workspace")
-            target_channel_id = channel.id
+        workspace, channel_id = _get_workspace_and_channel(
+            session, access_token.token, workspace_id, channel
+        )
 
         # Send message
         params: dict[str, Any] = {
-            "channel": target_channel_id,
+            "channel": channel_id,
             "text": message,
         }
         if thread_ts:
@@ -158,7 +184,7 @@ async def send_slack_message(
 
         return {
             "success": True,
-            "channel": target_channel_id,
+            "channel": channel_id,
             "ts": data.get("ts"),
             "message_preview": message[:100] + "..." if len(message) > 100 else message,
         }
@@ -167,7 +193,7 @@ async def send_slack_message(
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
 async def add_slack_reaction(
-    channel_id: str,
+    channel: str,
     message_ts: str,
     emoji: str,
     workspace_id: str | None = None,
@@ -176,7 +202,7 @@ async def add_slack_reaction(
     Add a reaction emoji to a Slack message.
 
     Args:
-        channel_id: The channel containing the message
+        channel: Channel ID (e.g., C12345678) or channel name (e.g., "general")
         message_ts: The timestamp of the message to react to
         emoji: The emoji name (without colons, e.g., "thumbsup" not ":thumbsup:")
         workspace_id: Optional workspace ID (uses default if not specified)
@@ -196,10 +222,9 @@ async def add_slack_reaction(
         raise ValueError("Not authenticated")
 
     with make_session() as session:
-        if workspace_id:
-            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
-        else:
-            workspace = _get_default_workspace(session, access_token.token)
+        workspace, channel_id = _get_workspace_and_channel(
+            session, access_token.token, workspace_id, channel
+        )
 
         await slack_api_call(
             workspace,
@@ -241,10 +266,9 @@ async def list_slack_channels(
         raise ValueError("Not authenticated")
 
     with make_session() as session:
-        if workspace_id:
-            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
-        else:
-            workspace = _get_default_workspace(session, access_token.token)
+        workspace, _ = _get_workspace_and_channel(
+            session, access_token.token, workspace_id, None
+        )
 
         query = session.query(SlackChannel).filter(
             SlackChannel.workspace_id == workspace.id,
@@ -280,8 +304,7 @@ async def list_slack_channels(
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
 async def get_slack_channel_history(
-    channel_id: str | None = None,
-    channel_name: str | None = None,
+    channel: str,
     workspace_id: str | None = None,
     limit: int = 50,
     before: str | None = None,
@@ -291,8 +314,7 @@ async def get_slack_channel_history(
     Get message history from a Slack channel.
 
     Args:
-        channel_id: Slack channel ID
-        channel_name: Channel name (will search for it)
+        channel: Channel ID (e.g., C12345678) or channel name (e.g., "general")
         workspace_id: Optional workspace ID (uses default if not specified)
         limit: Maximum number of messages (default 50, max 100)
         before: ISO datetime or message ts - only get messages before this
@@ -301,8 +323,8 @@ async def get_slack_channel_history(
     Returns:
         Dict with messages list
     """
-    if not channel_id and not channel_name:
-        raise ValueError("Must specify either channel_id or channel_name")
+    if not channel:
+        raise ValueError("Channel is required")
 
     limit = max(1, min(100, limit))
 
@@ -312,29 +334,13 @@ async def get_slack_channel_history(
         raise ValueError("Not authenticated")
 
     with make_session() as session:
-        if workspace_id:
-            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
-        else:
-            workspace = _get_default_workspace(session, access_token.token)
-
-        # Resolve channel
-        target_channel_id = channel_id
-        if not target_channel_id:
-            channel = (
-                session.query(SlackChannel)
-                .filter(
-                    SlackChannel.workspace_id == workspace.id,
-                    SlackChannel.name == channel_name,
-                )
-                .first()
-            )
-            if not channel:
-                raise ValueError(f"Channel '{channel_name}' not found")
-            target_channel_id = channel.id
+        workspace, channel_id = _get_workspace_and_channel(
+            session, access_token.token, workspace_id, channel
+        )
 
         # Build API params
         params: dict[str, Any] = {
-            "channel": target_channel_id,
+            "channel": channel_id,
             "limit": limit,
         }
         if before:
@@ -361,7 +367,7 @@ async def get_slack_channel_history(
             })
 
         return {
-            "channel_id": target_channel_id,
+            "channel_id": channel_id,
             "workspace_id": workspace.id,
             "messages": formatted_messages,
             "count": len(formatted_messages),
