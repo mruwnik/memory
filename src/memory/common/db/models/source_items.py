@@ -468,7 +468,7 @@ class SlackMessage(SourceItem):
     }
 
     __table_args__ = (
-        Index("slack_message_ts_workspace_idx", "message_ts", "workspace_id", unique=True),
+        Index("slack_message_ts_workspace_channel_idx", "message_ts", "workspace_id", "channel_id", unique=True),
         Index("slack_message_channel_idx", "channel_id"),
         Index("slack_message_author_idx", "author_id"),
         Index("slack_message_thread_idx", "thread_ts"),

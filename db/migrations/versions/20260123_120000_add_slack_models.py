@@ -120,7 +120,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["workspace_id"], ["slack_workspaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["author_id"], ["slack_users.id"], ondelete="SET NULL"),
     )
-    op.create_index("slack_message_ts_workspace_idx", "slack_message", ["message_ts", "workspace_id"], unique=True)
+    op.create_index("slack_message_ts_workspace_channel_idx", "slack_message", ["message_ts", "workspace_id", "channel_id"], unique=True)
     op.create_index("slack_message_channel_idx", "slack_message", ["channel_id"])
     op.create_index("slack_message_author_idx", "slack_message", ["author_id"])
     op.create_index("slack_message_thread_idx", "slack_message", ["thread_ts"])
@@ -131,7 +131,7 @@ def downgrade() -> None:
     op.drop_index("slack_message_thread_idx", table_name="slack_message")
     op.drop_index("slack_message_author_idx", table_name="slack_message")
     op.drop_index("slack_message_channel_idx", table_name="slack_message")
-    op.drop_index("slack_message_ts_workspace_idx", table_name="slack_message")
+    op.drop_index("slack_message_ts_workspace_channel_idx", table_name="slack_message")
     op.drop_table("slack_message")
 
     op.drop_index("slack_users_person_idx", table_name="slack_users")

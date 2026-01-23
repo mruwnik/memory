@@ -36,30 +36,31 @@ async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bo
     return await asyncio.to_thread(_check, session)
 
 
-def _get_user_workspaces(session: DBSession) -> list[SlackWorkspace]:
-    """Get the current user's Slack workspaces."""
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated")
+def _get_user_workspaces(session: DBSession, token: str) -> list[SlackWorkspace]:
+    """Get the current user's Slack workspaces.
 
-    user_session = session.get(UserSession, access_token.token)
+    Args:
+        session: Database session
+        token: Access token string (from get_access_token().token)
+    """
+    user_session = session.get(UserSession, token)
     if not user_session or not user_session.user:
         raise ValueError("User not found")
 
     return list(user_session.user.slack_workspaces)
 
 
-def _get_default_workspace(session: DBSession) -> SlackWorkspace:
+def _get_default_workspace(session: DBSession, token: str) -> SlackWorkspace:
     """Get the user's default (first) Slack workspace."""
-    workspaces = _get_user_workspaces(session)
+    workspaces = _get_user_workspaces(session, token)
     if not workspaces:
         raise ValueError("No Slack workspaces connected")
     return workspaces[0]
 
 
-def _get_workspace_by_id(session: DBSession, workspace_id: str) -> SlackWorkspace:
+def _get_workspace_by_id(session: DBSession, token: str, workspace_id: str) -> SlackWorkspace:
     """Get a specific workspace by ID, verifying user ownership."""
-    workspaces = _get_user_workspaces(session)
+    workspaces = _get_user_workspaces(session, token)
     for ws in workspaces:
         if ws.id == workspace_id:
             return ws
@@ -118,12 +119,17 @@ async def send_slack_message(
     if not channel_id and not channel_name:
         raise ValueError("Must specify either channel_id or channel_name")
 
+    # Get access token before entering sync context
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated")
+
     with make_session() as session:
         # Get workspace
         if workspace_id:
-            workspace = _get_workspace_by_id(session, workspace_id)
+            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
         else:
-            workspace = _get_default_workspace(session)
+            workspace = _get_default_workspace(session, access_token.token)
 
         # Resolve channel
         target_channel_id = channel_id
@@ -184,11 +190,16 @@ async def add_slack_reaction(
     # Remove colons if present
     emoji = emoji.strip(":")
 
+    # Get access token before entering sync context
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated")
+
     with make_session() as session:
         if workspace_id:
-            workspace = _get_workspace_by_id(session, workspace_id)
+            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
         else:
-            workspace = _get_default_workspace(session)
+            workspace = _get_default_workspace(session, access_token.token)
 
         await slack_api_call(
             workspace,
@@ -224,11 +235,16 @@ async def list_slack_channels(
     Returns:
         Dict with channels list
     """
+    # Get access token before entering sync context
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated")
+
     with make_session() as session:
         if workspace_id:
-            workspace = _get_workspace_by_id(session, workspace_id)
+            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
         else:
-            workspace = _get_default_workspace(session)
+            workspace = _get_default_workspace(session, access_token.token)
 
         query = session.query(SlackChannel).filter(
             SlackChannel.workspace_id == workspace.id,
@@ -290,11 +306,16 @@ async def get_slack_channel_history(
 
     limit = max(1, min(100, limit))
 
+    # Get access token before entering sync context
+    access_token = get_access_token()
+    if not access_token:
+        raise ValueError("Not authenticated")
+
     with make_session() as session:
         if workspace_id:
-            workspace = _get_workspace_by_id(session, workspace_id)
+            workspace = _get_workspace_by_id(session, access_token.token, workspace_id)
         else:
-            workspace = _get_default_workspace(session)
+            workspace = _get_default_workspace(session, access_token.token)
 
         # Resolve channel
         target_channel_id = channel_id
