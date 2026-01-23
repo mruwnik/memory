@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -33,18 +32,6 @@ from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User
-
-
-# --- Helper for Secret-based token storage ---
-
-
-def _secret_name(workspace_id: str, token_type: str) -> str:
-    """Generate secret name for Slack tokens.
-
-    Uses format: slack-<workspace_id>-<token_type>
-    E.g.: slack-T12345678-access-token
-    """
-    return f"slack-{workspace_id}-{token_type}"
 
 
 class SlackWorkspace(Base):
