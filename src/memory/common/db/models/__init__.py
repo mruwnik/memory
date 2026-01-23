@@ -232,6 +232,7 @@ __all__ = [
     "SlackChannel",
     "SlackUser",
     "SlackMessage",
+    "SlackOAuthState",
     "MCPServer",
     "MCPServerAssignment",
     # Users
