@@ -11,6 +11,7 @@ from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import meetings
 from memory.common.content_processing import create_content_hash
+from memory.common.people import find_or_create_person, make_identifier
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -365,37 +366,37 @@ def test_make_task_sha256_different_description():
 
 
 # ============================================================================
-# Tests for _make_identifier
+# Tests for make_identifier
 # ============================================================================
 
 
 def test_make_identifier_basic():
     """Test basic identifier creation."""
-    result = meetings._make_identifier("John Smith")
+    result = make_identifier("John Smith")
     assert result == "john_smith"
 
 
 def test_make_identifier_with_extra_spaces():
     """Test identifier with extra spaces - multiple spaces collapse to single underscore."""
-    result = meetings._make_identifier("  John   Smith  ")
+    result = make_identifier("  John   Smith  ")
     assert result == "john_smith"  # Multiple spaces collapse to single underscore
 
 
 def test_make_identifier_with_special_chars():
     """Test identifier strips special characters."""
-    result = meetings._make_identifier("John O'Brien-Smith")
+    result = make_identifier("John O'Brien-Smith")
     assert result == "john_obriensmith"
 
 
 def test_make_identifier_unicode():
     """Test identifier with unicode characters."""
-    result = meetings._make_identifier("José García")
+    result = make_identifier("José García")
     assert result == "josé_garcía"  # Unicode preserved (isalnum includes unicode)
 
 
 def test_make_identifier_numbers():
     """Test identifier preserves numbers."""
-    result = meetings._make_identifier("User 123")
+    result = make_identifier("User 123")
     assert result == "user_123"
 
 
@@ -441,7 +442,7 @@ def test_normalize_attendee_names_handles_trailing_commas():
 
 
 # ============================================================================
-# Tests for _find_or_create_person
+# Tests for find_or_create_person
 # ============================================================================
 
 
@@ -458,14 +459,14 @@ def test_find_or_create_person_finds_existing(mock_make_session, qdrant):
     mock_make_session.add(person)
     mock_make_session.commit()
 
-    result, created = meetings._find_or_create_person(mock_make_session, "Existing Person")
+    result, created = find_or_create_person(mock_make_session, "Existing Person")
     assert result.identifier == "existing_person"
     assert created is False
 
 
 def test_find_or_create_person_creates_new(mock_make_session, qdrant):
     """Test creating a new person."""
-    result, created = meetings._find_or_create_person(mock_make_session, "New Person")
+    result, created = find_or_create_person(mock_make_session, "New Person")
     assert result is not None
     assert result.identifier == "new_person"
     assert result.display_name == "New Person"
@@ -487,7 +488,7 @@ def test_find_or_create_person_finds_by_identifier(mock_make_session, qdrant):
     mock_make_session.commit()
 
     # Create someone with a name that generates the same identifier
-    result, created = meetings._find_or_create_person(mock_make_session, "John Doe")
+    result, created = find_or_create_person(mock_make_session, "John Doe")
     assert result.identifier == "john_doe"
     assert created is False
 
@@ -1070,7 +1071,7 @@ def test_process_meeting_sets_tags(
 )
 def test_make_identifier_various_names(name, expected_identifier):
     """Test identifier creation with various name formats."""
-    result = meetings._make_identifier(name)
+    result = make_identifier(name)
     assert result == expected_identifier
 
 
