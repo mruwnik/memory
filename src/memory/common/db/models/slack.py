@@ -40,11 +40,22 @@ class SlackWorkspace(Base):
     Each workspace represents a user's OAuth connection to Slack, allowing
     access to their channels, DMs, and messages. Unlike Discord bots,
     each workspace is owned by a single Memory user.
+
+    Design Decision - Primary Key:
+        We use Slack's team_id as the primary key. This means:
+        - A workspace can only be connected by ONE user in the system
+        - If user A connects workspace X, user B cannot also connect workspace X
+        - If a user disconnects and reconnects, the existing row is updated (not duplicated)
+
+        This is intentional for this use case where each Memory user connects their
+        own personal Slack account. If multi-user-per-workspace is needed in the future,
+        use a composite key (team_id, user_id) or an auto-increment id with a unique
+        constraint on (team_id, user_id).
     """
 
     __tablename__ = "slack_workspaces"
 
-    # Use Slack team_id as primary key
+    # Use Slack team_id as primary key (see class docstring for design rationale)
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # Slack team_id
     name: Mapped[str] = mapped_column(Text, nullable=False)
     domain: Mapped[str | None] = mapped_column(Text, nullable=True)

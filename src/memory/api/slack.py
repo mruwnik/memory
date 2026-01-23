@@ -1,5 +1,7 @@
 """API endpoints for Slack workspace, channel, and user management."""
 
+import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -174,6 +176,25 @@ def require_slack_configured() -> None:
 # --- OAuth Endpoints ---
 
 
+def _sign_state(state: str, user_id: int) -> str:
+    """Create HMAC signature for OAuth state to prevent tampering."""
+    message = f"{state}:{user_id}".encode()
+    key = settings.SLACK_CLIENT_SECRET.encode()
+    signature = hmac.new(key, message, hashlib.sha256).hexdigest()[:16]
+    return f"{state}.{signature}"
+
+
+def _verify_state_signature(signed_state: str, user_id: int) -> str | None:
+    """Verify HMAC signature and return original state if valid."""
+    if "." not in signed_state:
+        return None
+    state, signature = signed_state.rsplit(".", 1)
+    expected = _sign_state(state, user_id).rsplit(".", 1)[1]
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return state
+
+
 @router.get("/authorize")
 def authorize_slack(
     user: User = Depends(get_current_user),
@@ -203,18 +224,21 @@ def authorize_slack(
     db.add(oauth_state)
     db.commit()
 
+    # Sign state with user-specific data to prevent interception attacks
+    signed_state = _sign_state(state, user.id)
+
     # Build authorization URL
     params = {
         "client_id": settings.SLACK_CLIENT_ID,
         "scope": " ".join(SLACK_SCOPES),
         "redirect_uri": settings.SLACK_REDIRECT_URI,
-        "state": state,
+        "state": signed_state,
         "user_scope": " ".join(SLACK_SCOPES),  # Request user token scopes
     }
 
     auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
 
-    return {"authorization_url": auth_url, "state": state}
+    return {"authorization_url": auth_url, "state": signed_state}
 
 
 @router.get("/callback")
@@ -233,9 +257,14 @@ async def slack_callback(
     if error:
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
 
+    # Extract original state from signed state (format: "state.signature")
+    if "." not in state:
+        raise HTTPException(status_code=400, detail="Invalid state format")
+    original_state = state.rsplit(".", 1)[0]
+
     # Validate state from database (CSRF protection)
     oauth_state = db.query(SlackOAuthState).filter(
-        SlackOAuthState.state == state
+        SlackOAuthState.state == original_state
     ).first()
 
     if not oauth_state:
@@ -247,8 +276,15 @@ async def slack_callback(
         db.commit()
         raise HTTPException(status_code=400, detail="State parameter expired")
 
-    # Get user from the stored state
+    # Verify HMAC signature matches the user from database
     user_id = oauth_state.user_id
+    verified_state = _verify_state_signature(state, user_id)
+    if verified_state != original_state:
+        db.delete(oauth_state)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid state signature")
+
+    # Get user from the stored state
     user = db.get(User, user_id)
     if not user:
         db.delete(oauth_state)
@@ -297,6 +333,14 @@ async def slack_callback(
         SlackWorkspace.user_id == user_id,
     ).first()
 
+    # Calculate token expiration with 5-minute buffer to prevent race conditions
+    token_expires_at = None
+    expires_in = authed_user.get("expires_in")
+    if expires_in and expires_in > 300:  # Only set if > 5 minutes
+        token_expires_at = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ) + timedelta(seconds=expires_in - 300)  # 5-minute buffer
+
     if existing:
         # Update existing workspace
         existing.access_token = access_token
@@ -304,13 +348,7 @@ async def slack_callback(
         existing.scopes = authed_user.get("scope", "").split()
         existing.name = team_name
         existing.sync_error = None
-        # Update token expiration if present
-        if expires_in := authed_user.get("expires_in"):
-            existing.token_expires_at = datetime.now(timezone.utc).replace(
-                microsecond=0
-            ) + timedelta(seconds=expires_in)
-        else:
-            existing.token_expires_at = None
+        existing.token_expires_at = token_expires_at
         workspace = existing
     else:
         # Create new workspace
@@ -322,12 +360,7 @@ async def slack_callback(
         )
         workspace.access_token = access_token
         workspace.refresh_token = authed_user.get("refresh_token")
-
-        # Handle token expiration if present
-        if expires_in := authed_user.get("expires_in"):
-            workspace.token_expires_at = datetime.now(timezone.utc).replace(
-                microsecond=0
-            ) + timedelta(seconds=expires_in)
+        workspace.token_expires_at = token_expires_at
 
         db.add(workspace)
 

@@ -108,8 +108,8 @@ def download_slack_file(url: str, headers: dict, message_ts: str, workspace_id: 
         file_dir = settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
         file_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename from URL hash
-        url_hash = hashlib.md5(url.encode()).hexdigest()
+        # Generate filename from URL hash (SHA256 truncated for shorter filenames)
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
         ext = pathlib.Path(url).suffix or ".dat"
         ext = ext.split("?")[0][:10]  # Limit extension length
         filename = f"{url_hash}{ext}"
@@ -120,8 +120,11 @@ def download_slack_file(url: str, headers: dict, message_ts: str, workspace_id: 
         # Return relative path
         return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Failed to download Slack file from {url}: HTTP {e.response.status_code}")
+        return None
     except Exception as e:
-        logger.error(f"Failed to download Slack file from {url}: {e}")
+        logger.error(f"Failed to download Slack file from {url}: {type(e).__name__}: {e}")
         return None
 
 
@@ -364,20 +367,20 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
                 messages_synced = 0
                 oldest = channel.last_message_ts
                 newest_ts = oldest
+                cursor = None
 
                 while True:
-                    params = {"channel": channel_id, "limit": 100}
+                    params: dict[str, Any] = {"channel": channel_id, "limit": 100}
                     if oldest:
                         params["oldest"] = oldest
+                    if cursor:
+                        params["cursor"] = cursor
 
                     response = slack_api_call(client, "conversations.history", **params)
                     messages = response.get("messages", [])
 
                     if not messages:
                         break
-
-                    # Track the newest timestamp from this batch for pagination
-                    batch_newest_ts = None
 
                     for msg in messages:
                         msg_ts = msg.get("ts")
@@ -387,10 +390,6 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
                         # Track newest message for final cursor update
                         if not newest_ts or msg_ts > newest_ts:
                             newest_ts = msg_ts
-
-                        # Track newest in this batch for pagination
-                        if not batch_newest_ts or msg_ts > batch_newest_ts:
-                            batch_newest_ts = msg_ts
 
                         # Skip non-message subtypes we don't want
                         subtype = msg.get("subtype")
@@ -423,13 +422,13 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
                             )
                             messages_synced += thread_messages
 
-                    # Check for more messages
+                    # Handle cursor-based pagination
                     if not response.get("has_more"):
                         break
-
-                    # Update oldest for next page to get messages after this batch
-                    if batch_newest_ts:
-                        oldest = batch_newest_ts
+                    metadata = response.get("response_metadata", {})
+                    cursor = metadata.get("next_cursor")
+                    if not cursor:
+                        break
 
                 # Update cursor
                 if newest_ts:
@@ -452,45 +451,53 @@ def fetch_thread_replies(
     thread_ts: str,
     workspace_id: str,
 ) -> int:
-    """Fetch and queue thread replies."""
+    """Fetch and queue thread replies with pagination support."""
     messages_queued = 0
+    cursor = None
 
     try:
-        response = slack_api_call(
-            client, "conversations.replies",
-            channel=channel_id, ts=thread_ts, limit=100
-        )
-        messages = response.get("messages", [])
+        while True:
+            params: dict[str, Any] = {
+                "channel": channel_id,
+                "ts": thread_ts,
+                "limit": 100,
+            }
+            if cursor:
+                params["cursor"] = cursor
 
-        # Warn if thread has more replies than we fetched
-        if response.get("has_more"):
-            logger.warning(
-                f"Thread {thread_ts} in channel {channel_id} has more than 100 replies, "
-                "only first 100 will be synced"
-            )
+            response = slack_api_call(client, "conversations.replies", **params)
+            messages = response.get("messages", [])
 
-        for msg in messages:
-            msg_ts = msg.get("ts")
-            # Skip the parent message (same ts as thread_ts)
-            if not msg_ts or msg_ts == thread_ts:
-                continue
+            for msg in messages:
+                msg_ts = msg.get("ts")
+                # Skip the parent message (same ts as thread_ts)
+                if not msg_ts or msg_ts == thread_ts:
+                    continue
 
-            app.send_task(
-                ADD_SLACK_MESSAGE,
-                kwargs={
-                    "workspace_id": workspace_id,
-                    "channel_id": channel_id,
-                    "message_ts": msg_ts,
-                    "author_id": msg.get("user"),
-                    "content": msg.get("text", ""),
-                    "thread_ts": thread_ts,
-                    "subtype": msg.get("subtype"),
-                    "edited_ts": msg.get("edited", {}).get("ts"),
-                    "reactions": msg.get("reactions"),
-                    "files": msg.get("files"),
-                },
-            )
-            messages_queued += 1
+                app.send_task(
+                    ADD_SLACK_MESSAGE,
+                    kwargs={
+                        "workspace_id": workspace_id,
+                        "channel_id": channel_id,
+                        "message_ts": msg_ts,
+                        "author_id": msg.get("user"),
+                        "content": msg.get("text", ""),
+                        "thread_ts": thread_ts,
+                        "subtype": msg.get("subtype"),
+                        "edited_ts": msg.get("edited", {}).get("ts"),
+                        "reactions": msg.get("reactions"),
+                        "files": msg.get("files"),
+                    },
+                )
+                messages_queued += 1
+
+            # Handle pagination
+            if not response.get("has_more"):
+                break
+            metadata = response.get("response_metadata", {})
+            cursor = metadata.get("next_cursor")
+            if not cursor:
+                break
 
     except SlackAPIError as e:
         logger.error(f"Failed to fetch thread replies for {thread_ts}: {e}")
