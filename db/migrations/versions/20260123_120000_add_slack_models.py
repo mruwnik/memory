@@ -43,18 +43,20 @@ def upgrade() -> None:
     op.create_index("slack_workspaces_user_idx", "slack_workspaces", ["user_id"])
     op.create_index("slack_workspaces_collect_idx", "slack_workspaces", ["collect_messages"])
 
-    # Create slack_oauth_states table for CSRF protection
+    # Create oauth_client_states table for CSRF protection (generic for all OAuth clients)
     op.create_table(
-        "slack_oauth_states",
+        "oauth_client_states",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("provider", sa.String(), nullable=False),  # "slack", "google", etc.
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
     )
-    op.create_index("slack_oauth_states_state_idx", "slack_oauth_states", ["state"], unique=True)
+    op.create_index("oauth_client_states_state_idx", "oauth_client_states", ["state"], unique=True)
+    op.create_index("oauth_client_states_provider_idx", "oauth_client_states", ["provider"])
 
     # Create slack_channels table
     op.create_table(
@@ -145,8 +147,9 @@ def downgrade() -> None:
     op.drop_index("slack_channels_workspace_idx", table_name="slack_channels")
     op.drop_table("slack_channels")
 
-    op.drop_index("slack_oauth_states_state_idx", table_name="slack_oauth_states")
-    op.drop_table("slack_oauth_states")
+    op.drop_index("oauth_client_states_provider_idx", table_name="oauth_client_states")
+    op.drop_index("oauth_client_states_state_idx", table_name="oauth_client_states")
+    op.drop_table("oauth_client_states")
 
     op.drop_index("slack_workspaces_collect_idx", table_name="slack_workspaces")
     op.drop_index("slack_workspaces_user_idx", table_name="slack_workspaces")

@@ -17,10 +17,9 @@ from sqlalchemy.orm import Session
 from memory.api.auth import get_current_user
 from memory.common import settings
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackOAuthState,
     SlackUser,
     SlackWorkspace,
 )
@@ -210,14 +209,16 @@ def authorize_slack(
     state = secrets.token_urlsafe(32)
 
     # Clean up expired states for this user
-    db.query(SlackOAuthState).filter(
-        SlackOAuthState.user_id == user.id,
-        SlackOAuthState.expires_at < datetime.now(timezone.utc),
+    db.query(OAuthClientState).filter(
+        OAuthClientState.user_id == user.id,
+        OAuthClientState.provider == "slack",
+        OAuthClientState.expires_at < datetime.now(timezone.utc),
     ).delete()
 
     # Store state in database with 10-minute expiration
-    oauth_state = SlackOAuthState(
+    oauth_state = OAuthClientState(
         state=state,
+        provider="slack",
         user_id=user.id,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
     )
@@ -263,8 +264,9 @@ async def slack_callback(
     original_state = state.rsplit(".", 1)[0]
 
     # Validate state from database (CSRF protection)
-    oauth_state = db.query(SlackOAuthState).filter(
-        SlackOAuthState.state == original_state
+    oauth_state = db.query(OAuthClientState).filter(
+        OAuthClientState.state == original_state,
+        OAuthClientState.provider == "slack",
     ).first()
 
     if not oauth_state:

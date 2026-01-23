@@ -5,10 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.common.db.models import User
+from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackChannel,
-    SlackOAuthState,
     SlackUser,
     SlackWorkspace,
 )
@@ -376,7 +375,7 @@ def test_authorize_success(mock_settings, client, db_session, user):
     assert "test_client_id" in data["authorization_url"]
 
     # Verify state was stored
-    states = db_session.query(SlackOAuthState).filter_by(user_id=user.id).all()
+    states = db_session.query(OAuthClientState).filter_by(user_id=user.id, provider="slack").all()
     assert len(states) == 1
 
 
@@ -386,16 +385,18 @@ def test_authorize_success(mock_settings, client, db_session, user):
 def test_oauth_state_expiration(db_session, user):
     """Test OAuth state expiration check."""
     # Create expired state
-    expired_state = SlackOAuthState(
+    expired_state = OAuthClientState(
         state="expired_state",
+        provider="slack",
         user_id=user.id,
         expires_at=datetime.now(timezone.utc) - timedelta(minutes=15),
     )
     db_session.add(expired_state)
 
     # Create valid state
-    valid_state = SlackOAuthState(
+    valid_state = OAuthClientState(
         state="valid_state",
+        provider="slack",
         user_id=user.id,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )

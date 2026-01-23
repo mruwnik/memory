@@ -51,7 +51,6 @@ from memory.common.db.models.slack import (
     SlackWorkspace,
     SlackChannel,
     SlackUser,
-    SlackOAuthState,
 )
 from memory.common.db.models.mcp import (
     MCPServer,
@@ -89,6 +88,7 @@ from memory.common.db.models.users import (
     UserSession,
     OAuthClientInformation,
     OAuthState,
+    OAuthClientState,
     OAuthRefreshToken,
     generate_ssh_keypair,
     APIKey,
@@ -232,7 +232,6 @@ __all__ = [
     "SlackChannel",
     "SlackUser",
     "SlackMessage",
-    "SlackOAuthState",
     "MCPServer",
     "MCPServerAssignment",
     # Users
@@ -242,6 +241,7 @@ __all__ = [
     "UserSession",
     "OAuthClientInformation",
     "OAuthState",
+    "OAuthClientState",
     "OAuthRefreshToken",
     "APIKey",
     "APIKeyType",
