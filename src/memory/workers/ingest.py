@@ -20,6 +20,7 @@ from memory.common.celery_app import (
     SYNC_ALL_GITHUB_REPOS,
     SYNC_ALL_GOOGLE_ACCOUNTS,
     SYNC_ALL_CALENDARS,
+    SYNC_ALL_SLACK_WORKSPACES,
     VERIFY_ORPHANS,
 )
 
@@ -82,6 +83,10 @@ app.conf.beat_schedule.update({
     "sync-calendars": {
         "task": SYNC_ALL_CALENDARS,
         "schedule": settings.CALENDAR_SYNC_INTERVAL,
+    },
+    "sync-slack-workspaces": {
+        "task": SYNC_ALL_SLACK_WORKSPACES,
+        "schedule": settings.SLACK_SYNC_INTERVAL,
     },
     "verify-orphans": {
         "task": VERIFY_ORPHANS,

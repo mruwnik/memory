@@ -219,6 +219,9 @@ services:
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      SLACK_REDIRECT_URI: ${SLACK_REDIRECT_URI:-https://memory.equistamp.io/slack/callback}
       # Discord collector API (running in ingest-hub)
       DISCORD_COLLECTOR_SERVER_URL: ingest-hub
       DISCORD_COLLECTOR_PORT: 8003
@@ -260,7 +263,7 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,verification"
+      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,slack,verification"
 
   ingest-hub:
     <<: *worker-base

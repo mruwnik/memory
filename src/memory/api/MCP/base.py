@@ -14,6 +14,7 @@ from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.discord import discord_mcp
 from memory.api.MCP.servers.email import email_mcp
+from memory.api.MCP.servers.slack import slack_mcp
 from memory.api.MCP.servers.forecast import forecast_mcp
 from memory.api.MCP.servers.github import github_mcp
 from memory.api.MCP.servers.meta import meta_mcp
@@ -46,7 +47,7 @@ mcp = FastMCP(
 
 # List of prefixes used when mounting subservers
 # Used by middleware to strip prefixes when looking up visibility checkers
-SUBSERVER_PREFIXES = ["core", "discord", "email", "forecast", "github", "organizer", "people", "polling", "schedule", "books", "meta"]
+SUBSERVER_PREFIXES = ["core", "discord", "email", "forecast", "github", "organizer", "people", "polling", "schedule", "books", "meta", "slack"]
 
 
 def _get_user_info_for_middleware() -> dict:
@@ -225,3 +226,4 @@ mcp.mount(polling_mcp, prefix="polling")
 mcp.mount(schedule_mcp, prefix="schedule")
 mcp.mount(books_mcp, prefix="books")
 mcp.mount(meta_mcp, prefix="meta")
+mcp.mount(slack_mcp, prefix="slack")

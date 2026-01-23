@@ -68,6 +68,10 @@ class Person(SourceItem):
         "DiscordUser", back_populates="person"
     )
 
+    # Note: Slack user data is stored in contact_info["slack"] as:
+    # {"<workspace_id>": {"user_id": "U123", "username": "...", "display_name": "..."}}
+    # This avoids a separate table since Slack IDs are workspace-specific
+
     __mapper_args__ = {
         "polymorphic_identity": "person",
     }

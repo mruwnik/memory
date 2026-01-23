@@ -12,6 +12,7 @@ from memory.common.db.models.source_items import (
     AgentObservation,
     ChatMessage,
     DiscordMessage,
+    SlackMessage,
     BlogPost,
     Comic,
     BookSection,
@@ -45,6 +46,11 @@ from memory.common.db.models.discord import (
     DiscordChannel,
     DiscordUser,
     discord_bot_users,
+)
+from memory.common.db.models.slack import (
+    SlackWorkspace,
+    SlackChannel,
+    SlackUserCredentials,
 )
 from memory.common.db.models.mcp import (
     MCPServer,
@@ -82,6 +88,7 @@ from memory.common.db.models.users import (
     UserSession,
     OAuthClientInformation,
     OAuthState,
+    OAuthClientState,
     OAuthRefreshToken,
     generate_ssh_keypair,
     APIKey,
@@ -221,6 +228,10 @@ __all__ = [
     "DiscordChannel",
     "DiscordUser",
     "discord_bot_users",
+    "SlackWorkspace",
+    "SlackChannel",
+    "SlackUserCredentials",
+    "SlackMessage",
     "MCPServer",
     "MCPServerAssignment",
     # Users
@@ -230,6 +241,7 @@ __all__ = [
     "UserSession",
     "OAuthClientInformation",
     "OAuthState",
+    "OAuthClientState",
     "OAuthRefreshToken",
     "APIKey",
     "APIKeyType",

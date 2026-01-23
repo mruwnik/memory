@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot, DiscordUser
     from memory.common.db.models.people import Person
     from memory.common.db.models.secrets import Secret
+    from memory.common.db.models.slack import SlackUserCredentials
 
 
 def hash_password(password: str) -> str:
@@ -127,6 +128,11 @@ class User(Base):
         "DiscordBot",
         secondary="discord_bot_users",
         back_populates="authorized_users",
+    )
+
+    # Slack relationships (per-user OAuth credentials)
+    slack_credentials: Mapped[list[SlackUserCredentials]] = relationship(
+        "SlackUserCredentials", back_populates="user", cascade="all, delete-orphan"
     )
 
     # Link to Person record (for rich contact info about this user)
@@ -477,6 +483,31 @@ class OAuthRefreshToken(Base, OAuthToken):
             "expires_at": self.expires_at.timestamp(),
             "revoked": self.revoked,
         } | super().serialize()
+
+
+class OAuthClientState(Base):
+    """Temporary storage for OAuth client flow state tokens (CSRF protection).
+
+    Used when Memory acts as an OAuth client connecting to external services
+    (Slack, Google, etc.). This is distinct from OAuthState which is for
+    Memory acting as an OAuth provider.
+
+    States are created when initiating OAuth flow and consumed (deleted)
+    upon callback. They typically expire after 10 minutes if not used.
+    """
+
+    __tablename__ = "oauth_client_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String, nullable=False, index=True)  # "slack", "google", etc.
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 def purge_oauth(session: Session) -> None:

@@ -7,20 +7,18 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from dateutil import parser as date_parser
-from sqlalchemy import func as sql_func
 
 from memory.common import llms, settings, jobs as job_utils
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Task
 from memory.common.db.models.source_items import Meeting
-from memory.common.db.models.people import Person
 from memory.common.celery_app import app, PROCESS_MEETING, REPROCESS_MEETING
 from memory.common.content_processing import (
     clear_item_chunks,
-    create_content_hash,
     process_content_item,
     safe_task_execution,
 )
+from memory.common.people import find_or_create_person, find_person_by_name
 
 logger = logging.getLogger(__name__)
 
@@ -85,46 +83,6 @@ def parse_extraction_response(response: str) -> dict:
         return {"summary": "", "notes": "", "action_items": []}
 
 
-def find_person_by_name(session, name: str | None) -> Person | None:
-    """Try to find a Person record by name, alias, or email."""
-    if not name:
-        return None
-
-    name_lower = name.lower().strip()
-
-    # Try exact match on display_name first
-    person = (
-        session.query(Person)
-        .filter(sql_func.lower(Person.display_name) == name_lower)
-        .first()
-    )
-    if person:
-        return person
-
-    # Try matching aliases
-    people_with_aliases = (
-        session.query(Person)
-        .filter(Person.aliases.isnot(None))
-        .filter(sql_func.array_length(Person.aliases, 1) > 0)
-        .all()
-    )
-    for person in people_with_aliases:
-        if any(alias.lower() == name_lower for alias in (person.aliases or [])):
-            return person
-
-    # Check if input looks like an email
-    if "@" in name_lower:
-        person = (
-            session.query(Person)
-            .filter(Person.contact_info["email"].astext.ilike(f"%{name_lower}%"))
-            .first()
-        )
-        if person:
-            return person
-
-    return None
-
-
 def parse_due_date(date_str: str | None) -> datetime | None:
     """Parse a due date string into a datetime."""
     if not date_str:
@@ -158,40 +116,6 @@ def call_extraction_llm(
     return parse_extraction_response(response)
 
 
-def _make_identifier(name: str) -> str:
-    """Create a person identifier from a name (e.g. 'John Smith' -> 'john_smith')."""
-    import re
-
-    identifier = re.sub(r"\s+", "_", name.lower().strip())
-    return "".join(c for c in identifier if c.isalnum() or c == "_")
-
-
-def _find_or_create_person(session, name: str) -> tuple[Person, bool]:
-    """Find existing person or create new one. Returns (person, was_created)."""
-    person = find_person_by_name(session, name)
-    if person:
-        return person, False
-
-    identifier = _make_identifier(name)
-    existing = session.query(Person).filter(Person.identifier == identifier).first()
-    if existing:
-        return existing, False
-
-    sha256 = create_content_hash(f"person:{identifier}")
-    person = Person(
-        identifier=identifier,
-        display_name=name,
-        aliases=[name],
-        modality="person",
-        mime_type="text/plain",
-        sha256=sha256,
-        size=0,
-    )
-    session.add(person)
-    session.flush()
-    return person, True
-
-
 def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:
     """Flatten and normalize attendee names, splitting comma-separated values."""
     result = []
@@ -211,7 +135,10 @@ def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:
 
 
 def link_attendees(
-    session, meeting: Meeting, attendee_names: Sequence[str | None], create_missing: bool = True
+    session,
+    meeting: Meeting,
+    attendee_names: Sequence[str | None],
+    create_missing: bool = True,
 ) -> dict:
     """Link attendee names to Person records, optionally creating new ones."""
     normalized_names = normalize_attendee_names(attendee_names)
@@ -223,15 +150,13 @@ def link_attendees(
         if not name:
             continue
 
-        if not create_missing:
-            person = find_person_by_name(session, name)
-            if not person:
-                logger.warning(f"Could not find person for attendee '{name}'")
-                skipped.append(name)
-                continue
-            was_created = False
-        else:
-            person, was_created = _find_or_create_person(session, name)
+        person, was_created = find_or_create_person(
+            session, name, create_if_missing=create_missing
+        )
+        if not person:
+            logger.warning(f"Could not find person for attendee '{name}'")
+            skipped.append(name)
+            continue
 
         if person in meeting.attendees:
             continue
@@ -244,7 +169,9 @@ def link_attendees(
             logger.info(f"Linked attendee '{name}' to person '{person.identifier}'")
             linked += 1
 
-    logger.info(f"Attendees: {linked} linked, {created} created, {len(skipped)} skipped")
+    logger.info(
+        f"Attendees: {linked} linked, {created} created, {len(skipped)} skipped"
+    )
     return {"linked": linked, "created": created, "skipped": skipped}
 
 
@@ -261,7 +188,9 @@ def create_action_item_tasks(
         task_tags = ["meeting", "action-item"]
 
         assignee_name = item.get("assignee")
-        assignee_person = find_person_by_name(session, assignee_name) if assignee_name else None
+        assignee_person = (
+            find_person_by_name(session, assignee_name) if assignee_name else None
+        )
         if assignee_person:
             task_tags.append(f"assignee:{assignee_person.identifier}")
 
@@ -361,8 +290,6 @@ def reextract_meeting(
     return extract_and_update_meeting(
         session, meeting, extraction_prompt, system_prompt, model
     )
-
-
 
 
 def create_meeting_record(
@@ -618,7 +545,9 @@ def reprocess_meeting(
             return {"status": "error", "error": error}
 
         # Get attendee names from existing meeting for re-linking
-        attendee_names = [p.display_name for p in meeting.attendees] if meeting.attendees else None
+        attendee_names = (
+            [p.display_name for p in meeting.attendees] if meeting.attendees else None
+        )
 
         return execute_meeting_processing(
             session,

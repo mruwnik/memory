@@ -83,6 +83,9 @@ PROFILES_FOLDER = os.getenv("PROFILES_FOLDER", "profiles")
 DISCORD_STORAGE_DIR = pathlib.Path(
     os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
 )
+SLACK_STORAGE_DIR = pathlib.Path(
+    os.getenv("SLACK_STORAGE_DIR", FILE_STORAGE_DIR / "slack")
+)
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
@@ -112,6 +115,7 @@ storage_dirs = [
     WEBPAGE_STORAGE_DIR,
     NOTES_STORAGE_DIR,
     DISCORD_STORAGE_DIR,
+    SLACK_STORAGE_DIR,
 ]
 
 # All storage directories (including non-backed-up ones)
@@ -270,6 +274,12 @@ DISCORD_COLLECT_BOTS = boolean_env("DISCORD_COLLECT_BOTS", True)
 DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
 DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
+
+# Slack integration settings
+SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "")
+SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "")
+SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", f"{SERVER_URL}/slack/callback")
+SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 60))  # seconds
 
 
 # S3 Backup settings

@@ -34,6 +34,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": True,
     },
+    "message": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": True,
+    },
     "git": {
         "dimension": 1024,
         "distance": "Cosine",

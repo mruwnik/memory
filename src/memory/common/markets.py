@@ -662,8 +662,8 @@ async def search_kalshi_events(
             except aiohttp.ClientError:
                 continue
 
-            event_info = event_data.get("event", {})
-            markets = event_info.get("markets", [])
+            # Markets are at top level, not inside "event"
+            markets = event_data.get("markets", [])
 
             for market in markets:
                 volume = market.get("volume", 0) or 0
