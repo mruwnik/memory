@@ -70,7 +70,8 @@ class SlackWorkspace(Base):
 
     # Collection settings
     collect_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sync_interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    # Default 5 minutes - more conservative to avoid Slack rate limits (tier 3/4)
+    sync_interval_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
 
     # Sync status
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

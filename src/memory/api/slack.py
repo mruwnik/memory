@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
@@ -120,7 +120,20 @@ def get_user_workspace(
     return workspace
 
 
-def workspace_to_response(ws: SlackWorkspace) -> SlackWorkspaceResponse:
+def workspace_to_response(ws: SlackWorkspace, db: Session | None = None) -> SlackWorkspaceResponse:
+    # Use SQL count queries if session available to avoid loading all related objects
+    if db:
+        channel_count = db.query(func.count(SlackChannel.id)).filter(
+            SlackChannel.workspace_id == ws.id
+        ).scalar() or 0
+        user_count = db.query(func.count(SlackUser.id)).filter(
+            SlackUser.workspace_id == ws.id
+        ).scalar() or 0
+    else:
+        # Fallback to len() if no session (loads all objects into memory)
+        channel_count = len(ws.channels)
+        user_count = len(ws.users)
+
     return SlackWorkspaceResponse(
         id=ws.id,
         name=ws.name,
@@ -129,8 +142,8 @@ def workspace_to_response(ws: SlackWorkspace) -> SlackWorkspaceResponse:
         sync_interval_seconds=ws.sync_interval_seconds,
         last_sync_at=ws.last_sync_at.isoformat() if ws.last_sync_at else None,
         sync_error=ws.sync_error,
-        channel_count=len(ws.channels),
-        user_count=len(ws.users),
+        channel_count=channel_count,
+        user_count=user_count,
     )
 
 
@@ -407,7 +420,7 @@ def list_workspaces(
     workspaces = db.query(SlackWorkspace).filter(
         SlackWorkspace.user_id == user.id
     ).all()
-    return [workspace_to_response(w) for w in workspaces]
+    return [workspace_to_response(w, db) for w in workspaces]
 
 
 @router.get("/workspaces/{workspace_id}")
@@ -418,7 +431,7 @@ def get_workspace(
 ) -> SlackWorkspaceResponse:
     """Get details of a specific workspace."""
     workspace = get_user_workspace(db, workspace_id, user)
-    return workspace_to_response(workspace)
+    return workspace_to_response(workspace, db)
 
 
 @router.patch("/workspaces/{workspace_id}")
@@ -439,7 +452,7 @@ def update_workspace(
     db.commit()
     db.refresh(workspace)
 
-    return workspace_to_response(workspace)
+    return workspace_to_response(workspace, db)
 
 
 @router.delete("/workspaces/{workspace_id}")

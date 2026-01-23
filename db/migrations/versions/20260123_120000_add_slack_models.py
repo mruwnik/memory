@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("scopes", postgresql.ARRAY(sa.Text()), nullable=True),
         sa.Column("collect_messages", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("sync_interval_seconds", sa.Integer(), nullable=False, server_default="60"),
+        sa.Column("sync_interval_seconds", sa.Integer(), nullable=False, server_default="300"),
         sa.Column("last_sync_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("sync_error", sa.Text(), nullable=True),
         sa.Column("user_id", sa.Integer(), nullable=False),

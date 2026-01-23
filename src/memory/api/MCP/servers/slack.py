@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 slack_mcp = FastMCP("memory-slack")
 
 
+# --- Visibility Checker ---
+
+
 async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show Slack tools if user has connected workspaces."""
     token = user_info.get("token")
@@ -36,17 +39,14 @@ async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bo
     return await asyncio.to_thread(_check, session)
 
 
-def _get_user_workspaces(session: DBSession, token: str) -> list[SlackWorkspace]:
-    """Get the current user's Slack workspaces.
+# --- Sync DB Helpers (run in thread) ---
 
-    Args:
-        session: Database session
-        token: Access token string (from get_access_token().token)
-    """
+
+def _get_user_workspaces(session: DBSession, token: str) -> list[SlackWorkspace]:
+    """Get the current user's Slack workspaces."""
     user_session = session.get(UserSession, token)
     if not user_session or not user_session.user:
         raise ValueError("User not found")
-
     return list(user_session.user.slack_workspaces)
 
 
@@ -67,61 +67,127 @@ def _get_workspace_by_id(session: DBSession, token: str, workspace_id: str) -> S
     raise ValueError(f"Workspace {workspace_id} not found or not accessible")
 
 
-def _get_workspace_and_channel(
-    session: DBSession,
-    token: str,
-    workspace_id: str | None,
-    channel: str | None,
-) -> tuple[SlackWorkspace, str | None]:
-    """Get workspace and resolve channel identifier.
-
-    Args:
-        session: Database session
-        token: Access token string
-        workspace_id: Optional workspace ID (uses default if not specified)
-        channel: Channel ID (starts with C/D/G) or channel name
-
-    Returns:
-        Tuple of (workspace, resolved_channel_id)
-    """
-    # Get workspace
-    if workspace_id:
-        workspace = _get_workspace_by_id(session, token, workspace_id)
-    else:
-        workspace = _get_default_workspace(session, token)
-
-    if not channel:
-        return workspace, None
-
+def _resolve_channel(session: DBSession, workspace_id: str, channel: str) -> str:
+    """Resolve a channel name to ID, or return the ID if already an ID."""
     # Detect if channel is an ID or name
     # Slack channel IDs start with C (public), D (DM), or G (private/group)
-    if channel[0] in "CDG" and channel[1:].isalnum():
-        return workspace, channel
+    if channel and channel[0] in "CDG" and channel[1:].isalnum():
+        return channel
 
     # It's a name - look it up
     db_channel = (
         session.query(SlackChannel)
         .filter(
-            SlackChannel.workspace_id == workspace.id,
+            SlackChannel.workspace_id == workspace_id,
             SlackChannel.name == channel,
         )
         .first()
     )
     if not db_channel:
         raise ValueError(f"Channel '{channel}' not found in workspace")
-    return workspace, db_channel.id
+    return db_channel.id
 
 
-async def slack_api_call(workspace: SlackWorkspace, method: str, **params) -> dict:
+def _get_workspace_data_for_send(
+    token: str, workspace_id: str | None, channel: str
+) -> tuple[str, str, str]:
+    """
+    Get workspace data needed for sending a message (runs in thread).
+
+    Returns: (workspace_id, channel_id, access_token)
+    """
+    with make_session() as session:
+        if workspace_id:
+            workspace = _get_workspace_by_id(session, token, workspace_id)
+        else:
+            workspace = _get_default_workspace(session, token)
+
+        channel_id = _resolve_channel(session, workspace.id, channel)
+        access_token = workspace.access_token
+
+        if not access_token:
+            raise ValueError("No access token for workspace")
+
+        return workspace.id, channel_id, access_token
+
+
+def _get_channels_data(
+    token: str, workspace_id: str | None, include_private: bool, include_dms: bool
+) -> dict[str, Any]:
+    """Get channels list data (runs in thread)."""
+    with make_session() as session:
+        if workspace_id:
+            workspace = _get_workspace_by_id(session, token, workspace_id)
+        else:
+            workspace = _get_default_workspace(session, token)
+
+        query = session.query(SlackChannel).filter(
+            SlackChannel.workspace_id == workspace.id,
+            SlackChannel.is_archived == False,  # noqa: E712
+        )
+
+        if not include_private:
+            query = query.filter(SlackChannel.is_private == False)  # noqa: E712
+
+        if not include_dms:
+            query = query.filter(
+                SlackChannel.channel_type.notin_(["dm", "mpim", "private_channel"])
+            )
+
+        channels = query.order_by(SlackChannel.name).all()
+
+        return {
+            "workspace_id": workspace.id,
+            "workspace_name": workspace.name,
+            "channels": [
+                {
+                    "id": ch.id,
+                    "name": ch.name,
+                    "type": ch.channel_type,
+                    "is_private": ch.is_private,
+                }
+                for ch in channels
+            ],
+            "count": len(channels),
+        }
+
+
+def _get_history_data(
+    token: str, workspace_id: str | None, channel: str
+) -> tuple[str, str, str, dict[str, str]]:
+    """
+    Get data needed for fetching history (runs in thread).
+
+    Returns: (workspace_id, channel_id, access_token, users_by_id mapping)
+    """
+    with make_session() as session:
+        if workspace_id:
+            workspace = _get_workspace_by_id(session, token, workspace_id)
+        else:
+            workspace = _get_default_workspace(session, token)
+
+        channel_id = _resolve_channel(session, workspace.id, channel)
+        access_token = workspace.access_token
+
+        if not access_token:
+            raise ValueError("No access token for workspace")
+
+        # Build user cache for formatting - extract data while in session
+        users_by_id = {u.id: u.name for u in workspace.users}
+
+        return workspace.id, channel_id, access_token, users_by_id
+
+
+# --- Async Slack API ---
+
+
+async def slack_api_call(access_token: str, method: str, **params) -> dict:
     """Make an async Slack API call."""
-    if not workspace.access_token:
-        raise ValueError("No access token for workspace")
-
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"https://slack.com/api/{method}",
             headers={
-                "Authorization": f"Bearer {workspace.access_token}",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
             json=params if params else None,
@@ -134,6 +200,9 @@ async def slack_api_call(workspace: SlackWorkspace, method: str, **params) -> di
             raise ValueError(f"Slack API error: {error}")
 
         return data
+
+
+# --- MCP Tools ---
 
 
 @slack_mcp.tool()
@@ -162,32 +231,33 @@ async def send_slack_message(
     if not channel:
         raise ValueError("Channel is required")
 
-    # Get access token before entering sync context
+    # Get access token from FastMCP context
     access_token = get_access_token()
     if not access_token:
         raise ValueError("Not authenticated")
 
-    with make_session() as session:
-        workspace, channel_id = _get_workspace_and_channel(
-            session, access_token.token, workspace_id, channel
-        )
+    # Run DB operations in thread to avoid blocking event loop
+    _, channel_id, slack_token = await asyncio.to_thread(
+        _get_workspace_data_for_send, access_token.token, workspace_id, channel
+    )
 
-        # Send message
-        params: dict[str, Any] = {
-            "channel": channel_id,
-            "text": message,
-        }
-        if thread_ts:
-            params["thread_ts"] = thread_ts
+    # Build API params
+    params: dict[str, Any] = {
+        "channel": channel_id,
+        "text": message,
+    }
+    if thread_ts:
+        params["thread_ts"] = thread_ts
 
-        data = await slack_api_call(workspace, "chat.postMessage", **params)
+    # Make async API call (session is now closed)
+    data = await slack_api_call(slack_token, "chat.postMessage", **params)
 
-        return {
-            "success": True,
-            "channel": channel_id,
-            "ts": data.get("ts"),
-            "message_preview": message[:100] + "..." if len(message) > 100 else message,
-        }
+    return {
+        "success": True,
+        "channel": channel_id,
+        "ts": data.get("ts"),
+        "message_preview": message[:100] + "..." if len(message) > 100 else message,
+    }
 
 
 @slack_mcp.tool()
@@ -216,30 +286,31 @@ async def add_slack_reaction(
     # Remove colons if present
     emoji = emoji.strip(":")
 
-    # Get access token before entering sync context
+    # Get access token from FastMCP context
     access_token = get_access_token()
     if not access_token:
         raise ValueError("Not authenticated")
 
-    with make_session() as session:
-        workspace, channel_id = _get_workspace_and_channel(
-            session, access_token.token, workspace_id, channel
-        )
+    # Run DB operations in thread
+    _, channel_id, slack_token = await asyncio.to_thread(
+        _get_workspace_data_for_send, access_token.token, workspace_id, channel
+    )
 
-        await slack_api_call(
-            workspace,
-            "reactions.add",
-            channel=channel_id,
-            timestamp=message_ts,
-            name=emoji,
-        )
+    # Make async API call
+    await slack_api_call(
+        slack_token,
+        "reactions.add",
+        channel=channel_id,
+        timestamp=message_ts,
+        name=emoji,
+    )
 
-        return {
-            "success": True,
-            "channel": channel_id,
-            "message_ts": message_ts,
-            "emoji": emoji,
-        }
+    return {
+        "success": True,
+        "channel": channel_id,
+        "message_ts": message_ts,
+        "emoji": emoji,
+    }
 
 
 @slack_mcp.tool()
@@ -260,45 +331,15 @@ async def list_slack_channels(
     Returns:
         Dict with channels list
     """
-    # Get access token before entering sync context
+    # Get access token from FastMCP context
     access_token = get_access_token()
     if not access_token:
         raise ValueError("Not authenticated")
 
-    with make_session() as session:
-        workspace, _ = _get_workspace_and_channel(
-            session, access_token.token, workspace_id, None
-        )
-
-        query = session.query(SlackChannel).filter(
-            SlackChannel.workspace_id == workspace.id,
-            SlackChannel.is_archived == False,  # noqa: E712
-        )
-
-        if not include_private:
-            query = query.filter(SlackChannel.is_private == False)  # noqa: E712
-
-        if not include_dms:
-            query = query.filter(
-                SlackChannel.channel_type.notin_(["dm", "mpim", "group_dm"])
-            )
-
-        channels = query.order_by(SlackChannel.name).all()
-
-        return {
-            "workspace_id": workspace.id,
-            "workspace_name": workspace.name,
-            "channels": [
-                {
-                    "id": ch.id,
-                    "name": ch.name,
-                    "type": ch.channel_type,
-                    "is_private": ch.is_private,
-                }
-                for ch in channels
-            ],
-            "count": len(channels),
-        }
+    # Run DB operations in thread - this returns all the data we need
+    return await asyncio.to_thread(
+        _get_channels_data, access_token.token, workspace_id, include_private, include_dms
+    )
 
 
 @slack_mcp.tool()
@@ -328,48 +369,47 @@ async def get_slack_channel_history(
 
     limit = max(1, min(100, limit))
 
-    # Get access token before entering sync context
+    # Get access token from FastMCP context
     access_token = get_access_token()
     if not access_token:
         raise ValueError("Not authenticated")
 
-    with make_session() as session:
-        workspace, channel_id = _get_workspace_and_channel(
-            session, access_token.token, workspace_id, channel
-        )
+    # Run DB operations in thread
+    ws_id, channel_id, slack_token, users_by_id = await asyncio.to_thread(
+        _get_history_data, access_token.token, workspace_id, channel
+    )
 
-        # Build API params
-        params: dict[str, Any] = {
-            "channel": channel_id,
-            "limit": limit,
-        }
-        if before:
-            params["latest"] = before
-        if after:
-            params["oldest"] = after
+    # Build API params
+    params: dict[str, Any] = {
+        "channel": channel_id,
+        "limit": limit,
+    }
+    if before:
+        params["latest"] = before
+    if after:
+        params["oldest"] = after
 
-        data = await slack_api_call(workspace, "conversations.history", **params)
-        messages = data.get("messages", [])
+    # Make async API call (session is closed, users_by_id is plain dict)
+    data = await slack_api_call(slack_token, "conversations.history", **params)
+    messages = data.get("messages", [])
 
-        # Build user cache for formatting
-        users_by_id = {u.id: u for u in workspace.users}
+    # Format messages using cached user data
+    formatted_messages = []
+    for msg in messages:
+        user_id = msg.get("user")
+        user_name = users_by_id.get(user_id, user_id) if user_id else None
+        formatted_messages.append({
+            "ts": msg.get("ts"),
+            "user": user_name,
+            "text": msg.get("text", ""),
+            "thread_ts": msg.get("thread_ts"),
+            "reply_count": msg.get("reply_count"),
+        })
 
-        formatted_messages = []
-        for msg in messages:
-            user_id = msg.get("user")
-            user = users_by_id.get(user_id) if user_id else None
-            formatted_messages.append({
-                "ts": msg.get("ts"),
-                "user": user.name if user else user_id,
-                "text": msg.get("text", ""),
-                "thread_ts": msg.get("thread_ts"),
-                "reply_count": msg.get("reply_count"),
-            })
-
-        return {
-            "channel_id": channel_id,
-            "workspace_id": workspace.id,
-            "messages": formatted_messages,
-            "count": len(formatted_messages),
-            "has_more": data.get("has_more", False),
-        }
+    return {
+        "channel_id": channel_id,
+        "workspace_id": ws_id,
+        "messages": formatted_messages,
+        "count": len(formatted_messages),
+        "has_more": data.get("has_more", False),
+    }

@@ -70,8 +70,16 @@ export const SlackPanel = () => {
   const handleConnect = async () => {
     try {
       const { authorization_url } = await getAuthorizeUrl()
-      // Open OAuth flow in a popup or redirect
-      window.open(authorization_url, '_blank', 'width=600,height=700')
+      // Open OAuth flow in a popup
+      const popup = window.open(authorization_url, '_blank', 'width=600,height=700')
+
+      // Check if popup was blocked
+      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+        // Popup was blocked - show error with link
+        setError(
+          `Popup was blocked. Please allow popups for this site, or open the authorization link directly: ${authorization_url}`
+        )
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start OAuth flow')
     }
@@ -311,7 +319,7 @@ const ChannelRow = ({ channel, workspaceCollecting, onToggle }: ChannelRowProps)
   const typeIcon = {
     channel: '#',
     dm: '💬',
-    group_dm: '👥',
+    private_channel: '🔒',
     mpim: '👥',
   }[channel.channel_type] || '#'
 

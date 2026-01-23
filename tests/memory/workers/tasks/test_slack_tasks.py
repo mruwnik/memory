@@ -362,7 +362,7 @@ def test_sync_slack_workspace_unexpected_error(
         ("channel", "channel"),
         ("im", "dm"),
         ("mpim", "mpim"),
-        ("group", "group_dm"),
+        ("group", "private_channel"),
     ],
 )
 def test_add_slack_message_creates_channel_if_missing(

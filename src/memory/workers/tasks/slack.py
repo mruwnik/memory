@@ -86,10 +86,11 @@ def resolve_mentions(content: str, users_by_id: dict[str, SlackUser]) -> str:
         return match.group(0)
 
     # Replace user mentions: <@U123> or <@U123|name>
-    content = re.sub(r"<@([A-Z0-9]+)(?:\|[^>]*)?>", replace_mention, content)
+    # Slack IDs are typically uppercase but use case-insensitive match for safety
+    content = re.sub(r"<@([A-Za-z0-9]+)(?:\|[^>]*)?>", replace_mention, content)
 
     # Replace channel mentions: <#C123|channel-name> -> #channel-name
-    content = re.sub(r"<#[A-Z0-9]+\|([^>]+)>", r"#\1", content)
+    content = re.sub(r"<#[A-Za-z0-9]+\|([^>]+)>", r"#\1", content)
 
     # Replace URLs: <http://url|label> -> label (or just url if no label)
     content = re.sub(r"<(https?://[^|>]+)\|([^>]+)>", r"\2", content)
@@ -181,6 +182,12 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
             workspace.sync_error = "No access token"
             session.commit()
             return {"status": "error", "error": "No access token"}
+
+        # Check token expiration before making API calls
+        if workspace.is_token_expired():
+            workspace.sync_error = "Token expired - please re-authorize"
+            session.commit()
+            return {"status": "error", "error": "Token expired"}
 
         try:
             with get_slack_client(workspace) as client:
@@ -304,13 +311,17 @@ def sync_workspace_channels(client: httpx.Client, workspace: SlackWorkspace, ses
             if not channel_id:
                 continue
 
-            # Determine channel type
+            # Determine channel type based on Slack's terminology:
+            # - is_im = direct message
+            # - is_mpim = multi-person DM
+            # - is_private = private channel (includes legacy is_group)
+            # - else = public channel
             if channel.get("is_im"):
                 ch_type = "dm"
             elif channel.get("is_mpim"):
                 ch_type = "mpim"
             elif channel.get("is_group") or channel.get("is_private"):
-                ch_type = "group_dm"
+                ch_type = "private_channel"
             else:
                 ch_type = "channel"
 
