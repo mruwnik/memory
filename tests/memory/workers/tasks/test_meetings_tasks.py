@@ -460,6 +460,7 @@ def test_find_or_create_person_finds_existing(mock_make_session, qdrant):
     mock_make_session.commit()
 
     result, created = find_or_create_person(mock_make_session, "Existing Person")
+    assert result is not None
     assert result.identifier == "existing_person"
     assert created is False
 
@@ -489,6 +490,7 @@ def test_find_or_create_person_finds_by_identifier(mock_make_session, qdrant):
 
     # Create someone with a name that generates the same identifier
     result, created = find_or_create_person(mock_make_session, "John Doe")
+    assert result is not None
     assert result.identifier == "john_doe"
     assert created is False
 
