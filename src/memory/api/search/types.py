@@ -1,12 +1,15 @@
 from collections.abc import Sequence
 from datetime import datetime
 import logging
-from typing import Optional, cast, TypedDict, NotRequired
+from typing import Optional, cast, TypedDict, NotRequired, TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
+
+if TYPE_CHECKING:
+    from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,22 @@ class SearchFilters(TypedDict):
 
     # Subject filter (for observations)
     subject: NotRequired[str]
+
+    # Person filter - only return items associated with this person
+    # Items without a 'people' field in metadata are included (not filtered out)
+    person_id: NotRequired[int]
+
+    # Access control filter (built from user's project memberships).
+    # Semantics:
+    # - None: Superadmin access, no filtering applied (sees all content)
+    # - AccessFilter with conditions: Only items matching at least one condition are returned.
+    #   Each condition specifies a project_id and allowed sensitivity levels.
+    # - AccessFilter with empty conditions: User has no project access, returns no results.
+    #
+    # Note: This filter requires SourceItem.project_id and SourceItem.sensitivity columns
+    # to exist in the database schema. These columns are added by the access control migration.
+    # Until that migration runs, access filtering will fail at runtime.
+    access_filter: NotRequired["AccessFilter | None"]
 
 
 class SearchConfig(BaseModel):

@@ -1,5 +1,11 @@
 import pytest
-from memory.api.search.embeddings import merge_range_filter, merge_filters
+from memory.api.search.embeddings import (
+    merge_range_filter,
+    merge_filters,
+    build_person_filter,
+    build_access_qdrant_filter,
+)
+from memory.common.access_control import AccessFilter, AccessCondition
 
 
 def test_merge_range_filter_new_filter():
@@ -189,3 +195,280 @@ def test_merge_filters_empty_min_confidences():
     filters = []
     result = merge_filters(filters, "min_confidences", {})
     assert result == []
+
+
+# --- Person Filter Tests ---
+
+
+def test_build_person_filter_structure():
+    """Test that build_person_filter creates correct Qdrant filter structure"""
+    result = build_person_filter(42)
+
+    # Should create a "should" filter with two conditions
+    # Note: No explicit min_should needed - Qdrant's 'should' requires at least one match by default
+    assert "should" in result
+    assert "min_should" not in result  # Not needed for "at least one" semantics
+
+    should_conditions = result["should"]
+    assert len(should_conditions) == 2
+
+
+def test_build_person_filter_is_null_condition():
+    """Test that person filter includes is_null condition for missing people field"""
+    result = build_person_filter(42)
+
+    # First condition: people field is null/missing
+    is_null_condition = result["should"][0]
+    assert is_null_condition == {"is_null": {"key": "people"}}
+
+
+def test_build_person_filter_match_condition():
+    """Test that person filter includes match condition for person_id"""
+    result = build_person_filter(42)
+
+    # Second condition: people field contains person_id
+    match_condition = result["should"][1]
+    assert match_condition == {"key": "people", "match": {"any": [42]}}
+
+
+@pytest.mark.parametrize("person_id", [1, 100, 999999])
+def test_build_person_filter_different_ids(person_id):
+    """Test person filter with different person IDs"""
+    result = build_person_filter(person_id)
+    match_condition = result["should"][1]
+    assert match_condition["match"]["any"] == [person_id]
+
+
+def test_merge_filters_ignores_person_id():
+    """Test that merge_filters ignores person_id key (handled separately)"""
+    filters = []
+    result = merge_filters(filters, "person_id", 42)
+    # person_id is handled separately in search_chunks, so merge_filters should ignore it
+    # (it falls through to the unknown key case)
+    assert result == []
+
+
+# --- Access Control Filter Tests ---
+
+
+def test_build_access_qdrant_filter_superadmin():
+    """Test that superadmin (None filter) returns empty list (no filtering)."""
+    result = build_access_qdrant_filter(None)
+    assert result == []
+
+
+def test_build_access_qdrant_filter_no_access():
+    """Test that empty access filter returns impossible condition."""
+    access_filter = AccessFilter(conditions=[])
+    result = build_access_qdrant_filter(access_filter)
+
+    # Should return a condition that matches nothing
+    assert len(result) == 1
+    assert result[0]["key"] == "project_id"
+    assert result[0]["match"]["value"] == -1
+
+
+def test_build_access_qdrant_filter_single_project():
+    """Test access filter with single project membership."""
+    condition = AccessCondition(
+        project_id=1,
+        sensitivities=frozenset({"basic", "internal"}),
+    )
+    access_filter = AccessFilter(conditions=[condition])
+    result = build_access_qdrant_filter(access_filter)
+
+    assert len(result) == 1
+    # Should have must conditions for project_id and sensitivity
+    assert "must" in result[0]
+    must_conditions = result[0]["must"]
+    assert len(must_conditions) == 2
+
+    # Check project_id condition
+    project_condition = next(c for c in must_conditions if c["key"] == "project_id")
+    assert project_condition["match"]["value"] == 1
+
+    # Check sensitivity condition
+    sensitivity_condition = next(c for c in must_conditions if c["key"] == "sensitivity")
+    assert set(sensitivity_condition["match"]["any"]) == {"basic", "internal"}
+
+
+def test_build_access_qdrant_filter_multiple_projects():
+    """Test access filter with multiple project memberships."""
+    conditions = [
+        AccessCondition(project_id=1, sensitivities=frozenset({"basic"})),
+        AccessCondition(project_id=2, sensitivities=frozenset({"basic", "internal", "confidential"})),
+    ]
+    access_filter = AccessFilter(conditions=conditions)
+    result = build_access_qdrant_filter(access_filter)
+
+    # Should have two "should" conditions (one per project)
+    assert len(result) == 2
+
+    # Find conditions by project_id
+    proj1_cond = next(r for r in result if any(
+        c.get("key") == "project_id" and c["match"]["value"] == 1
+        for c in r["must"]
+    ))
+    proj2_cond = next(r for r in result if any(
+        c.get("key") == "project_id" and c["match"]["value"] == 2
+        for c in r["must"]
+    ))
+
+    # Project 1: only basic
+    sens1 = next(c for c in proj1_cond["must"] if c["key"] == "sensitivity")
+    assert sens1["match"]["any"] == ["basic"]
+
+    # Project 2: all levels
+    sens2 = next(c for c in proj2_cond["must"] if c["key"] == "sensitivity")
+    assert set(sens2["match"]["any"]) == {"basic", "internal", "confidential"}
+
+
+# --- Integration Tests for search_chunks with filter parameters ---
+
+
+@pytest.fixture
+def mock_qdrant_client():
+    """Create a mock Qdrant client."""
+    from unittest.mock import MagicMock
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_passes_person_filter_to_query():
+    """Test that search_chunks correctly passes person_id filter to query_chunks."""
+    from unittest.mock import patch, AsyncMock
+    from memory.api.search.embeddings import search_chunks
+    from memory.common.extract import DataChunk
+
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        data = [DataChunk(data=["test query"])]
+        await search_chunks(data, modalities={"text"}, filters={"person_id": 42})
+
+        # Verify query_chunks was called
+        mock_query.assert_called_once()
+        call_kwargs = mock_query.call_args[1]
+
+        # Check that filters contain the person filter structure
+        filters = call_kwargs.get("filters")
+        assert filters is not None
+        assert "must" in filters
+
+        # Find the person filter in the must conditions
+        person_filter = next(
+            (f for f in filters["must"] if "should" in f and any(
+                "is_null" in c for c in f["should"]
+            )),
+            None
+        )
+        assert person_filter is not None
+        assert person_filter["should"][1]["match"]["any"] == [42]
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_passes_access_filter_to_query():
+    """Test that search_chunks correctly passes access_filter to query_chunks."""
+    from unittest.mock import patch, AsyncMock
+    from memory.api.search.embeddings import search_chunks
+    from memory.common.extract import DataChunk
+
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        condition = AccessCondition(project_id=1, sensitivities=frozenset({"basic"}))
+        access_filter = AccessFilter(conditions=[condition])
+
+        data = [DataChunk(data=["test query"])]
+        await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
+
+        mock_query.assert_called_once()
+        call_kwargs = mock_query.call_args[1]
+
+        filters = call_kwargs.get("filters")
+        assert filters is not None
+        assert "must" in filters
+
+        # Find the access filter (nested should with project conditions)
+        access_nested = next(
+            (f for f in filters["must"] if "should" in f and any(
+                "must" in c for c in f["should"]
+            )),
+            None
+        )
+        assert access_nested is not None
+        # Verify the project_id condition is in the nested should
+        project_cond = access_nested["should"][0]["must"]
+        assert any(c.get("key") == "project_id" and c["match"]["value"] == 1 for c in project_cond)
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_no_access_filter_passes_impossible_condition():
+    """Test that empty access filter (no project access) passes impossible condition."""
+    from unittest.mock import patch, AsyncMock
+    from memory.api.search.embeddings import search_chunks
+    from memory.common.extract import DataChunk
+
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        # Empty conditions = no project access
+        access_filter = AccessFilter(conditions=[])
+
+        data = [DataChunk(data=["test query"])]
+        await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
+
+        mock_query.assert_called_once()
+        call_kwargs = mock_query.call_args[1]
+
+        filters = call_kwargs.get("filters")
+        assert filters is not None
+        assert "must" in filters
+
+        # Find the impossible condition (project_id = -1)
+        impossible_cond = next(
+            (f for f in filters["must"] if f.get("key") == "project_id"),
+            None
+        )
+        assert impossible_cond is not None
+        assert impossible_cond["match"]["value"] == -1
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_superadmin_no_access_filter():
+    """Test that None access filter (superadmin) adds no access filtering."""
+    from unittest.mock import patch, AsyncMock
+    from memory.api.search.embeddings import search_chunks
+    from memory.common.extract import DataChunk
+
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        data = [DataChunk(data=["test query"])]
+        # Explicitly pass None for access_filter (superadmin)
+        await search_chunks(data, modalities={"text"}, filters={"access_filter": None})
+
+        mock_query.assert_called_once()
+        call_kwargs = mock_query.call_args[1]
+
+        # Filters should be None or empty (no access filtering for superadmin)
+        filters = call_kwargs.get("filters")
+        # No must conditions should be present for access control
+        if filters:
+            # If there are must conditions, none should be access-related
+            must_conditions = filters.get("must", [])
+            access_conditions = [
+                f for f in must_conditions
+                if f.get("key") == "project_id" or (
+                    "should" in f and any("must" in c for c in f["should"])
+                )
+            ]
+            assert access_conditions == []

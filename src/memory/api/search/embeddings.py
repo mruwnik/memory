@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import Any, Callable, cast
+from typing import Any, Callable, cast, TYPE_CHECKING
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
@@ -12,7 +12,67 @@ from memory.common.collections import (
 )
 from memory.api.search.types import SearchFilters
 
+if TYPE_CHECKING:
+    from memory.common.access_control import AccessFilter
+
 logger = logging.getLogger(__name__)
+
+def build_access_qdrant_filter(
+    access_filter: "AccessFilter | None",
+) -> list[dict[str, Any]]:
+    """
+    Build Qdrant filter conditions from an AccessFilter.
+
+    Returns a list of "should" conditions where each condition represents
+    a project + allowed sensitivities combination. At least one must match.
+
+    If access_filter is None (superadmin), returns empty list (no filtering).
+    If access_filter has no conditions, returns a filter that matches nothing.
+    """
+    if access_filter is None:
+        # Superadmin - no access filtering
+        return []
+
+    if access_filter.is_empty():
+        # User has no project access - match nothing
+        # Use an impossible condition
+        return [{"key": "project_id", "match": {"value": -1}}]
+
+    # Build should conditions for each project membership
+    should_conditions = []
+    for condition in access_filter.conditions:
+        # Each condition: project_id must match AND sensitivity must be in allowed set
+        project_condition = {
+            "must": [
+                {"key": "project_id", "match": {"value": condition.project_id}},
+                {"key": "sensitivity", "match": {"any": list(condition.sensitivities)}},
+            ]
+        }
+        should_conditions.append(project_condition)
+
+    return should_conditions
+
+
+def build_person_filter(person_id: int) -> dict[str, Any]:
+    """
+    Build a Qdrant filter for person_id.
+
+    Returns a filter that matches items where:
+    - 'people' field is null/missing (item not associated with specific people), OR
+    - 'people' field contains the given person_id
+
+    This ensures items without people associations are still returned,
+    while items with people associations only return if the person is included.
+
+    Note: The 'should' clause in Qdrant requires at least one condition to match
+    by default, so no explicit min_should is needed for "match any" semantics.
+    """
+    return {
+        "should": [
+            {"is_null": {"key": "people"}},
+            {"key": "people", "match": {"any": [person_id]}},
+        ],
+    }
 
 
 async def query_chunks(
@@ -162,9 +222,66 @@ async def search_chunks(
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
-    search_filters = []
+    search_filters: list[dict[str, Any]] = []
     for key, val in filters.items():
+        if key in ("access_filter", "person_id"):
+            # Handle these filters separately (they create compound conditions)
+            continue
         search_filters = merge_filters(search_filters, key, val)
+
+    # Build the complete Qdrant filter
+    qdrant_filter: dict[str, Any] = {}
+
+    if search_filters:
+        qdrant_filter["must"] = search_filters
+
+    # Add person_id filter if present
+    # This matches items where 'people' is null OR contains the person_id
+    #
+    # Note: This filtering approach differs from BM25 (bm25.py):
+    # - Qdrant (here): Uses payload-based filtering on 'people' field. Any content
+    #   type with a 'people' field will be filtered.
+    # - BM25: Uses schema-based filtering via meeting_attendees table. Only Meetings
+    #   are filtered; other content types are always returned.
+    #
+    # Currently only Meetings populate the 'people' field, so results are equivalent.
+    # If other content types add 'people' in the future, Qdrant will filter them
+    # but BM25 will not.
+    if (person_id := filters.get("person_id")) is not None:
+        person_filter = build_person_filter(person_id)
+        if "must" not in qdrant_filter:
+            qdrant_filter["must"] = []
+        qdrant_filter["must"].append(person_filter)
+
+    # Add access control filter if present
+    # Wrap in a nested Filter inside must for consistent structure
+    access_filter = filters.get("access_filter")
+    access_conditions = build_access_qdrant_filter(access_filter)
+    if access_conditions:
+        if "must" not in qdrant_filter:
+            qdrant_filter["must"] = []
+        # Distinguish between "no access" and "has project access" cases:
+        #
+        # - "No access" case: build_access_qdrant_filter returns a single condition
+        #   with a "key" field (e.g., {"key": "project_id", "match": {"value": -1}}).
+        #   This is an impossible condition that matches nothing.
+        #
+        # - "Has access" case: Returns list of nested {"must": [...]} conditions,
+        #   one per project. These don't have a top-level "key" field.
+        #
+        # We detect the "no access" case by checking for a single condition with "key".
+        is_no_access_condition = len(access_conditions) == 1 and "key" in access_conditions[0]
+        if is_no_access_condition:
+            # User has no project access - return empty results without querying Qdrant
+            return {}
+
+        # Multiple project conditions - wrap as nested Filter with should
+        # The 'should' clause requires at least one condition to match by default
+        # This ensures proper AND semantics with other must conditions
+        access_nested_filter = {
+            "should": access_conditions,
+        }
+        qdrant_filter["must"].append(access_nested_filter)
 
     client = qdrant.get_qdrant_client()
     results = await query_chunks(
@@ -174,7 +291,7 @@ async def search_chunks(
         embedding.embed_text if not multimodal else embedding.embed_mixed,
         min_score=min_score,
         limit=limit,
-        filters={"must": search_filters} if search_filters else None,
+        filters=qdrant_filter if qdrant_filter else None,
     )
     search_results = {k: results.get(k, []) for k in modalities}
 

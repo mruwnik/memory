@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memory.api.search import bm25
+from memory.api.search.bm25 import apply_access_filter
 from memory.api.search.types import SearchFilters
 from memory.common import extract
+from memory.common.access_control import AccessFilter
 
 
 class TestBuildTsquery:
@@ -393,3 +395,278 @@ class TestSearchBm25Chunks:
 
         call_args = mock_search_bm25.call_args
         assert call_args[0][1] == modalities
+
+
+def test_apply_access_filter_superadmin_returns_unchanged_query():
+    """Test that None filter (superadmin) returns query unchanged."""
+    mock_query = MagicMock()
+    result = apply_access_filter(mock_query, None)
+    assert result is mock_query
+    assert not mock_query.filter.called
+
+
+def test_apply_access_filter_empty_matches_nothing():
+    """Test that empty access filter returns impossible condition."""
+    mock_query = MagicMock()
+    access_filter = AccessFilter(conditions=[])
+    apply_access_filter(mock_query, access_filter)
+    mock_query.filter.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestSearchBm25PersonFilter:
+    """Tests for person_id filter in BM25 search."""
+
+    @patch("memory.api.search.bm25.make_session")
+    async def test_person_id_triggers_source_join(self, mock_make_session):
+        """Test that person_id filter triggers join with SourceItem."""
+        mock_db = MagicMock()
+        mock_make_session.return_value.__enter__.return_value = mock_db
+        mock_query = mock_db.query.return_value
+        mock_filter = mock_query.filter.return_value
+        mock_join = mock_filter.join.return_value
+        mock_join.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+
+        filters = SearchFilters(person_id=42)
+        await bm25.search_bm25("test", {"text"}, filters=filters)
+
+        # Verify join was called (person_id requires source join)
+        assert mock_filter.join.called
+
+    @patch("memory.api.search.bm25.make_session")
+    async def test_person_id_filter_applied(self, mock_make_session):
+        """Test that person_id filter is properly applied to query."""
+        mock_db = MagicMock()
+        mock_make_session.return_value.__enter__.return_value = mock_db
+        mock_query = mock_db.query.return_value
+
+        # Setup the chain for source join + person filter
+        mock_base_filter = mock_query.filter.return_value
+        mock_join = mock_base_filter.join.return_value
+        mock_person_filter = mock_join.filter.return_value
+        mock_person_filter.order_by.return_value.limit.return_value.all.return_value = []
+
+        filters = SearchFilters(person_id=42)
+        await bm25.search_bm25("test", {"text"}, filters=filters)
+
+        # The person_id filter adds a filter call after the join
+        # This tests that the flow includes the filter call
+        assert mock_join.filter.called
+
+
+# ============================================================================
+# Integration tests for apply_access_filter
+# These require db_session (--run-slow) as they test real database queries
+# ============================================================================
+
+
+@pytest.fixture
+def github_account(db_session):
+    """Create a GitHub account for testing."""
+    from memory.common.db.models.sources import GithubAccount
+
+    account = GithubAccount(
+        user_id=1,
+        name="Test Account",
+        auth_type="pat",
+        access_token="test_token",
+    )
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+@pytest.fixture
+def github_repo(db_session, github_account):
+    """Create a GitHub repo for testing."""
+    from memory.common.db.models.sources import GithubRepo
+
+    repo = GithubRepo(
+        account_id=github_account.id,
+        github_id=12345,
+        owner="testowner",
+        name="testrepo",
+    )
+    db_session.add(repo)
+    db_session.commit()
+    return repo
+
+
+@pytest.fixture
+def project(db_session, github_repo):
+    """Create a GitHub milestone (project) for testing."""
+    from memory.common.db.models.sources import GithubMilestone
+
+    milestone = GithubMilestone(
+        repo_id=github_repo.id,
+        github_id=100,
+        number=1,
+        title="Test Project",
+        state="open",
+    )
+    db_session.add(milestone)
+    db_session.commit()
+    return milestone
+
+
+@pytest.fixture
+def second_project(db_session, github_repo):
+    """Create a second GitHub milestone (project) for testing."""
+    from memory.common.db.models.sources import GithubMilestone
+
+    milestone = GithubMilestone(
+        repo_id=github_repo.id,
+        github_id=101,
+        number=2,
+        title="Second Project",
+        state="open",
+    )
+    db_session.add(milestone)
+    db_session.commit()
+    return milestone
+
+
+@pytest.fixture
+def source_items_with_access(db_session, project, second_project):
+    """Create source items with different project_id and sensitivity values."""
+    from memory.common.db.models import Note
+
+    items = [
+        # Project 1 items
+        Note(content="Project 1 basic item", project_id=project.id, sensitivity="basic"),
+        Note(content="Project 1 internal item", project_id=project.id, sensitivity="internal"),
+        Note(content="Project 1 confidential item", project_id=project.id, sensitivity="confidential"),
+        # Project 2 items
+        Note(content="Project 2 basic item", project_id=second_project.id, sensitivity="basic"),
+        Note(content="Project 2 internal item", project_id=second_project.id, sensitivity="internal"),
+        # Item with no project (superadmin only)
+        Note(content="Unclassified item", project_id=None, sensitivity="basic"),
+    ]
+    for item in items:
+        db_session.add(item)
+    db_session.commit()
+    return items
+
+
+@pytest.mark.parametrize(
+    "role,expected_count",
+    [
+        # Contributor sees only basic (1 item)
+        ("contributor", 1),
+        # Manager sees basic + internal (2 items)
+        ("manager", 2),
+        # Admin sees all sensitivities (3 items)
+        ("admin", 3),
+    ],
+)
+def test_apply_access_filter_single_project_sensitivity(
+    db_session, project, source_items_with_access, role, expected_count
+):
+    """Test that single project filter respects sensitivity levels based on role."""
+    from memory.common.access_control import AccessCondition, AccessFilter, get_allowed_sensitivities
+    from memory.common.db.models import SourceItem
+
+    # Ensure fixture ran (creates items in db)
+    _ = source_items_with_access
+
+    # Build filter for project with given role
+    sensitivities = get_allowed_sensitivities(role)
+    assert sensitivities is not None, f"Invalid role: {role}"
+    access_filter = AccessFilter(
+        conditions=[AccessCondition(project_id=project.id, sensitivities=sensitivities)]
+    )
+
+    # Query all source items with access filter
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, access_filter)
+    results = filtered_query.all()
+
+    assert len(results) == expected_count
+    # All results should be from the correct project
+    for item in results:
+        assert item.project_id == project.id
+        assert item.sensitivity in sensitivities
+
+
+def test_apply_access_filter_multiple_projects(
+    db_session, project, second_project, source_items_with_access
+):
+    """Test that multiple project conditions are OR'd together correctly."""
+    from memory.common.access_control import AccessCondition, AccessFilter
+    from memory.common.db.models import SourceItem
+
+    # Ensure fixture ran
+    _ = source_items_with_access
+
+    # User is contributor on project 1, manager on project 2
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(project_id=project.id, sensitivities=frozenset({"basic"})),
+            AccessCondition(project_id=second_project.id, sensitivities=frozenset({"basic", "internal"})),
+        ]
+    )
+
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, access_filter)
+    results = filtered_query.all()
+
+    # Should get: 1 from project 1 (basic only) + 2 from project 2 (basic + internal)
+    assert len(results) == 3
+
+    # Verify the right items were returned
+    project1_items = [i for i in results if i.project_id == project.id]
+    project2_items = [i for i in results if i.project_id == second_project.id]
+
+    assert len(project1_items) == 1
+    assert project1_items[0].sensitivity == "basic"
+
+    assert len(project2_items) == 2
+    assert {i.sensitivity for i in project2_items} == {"basic", "internal"}
+
+
+def test_apply_access_filter_excludes_null_project_id(
+    db_session, project, source_items_with_access
+):
+    """Test that items with NULL project_id are excluded for non-superadmins."""
+    from memory.common.access_control import AccessCondition, AccessFilter
+    from memory.common.db.models import SourceItem
+
+    # Ensure fixture ran
+    _ = source_items_with_access
+
+    # Even with admin role on a project, NULL project_id items should be excluded
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(
+                project_id=project.id,
+                sensitivities=frozenset({"basic", "internal", "confidential"}),
+            )
+        ]
+    )
+
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, access_filter)
+    results = filtered_query.all()
+
+    # All results should have a project_id (no NULLs)
+    for item in results:
+        assert item.project_id is not None
+
+
+def test_apply_access_filter_superadmin_sees_all(db_session, source_items_with_access):
+    """Test that superadmin (None filter) sees all items including NULL project_id."""
+    from memory.common.db.models import SourceItem
+
+    # Ensure fixture ran
+    _ = source_items_with_access
+
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, None)  # None = superadmin
+    results = filtered_query.all()
+
+    # Superadmin sees all 6 items including the one with NULL project_id
+    assert len(results) == 6
+
+    # Verify NULL project_id item is included
+    null_project_items = [i for i in results if i.project_id is None]
+    assert len(null_project_items) == 1

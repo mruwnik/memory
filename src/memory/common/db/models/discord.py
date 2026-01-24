@@ -22,6 +22,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    String,
     Table,
     Text,
     func,
@@ -143,6 +144,12 @@ class DiscordChannel(Base):
     # Collection setting: null = inherit from server, True/False = explicit override
     collect_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
+    # Access control: link to project (milestone) and sensitivity level
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -153,7 +160,10 @@ class DiscordChannel(Base):
     # Relationships
     server: Mapped[DiscordServer | None] = relationship("DiscordServer", back_populates="channels")
 
-    __table_args__ = (Index("discord_channels_server_idx", "server_id"),)
+    __table_args__ = (
+        Index("discord_channels_server_idx", "server_id"),
+        Index("discord_channels_project_idx", "project_id"),
+    )
 
     @property
     def should_collect(self) -> bool:

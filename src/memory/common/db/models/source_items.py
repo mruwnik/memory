@@ -7,7 +7,7 @@ from __future__ import annotations
 import pathlib
 import textwrap
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Annotated, Sequence
+from typing import TYPE_CHECKING, Any, Annotated, NotRequired, Sequence
 
 from PIL import Image
 import zlib
@@ -1635,7 +1635,8 @@ class MeetingPayload(SourceItemPayload):
     summary: Annotated[str | None, "LLM-generated summary of the meeting"]
     notes: Annotated[str | None, "LLM-extracted key points and decisions"]
     extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, failed"]
-    attendee_ids: Annotated[list[int], "IDs of Person records who attended"]
+    # IDs of Person records who attended (also used for Qdrant person-based filtering)
+    people: Annotated[list[int], "IDs of Person records who attended"]
     task_ids: Annotated[list[int], "IDs of Task records extracted from this meeting"]
     calendar_event_id: Annotated[int | None, "ID of linked CalendarEvent if available"]
 
@@ -1703,6 +1704,7 @@ class Meeting(SourceItem):
     def as_payload(self) -> MeetingPayload:
         # spawned_tasks comes from backref on Task.source_item
         spawned = getattr(self, "spawned_tasks", [])
+        people = [p.id for p in self.attendees]
         return MeetingPayload(
             **super().as_payload(),
             title=self.title,
@@ -1712,7 +1714,7 @@ class Meeting(SourceItem):
             summary=self.summary,
             notes=self.notes,
             extraction_status=self.extraction_status,
-            attendee_ids=[p.id for p in self.attendees],
+            people=people,
             task_ids=[t.id for t in spawned],
             calendar_event_id=self.calendar_event_id,
         )

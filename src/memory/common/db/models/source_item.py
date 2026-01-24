@@ -298,6 +298,15 @@ class SourceItem(Base):
         Integer, nullable=False, server_default="0"
     )
 
+    # Access control
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+
+    # Person associations (for filtering content by person)
+    people: Mapped[list[int] | None] = mapped_column(ARRAY(BigInteger), nullable=True)
+
     __mapper_args__: dict[str, Any] = {
         "polymorphic_on": type,
         "polymorphic_identity": "source_item",
@@ -309,11 +318,18 @@ class SourceItem(Base):
         CheckConstraint(
             "verification_failures >= 0", name="verification_failures_non_negative"
         ),
+        CheckConstraint(
+            "sensitivity IN ('basic', 'internal', 'confidential')",
+            name="valid_sensitivity_level",
+        ),
         Index("source_modality_idx", "modality"),
         Index("source_status_idx", "embed_status"),
         Index("source_tags_idx", "tags", postgresql_using="gin"),
         Index("source_filename_idx", "filename"),
         Index("source_verified_at_idx", "type", "last_verified_at"),
+        Index("source_project_idx", "project_id"),
+        Index("source_sensitivity_idx", "sensitivity"),
+        Index("source_people_idx", "people", postgresql_using="gin"),
     )
 
     @property

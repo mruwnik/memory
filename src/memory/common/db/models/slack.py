@@ -15,12 +15,14 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -190,6 +192,12 @@ class SlackChannel(Base):
     # Collection setting: null = inherit from workspace, True/False = explicit override
     collect_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
+    # Access control: link to project (milestone) and sensitivity level
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+
     # Sync cursor for incremental message fetching
     last_message_ts: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -206,6 +214,7 @@ class SlackChannel(Base):
     __table_args__ = (
         Index("slack_channels_workspace_idx", "workspace_id"),
         Index("slack_channels_type_idx", "channel_type"),
+        Index("slack_channels_project_idx", "project_id"),
     )
 
     @property

@@ -12,20 +12,25 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    String,
+    Table,
     Text,
     UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
 
 if TYPE_CHECKING:
+    from memory.common.db.models.people import Person
     from memory.common.db.models.source_items import BookSection, GithubItem, MailMessage
     from memory.common.db.models.users import User
 
@@ -321,12 +326,69 @@ class GithubMilestone(Base):
     # Relationships
     repo: Mapped[GithubRepo] = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
     items: Mapped[list[GithubItem]] = relationship("GithubItem", back_populates="milestone_rel")
+    collaborators: Mapped[list["Person"]] = relationship(
+        "Person", secondary="project_collaborators", back_populates="projects"
+    )
 
     __table_args__ = (
         UniqueConstraint("repo_id", "number", name="unique_milestone_per_repo"),
         Index("github_milestones_repo_idx", "repo_id"),
         Index("github_milestones_due_idx", "due_on"),
     )
+
+    @hybrid_property
+    def slug(self) -> str | None:
+        """Project slug in format owner/repo:number."""
+        if self.repo is None:
+            return None
+        return f"{self.repo.owner}/{self.repo.name}:{self.number}"
+
+
+# Junction table for milestone/project collaborators
+project_collaborators = Table(
+    "project_collaborators",
+    Base.metadata,
+    Column("project_id", BigInteger, ForeignKey("github_milestones.id", ondelete="CASCADE"), primary_key=True),
+    Column("person_id", BigInteger, ForeignKey("people.id", ondelete="CASCADE"), primary_key=True),
+    Column("role", String(50), nullable=False, server_default="contributor"),
+    CheckConstraint("role IN ('contributor', 'manager', 'admin')", name="valid_collaborator_role"),
+    Index("project_collaborators_project_idx", "project_id"),
+    Index("project_collaborators_person_idx", "person_id"),
+)
+
+
+class GithubUser(Base):
+    """GitHub user account linked to a Person."""
+
+    __tablename__ = "github_users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # GitHub user ID
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Link to Person
+    person_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
+    )
+    person: Mapped["Person | None"] = relationship("Person", back_populates="github_accounts")
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("github_users_username_idx", "username"),
+        Index("github_users_person_idx", "person_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GithubUser(id={self.id}, username={self.username!r})>"
 
 
 class GithubProject(Base):

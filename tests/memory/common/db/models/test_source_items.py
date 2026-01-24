@@ -14,7 +14,9 @@ from memory.common.db.models.source_items import (
     BlogPost,
     AgentObservation,
     Note,
+    Meeting,
 )
+from memory.common.db.models.people import Person
 from tests.data.contents import SAMPLE_MARKDOWN
 
 
@@ -801,3 +803,59 @@ def test_note_data_chunks_long_content():
         assert chunk.item_metadata["size"] == 123
         assert chunk.item_metadata["source_id"] is None
         assert chunk.item_metadata["subject"] is None
+
+
+# --- Meeting Tests ---
+
+
+def test_meeting_as_payload_with_attendees():
+    """Test Meeting.as_payload includes 'people' field when attendees exist."""
+    # Create mock people
+    person1 = Person(id=1, identifier="person1", display_name="Alice", sha256=b"p1")
+    person2 = Person(id=2, identifier="person2", display_name="Bob", sha256=b"p2")
+
+    meeting = Meeting(
+        sha256=b"test_meeting",
+        content="Meeting transcript",
+        title="Team Standup",
+    )
+    # Manually set attendees for testing (normally done via relationship)
+    meeting.attendees = [person1, person2]
+
+    payload = meeting.as_payload()
+
+    # Should include 'people' field with attendee IDs
+    assert "people" in payload
+    assert payload["people"] == [1, 2]
+
+
+def test_meeting_as_payload_without_attendees():
+    """Test Meeting.as_payload with no attendees."""
+    meeting = Meeting(
+        sha256=b"test_meeting_empty",
+        content="Solo meeting notes",
+        title="Personal Notes",
+    )
+    meeting.attendees = []
+
+    payload = meeting.as_payload()
+
+    # Should have empty people list
+    assert payload["people"] == []
+
+
+def test_meeting_as_payload_single_attendee():
+    """Test Meeting.as_payload with single attendee."""
+    person = Person(id=42, identifier="single", display_name="Solo", sha256=b"solo")
+
+    meeting = Meeting(
+        sha256=b"test_meeting_single",
+        content="One on one notes",
+        title="1:1 Meeting",
+    )
+    meeting.attendees = [person]
+
+    payload = meeting.as_payload()
+
+    assert "people" in payload
+    assert payload["people"] == [42]

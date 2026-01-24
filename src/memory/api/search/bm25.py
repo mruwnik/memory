@@ -9,12 +9,14 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import func, text
+from sqlalchemy import func, text, or_, exists, select, false as sql_false
 
 from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
+from memory.common.db.models.source_items import meeting_attendees
+from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,45 @@ _STOPWORDS = frozenset([
     "during", "before", "after", "above", "below", "between", "under", "again",
     "further", "then", "once", "here", "there", "any", "being", "doing",
 ])
+
+
+def apply_access_filter(query, access_filter: AccessFilter | None):
+    """
+    Apply access control filter to a SQLAlchemy query.
+
+    Args:
+        query: SQLAlchemy query (must have SourceItem joined)
+        access_filter: Access filter from user's memberships, or None for superadmin
+
+    Returns:
+        Modified query with access control filter applied
+
+    Note:
+        This function requires SourceItem.project_id and SourceItem.sensitivity
+        columns to exist. These are added by the access control database migration.
+        Until that migration runs, queries using access filtering will fail.
+    """
+    if access_filter is None:
+        # Superadmin - no filtering
+        return query
+
+    if access_filter.is_empty():
+        # User has no project access - match nothing
+        return query.filter(sql_false())
+
+    # Build OR conditions for each project membership
+    # NOTE: Items with NULL project_id are excluded by design - they require superadmin access.
+    # The equality check (project_id == X) implicitly excludes NULLs in SQL.
+    conditions = []
+    for condition in access_filter.conditions:
+        # Must match project_id AND sensitivity in allowed set
+        project_condition = (SourceItem.project_id == condition.project_id) & (
+            SourceItem.sensitivity.in_(condition.sensitivities)
+        )
+        conditions.append(project_condition)
+
+    # Apply OR across all project conditions
+    return query.filter(or_(*conditions))
 
 
 def build_tsquery(query: str) -> str:
@@ -99,11 +140,44 @@ async def search_bm25(
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
-        # Join with SourceItem if we need size filters
-        needs_source_join = any(filters.get(k) for k in ["min_size", "max_size"])
+        # Join with SourceItem if we need size filters, access control, or person filter
+        access_filter = filters.get("access_filter")
+        person_id = filters.get("person_id")
+        needs_source_join = (
+            any(filters.get(k) for k in ["min_size", "max_size"])
+            or access_filter is not None
+            or person_id is not None
+        )
         if needs_source_join:
             items_query = items_query.join(
                 SourceItem, SourceItem.id == Chunk.source_id
+            )
+
+        # Apply access control filter (requires source join)
+        if access_filter is not None:
+            items_query = apply_access_filter(items_query, access_filter)
+
+        # Apply person filter (requires source join)
+        # Include items where: source is not a Meeting OR person is in meeting_attendees
+        #
+        # Note: This filtering logic differs from the Qdrant person filter in embeddings.py:
+        # - BM25 (here): Filters by modality - only Meetings are filtered by attendees,
+        #   all other content types are returned regardless of person_id.
+        # - Qdrant: Filters by 'people' payload field - returns items where 'people' is
+        #   null/missing OR contains the person_id. Currently only Meetings populate
+        #   the 'people' field, so behavior is equivalent.
+        #
+        # If other content types add a 'people' field in the future, the Qdrant filter
+        # will automatically filter them, but BM25 will not (by design - BM25 only
+        # knows about the Meeting/attendee relationship via the database schema).
+        if person_id is not None:
+            person_in_meeting = exists(
+                select(meeting_attendees.c.meeting_id)
+                .where(meeting_attendees.c.meeting_id == SourceItem.id)
+                .where(meeting_attendees.c.person_id == person_id)
+            )
+            items_query = items_query.filter(
+                or_(SourceItem.modality != "meeting", person_in_meeting)
             )
 
         if source_ids := filters.get("source_ids"):
