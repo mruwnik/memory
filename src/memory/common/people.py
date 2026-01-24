@@ -11,12 +11,15 @@ import logging
 import re
 
 from sqlalchemy import func as sql_func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, scoped_session
 
 from memory.common.content_processing import create_content_hash
 from memory.common.db.models.people import Person
 
 logger = logging.getLogger(__name__)
+
+# Type alias for session types - scoped_session behaves like Session at runtime
+DBSession = Session | scoped_session[Session]
 
 
 def make_identifier(name: str) -> str:
@@ -25,7 +28,7 @@ def make_identifier(name: str) -> str:
     return "".join(c for c in identifier if c.isalnum() or c == "_")
 
 
-def find_person_by_name(session: Session, name: str | None) -> Person | None:
+def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
     """Try to find a Person record by name, alias, or email.
 
     Matching order:
@@ -78,7 +81,7 @@ def find_person_by_name(session: Session, name: str | None) -> Person | None:
     return None
 
 
-def find_person_by_email(session: Session, email: str | None) -> Person | None:
+def find_person_by_email(session: DBSession, email: str | None) -> Person | None:
     """Find a Person by their email address.
 
     Args:
@@ -100,7 +103,7 @@ def find_person_by_email(session: Session, email: str | None) -> Person | None:
 
 
 def find_person_by_slack_id(
-    session: Session, workspace_id: str, slack_user_id: str
+    session: DBSession, workspace_id: str, slack_user_id: str
 ) -> Person | None:
     """Find a Person by their Slack user ID in a specific workspace.
 
@@ -131,7 +134,7 @@ def find_person_by_slack_id(
 
 
 def find_or_create_person(
-    session: Session,
+    session: DBSession,
     name: str,
     email: str | None = None,
     create_if_missing: bool = True,
@@ -191,7 +194,7 @@ def find_or_create_person(
 
 
 def link_slack_user_to_person(
-    session: Session,
+    session: DBSession,
     person: Person,
     workspace_id: str,
     slack_user_id: str,
@@ -228,7 +231,7 @@ def link_slack_user_to_person(
 
 
 def sync_slack_users_to_people(
-    session: Session,
+    session: DBSession,
     workspace_id: str,
     users: list[dict],
     create_missing: bool = False,

@@ -305,9 +305,10 @@ def sync_workspace_channels(
         ch_type = get_channel_type(channel)
 
         # Get channel name - DMs need user name resolution
+        name: str
         if channel.get("is_im"):
             user_id = channel.get("user")
-            name = users_by_id.get(user_id, user_id) if user_id else channel_id
+            name = users_by_id.get(user_id, user_id) if user_id else channel_id  # type: ignore[assignment]
         else:
             name = channel.get("name") or channel_id
 
