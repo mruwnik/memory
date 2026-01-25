@@ -118,12 +118,14 @@ def test_mail_message_as_payload(sent_at, expected_date):
     )
     # Manually set id for testing
     object.__setattr__(mail_message, "id", 123)
+    mail_message.people = []
 
     payload = mail_message.as_payload()
 
     expected = {
         "source_id": 123,
         "size": 1024,
+        "people": [],
         "message_id": "<test@example.com>",
         "subject": "Test Subject",
         "sender": "sender@example.com",
@@ -194,6 +196,7 @@ Test Body Content"""
         size=1024,
         sent_at=datetime(2023, 1, 1, 12, 0, 0),
     )
+    mail_message.people = []
 
     assert mail_message.display_contents == {
         "content": "Test Body Content",
@@ -207,6 +210,7 @@ Test Body Content"""
         "tags": None,
         "folder": None,
         "message_id": "<test@example.com>",
+        "people": [],
     }
 
 
@@ -238,6 +242,7 @@ def test_email_attachment_as_payload(created_at, expected_date):
     )
     # Manually set id for testing
     object.__setattr__(attachment, "id", 456)
+    attachment.people = []
 
     payload = attachment.as_payload()
 
@@ -250,6 +255,7 @@ def test_email_attachment_as_payload(created_at, expected_date):
         "mail_message_id": 123,
         "tags": ["pdf", "document"],
         "sent_at": "2025-01-01T12:00:00",
+        "people": [],
     }
     assert payload == expected
 
@@ -523,6 +529,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": [],
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -537,6 +544,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": [],
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -555,6 +563,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": [],
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -570,6 +579,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": [],
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -589,6 +599,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": {"existing_tag"},
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -604,6 +615,7 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "source_id": None,
                 "tags": {"existing_tag"},
                 "size": None,
+                "people": [],
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -637,6 +649,7 @@ def test_agent_observation_data_chunks(
         session_id=session_id,
         tags=observation_tags,
     )
+    observation.people = []
     observation.update_confidences({"observation_accuracy": 0.9})
     # Set inserted_at using object.__setattr__ to bypass SQLAlchemy restrictions
     object.__setattr__(observation, "inserted_at", datetime(2023, 1, 1, 12, 0, 0))
@@ -751,6 +764,7 @@ def test_note_data_chunks(subject, content, expected):
         size=123,
         tags=["bla"],
     )
+    note.people = []
     note.update_confidences({"observation_accuracy": 0.9})
     chunks = note.data_chunks()
     assert [chunk.content for chunk in chunks] == expected
@@ -766,6 +780,7 @@ def test_note_data_chunks(subject, content, expected):
             "source_id": None,
             "subject": subject,
             "tags": tags,
+            "people": [],
         }
 
 
@@ -819,8 +834,8 @@ def test_meeting_as_payload_with_attendees():
         content="Meeting transcript",
         title="Team Standup",
     )
-    # Manually set attendees for testing (normally done via relationship)
-    meeting.attendees = [person1, person2]
+    # Set people relationship (data migrated from meeting_attendees to source_item_people)
+    meeting.people = [person1, person2]
 
     payload = meeting.as_payload()
 
@@ -836,7 +851,7 @@ def test_meeting_as_payload_without_attendees():
         content="Solo meeting notes",
         title="Personal Notes",
     )
-    meeting.attendees = []
+    meeting.people = []
 
     payload = meeting.as_payload()
 
@@ -853,7 +868,7 @@ def test_meeting_as_payload_single_attendee():
         content="One on one notes",
         title="1:1 Meeting",
     )
-    meeting.attendees = [person]
+    meeting.people = [person]
 
     payload = meeting.as_payload()
 

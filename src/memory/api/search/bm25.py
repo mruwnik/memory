@@ -15,7 +15,7 @@ from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
-from memory.common.db.models.source_items import meeting_attendees
+from memory.common.db.models.source_item import source_item_people
 from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
@@ -158,27 +158,22 @@ async def search_bm25(
             items_query = apply_access_filter(items_query, access_filter)
 
         # Apply person filter (requires source join)
-        # Include items where: source is not a Meeting OR person is in meeting_attendees
+        # Include items where: no people associations exist OR person is associated
         #
-        # Note: This filtering logic differs from the Qdrant person filter in embeddings.py:
-        # - BM25 (here): Filters by modality - only Meetings are filtered by attendees,
-        #   all other content types are returned regardless of person_id.
-        # - Qdrant: Filters by 'people' payload field - returns items where 'people' is
-        #   null/missing OR contains the person_id. Currently only Meetings populate
-        #   the 'people' field, so behavior is equivalent.
-        #
-        # If other content types add a 'people' field in the future, the Qdrant filter
-        # will automatically filter them, but BM25 will not (by design - BM25 only
-        # knows about the Meeting/attendee relationship via the database schema).
+        # This filtering logic now matches the Qdrant person filter in embeddings.py:
+        # both filter by person associations via the source_item_people junction table.
+        # Items without any person associations are always included (not filtered out).
         if person_id is not None:
-            person_in_meeting = exists(
-                select(meeting_attendees.c.meeting_id)
-                .where(meeting_attendees.c.meeting_id == SourceItem.id)
-                .where(meeting_attendees.c.person_id == person_id)
+            person_associated = exists(
+                select(source_item_people.c.source_item_id)
+                .where(source_item_people.c.source_item_id == SourceItem.id)
+                .where(source_item_people.c.person_id == person_id)
             )
-            items_query = items_query.filter(
-                or_(SourceItem.modality != "meeting", person_in_meeting)
+            no_people = ~exists(
+                select(source_item_people.c.source_item_id)
+                .where(source_item_people.c.source_item_id == SourceItem.id)
             )
+            items_query = items_query.filter(or_(no_people, person_associated))
 
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))

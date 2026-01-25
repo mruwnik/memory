@@ -48,7 +48,7 @@ from memory.common.content_processing import (
     process_content_item,
     safe_task_execution,
 )
-from memory.common.people import sync_slack_users_to_people
+from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
 
 logger = logging.getLogger(__name__)
 
@@ -597,6 +597,12 @@ def add_slack_message(
             resolved_content=resolved_content if resolved_content != content else None,
             images=saved_images or None,
         )
+
+        # Link author to Person if found
+        if author_id:
+            if person := find_person_by_slack_id(session, workspace_id, author_id):
+                if person not in message.people:
+                    message.people.append(person)
 
         result = process_content_item(message, session)
         return result

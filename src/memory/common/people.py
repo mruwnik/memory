@@ -9,12 +9,16 @@ records and optionally creating new ones. Used by:
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session, scoped_session
 
 from memory.common.content_processing import create_content_hash
 from memory.common.db.models.people import Person
+
+if TYPE_CHECKING:
+    from memory.common.db.models.source_item import SourceItem
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +195,78 @@ def find_or_create_person(
     session.flush()
     logger.info(f"Created person '{identifier}' for name '{name}'")
     return person, True
+
+
+def find_person(session: DBSession, identifier: str | None) -> Person | None:
+    """Find a Person by trying multiple lookup strategies.
+
+    Tries in order:
+    1. By email (if identifier contains @)
+    2. By name/alias
+    3. By identifier slug
+
+    Args:
+        session: Database session
+        identifier: Email, name, or identifier to search for
+
+    Returns:
+        Matching Person or None
+    """
+    if not identifier:
+        return None
+
+    # Try email lookup first if it looks like an email
+    if "@" in identifier:
+        if person := find_person_by_email(session, identifier):
+            return person
+
+    # Try name/alias lookup
+    if person := find_person_by_name(session, identifier):
+        return person
+
+    # Try identifier slug lookup
+    slug = make_identifier(identifier)
+    return session.query(Person).filter(Person.identifier == slug).first()
+
+
+def link_people(
+    session: DBSession,
+    source_item: "SourceItem",
+    identifiers: set[str] | list[str],
+    create_if_missing: bool = False,
+) -> int:
+    """Link Person records to a SourceItem based on identifiers.
+
+    For each identifier, tries to find a matching Person by email, name,
+    or identifier slug. Skips duplicates and None values.
+
+    Args:
+        session: Database session for person lookup
+        source_item: The SourceItem to link people to
+        identifiers: Collection of emails, names, or identifiers to look up
+        create_if_missing: If True, create Person records for unmatched identifiers
+
+    Returns:
+        Number of people linked
+    """
+    linked = 0
+    for identifier in identifiers:
+        if not identifier:
+            continue
+
+        person = find_person(session, identifier)
+
+        # Optionally create if not found and we have enough info
+        if not person and create_if_missing:
+            email = identifier if "@" in identifier else None
+            name = identifier if "@" not in identifier else identifier.split("@")[0]
+            person, _ = find_or_create_person(session, name=name, email=email)
+
+        if person and person not in source_item.people:
+            source_item.people.append(person)
+            linked += 1
+
+    return linked
 
 
 def link_slack_user_to_person(

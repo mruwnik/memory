@@ -211,6 +211,10 @@ def create_action_item_tasks(
             sha256=make_task_sha256(meeting.id, item["description"]),
         )
 
+        # Link assignee to task via people relationship
+        if assignee_person and assignee_person not in task.people:
+            task.people.append(assignee_person)
+
         session.add(task)
         created_tasks.append(item["description"])
 

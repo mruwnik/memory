@@ -1,11 +1,16 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
+
 from memory.api.search.embeddings import (
     merge_range_filter,
     merge_filters,
     build_person_filter,
     build_access_qdrant_filter,
+    search_chunks,
 )
 from memory.common.access_control import AccessFilter, AccessCondition
+from memory.common.extract import DataChunk
 
 
 def test_merge_range_filter_new_filter():
@@ -213,13 +218,14 @@ def test_build_person_filter_structure():
     assert len(should_conditions) == 2
 
 
-def test_build_person_filter_is_null_condition():
-    """Test that person filter includes is_null condition for missing people field"""
+def test_build_person_filter_is_empty_condition():
+    """Test that person filter includes is_empty condition for null/missing/empty people field"""
     result = build_person_filter(42)
 
-    # First condition: people field is null/missing
-    is_null_condition = result["should"][0]
-    assert is_null_condition == {"is_null": {"key": "people"}}
+    # First condition: people field is null, missing, or empty array
+    # Using is_empty (not is_null) because as_payload() returns [] for items without people
+    is_empty_condition = result["should"][0]
+    assert is_empty_condition == {"is_empty": {"key": "people"}}
 
 
 def test_build_person_filter_match_condition():
@@ -329,17 +335,12 @@ def test_build_access_qdrant_filter_multiple_projects():
 @pytest.fixture
 def mock_qdrant_client():
     """Create a mock Qdrant client."""
-    from unittest.mock import MagicMock
     return MagicMock()
 
 
 @pytest.mark.asyncio
 async def test_search_chunks_passes_person_filter_to_query():
     """Test that search_chunks correctly passes person_id filter to query_chunks."""
-    from unittest.mock import patch, AsyncMock
-    from memory.api.search.embeddings import search_chunks
-    from memory.common.extract import DataChunk
-
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
          patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
         mock_qdrant.get_qdrant_client.return_value = "mock_client"
@@ -358,9 +359,10 @@ async def test_search_chunks_passes_person_filter_to_query():
         assert "must" in filters
 
         # Find the person filter in the must conditions
+        # Uses is_empty (not is_null) because as_payload() returns [] for items without people
         person_filter = next(
             (f for f in filters["must"] if "should" in f and any(
-                "is_null" in c for c in f["should"]
+                "is_empty" in c for c in f["should"]
             )),
             None
         )
@@ -371,10 +373,6 @@ async def test_search_chunks_passes_person_filter_to_query():
 @pytest.mark.asyncio
 async def test_search_chunks_passes_access_filter_to_query():
     """Test that search_chunks correctly passes access_filter to query_chunks."""
-    from unittest.mock import patch, AsyncMock
-    from memory.api.search.embeddings import search_chunks
-    from memory.common.extract import DataChunk
-
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
          patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
         mock_qdrant.get_qdrant_client.return_value = "mock_client"
@@ -407,12 +405,8 @@ async def test_search_chunks_passes_access_filter_to_query():
 
 
 @pytest.mark.asyncio
-async def test_search_chunks_no_access_filter_passes_impossible_condition():
-    """Test that empty access filter (no project access) passes impossible condition."""
-    from unittest.mock import patch, AsyncMock
-    from memory.api.search.embeddings import search_chunks
-    from memory.common.extract import DataChunk
-
+async def test_search_chunks_no_access_filter_returns_early():
+    """Test that empty access filter (no project access) returns empty without querying."""
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
          patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
         mock_qdrant.get_qdrant_client.return_value = "mock_client"
@@ -422,31 +416,16 @@ async def test_search_chunks_no_access_filter_passes_impossible_condition():
         access_filter = AccessFilter(conditions=[])
 
         data = [DataChunk(data=["test query"])]
-        await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
+        result = await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
 
-        mock_query.assert_called_once()
-        call_kwargs = mock_query.call_args[1]
-
-        filters = call_kwargs.get("filters")
-        assert filters is not None
-        assert "must" in filters
-
-        # Find the impossible condition (project_id = -1)
-        impossible_cond = next(
-            (f for f in filters["must"] if f.get("key") == "project_id"),
-            None
-        )
-        assert impossible_cond is not None
-        assert impossible_cond["match"]["value"] == -1
+        # Should return empty dict immediately without calling Qdrant
+        assert result == {}
+        mock_query.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_search_chunks_superadmin_no_access_filter():
     """Test that None access filter (superadmin) adds no access filtering."""
-    from unittest.mock import patch, AsyncMock
-    from memory.api.search.embeddings import search_chunks
-    from memory.common.extract import DataChunk
-
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
          patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
         mock_qdrant.get_qdrant_client.return_value = "mock_client"

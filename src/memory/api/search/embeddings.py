@@ -58,18 +58,20 @@ def build_person_filter(person_id: int) -> dict[str, Any]:
     Build a Qdrant filter for person_id.
 
     Returns a filter that matches items where:
-    - 'people' field is null/missing (item not associated with specific people), OR
+    - 'people' field is null/missing/empty (item not associated with specific people), OR
     - 'people' field contains the given person_id
 
     This ensures items without people associations are still returned,
     while items with people associations only return if the person is included.
 
-    Note: The 'should' clause in Qdrant requires at least one condition to match
-    by default, so no explicit min_should is needed for "match any" semantics.
+    Note: We use 'is_empty' rather than 'is_null' because as_payload() returns
+    an empty list [] for items without people, not null. In Qdrant, 'is_empty'
+    matches null, missing, AND empty arrays, while 'is_null' only matches truly
+    null/missing fields.
     """
     return {
         "should": [
-            {"is_null": {"key": "people"}},
+            {"is_empty": {"key": "people"}},
             {"key": "people", "match": {"any": [person_id]}},
         ],
     }
@@ -238,15 +240,12 @@ async def search_chunks(
     # Add person_id filter if present
     # This matches items where 'people' is null OR contains the person_id
     #
-    # Note: This filtering approach differs from BM25 (bm25.py):
-    # - Qdrant (here): Uses payload-based filtering on 'people' field. Any content
-    #   type with a 'people' field will be filtered.
-    # - BM25: Uses schema-based filtering via meeting_attendees table. Only Meetings
-    #   are filtered; other content types are always returned.
+    # Both Qdrant and BM25 implement equivalent filtering logic:
+    # - Qdrant: Uses 'people' field in payload (populated via SourceItem.as_payload())
+    # - BM25: Uses source_item_people junction table
     #
-    # Currently only Meetings populate the 'people' field, so results are equivalent.
-    # If other content types add 'people' in the future, Qdrant will filter them
-    # but BM25 will not.
+    # Person associations are populated during ingestion for: Meetings, Emails,
+    # Slack/Discord messages, GoogleDocs, Tasks, and CalendarEvents.
     if (person_id := filters.get("person_id")) is not None:
         person_filter = build_person_filter(person_id)
         if "must" not in qdrant_filter:

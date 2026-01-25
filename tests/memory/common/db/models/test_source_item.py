@@ -292,6 +292,8 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
         tags=["tag1"],
         size=1024,
     )
+    # Initialize people relationship for testing outside of database session
+    source.people = []
     # Create actual image
     image_file = tmp_path / "test.png"
     img = Image.new("RGB", (1, 1), color="red")
@@ -318,6 +320,7 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
         "tags": {"tag1"},
         "extra": "data",
         "size": 1024,
+        "people": [],
     }
     assert chunk.item_metadata == expected_payload
 
@@ -331,9 +334,11 @@ def test_source_item_as_payload():
         tags=["tag1", "tag2"],
         size=1024,
     )
+    # Initialize people relationship (empty list) for testing outside of database session
+    source.people = []
 
     payload = source.as_payload()
-    assert payload == {"source_id": 123, "tags": ["tag1", "tag2"], "size": 1024}
+    assert payload == {"source_id": 123, "tags": ["tag1", "tag2"], "size": 1024, "people": []}
 
 
 @pytest.mark.parametrize(
@@ -356,12 +361,14 @@ def test_source_item_display_contents(content, filename):
         size=123,
         tags=["bla", "ble"],
     )
+    source.people = []
     assert source.display_contents == {
         "content": content,
         "filename": filename,
         "mime_type": "text/plain",
         "size": 123,
         "tags": ["bla", "ble"],
+        "people": [],
     }
 
 

@@ -25,6 +25,8 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage
+from memory.common.db.models.discord import DiscordUser
+from memory.common.people import find_or_create_person
 from memory.common.content_processing import (
     check_content_exists,
     create_task_result,
@@ -167,6 +169,21 @@ def add_discord_message(
             attachments=attachments,
             reactions=reactions,
         )
+
+        # Link author to Person via DiscordUser
+        # Auto-create Person if DiscordUser exists but has no linked Person
+        if discord_user := session.get(DiscordUser, author_id):
+            if not discord_user.person:
+                # Create Person from Discord user info
+                person, _ = find_or_create_person(
+                    session,
+                    name=discord_user.display_name or discord_user.username,
+                    create_if_missing=True,
+                )
+                discord_user.person = person
+                session.flush()
+            if discord_user.person not in discord_message.people:
+                discord_message.people.append(discord_user.person)
 
         try:
             result = process_content_item(discord_message, session)

@@ -325,7 +325,10 @@ class GithubMilestone(Base):
 
     # Relationships
     repo: Mapped[GithubRepo] = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
-    items: Mapped[list[GithubItem]] = relationship("GithubItem", back_populates="milestone_rel")
+    # foreign_keys needed because SourceItem.project_id also references github_milestones
+    items: Mapped[list[GithubItem]] = relationship(
+        "GithubItem", back_populates="milestone_rel", foreign_keys="[GithubItem.milestone_id]"
+    )
     collaborators: Mapped[list["Person"]] = relationship(
         "Person", secondary="project_collaborators", back_populates="projects"
     )

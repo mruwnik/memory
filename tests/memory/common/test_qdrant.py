@@ -43,7 +43,8 @@ def test_ensure_collection_exists_new(mock_qdrant_client):
 
     mock_qdrant_client.get_collection.assert_called_once_with("test_collection")
     mock_qdrant_client.create_collection.assert_called_once()
-    mock_qdrant_client.create_payload_index.assert_called_once()
+    # Two indexes: tags (keyword) and people (integer)
+    assert mock_qdrant_client.create_payload_index.call_count == 2
 
 
 def test_initialize_collections(mock_qdrant_client):

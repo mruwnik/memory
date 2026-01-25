@@ -18,6 +18,7 @@ from memory.common.db.models import (
     EmailAttachment,
     MailMessage,
 )
+from memory.common.people import link_people
 from memory.parsers.email import (
     Attachment,
     EmailMessage,
@@ -145,6 +146,12 @@ def create_mail_message(
         attachments = process_attachments(parsed_email["attachments"], mail_message)
         db_session.add_all(attachments)
         mail_message.attachments = attachments
+
+    # Link people from sender and recipients
+    email_addresses = set(parsed_email["recipients"] or [])
+    if parsed_email["sender"]:  # sender can be None
+        email_addresses.add(parsed_email["sender"])
+    link_people(db_session, mail_message, email_addresses)
 
     return mail_message
 
@@ -357,7 +364,7 @@ def get_folder_uids(conn: imaplib.IMAP4_SSL, folder: str) -> set[str]:
         return set()
 
 
-def should_delete_email(email: MailMessage) -> bool:
+def should_delete_email(_email: MailMessage) -> bool:
     """
     Determine if an email should be deleted when it's no longer on the server.
 

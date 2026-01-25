@@ -22,6 +22,7 @@ from memory.common.content_processing import (
     process_content_item,
     safe_task_execution,
 )
+from memory.common.people import link_people
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def _deserialize_file_data(data: dict[str, Any]) -> GoogleFileData:
         content_hash=data["content_hash"],
         size=data["size"],
         word_count=data["word_count"],
+        shared_with=data.get("shared_with", []),
     )
 
 
@@ -197,6 +199,17 @@ def sync_google_doc(
 
         # Create new document
         google_doc = _create_google_doc(folder, file_data)
+
+        # Link people who have access to this doc (shared_with + owner)
+        # LIMITATION: Person associations are only set on document creation.
+        # Users added to document permissions after initial sync won't be linked,
+        # meaning person-filtered searches may miss content they should see.
+        # TODO(#50): Add permission reconciliation in _update_existing_doc or via periodic task
+        emails = set(file_data.get("shared_with", []))
+        if owner := file_data.get("owner"):
+            emails.add(owner)
+        link_people(session, google_doc, emails)
+
         return process_content_item(google_doc, session)
 
 

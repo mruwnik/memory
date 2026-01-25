@@ -17,11 +17,13 @@ from sqlalchemy import (
     UUID,
     BigInteger,
     CheckConstraint,
+    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
+    Table,
     Text,
     event,
     func,
@@ -40,7 +42,7 @@ import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
 
 if TYPE_CHECKING:
-    pass
+    from memory.common.db.models.people import Person
 
 
 class MetadataSchema(TypedDict):
@@ -52,6 +54,7 @@ class SourceItemPayload(TypedDict):
     source_id: Annotated[int, "Unique identifier of the source item"]
     tags: Annotated[list[str], "List of tags for categorization"]
     size: Annotated[int | None, "Size of the content in bytes"]
+    people: Annotated[list[int], "IDs of associated Person records"]
 
 
 @event.listens_for(Session, "before_flush")
@@ -255,6 +258,28 @@ class ConfidenceScore(Base):
         return f"<ConfidenceScore(type={self.confidence_type}, score={self.score})>"
 
 
+# Junction table for SourceItem <-> Person many-to-many relationship
+# Used for associating content with people (e.g., meeting attendees, email recipients)
+source_item_people = Table(
+    "source_item_people",
+    Base.metadata,
+    Column(
+        "source_item_id",
+        BigInteger,
+        ForeignKey("source_item.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        BigInteger,
+        ForeignKey("people.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Index("source_item_people_source_idx", "source_item_id"),
+    Index("source_item_people_person_idx", "person_id"),
+)
+
+
 class SourceItem(Base):
     """Base class for all content in the system using SQLAlchemy's joined table inheritance."""
 
@@ -305,7 +330,14 @@ class SourceItem(Base):
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
 
     # Person associations (for filtering content by person)
-    people: Mapped[list[int] | None] = mapped_column(ARRAY(BigInteger), nullable=True)
+    # Many-to-many relationship via source_item_people junction table
+    # Using lazy="select" (default) to avoid eager loading on every query.
+    # Callers needing person data should use joinedload() or selectinload() explicitly.
+    people: Mapped[list["Person"]] = relationship(
+        "Person",
+        secondary=source_item_people,
+        lazy="select",
+    )
 
     __mapper_args__: dict[str, Any] = {
         "polymorphic_on": type,
@@ -329,7 +361,6 @@ class SourceItem(Base):
         Index("source_verified_at_idx", "type", "last_verified_at"),
         Index("source_project_idx", "project_id"),
         Index("source_sensitivity_idx", "sensitivity"),
-        Index("source_people_idx", "people", postgresql_using="gin"),
     )
 
     @property
@@ -403,10 +434,18 @@ class SourceItem(Base):
         return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
 
     def as_payload(self) -> SourceItemPayload:
+        """
+        Return payload dict for this item.
+
+        Note: Accessing `self.people` triggers a lazy load if not already loaded.
+        For bulk operations, callers should use `selectinload(SourceItem.people)`
+        or `joinedload(SourceItem.people)` when querying to avoid N+1 queries.
+        """
         return SourceItemPayload(
             source_id=self.id,
             tags=self.tags,
             size=self.size,
+            people=[p.id for p in self.people],
         )
 
     @classmethod

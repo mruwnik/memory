@@ -59,6 +59,7 @@ class GoogleFileData(TypedDict):
     folder_path: str | None
     owner: str | None
     last_modified_by: str | None
+    shared_with: list[str]  # Email addresses of users the doc is shared with
     modified_at: datetime | None
     created_at: datetime | None
     content: str
@@ -120,7 +121,7 @@ class GoogleDriveClient:
             service.files()
             .get(
                 fileId=file_id,
-                fields="id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size",
+                fields="id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size, permissions(emailAddress, type)",
                 supportsAllDrives=True,
             )
             .execute()
@@ -182,7 +183,7 @@ class GoogleDriveClient:
                 .list(
                     q=query,
                     spaces="drive",
-                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size)",
+                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, owners, lastModifyingUser, parents, size, permissions(emailAddress, type))",
                     pageToken=page_token,
                     pageSize=page_size,
                     supportsAllDrives=True,
@@ -296,6 +297,23 @@ class GoogleDriveClient:
         last_modifier = file_metadata.get("lastModifyingUser", {})
         last_modified_by = last_modifier.get("emailAddress")
 
+        # Extract shared user emails from permissions (exclude non-user types like "anyone")
+        # Note: Reading permissions requires appropriate Drive API scopes. If permissions
+        # are empty but the file has an owner, the API credentials may lack access.
+        permissions = file_metadata.get("permissions", [])
+        shared_with = [
+            p.get("emailAddress")
+            for p in permissions
+            if p.get("type") == "user" and p.get("emailAddress")
+        ]
+        if not permissions and owner:
+            logger.warning(
+                "No permissions returned for file %s (owner: %s). "
+                "API credentials may lack permissions scope - shared_with will be empty.",
+                file_id,
+                owner,
+            )
+
         return GoogleFileData(
             file_id=file_id,
             title=file_metadata["name"],
@@ -304,6 +322,7 @@ class GoogleDriveClient:
             folder_path=folder_path,
             owner=owner,
             last_modified_by=last_modified_by,
+            shared_with=shared_with,
             modified_at=parse_google_date(file_metadata.get("modifiedTime")),
             created_at=parse_google_date(file_metadata.get("createdTime")),
             content=content,

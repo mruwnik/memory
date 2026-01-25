@@ -17,14 +17,12 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
     Numeric,
-    Table,
     Text,
     func,
 )
@@ -61,7 +59,6 @@ if TYPE_CHECKING:
         GithubMilestone,
     )
     from memory.common.db.models.observations import ObservationContradiction
-    from memory.common.db.models.people import Person
 
 
 class MailMessagePayload(SourceItemPayload):
@@ -946,7 +943,10 @@ class GithubItem(SourceItem):
     comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationship to milestone
-    milestone_rel: Mapped[GithubMilestone | None] = relationship("GithubMilestone", back_populates="items")
+    # foreign_keys needed because SourceItem.project_id also references github_milestones
+    milestone_rel: Mapped[GithubMilestone | None] = relationship(
+        "GithubMilestone", back_populates="items", foreign_keys=[milestone_id]
+    )
 
     # Relationship to PR-specific data
     pr_data: Mapped[GithubPRData | None] = relationship(
@@ -1608,25 +1608,6 @@ class CalendarEvent(SourceItem):
         return self.event_title
 
 
-# Association table for Meeting <-> Person many-to-many relationship
-meeting_attendees = Table(
-    "meeting_attendees",
-    Base.metadata,
-    Column(
-        "meeting_id",
-        BigInteger,
-        ForeignKey("meeting.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "person_id",
-        BigInteger,
-        ForeignKey("people.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
-
-
 class MeetingPayload(SourceItemPayload):
     title: Annotated[str | None, "Title of the meeting"]
     meeting_date: Annotated[str | None, "Date/time when the meeting occurred (ISO format)"]
@@ -1635,8 +1616,7 @@ class MeetingPayload(SourceItemPayload):
     summary: Annotated[str | None, "LLM-generated summary of the meeting"]
     notes: Annotated[str | None, "LLM-extracted key points and decisions"]
     extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, failed"]
-    # IDs of Person records who attended (also used for Qdrant person-based filtering)
-    people: Annotated[list[int], "IDs of Person records who attended"]
+    # Note: 'people' is inherited from SourceItemPayload - for Meeting, it contains attendee IDs
     task_ids: Annotated[list[int], "IDs of Task records extracted from this meeting"]
     calendar_event_id: Annotated[int | None, "ID of linked CalendarEvent if available"]
 
@@ -1666,12 +1646,6 @@ class Meeting(SourceItem):
     extraction_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
 
     # Relationships
-    attendees: Mapped[list[Person]] = relationship(
-        "Person",
-        secondary=meeting_attendees,
-        backref="meetings",
-        lazy="selectin",
-    )
     calendar_event: Mapped[CalendarEvent | None] = relationship(
         "CalendarEvent",
         foreign_keys=[calendar_event_id],
@@ -1702,9 +1676,7 @@ class Meeting(SourceItem):
         super().__init__(**kwargs)
 
     def as_payload(self) -> MeetingPayload:
-        # spawned_tasks comes from backref on Task.source_item
         spawned = getattr(self, "spawned_tasks", [])
-        people = [p.id for p in self.attendees]
         return MeetingPayload(
             **super().as_payload(),
             title=self.title,
@@ -1714,7 +1686,6 @@ class Meeting(SourceItem):
             summary=self.summary,
             notes=self.notes,
             extraction_status=self.extraction_status,
-            people=people,
             task_ids=[t.id for t in spawned],
             calendar_event_id=self.calendar_event_id,
         )
@@ -1729,7 +1700,7 @@ class Meeting(SourceItem):
             "summary": self.summary,
             "notes": self.notes,
             "extraction_status": self.extraction_status,
-            "attendees": [p.display_name for p in self.attendees],
+            "people": [p.display_name for p in self.people],
             "task_count": len(getattr(self, "spawned_tasks", [])),
             "tags": self.tags,
             "calendar_event_id": self.calendar_event_id,
@@ -1744,8 +1715,8 @@ class Meeting(SourceItem):
         if self.meeting_date:
             parts.append(f"Date: {self.meeting_date.strftime('%Y-%m-%d')}")
 
-        if self.attendees:
-            attendee_names = [p.display_name for p in self.attendees]
+        if self.people:
+            attendee_names = [p.display_name for p in self.people]
             parts.append(f"Attendees: {', '.join(attendee_names)}")
 
         if self.summary:

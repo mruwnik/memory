@@ -285,6 +285,8 @@ def update_metadata_for_item(item_id: str, item_type: str):
             current_payloads = qdrant.get_payloads(client, collection, chunk_ids)
 
             # Get new metadata from source item
+            # Note: as_payload() triggers a lazy load of item.people. For single-item
+            # operations this N+1 cost is acceptable. Bulk operations should eager-load.
             new_metadata: dict[str, Any] = dict(item.as_payload())
             new_tags: set[str] = set(new_metadata.get("tags", []))
 

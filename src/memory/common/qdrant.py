@@ -70,6 +70,16 @@ def ensure_collection_exists(
             field_name="tags",
             field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
         )
+        # Index for person-based search filtering. The 'people' field in chunk
+        # metadata contains Person IDs associated with the content (e.g., email
+        # senders/recipients, meeting attendees). This enables queries like
+        # "show content involving person X". Items without people get an empty
+        # list and are returned for all person-filtered queries (no restriction).
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="people",
+            field_schema=qdrant_models.PayloadSchemaType.INTEGER,
+        )
 
         return True
 
