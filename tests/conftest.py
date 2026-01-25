@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 import sys
@@ -496,3 +497,31 @@ def mock_redis():
 def mock_discord_client():
     with patch.object(settings, "DISCORD_NOTIFICATIONS_ENABLED", False):
         yield
+
+
+# ============================================================================
+# Common test helpers
+# ============================================================================
+
+
+def unique_sha256(prefix: str = "") -> bytes:
+    """Generate a unique sha256 hash for test data.
+
+    Useful for creating SourceItem instances that require unique sha256 values.
+    """
+    return hashlib.sha256(f"{prefix}-{uuid.uuid4()}".encode()).digest()
+
+
+@pytest.fixture
+def test_user(db_session):
+    """Create a test user for fixtures that need user_id."""
+    from memory.common.db.models.users import HumanUser
+
+    user = HumanUser(
+        name="Test User",
+        email=f"test-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user

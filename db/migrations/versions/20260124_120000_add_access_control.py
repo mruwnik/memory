@@ -9,12 +9,13 @@ This migration implements project-based RBAC where:
 Tables created:
 - github_users: GitHub user accounts linked to Persons
 - project_collaborators: Junction table linking Persons to milestones with roles
+- source_item_people: Junction table linking SourceItems to Persons
 - access_logs: Audit logging for access events
 
 Columns added:
 - discord_channels.project_id, .sensitivity
 - slack_channels.project_id, .sensitivity
-- source_item.project_id, .sensitivity, .people
+- source_item.project_id, .sensitivity
 
 Revision ID: 20260124_120000
 Revises: 20260123_120000
@@ -25,7 +26,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import ARRAY
 
 
 # revision identifiers, used by Alembic.
@@ -135,7 +135,7 @@ def upgrade() -> None:
     )
     op.create_index("slack_channels_project_idx", "slack_channels", ["project_id"])
 
-    # Add project_id, sensitivity, and people to source_item
+    # Add project_id and sensitivity to source_item
     op.add_column(
         "source_item",
         sa.Column("project_id", sa.BigInteger(), nullable=True),
@@ -143,10 +143,6 @@ def upgrade() -> None:
     op.add_column(
         "source_item",
         sa.Column("sensitivity", sa.String(20), nullable=False, server_default="basic"),
-    )
-    op.add_column(
-        "source_item",
-        sa.Column("people", ARRAY(sa.BigInteger()), nullable=True),
     )
     op.create_foreign_key(
         "fk_source_item_project",
@@ -163,17 +159,70 @@ def upgrade() -> None:
     )
     op.create_index("source_project_idx", "source_item", ["project_id"])
     op.create_index("source_sensitivity_idx", "source_item", ["sensitivity"])
-    op.create_index("source_people_idx", "source_item", ["people"], postgresql_using="gin")
+
+    # Create source_item_people junction table for person associations
+    op.create_table(
+        "source_item_people",
+        sa.Column("source_item_id", sa.BigInteger(), nullable=False),
+        sa.Column("person_id", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("source_item_id", "person_id"),
+        sa.ForeignKeyConstraint(["source_item_id"], ["source_item.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["person_id"], ["people.id"], ondelete="CASCADE"),
+    )
+    op.create_index("source_item_people_source_idx", "source_item_people", ["source_item_id"])
+    op.create_index("source_item_people_person_idx", "source_item_people", ["person_id"])
+
+    # Migrate existing meeting_attendees data to source_item_people
+    # Since Meeting.id = SourceItem.id (joined table inheritance), we can copy directly
+    # Note: For very large meeting_attendees tables (millions of rows), consider using
+    # batched inserts instead. For typical deployments, this single INSERT is fine.
+    # If meeting_attendees is empty, this INSERT is a no-op (gracefully handled).
+    op.execute("""
+        INSERT INTO source_item_people (source_item_id, person_id)
+        SELECT meeting_id, person_id FROM meeting_attendees
+        ON CONFLICT DO NOTHING
+    """)
+
+    # Drop meeting_attendees table (replaced by source_item_people)
+    op.drop_table("meeting_attendees")
 
 
 def downgrade() -> None:
+    # WARNING: This downgrade has data loss implications.
+    # Person associations for non-Meeting content types (emails, Slack messages, Google Docs,
+    # Discord messages, etc.) created after this migration was applied will be LOST on downgrade.
+    # Only Meeting attendee associations are preserved (migrated back to meeting_attendees).
+    # This is acceptable because:
+    # 1. Downgrades are rare and typically only used in development/testing
+    # 2. The person associations can be re-created by re-syncing content
+
+    # Recreate meeting_attendees table (was replaced by source_item_people)
+    op.create_table(
+        "meeting_attendees",
+        sa.Column("meeting_id", sa.BigInteger(), nullable=False),
+        sa.Column("person_id", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("meeting_id", "person_id"),
+        sa.ForeignKeyConstraint(["meeting_id"], ["meeting.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["person_id"], ["people.id"], ondelete="CASCADE"),
+    )
+
+    # Migrate data back from source_item_people to meeting_attendees
+    # Note: Only Meeting associations are preserved; other content types lose their person links
+    op.execute("""
+        INSERT INTO meeting_attendees (meeting_id, person_id)
+        SELECT source_item_id, person_id FROM source_item_people
+        WHERE source_item_id IN (SELECT id FROM meeting)
+        ON CONFLICT DO NOTHING
+    """)
+
+    # Drop source_item_people junction table (indexes are dropped automatically with table)
+    op.drop_table("source_item_people")
+
     # Remove indexes and columns from source_item
-    op.drop_index("source_people_idx", table_name="source_item")
     op.drop_index("source_sensitivity_idx", table_name="source_item")
     op.drop_index("source_project_idx", table_name="source_item")
     op.drop_constraint("valid_sensitivity_level", "source_item", type_="check")
     op.drop_constraint("fk_source_item_project", "source_item", type_="foreignkey")
-    op.drop_column("source_item", "people")
     op.drop_column("source_item", "sensitivity")
     op.drop_column("source_item", "project_id")
 

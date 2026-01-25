@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, FrozenSet
+from typing import TYPE_CHECKING, FrozenSet, Literal
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 logger = logging.getLogger(__name__)
+
+# Type alias for database columns and TypedDict fields
+SensitivityLevelLiteral = Literal["basic", "internal", "confidential"]
 
 
 class SensitivityLevel(str, Enum):

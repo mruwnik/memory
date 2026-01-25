@@ -461,12 +461,12 @@ class TestSearchBm25PersonFilter:
 
 
 @pytest.fixture
-def github_account(db_session):
+def github_account(db_session, test_user):
     """Create a GitHub account for testing."""
     from memory.common.db.models.sources import GithubAccount
 
     account = GithubAccount(
-        user_id=1,
+        user_id=test_user.id,
         name="Test Account",
         auth_type="pat",
         access_token="test_token",
@@ -483,7 +483,6 @@ def github_repo(db_session, github_account):
 
     repo = GithubRepo(
         account_id=github_account.id,
-        github_id=12345,
         owner="testowner",
         name="testrepo",
     )
@@ -529,18 +528,56 @@ def second_project(db_session, github_repo):
 @pytest.fixture
 def source_items_with_access(db_session, project, second_project):
     """Create source items with different project_id and sensitivity values."""
+    from tests.conftest import unique_sha256
+
     from memory.common.db.models import Note
 
     items = [
         # Project 1 items
-        Note(content="Project 1 basic item", project_id=project.id, sensitivity="basic"),
-        Note(content="Project 1 internal item", project_id=project.id, sensitivity="internal"),
-        Note(content="Project 1 confidential item", project_id=project.id, sensitivity="confidential"),
+        Note(
+            content="Project 1 basic item",
+            modality="text",
+            sha256=unique_sha256("p1-basic"),
+            project_id=project.id,
+            sensitivity="basic",
+        ),
+        Note(
+            content="Project 1 internal item",
+            modality="text",
+            sha256=unique_sha256("p1-internal"),
+            project_id=project.id,
+            sensitivity="internal",
+        ),
+        Note(
+            content="Project 1 confidential item",
+            modality="text",
+            sha256=unique_sha256("p1-confidential"),
+            project_id=project.id,
+            sensitivity="confidential",
+        ),
         # Project 2 items
-        Note(content="Project 2 basic item", project_id=second_project.id, sensitivity="basic"),
-        Note(content="Project 2 internal item", project_id=second_project.id, sensitivity="internal"),
+        Note(
+            content="Project 2 basic item",
+            modality="text",
+            sha256=unique_sha256("p2-basic"),
+            project_id=second_project.id,
+            sensitivity="basic",
+        ),
+        Note(
+            content="Project 2 internal item",
+            modality="text",
+            sha256=unique_sha256("p2-internal"),
+            project_id=second_project.id,
+            sensitivity="internal",
+        ),
         # Item with no project (superadmin only)
-        Note(content="Unclassified item", project_id=None, sensitivity="basic"),
+        Note(
+            content="Unclassified item",
+            modality="text",
+            sha256=unique_sha256("unclassified"),
+            project_id=None,
+            sensitivity="basic",
+        ),
     ]
     for item in items:
         db_session.add(item)
@@ -623,6 +660,20 @@ def test_apply_access_filter_multiple_projects(
     assert len(project2_items) == 2
     assert {i.sensitivity for i in project2_items} == {"basic", "internal"}
 
+    # NEGATIVE ASSERTIONS: Verify items that should NOT be returned
+    # Project 1's internal/confidential should NOT be in results (contributor only has basic)
+    for item in results:
+        if item.project_id == project.id:
+            assert item.sensitivity not in {"internal", "confidential"}, (
+                f"Contributor saw {item.sensitivity} item from project 1!"
+            )
+    # Project 2's confidential should NOT be in results (manager doesn't have confidential)
+    for item in results:
+        if item.project_id == second_project.id:
+            assert item.sensitivity != "confidential", (
+                f"Manager saw confidential item from project 2!"
+            )
+
 
 def test_apply_access_filter_excludes_null_project_id(
     db_session, project, source_items_with_access
@@ -670,3 +721,86 @@ def test_apply_access_filter_superadmin_sees_all(db_session, source_items_with_a
     # Verify NULL project_id item is included
     null_project_items = [i for i in results if i.project_id is None]
     assert len(null_project_items) == 1
+
+
+def test_apply_access_filter_cross_project_isolation(
+    db_session, project, second_project, source_items_with_access
+):
+    """
+    Test that users with access to one project cannot see ANY items from another project.
+
+    This is a critical security test - even with admin-level access to project 1,
+    a user should see ZERO items from project 2 (including basic sensitivity).
+    """
+    from memory.common.access_control import AccessCondition, AccessFilter
+    from memory.common.db.models import SourceItem
+
+    _ = source_items_with_access
+
+    # User has ADMIN access to project 1 only (all sensitivities)
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(
+                project_id=project.id,
+                sensitivities=frozenset({"basic", "internal", "confidential"}),
+            )
+        ]
+    )
+
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, access_filter)
+    results = filtered_query.all()
+
+    # Should see all 3 items from project 1
+    assert len(results) == 3
+
+    # CRITICAL: Verify NO items from project 2 are returned
+    for item in results:
+        assert item.project_id != second_project.id, (
+            f"Cross-project access violation! User with project 1 access saw "
+            f"project 2 item (sensitivity: {item.sensitivity})"
+        )
+
+
+def test_apply_access_filter_contributor_cannot_see_higher_sensitivity(
+    db_session, project, source_items_with_access
+):
+    """
+    Test that contributors (basic only) cannot see internal or confidential items.
+
+    This test has explicit negative assertions for each sensitivity level.
+    """
+    from memory.common.access_control import AccessCondition, AccessFilter
+    from memory.common.db.models import SourceItem
+
+    _ = source_items_with_access
+
+    # Contributor has basic access only
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(
+                project_id=project.id,
+                sensitivities=frozenset({"basic"}),
+            )
+        ]
+    )
+
+    query = db_session.query(SourceItem)
+    filtered_query = apply_access_filter(query, access_filter)
+    results = filtered_query.all()
+
+    # Only basic items should be returned
+    assert len(results) == 1
+    assert results[0].sensitivity == "basic"
+
+    # NEGATIVE ASSERTIONS: Query all items from project and verify internal/confidential not returned
+    all_project_items = db_session.query(SourceItem).filter(
+        SourceItem.project_id == project.id
+    ).all()
+    returned_ids = {item.id for item in results}
+
+    for item in all_project_items:
+        if item.sensitivity == "internal":
+            assert item.id not in returned_ids, "Contributor saw internal item!"
+        if item.sensitivity == "confidential":
+            assert item.id not in returned_ids, "Contributor saw confidential item!"

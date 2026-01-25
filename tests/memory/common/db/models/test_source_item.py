@@ -321,6 +321,8 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
         "extra": "data",
         "size": 1024,
         "people": [],
+        "project_id": None,
+        "sensitivity": "basic",  # Default when not explicitly set
     }
     assert chunk.item_metadata == expected_payload
 
@@ -338,7 +340,14 @@ def test_source_item_as_payload():
     source.people = []
 
     payload = source.as_payload()
-    assert payload == {"source_id": 123, "tags": ["tag1", "tag2"], "size": 1024, "people": []}
+    assert payload == {
+        "source_id": 123,
+        "tags": ["tag1", "tag2"],
+        "size": 1024,
+        "people": [],
+        "project_id": None,
+        "sensitivity": "basic",  # Default when not explicitly set
+    }
 
 
 @pytest.mark.parametrize(
@@ -369,6 +378,8 @@ def test_source_item_display_contents(content, filename):
         "size": 123,
         "tags": ["bla", "ble"],
         "people": [],
+        "project_id": None,
+        "sensitivity": "basic",  # Default when not explicitly set
     }
 
 

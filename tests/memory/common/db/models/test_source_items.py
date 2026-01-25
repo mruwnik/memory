@@ -126,6 +126,8 @@ def test_mail_message_as_payload(sent_at, expected_date):
         "source_id": 123,
         "size": 1024,
         "people": [],
+        "project_id": None,
+        "sensitivity": None,  # None when not inserted into database
         "message_id": "<test@example.com>",
         "subject": "Test Subject",
         "sender": "sender@example.com",
@@ -211,6 +213,8 @@ Test Body Content"""
         "folder": None,
         "message_id": "<test@example.com>",
         "people": [],
+        "project_id": None,
+        "sensitivity": None,  # None when not inserted into database
     }
 
 
@@ -256,6 +260,8 @@ def test_email_attachment_as_payload(created_at, expected_date):
         "tags": ["pdf", "document"],
         "sent_at": "2025-01-01T12:00:00",
         "people": [],
+        "project_id": None,
+        "sensitivity": None,  # None when not inserted into database
     }
     assert payload == expected
 
@@ -530,6 +536,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": [],
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -545,6 +553,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": [],
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -564,6 +574,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": [],
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -580,6 +592,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": [],
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -600,6 +614,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": {"existing_tag"},
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -616,6 +632,8 @@ def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chun
                 "tags": {"existing_tag"},
                 "size": None,
                 "people": [],
+                "project_id": None,
+                "sensitivity": None,  # None when not inserted into database
                 "observation_type": "preference",
                 "subject": "programming preferences",
                 "confidence": {"observation_accuracy": 0.9},
@@ -781,6 +799,8 @@ def test_note_data_chunks(subject, content, expected):
             "subject": subject,
             "tags": tags,
             "people": [],
+            "project_id": None,
+            "sensitivity": None,  # None when not inserted into database
         }
 
 

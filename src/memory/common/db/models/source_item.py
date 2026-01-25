@@ -40,6 +40,7 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
+from memory.common.access_control import SensitivityLevelLiteral as SensitivityLevel
 
 if TYPE_CHECKING:
     from memory.common.db.models.people import Person
@@ -55,6 +56,8 @@ class SourceItemPayload(TypedDict):
     tags: Annotated[list[str], "List of tags for categorization"]
     size: Annotated[int | None, "Size of the content in bytes"]
     people: Annotated[list[int], "IDs of associated Person records"]
+    project_id: Annotated[int | None, "ID of the associated project (GithubMilestone)"]
+    sensitivity: Annotated[SensitivityLevel, "Sensitivity level: basic, internal, or confidential"]
 
 
 @event.listens_for(Session, "before_flush")
@@ -327,7 +330,9 @@ class SourceItem(Base):
     project_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
     )
-    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    sensitivity: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="basic", server_default="basic"
+    )
 
     # Person associations (for filtering content by person)
     # Many-to-many relationship via source_item_people junction table
@@ -441,11 +446,15 @@ class SourceItem(Base):
         For bulk operations, callers should use `selectinload(SourceItem.people)`
         or `joinedload(SourceItem.people)` when querying to avoid N+1 queries.
         """
+        # Use "basic" as fallback since SQLAlchemy defaults may not apply before flush
+        sensitivity: SensitivityLevel = self.sensitivity or "basic"
         return SourceItemPayload(
             source_id=self.id,
             tags=self.tags,
             size=self.size,
             people=[p.id for p in self.people],
+            project_id=self.project_id,
+            sensitivity=sensitivity,
         )
 
     @classmethod
