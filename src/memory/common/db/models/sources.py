@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -326,13 +327,14 @@ class GithubMilestone(Base):
     __tablename__ = "github_milestones"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    repo_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("github_repos.id", ondelete="CASCADE"), nullable=False
+    # repo_id is nullable to support standalone projects (not backed by GitHub)
+    repo_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_repos.id", ondelete="CASCADE"), nullable=True
     )
 
-    # GitHub identifiers
-    github_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # GitHub identifiers (nullable for standalone projects)
+    github_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Data
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -372,7 +374,14 @@ class GithubMilestone(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("repo_id", "number", name="unique_milestone_per_repo"),
+        # Partial unique index for GitHub-synced projects (repo_id IS NOT NULL)
+        # Standalone projects don't need this constraint
+        Index(
+            "unique_github_milestone_per_repo",
+            "repo_id", "number",
+            unique=True,
+            postgresql_where=text("repo_id IS NOT NULL"),
+        ),
         Index("projects_repo_idx", "repo_id"),
         Index("projects_due_idx", "due_on"),
         Index("projects_parent_idx", "parent_id"),
