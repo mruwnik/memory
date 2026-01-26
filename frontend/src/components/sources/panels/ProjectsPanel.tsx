@@ -23,7 +23,7 @@ export const ProjectsPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree')
-  const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('open')
+  const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('all')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
@@ -37,8 +37,9 @@ export const ProjectsPanel = () => {
         listProjects({ state, include_children: true }),
         getProjectTree({ state }),
       ])
-      setProjects(projectsList)
-      setTree(treeData)
+      // Ensure we always have arrays (API might return error objects)
+      setProjects(Array.isArray(projectsList) ? projectsList : [])
+      setTree(Array.isArray(treeData) ? treeData : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load projects')
     } finally {
@@ -119,7 +120,7 @@ export const ProjectsPanel = () => {
           actionLabel="Create Project"
           onAction={() => setShowCreateModal(true)}
         />
-      ) : viewMode === 'tree' ? (
+      ) : viewMode === 'tree' && tree.length > 0 ? (
         <div className={styles.sourceList}>
           <ProjectTree
             nodes={tree}

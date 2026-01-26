@@ -54,7 +54,9 @@ export const useProjects = () => {
     if (options?.include_children) params.append('include_children', 'true')
 
     const url = `/projects${params.toString() ? `?${params.toString()}` : ''}`
-    return apiCall(url)
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch projects')
+    return response.json()
   }, [apiCall])
 
   const getProjectTree = useCallback(async (options?: {
@@ -64,31 +66,50 @@ export const useProjects = () => {
     if (options?.state) params.append('state', options.state)
 
     const url = `/projects/tree${params.toString() ? `?${params.toString()}` : ''}`
-    return apiCall(url)
+    const response = await apiCall(url)
+    if (!response.ok) throw new Error('Failed to fetch project tree')
+    return response.json()
   }, [apiCall])
 
   const getProject = useCallback(async (id: number): Promise<Project> => {
-    return apiCall(`/projects/${id}`)
+    const response = await apiCall(`/projects/${id}`)
+    if (!response.ok) throw new Error('Failed to fetch project')
+    return response.json()
   }, [apiCall])
 
   const createProject = useCallback(async (data: ProjectCreate): Promise<Project> => {
-    return apiCall('/projects', {
+    const response = await apiCall('/projects', {
       method: 'POST',
       body: JSON.stringify(data),
     })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to create project')
+    }
+    return response.json()
   }, [apiCall])
 
   const updateProject = useCallback(async (id: number, data: ProjectUpdate): Promise<Project> => {
-    return apiCall(`/projects/${id}`, {
+    const response = await apiCall(`/projects/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to update project')
+    }
+    return response.json()
   }, [apiCall])
 
   const deleteProject = useCallback(async (id: number): Promise<{ status: string; id: number }> => {
-    return apiCall(`/projects/${id}`, {
+    const response = await apiCall(`/projects/${id}`, {
       method: 'DELETE',
     })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to delete project')
+    }
+    return response.json()
   }, [apiCall])
 
   return {

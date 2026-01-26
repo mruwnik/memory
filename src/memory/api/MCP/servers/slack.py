@@ -210,7 +210,7 @@ def _get_history_data(
 
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
-async def send_slack_message(
+async def send(
     message: str,
     channel: str | None = None,
     user: str | None = None,
@@ -280,7 +280,7 @@ async def send_slack_message(
 
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
-async def add_slack_reaction(
+async def add_reaction(
     channel: str,
     message_ts: str,
     emoji: str,
@@ -333,7 +333,7 @@ async def add_slack_reaction(
 
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
-async def list_slack_channels(
+async def list_channels(
     workspace_id: str | None = None,
     include_private: bool = True,
     include_dms: bool = False,
@@ -356,13 +356,17 @@ async def list_slack_channels(
 
     # Run DB operations in thread - this returns all the data we need
     return await asyncio.to_thread(
-        _get_channels_data, access_token.token, workspace_id, include_private, include_dms
+        _get_channels_data,
+        access_token.token,
+        workspace_id,
+        include_private,
+        include_dms,
     )
 
 
 @slack_mcp.tool()
 @visible_when(require_scopes("slack"), has_slack_workspaces)
-async def get_slack_channel_history(
+async def get_channel_history(
     channel: str,
     workspace_id: str | None = None,
     limit: int = 50,
@@ -414,13 +418,15 @@ async def get_slack_channel_history(
     # Format messages (user names not available without additional API calls)
     formatted_messages = []
     for msg in messages:
-        formatted_messages.append({
-            "ts": msg.get("ts"),
-            "user": msg.get("user"),  # Slack user ID
-            "text": msg.get("text", ""),
-            "thread_ts": msg.get("thread_ts"),
-            "reply_count": msg.get("reply_count"),
-        })
+        formatted_messages.append(
+            {
+                "ts": msg.get("ts"),
+                "user": msg.get("user"),  # Slack user ID
+                "text": msg.get("text", ""),
+                "thread_ts": msg.get("thread_ts"),
+                "reply_count": msg.get("reply_count"),
+            }
+        )
 
     return {
         "channel_id": channel_id,
