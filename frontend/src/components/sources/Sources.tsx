@@ -1,5 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, createContext, useContext } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import UserSelector, { SelectedUser, useUserSelection } from '../common/UserSelector'
+import { useAuth } from '../../hooks/useAuth'
+
+// Context to provide selected user to all panels
+interface SourcesContextType {
+  selectedUser: SelectedUser
+  userId: number | undefined
+}
+
+const SourcesContext = createContext<SourcesContextType>({
+  selectedUser: { type: 'user', id: 0, name: '' },
+  userId: undefined,
+})
+
+export const useSourcesContext = () => useContext(SourcesContext)
 
 // Import all panels
 import { AccountsPanel } from './panels/AccountsPanel'
@@ -25,6 +40,14 @@ const Sources = () => {
   const tabParam = searchParams.get('tab')
   const initialTab = validTabs.includes(tabParam as TabType) ? (tabParam as TabType) : 'accounts'
   const [activeTab, setActiveTab] = useState<TabType>(initialTab)
+  const [selectedUser, setSelectedUser] = useUserSelection('sourcesSelectedUser')
+  const { hasScope } = useAuth()
+
+  // Check if user is admin
+  const isAdmin = hasScope('admin') || hasScope('*')
+
+  // Compute userId for API calls
+  const userId = selectedUser.id || undefined
 
   // Update URL when tab changes
   useEffect(() => {
@@ -43,11 +66,15 @@ const Sources = () => {
     }`
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <div className="flex items-center gap-4 mb-6">
-        <Link to="/ui/dashboard" className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200">Back</Link>
-        <h2 className="text-2xl font-semibold text-slate-800">Manage Sources</h2>
-      </div>
+    <SourcesContext.Provider value={{ selectedUser, userId }}>
+      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+        <div className="flex items-center gap-4 mb-6">
+          <Link to="/ui/dashboard" className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200">Back</Link>
+          <h2 className="text-2xl font-semibold text-slate-800 flex-1">Manage Sources</h2>
+          {isAdmin && (
+            <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />
+          )}
+        </div>
 
       <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-6">
         <button className={tabClass('accounts')} onClick={() => setActiveTab('accounts')}>
@@ -106,7 +133,8 @@ const Sources = () => {
         {activeTab === 'projects' && <ProjectsPanel />}
         {activeTab === 'secrets' && <SecretsPanel />}
       </div>
-    </div>
+      </div>
+    </SourcesContext.Provider>
   )
 }
 

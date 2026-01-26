@@ -114,8 +114,8 @@ const UserSettings = () => {
 
     try {
       const result = await regenerateApiKey(user.id)
-      setNewApiKey(result.api_key)
-      setUser({ ...user, has_api_key: true })
+      setNewApiKey(result.key)
+      setUser({ ...user, api_key_count: (user.api_key_count || 0) + 1 })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to regenerate API key')
     } finally {
@@ -238,14 +238,14 @@ const UserSettings = () => {
               <div>
                 <p className="font-medium text-slate-800">API Key</p>
                 <p className="text-sm text-slate-500">
-                  {user?.has_api_key ? 'You have an API key configured' : 'No API key configured'}
+                  {(user?.api_key_count ?? 0) > 0 ? 'You have an API key configured' : 'No API key configured'}
                 </p>
               </div>
               <button
                 onClick={() => setShowApiKeyModal(true)}
                 className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
-                {user?.has_api_key ? 'Regenerate' : 'Generate'} API Key
+                {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
               </button>
             </div>
           </div>
@@ -345,11 +345,11 @@ const UserSettings = () => {
             {!newApiKey ? (
               <>
                 <h3 className="text-lg font-semibold text-slate-800 mb-4">
-                  {user?.has_api_key ? 'Regenerate' : 'Generate'} API Key
+                  {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
                 </h3>
 
                 <p className="text-sm text-slate-600 mb-4">
-                  {user?.has_api_key
+                  {(user?.api_key_count ?? 0) > 0
                     ? 'Are you sure you want to regenerate your API key? The current key will be invalidated and any integrations using it will stop working.'
                     : 'Generate an API key to use with integrations and CLI tools.'}
                 </p>
@@ -366,7 +366,7 @@ const UserSettings = () => {
                     disabled={apiKeyLoading}
                     className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
                   >
-                    {apiKeyLoading ? 'Generating...' : user?.has_api_key ? 'Regenerate' : 'Generate'}
+                    {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
                   </button>
                 </div>
               </>

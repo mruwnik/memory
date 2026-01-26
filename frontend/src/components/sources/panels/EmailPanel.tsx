@@ -9,9 +9,11 @@ import {
   ErrorState,
 } from '../shared'
 import { styles } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
   const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts, listProjects } = useSources()
+  const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -25,8 +27,8 @@ export const EmailPanel = () => {
     setError(null)
     try {
       const [emailData, googleData, projectData] = await Promise.all([
-        listEmailAccounts(),
-        listGoogleAccounts(),
+        listEmailAccounts(userId),
+        listGoogleAccounts(userId),
         listProjects()
       ])
       setAccounts(emailData)
@@ -37,8 +39,9 @@ export const EmailPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listEmailAccounts, listGoogleAccounts, listProjects])
+  }, [listEmailAccounts, listGoogleAccounts, listProjects, userId])
 
+  // Reload when userId changes (admin switching user view)
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
   const handleCreate = async (data: any) => {

@@ -12,6 +12,7 @@ import {
   SyncButton,
 } from '../shared'
 import { styles, cx } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const GitHubPanel = () => {
   const {
@@ -19,6 +20,7 @@ export const GitHubPanel = () => {
     addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo,
     listAccountProjects, addGithubProject, deleteGithubProject
   } = useSources()
+  const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<GithubAccount[]>([])
   const [accountProjects, setAccountProjects] = useState<Record<number, GithubProject[]>>({})
   const [loading, setLoading] = useState(true)
@@ -30,7 +32,7 @@ export const GitHubPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const accountsData = await listGithubAccounts()
+      const accountsData = await listGithubAccounts(userId)
       setAccounts(accountsData)
 
       // Load projects for each account
@@ -50,7 +52,7 @@ export const GitHubPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listGithubAccounts, listAccountProjects])
+  }, [listGithubAccounts, listAccountProjects, userId])
 
   useEffect(() => { loadData() }, [loadData])
 

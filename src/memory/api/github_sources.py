@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account, has_admin_scope
+from memory.api.auth import get_current_user, get_user_account, has_admin_scope, resolve_user_filter
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
@@ -158,11 +158,16 @@ def account_to_response(account: GithubAccount) -> GithubAccountResponse:
 
 @router.get("/accounts")
 def list_accounts(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[GithubAccountResponse]:
-    """List GitHub accounts for the current user."""
-    accounts = db.query(GithubAccount).filter(GithubAccount.user_id == user.id).all()
+    """List GitHub accounts. Admins can view any user's accounts or all accounts."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    query = db.query(GithubAccount)
+    if resolved_user_id is not None:
+        query = query.filter(GithubAccount.user_id == resolved_user_id)
+    accounts = query.all()
     return [account_to_response(account) for account in accounts]
 
 

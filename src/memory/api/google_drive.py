@@ -20,7 +20,7 @@ from memory.common.db.models.sources import (
     GoogleFolder,
     GoogleOAuthConfig,
 )
-from memory.api.auth import get_current_user, get_user_account
+from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
@@ -434,10 +434,16 @@ def google_callback(
 
 @router.get("/accounts")
 def list_accounts(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: DBSession = Depends(get_session),
 ) -> list[AccountResponse]:
-    """List Google accounts for the current user."""
+    """List Google accounts. Admins can view any user's accounts or all accounts."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    query = db.query(GoogleAccount)
+    if resolved_user_id is not None:
+        query = query.filter(GoogleAccount.user_id == resolved_user_id)
+    accounts = query.all()
     return [
         AccountResponse(
             id=cast(int, account.id),
@@ -469,7 +475,7 @@ def list_accounts(
                 for folder in account.folders
             ],
         )
-        for account in user.google_accounts  # type: ignore[attr-defined]
+        for account in accounts
     ]
 
 

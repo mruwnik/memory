@@ -10,9 +10,11 @@ import {
   ErrorState,
 } from '../shared'
 import { styles } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const FeedsPanel = () => {
   const { listArticleFeeds, createArticleFeed, updateArticleFeed, deleteArticleFeed, syncArticleFeed } = useSources()
+  const { userId } = useSourcesContext()
   const [feeds, setFeeds] = useState<ArticleFeed[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -23,14 +25,14 @@ export const FeedsPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listArticleFeeds()
+      const data = await listArticleFeeds(userId)
       setFeeds(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load feeds')
     } finally {
       setLoading(false)
     }
-  }, [listArticleFeeds])
+  }, [listArticleFeeds, userId])
 
   useEffect(() => { loadFeeds() }, [loadFeeds])
 

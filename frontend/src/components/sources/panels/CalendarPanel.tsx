@@ -13,6 +13,7 @@ import {
   SyncButton,
 } from '../shared'
 import { styles } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 interface GroupedEvents {
   [calendarName: string]: CalendarEvent[]
@@ -23,6 +24,7 @@ export const CalendarPanel = () => {
     listCalendarAccounts, createCalendarAccount, updateCalendarAccount,
     deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts, listProjects
   } = useSources()
+  const { userId } = useSourcesContext()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -39,8 +41,8 @@ export const CalendarPanel = () => {
     setError(null)
     try {
       const [calendarData, googleData, projectData, eventsData] = await Promise.all([
-        listCalendarAccounts(),
-        listGoogleAccounts(),
+        listCalendarAccounts(userId),
+        listGoogleAccounts(userId),
         listProjects(),
         getUpcomingEvents({ days: 365, limit: 200 })
       ])
@@ -53,7 +55,7 @@ export const CalendarPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listCalendarAccounts, listGoogleAccounts, listProjects, getUpcomingEvents])
+  }, [listCalendarAccounts, listGoogleAccounts, listProjects, getUpcomingEvents, userId])
 
   useEffect(() => { loadData() }, [loadData])
 

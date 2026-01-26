@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, User } from '../../hooks/useUsers'
 
-export type SelectedUser = { type: 'all' } | { type: 'user'; id: number; name: string }
+export type SelectedUser = { type: 'user'; id: number; name: string }
 
 // Minimal user info for filtering
 export interface FilterUser {
@@ -16,16 +16,19 @@ interface UserSelectorProps {
   className?: string
   // Optional: only show users that exist in this list (e.g., users with telemetry data)
   filterToUsers?: FilterUser[]
+  // Only show human users (excludes bots)
+  onlyHumanUsers?: boolean
 }
 
 /**
  * User selector dropdown for admin users.
- * Allows admins to select a specific user or "All Users" to view aggregate data.
+ * Allows admins to select a specific user to view their data.
  * Non-admin users will not see this component (returns null).
  *
  * If filterToUsers is provided, only users in that list will be shown.
+ * If onlyHumanUsers is true, bot users will be excluded.
  */
-const UserSelector = ({ value, onChange, className = '', filterToUsers }: UserSelectorProps) => {
+const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHumanUsers = false }: UserSelectorProps) => {
   const { hasScope, user: currentUser } = useAuth()
   const { listUsers } = useUsers()
   const [users, setUsers] = useState<User[]>([])
@@ -53,12 +56,20 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers }: UserSe
     loadUsers()
   }, [isAdmin, listUsers])
 
-  // Filter users if filterToUsers is provided
+  // Filter users based on props
   const displayUsers = useMemo(() => {
-    if (!filterToUsers) return users
-    const filterIds = new Set(filterToUsers.map(u => u.id))
-    return users.filter(u => filterIds.has(u.id))
-  }, [users, filterToUsers])
+    let filtered = users
+    // Filter to only human users if requested
+    if (onlyHumanUsers) {
+      filtered = filtered.filter(u => u.user_type === 'human')
+    }
+    // Filter to specific users if provided
+    if (filterToUsers) {
+      const filterIds = new Set(filterToUsers.map(u => u.id))
+      filtered = filtered.filter(u => filterIds.has(u.id))
+    }
+    return filtered
+  }, [users, filterToUsers, onlyHumanUsers])
 
   // Don't render for non-admins
   if (!isAdmin) return null
@@ -79,10 +90,6 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers }: UserSe
     )
   }
 
-  const displayValue = value.type === 'all'
-    ? 'All Users'
-    : value.name || `User #${value.id}`
-
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       <label htmlFor="user-selector" className="text-sm text-slate-600 font-medium">
@@ -90,22 +97,16 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers }: UserSe
       </label>
       <select
         id="user-selector"
-        value={value.type === 'all' ? 'all' : `user:${value.id}`}
+        value={value.id}
         onChange={(e) => {
-          const val = e.target.value
-          if (val === 'all') {
-            onChange({ type: 'all' })
-          } else {
-            const userId = parseInt(val.replace('user:', ''), 10)
-            const user = users.find(u => u.id === userId)
-            onChange({ type: 'user', id: userId, name: user?.name || '' })
-          }
+          const userId = parseInt(e.target.value, 10)
+          const user = users.find(u => u.id === userId)
+          onChange({ type: 'user', id: userId, name: user?.name || '' })
         }}
         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
       >
-        <option value="all">All Users</option>
         {displayUsers.map(user => (
-          <option key={user.id} value={`user:${user.id}`}>
+          <option key={user.id} value={user.id}>
             {user.name} {user.id === currentUser?.id ? '(you)' : ''}
           </option>
         ))}
@@ -130,18 +131,18 @@ export function useUserSelection(storageKey: string = 'adminSelectedUser'): [Sel
       try {
         const stored = localStorage.getItem(storageKey)
         if (stored) {
-          return JSON.parse(stored)
+          const parsed = JSON.parse(stored)
+          // Migrate old 'all' type to current user
+          if (parsed.type === 'user' && parsed.id) {
+            return parsed
+          }
         }
       } catch {
         // Ignore parsing errors
       }
-      // Default to "all" for admins
-      return { type: 'all' }
     }
 
-    // Non-admins always see their own data
-    // If currentUser isn't loaded yet, use a placeholder that will be updated
-    // by the useEffect below once the user data is available
+    // Default to current user for everyone
     if (currentUser) {
       return { type: 'user', id: currentUser.id, name: currentUser.name }
     }
@@ -160,12 +161,12 @@ export function useUserSelection(storageKey: string = 'adminSelectedUser'): [Sel
     }
   }
 
-  // Update if currentUser changes and we're not admin
+  // Update if currentUser changes and selected user is placeholder (id: 0)
   useEffect(() => {
-    if (!isAdmin && currentUser) {
+    if (currentUser && selectedUser.id === 0) {
       setSelectedUserState({ type: 'user', id: currentUser.id, name: currentUser.name })
     }
-  }, [isAdmin, currentUser])
+  }, [currentUser, selectedUser.id])
 
   return [selectedUser, setSelectedUser]
 }

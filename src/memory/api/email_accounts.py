@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
-from memory.api.auth import get_current_user, get_user_account
+from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
 
@@ -151,11 +151,16 @@ def account_to_response(account: EmailAccount, db: Session | None = None) -> Ema
 
 @router.get("")
 def list_accounts(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[EmailAccountResponse]:
-    """List email accounts for the current user."""
-    accounts = db.query(EmailAccount).filter(EmailAccount.user_id == user.id).all()
+    """List email accounts. Admins can view any user's accounts or all accounts."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    query = db.query(EmailAccount)
+    if resolved_user_id is not None:
+        query = query.filter(EmailAccount.user_id == resolved_user_id)
+    accounts = query.all()
     return [account_to_response(account, db) for account in accounts]
 
 

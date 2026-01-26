@@ -49,7 +49,7 @@ const Jobs = () => {
 
   // Convert selectedUser to userId for API calls
   // Note: id=0 is a placeholder meaning "user not loaded yet", so treat it as undefined
-  const userId = selectedUser.type === 'user' && selectedUser.id !== 0 ? selectedUser.id : undefined
+  const userId = selectedUser.id !== 0 ? selectedUser.id : undefined
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)

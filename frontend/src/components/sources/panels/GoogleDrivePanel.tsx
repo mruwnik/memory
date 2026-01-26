@@ -12,12 +12,14 @@ import {
   SyncButton,
 } from '../shared'
 import { styles, cx } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
   const {
     listGoogleAccounts, listProjects,
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
   } = useSources()
+  const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -31,7 +33,7 @@ export const GoogleDrivePanel = () => {
     setError(null)
     try {
       const [accountsData, projectsData] = await Promise.all([
-        listGoogleAccounts(),
+        listGoogleAccounts(userId),
         listProjects()
       ])
       setAccounts(accountsData)
@@ -41,7 +43,7 @@ export const GoogleDrivePanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listGoogleAccounts, listProjects])
+  }, [listGoogleAccounts, listProjects, userId])
 
   useEffect(() => { loadData() }, [loadData])
 

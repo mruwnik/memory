@@ -7,7 +7,7 @@ export interface User {
   email: string
   user_type: 'human' | 'bot'
   scopes: string[]
-  has_api_key: boolean
+  api_key_count: number
   created_at?: string
 }
 
@@ -31,7 +31,7 @@ export interface PasswordChange {
 }
 
 export interface ApiKeyResponse {
-  api_key: string
+  key: string
 }
 
 export interface ScopeInfo {
@@ -111,7 +111,10 @@ export const useUsers = () => {
   }, [apiCall])
 
   const regenerateApiKey = useCallback(async (id: number): Promise<ApiKeyResponse> => {
-    const response = await apiCall(`/users/${id}/regenerate-api-key`, { method: 'POST' })
+    const response = await apiCall(`/users/${id}/api-keys`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Default API Key' }),
+    })
     if (!response.ok) {
       const error = await response.json()
       throw new Error(error.detail || 'Failed to regenerate API key')

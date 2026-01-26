@@ -154,7 +154,7 @@ const UserManagement = () => {
 
     try {
       const result = await regenerateApiKey(apiKeyUser.id)
-      setNewApiKey(result.api_key)
+      setNewApiKey(result.key)
       await loadUsers()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to regenerate API key')
@@ -264,7 +264,7 @@ const UserManagement = () => {
                       </div>
 
                       {/* API Key status */}
-                      {user.has_api_key && (
+                      {user.api_key_count > 0 && (
                         <p className="text-xs text-slate-400 mt-2">Has API key configured</p>
                       )}
                     </div>
@@ -277,7 +277,7 @@ const UserManagement = () => {
                         onClick={() => setApiKeyUser(user)}
                         className="text-sm text-slate-600 hover:text-slate-800 px-3 py-1 rounded hover:bg-slate-100 transition-colors"
                       >
-                        {user.has_api_key ? 'Regenerate Key' : 'Generate Key'}
+                        {user.api_key_count > 0 ? 'Regenerate Key' : 'Generate Key'}
                       </button>
                     )}
                     <button
@@ -532,11 +532,11 @@ const UserManagement = () => {
             {!newApiKey ? (
               <>
                 <h3 className="text-lg font-semibold text-slate-800 mb-4">
-                  {apiKeyUser.has_api_key ? 'Regenerate' : 'Generate'} API Key
+                  {apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'} API Key
                 </h3>
 
                 <p className="text-sm text-slate-600 mb-4">
-                  {apiKeyUser.has_api_key
+                  {apiKeyUser.api_key_count > 0
                     ? `Are you sure you want to regenerate the API key for ${apiKeyUser.name}? The current key will be invalidated.`
                     : `Generate an API key for ${apiKeyUser.name}.`}
                 </p>
@@ -553,7 +553,7 @@ const UserManagement = () => {
                     disabled={apiKeyLoading}
                     className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
                   >
-                    {apiKeyLoading ? 'Generating...' : apiKeyUser.has_api_key ? 'Regenerate' : 'Generate'}
+                    {apiKeyLoading ? 'Generating...' : apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'}
                   </button>
                 </div>
               </>

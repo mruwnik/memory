@@ -427,8 +427,9 @@ export const useSources = () => {
 
   // === Email Accounts ===
 
-  const listEmailAccounts = useCallback(async (): Promise<EmailAccount[]> => {
-    const response = await apiCall('/email-accounts')
+  const listEmailAccounts = useCallback(async (userId?: number): Promise<EmailAccount[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/email-accounts${params}`)
     if (!response.ok) throw new Error('Failed to fetch email accounts')
     return response.json()
   }, [apiCall])
@@ -476,8 +477,9 @@ export const useSources = () => {
 
   // === Article Feeds ===
 
-  const listArticleFeeds = useCallback(async (): Promise<ArticleFeed[]> => {
-    const response = await apiCall('/article-feeds')
+  const listArticleFeeds = useCallback(async (userId?: number): Promise<ArticleFeed[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/article-feeds${params}`)
     if (!response.ok) throw new Error('Failed to fetch article feeds')
     return response.json()
   }, [apiCall])
@@ -527,8 +529,9 @@ export const useSources = () => {
 
   // === GitHub Accounts ===
 
-  const listGithubAccounts = useCallback(async (): Promise<GithubAccount[]> => {
-    const response = await apiCall('/github/accounts')
+  const listGithubAccounts = useCallback(async (userId?: number): Promise<GithubAccount[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/github/accounts${params}`)
     if (!response.ok) throw new Error('Failed to fetch GitHub accounts')
     return response.json()
   }, [apiCall])
@@ -686,8 +689,9 @@ export const useSources = () => {
 
   // === Google Drive ===
 
-  const listGoogleAccounts = useCallback(async (): Promise<GoogleAccount[]> => {
-    const response = await apiCall('/google-drive/accounts')
+  const listGoogleAccounts = useCallback(async (userId?: number): Promise<GoogleAccount[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/google-drive/accounts${params}`)
     if (!response.ok) throw new Error('Failed to fetch Google accounts')
     return response.json()
   }, [apiCall])
@@ -815,8 +819,9 @@ export const useSources = () => {
 
   // === Calendar Accounts ===
 
-  const listCalendarAccounts = useCallback(async (): Promise<CalendarAccount[]> => {
-    const response = await apiCall('/calendar-accounts')
+  const listCalendarAccounts = useCallback(async (userId?: number): Promise<CalendarAccount[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/calendar-accounts${params}`)
     if (!response.ok) throw new Error('Failed to fetch calendar accounts')
     return response.json()
   }, [apiCall])

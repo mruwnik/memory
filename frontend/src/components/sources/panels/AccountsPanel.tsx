@@ -10,6 +10,7 @@ import {
   SyncStatus,
 } from '../shared'
 import { styles, cx } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const AccountsPanel = () => {
   const {
@@ -17,6 +18,7 @@ export const AccountsPanel = () => {
     listGoogleAccounts, getGoogleAvailableScopes, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
+  const { userId } = useSourcesContext()
 
   const [githubAccounts, setGithubAccounts] = useState<GithubAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -54,8 +56,8 @@ export const AccountsPanel = () => {
     setError(null)
     try {
       const [githubData, googleData, configData] = await Promise.all([
-        listGithubAccounts(),
-        listGoogleAccounts(),
+        listGithubAccounts(userId),
+        listGoogleAccounts(userId),
         getGoogleOAuthConfig()
       ])
       setGithubAccounts(githubData)
@@ -66,7 +68,7 @@ export const AccountsPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listGithubAccounts, listGoogleAccounts, getGoogleOAuthConfig])
+  }, [listGithubAccounts, listGoogleAccounts, getGoogleOAuthConfig, userId])
 
   useEffect(() => { loadData() }, [loadData])
 
