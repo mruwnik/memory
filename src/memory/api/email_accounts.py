@@ -33,6 +33,9 @@ class EmailAccountCreate(BaseModel):
     folders: list[str] = []
     tags: list[str] = []
     send_enabled: bool = True
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
 
     @model_validator(mode="after")
     def validate_account_type_fields(self):
@@ -67,6 +70,9 @@ class EmailAccountUpdate(BaseModel):
     tags: list[str] | None = None
     active: bool | None = None  # sync enabled
     send_enabled: bool | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 class GoogleAccountInfo(BaseModel):
@@ -100,6 +106,9 @@ class EmailAccountResponse(BaseModel):
     send_enabled: bool
     created_at: str
     updated_at: str
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 def account_to_response(account: EmailAccount, db: Session | None = None) -> EmailAccountResponse:
@@ -135,6 +144,8 @@ def account_to_response(account: EmailAccount, db: Session | None = None) -> Ema
         send_enabled=cast(bool, account.send_enabled) if account.send_enabled is not None else True,
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
+        project_id=account.project_id,
+        sensitivity=cast(str, account.sensitivity) or "basic",
     )
 
 
@@ -186,6 +197,8 @@ def create_account(
         folders=data.folders,
         tags=data.tags,
         send_enabled=data.send_enabled,
+        project_id=data.project_id,
+        sensitivity=data.sensitivity,
     )
     db.add(account)
     db.commit()
@@ -241,6 +254,10 @@ def update_account(
         account.active = updates.active
     if updates.send_enabled is not None:
         account.send_enabled = updates.send_enabled
+    if updates.project_id is not None:
+        account.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        account.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(account)

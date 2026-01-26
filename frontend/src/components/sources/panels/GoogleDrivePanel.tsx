@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
+import { useSources, GoogleAccount, GoogleFolder, DriveItem, Project } from '@/hooks/useSources'
 import {
   Modal,
   TagsInput,
@@ -15,10 +15,11 @@ import { styles, cx } from '../styles'
 
 export const GoogleDrivePanel = () => {
   const {
-    listGoogleAccounts,
+    listGoogleAccounts, listProjects,
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
   } = useSources()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
@@ -29,14 +30,18 @@ export const GoogleDrivePanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const accountsData = await listGoogleAccounts()
+      const [accountsData, projectsData] = await Promise.all([
+        listGoogleAccounts(),
+        listProjects()
+      ])
       setAccounts(accountsData)
+      setProjects(projectsData)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
     }
-  }, [listGoogleAccounts])
+  }, [listGoogleAccounts, listProjects])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -196,6 +201,7 @@ export const GoogleDrivePanel = () => {
       {addingFolderTo && (
         <GoogleFolderForm
           accountId={addingFolderTo}
+          projects={projects}
           onSubmit={(data) => handleAddFolder(addingFolderTo, data)}
           onCancel={() => setAddingFolderTo(null)}
         />
@@ -606,11 +612,12 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
 
 interface GoogleFolderFormProps {
   accountId: number
+  projects: Project[]
   onSubmit: (data: any) => Promise<void>
   onCancel: () => void
 }
 
-const GoogleFolderForm = ({ accountId, onSubmit, onCancel }: GoogleFolderFormProps) => {
+const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFolderFormProps) => {
   const [formData, setFormData] = useState({
     folder_id: '',
     folder_name: '',
@@ -618,6 +625,8 @@ const GoogleFolderForm = ({ accountId, onSubmit, onCancel }: GoogleFolderFormPro
     include_shared: false,
     tags: [] as string[],
     check_interval: 60,
+    project_id: undefined as number | undefined,
+    sensitivity: 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -700,6 +709,39 @@ const GoogleFolderForm = ({ accountId, onSubmit, onCancel }: GoogleFolderFormPro
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
+        </div>
+
+        <div className={styles.formRow}>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Project</label>
+            <select
+              value={formData.project_id || ''}
+              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
+              className={styles.formSelect}
+            >
+              <option value="">None</option>
+              {projects.map(project => (
+                <option key={project.id} value={project.id}>
+                  {project.title} ({project.repo_path})
+                </option>
+              ))}
+            </select>
+            <p className={styles.formHint}>Project for access control</p>
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Sensitivity</label>
+            <select
+              value={formData.sensitivity}
+              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
+              className={styles.formSelect}
+            >
+              <option value="public">Public</option>
+              <option value="basic">Basic</option>
+              <option value="internal">Internal</option>
+              <option value="confidential">Confidential</option>
+            </select>
+            <p className={styles.formHint}>Visibility level for files from this folder</p>
+          </div>
         </div>
 
         <div className={styles.formActions}>

@@ -8,13 +8,16 @@ import textwrap
 from datetime import datetime, timezone
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.api.MCP.access import build_user_access_filter_from_dict
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.common.access_control import AccessFilter, user_can_access
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
@@ -33,6 +36,78 @@ from memory.common.db.models import (
 from memory.common.formatters import observation
 
 logger = logging.getLogger(__name__)
+
+
+def get_current_user_access_filter() -> AccessFilter | None:
+    """
+    Get access filter for the current MCP user.
+
+    Returns:
+        AccessFilter with user's project access conditions,
+        or None if user is superadmin (no filtering needed).
+    """
+    access_token = get_access_token()
+    if access_token is None:
+        # No auth - return empty filter (no access)
+        logger.warning("get_current_user_access_filter: no access token")
+        return AccessFilter(conditions=[])
+
+    # Build user dict from token - we need id and USER's scopes (not API key scopes)
+    # for access control. API key scopes control which tools are available,
+    # but USER scopes determine admin status and data access.
+    with make_session() as session:
+        from memory.common.db.models import UserSession
+
+        # Try as session token first
+        user_session = session.get(UserSession, access_token.token)
+        if user_session and user_session.user:
+            user = user_session.user
+            user_dict = {
+                "id": user.id,
+                "scopes": list(user.scopes) if user.scopes else [],
+            }
+            return build_user_access_filter_from_dict(user_dict)
+
+        # Try as API key
+        from memory.api.auth import lookup_api_key
+
+        api_key_record = lookup_api_key(access_token.token, session)
+        if api_key_record and api_key_record.user:
+            user = api_key_record.user
+            user_dict = {
+                "id": user.id,
+                "scopes": list(user.scopes) if user.scopes else [],
+            }
+            return build_user_access_filter_from_dict(user_dict)
+
+    # Couldn't identify user - return empty filter (no access)
+    logger.warning("get_current_user_access_filter: couldn't identify user from token")
+    return AccessFilter(conditions=[])
+
+
+def get_current_user_id() -> int | None:
+    """Get the current user's ID from the access token."""
+    access_token = get_access_token()
+    if access_token is None:
+        return None
+
+    with make_session() as session:
+        from memory.common.db.models import UserSession
+
+        # Try as session token first
+        user_session = session.get(UserSession, access_token.token)
+        if user_session and user_session.user:
+            return user_session.user.id
+
+        # Try as API key
+        from memory.api.auth import lookup_api_key
+
+        api_key_record = lookup_api_key(access_token.token, session)
+        if api_key_record and api_key_record.user:
+            return api_key_record.user.id
+
+    return None
+
 
 # Filter definitions: (name, description, applicable_modalities)
 # applicable_modalities is None for "all modalities"
@@ -195,6 +270,10 @@ async def search(
     search_filters = SearchFilters(**filters)
     search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
 
+    # Apply access control filter
+    access_filter = get_current_user_access_filter()
+    search_filters["access_filter"] = access_filter
+
     upload_data = extract.extract_text(query, skip_summary=True)
     results = await search_base(
         upload_data,
@@ -330,6 +409,9 @@ async def search_observations(
         content=query,
         created_at=datetime.now(timezone.utc),
     )
+    # Apply access control filter for observations
+    access_filter = get_current_user_access_filter()
+
     results = await search_base(
         [
             extract.DataChunk(data=[query]),
@@ -343,6 +425,7 @@ async def search_observations(
             tags=tags or [],
             observation_types=observation_types,
             source_ids=filter_observation_source_ids(tags=tags),
+            access_filter=access_filter,
         ),
         config=config,
     )
@@ -504,6 +587,11 @@ async def get_item(id: int, include_content: bool = True) -> dict:
 
     Returns: Full item details including metadata, tags, and optionally content.
     """
+    from memory.common.access_control import get_user_project_roles
+
+    # Get access filter to check permissions
+    access_filter = get_current_user_access_filter()
+
     with make_session() as session:
         item = (
             session.query(SourceItem)
@@ -515,6 +603,25 @@ async def get_item(id: int, include_content: bool = True) -> dict:
         )
         if not item:
             raise ValueError(f"Item {id} not found or not yet indexed")
+
+        # Check access control
+        # access_filter is None for superadmins (they see everything)
+        if access_filter is not None:
+            # Need to check if user can access this item
+            # Get user from current context for project roles lookup
+            user_id = get_current_user_id()
+            if user_id is None:
+                raise ValueError(f"Item {id} not found or access denied")
+
+            from memory.common.db.models import User
+
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError(f"Item {id} not found or access denied")
+
+            project_roles = get_user_project_roles(session, user)
+            if not user_can_access(user, item, project_roles):
+                raise ValueError(f"Item {id} not found or access denied")
 
         result = {
             "id": item.id,
@@ -532,6 +639,62 @@ async def get_item(id: int, include_content: bool = True) -> dict:
             result["content"] = item.content
 
         return result
+
+
+def apply_access_control_to_query(query, access_filter: AccessFilter | None, session):
+    """
+    Apply access control filters to a SQLAlchemy query.
+
+    Args:
+        query: SQLAlchemy query object
+        access_filter: AccessFilter from get_current_user_access_filter()
+        session: Database session for user lookup
+
+    Returns:
+        Modified query with access control applied
+    """
+    from sqlalchemy import or_
+
+    # Superadmin - no filtering
+    if access_filter is None:
+        return query
+
+    # Build OR conditions for access
+    or_conditions = []
+
+    # Public items are visible to all authenticated users
+    if access_filter.include_public:
+        or_conditions.append(SourceItem.sensitivity == "public")
+
+    # Person override: if user's person is associated with item
+    if access_filter.person_id is not None:
+        from memory.common.db.models.source_item import source_item_people
+
+        # Items where user's person is in the people relationship
+        person_subquery = (
+            session.query(source_item_people.c.source_item_id)
+            .filter(source_item_people.c.person_id == access_filter.person_id)
+            .subquery()
+        )
+        or_conditions.append(SourceItem.id.in_(person_subquery))
+
+    # Project-based access
+    for condition in access_filter.conditions:
+        # Item must be in project AND have allowed sensitivity
+        project_condition = (
+            (SourceItem.project_id == condition.project_id)
+            & (SourceItem.sensitivity.in_(list(condition.sensitivities)))
+        )
+        or_conditions.append(project_condition)
+
+    # If no conditions, user has no access - return empty result
+    if not or_conditions:
+        # Add impossible condition to return no results
+        query = query.filter(SourceItem.id == -1)
+    else:
+        query = query.filter(or_(*or_conditions))
+
+    return query
 
 
 @core_mcp.tool()
@@ -566,8 +729,14 @@ async def list_items(
     if sort_order not in ("asc", "desc"):
         sort_order = "desc"
 
+    # Get access filter for current user
+    access_filter = get_current_user_access_filter()
+
     with make_session() as session:
         query = session.query(SourceItem).filter(SourceItem.embed_status == "STORED")
+
+        # Apply access control filter
+        query = apply_access_control_to_query(query, access_filter, session)
 
         # Filter by modalities
         if modalities:
@@ -665,10 +834,16 @@ async def count_items(
     """
     from sqlalchemy import func as sql_func
 
+    # Get access filter for current user
+    access_filter = get_current_user_access_filter()
+
     with make_session() as session:
         base_query = session.query(SourceItem).filter(
             SourceItem.embed_status == "STORED"
         )
+
+        # Apply access control filter
+        base_query = apply_access_control_to_query(base_query, access_filter, session)
 
         # Apply filters
         if modalities:

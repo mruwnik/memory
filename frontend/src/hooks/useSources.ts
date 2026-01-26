@@ -27,6 +27,9 @@ export interface EmailAccount {
   send_enabled: boolean
   created_at: string
   updated_at: string
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface EmailAccountCreate {
@@ -48,6 +51,9 @@ export interface EmailAccountCreate {
   folders?: string[]
   tags?: string[]
   send_enabled?: boolean
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface EmailAccountUpdate {
@@ -69,6 +75,9 @@ export interface EmailAccountUpdate {
   tags?: string[]
   active?: boolean  // sync enabled
   send_enabled?: boolean
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Article Feeds
@@ -258,6 +267,9 @@ export interface GoogleFolder {
   last_sync_at: string | null
   active: boolean
   exclude_folder_ids: string[]
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface GoogleAccount {
@@ -277,6 +289,9 @@ export interface GoogleFolderCreate {
   include_shared?: boolean
   tags?: string[]
   check_interval?: number
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface GoogleFolderUpdate {
@@ -287,6 +302,9 @@ export interface GoogleFolderUpdate {
   check_interval?: number
   active?: boolean
   exclude_folder_ids?: string[]
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Google OAuth scopes
@@ -341,6 +359,9 @@ export interface CalendarAccount {
   active: boolean
   created_at: string
   updated_at: string
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface CalendarAccountCreate {
@@ -355,6 +376,9 @@ export interface CalendarAccountCreate {
   check_interval?: number
   sync_past_days?: number
   sync_future_days?: number
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface CalendarAccountUpdate {
@@ -369,6 +393,18 @@ export interface CalendarAccountUpdate {
   sync_past_days?: number
   sync_future_days?: number
   active?: boolean
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+}
+
+// Access control projects (from GitHub milestones)
+export interface Project {
+  id: number
+  title: string
+  description: string | null
+  state: string
+  repo_path: string
 }
 
 // Celery task response (for async jobs)
@@ -379,6 +415,15 @@ export interface CeleryTaskResponse {
 
 export const useSources = () => {
   const { apiCall } = useAuth()
+
+  // === Projects (for access control) ===
+
+  const listProjects = useCallback(async (state?: string): Promise<Project[]> => {
+    const params = state ? `?state=${state}` : ''
+    const response = await apiCall(`/projects${params}`)
+    if (!response.ok) throw new Error('Failed to fetch projects')
+    return response.json()
+  }, [apiCall])
 
   // === Email Accounts ===
 
@@ -819,6 +864,8 @@ export const useSources = () => {
   }, [apiCall])
 
   return {
+    // Projects (access control)
+    listProjects,
     // Email
     listEmailAccounts,
     createEmailAccount,

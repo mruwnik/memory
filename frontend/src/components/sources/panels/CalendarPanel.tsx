@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
+import { useSources, CalendarAccount, GoogleAccount, Project } from '@/hooks/useSources'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import {
   Modal,
@@ -21,11 +21,12 @@ interface GroupedEvents {
 export const CalendarPanel = () => {
   const {
     listCalendarAccounts, createCalendarAccount, updateCalendarAccount,
-    deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts
+    deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts, listProjects
   } = useSources()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [expandedCalendars, setExpandedCalendars] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -37,20 +38,22 @@ export const CalendarPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const [calendarData, googleData, eventsData] = await Promise.all([
+      const [calendarData, googleData, projectData, eventsData] = await Promise.all([
         listCalendarAccounts(),
         listGoogleAccounts(),
+        listProjects(),
         getUpcomingEvents({ days: 365, limit: 200 })
       ])
       setAccounts(calendarData)
       setGoogleAccounts(googleData)
+      setProjects(projectData)
       setEvents(eventsData)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
     }
-  }, [listCalendarAccounts, listGoogleAccounts, getUpcomingEvents])
+  }, [listCalendarAccounts, listGoogleAccounts, listProjects, getUpcomingEvents])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -223,6 +226,7 @@ export const CalendarPanel = () => {
       {showForm && (
         <CalendarForm
           googleAccounts={googleAccounts}
+          projects={projects}
           onSubmit={handleCreate}
           onCancel={() => setShowForm(false)}
         />
@@ -232,6 +236,7 @@ export const CalendarPanel = () => {
         <CalendarForm
           account={editingAccount}
           googleAccounts={googleAccounts}
+          projects={projects}
           onSubmit={handleUpdate}
           onCancel={() => setEditingAccount(null)}
         />
@@ -243,11 +248,12 @@ export const CalendarPanel = () => {
 interface CalendarFormProps {
   account?: CalendarAccount
   googleAccounts: GoogleAccount[]
+  projects: Project[]
   onSubmit: (data: any) => Promise<void>
   onCancel: () => void
 }
 
-const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarFormProps) => {
+const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: CalendarFormProps) => {
   const [formData, setFormData] = useState({
     name: account?.name || '',
     calendar_type: account?.calendar_type || 'caldav' as 'caldav' | 'google',
@@ -259,6 +265,8 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
     check_interval: account?.check_interval || 15,
     sync_past_days: account?.sync_past_days || 30,
     sync_future_days: account?.sync_future_days || 90,
+    project_id: account?.project_id || undefined as number | undefined,
+    sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -275,6 +283,8 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
         check_interval: formData.check_interval,
         sync_past_days: formData.sync_past_days,
         sync_future_days: formData.sync_future_days,
+        project_id: formData.project_id,
+        sensitivity: formData.sensitivity,
       }
 
       if (formData.calendar_type === 'caldav') {
@@ -423,6 +433,39 @@ const CalendarForm = ({ account, googleAccounts, onSubmit, onCancel }: CalendarF
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
+        </div>
+
+        <div className={styles.formRow}>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Project</label>
+            <select
+              value={formData.project_id || ''}
+              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
+              className={styles.formSelect}
+            >
+              <option value="">None</option>
+              {projects.map(project => (
+                <option key={project.id} value={project.id}>
+                  {project.title} ({project.repo_path})
+                </option>
+              ))}
+            </select>
+            <p className={styles.formHint}>Project for access control</p>
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Sensitivity</label>
+            <select
+              value={formData.sensitivity}
+              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
+              className={styles.formSelect}
+            >
+              <option value="public">Public</option>
+              <option value="basic">Basic</option>
+              <option value="internal">Internal</option>
+              <option value="confidential">Confidential</option>
+            </select>
+            <p className={styles.formHint}>Visibility level for calendar events</p>
+          </div>
         </div>
 
         <div className={styles.formActions}>

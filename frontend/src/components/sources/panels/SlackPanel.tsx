@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSlack, SlackWorkspace, SlackChannel } from '@/hooks/useSlack'
+import { useSlack, SlackWorkspace, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
+import { useSources, Project } from '@/hooks/useSources'
 import {
   EmptyState,
   LoadingState,
@@ -20,9 +21,11 @@ export const SlackPanel = () => {
     listChannels,
     updateChannel,
   } = useSlack()
+  const { listProjects } = useSources()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})
+  const [projects, setProjects] = useState<Project[]>([])
   const [expandedWorkspace, setExpandedWorkspace] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -32,14 +35,18 @@ export const SlackPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listWorkspaces()
-      setWorkspaces(data)
+      const [workspacesData, projectsData] = await Promise.all([
+        listWorkspaces(),
+        listProjects()
+      ])
+      setWorkspaces(workspacesData)
+      setProjects(projectsData)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load workspaces')
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces])
+  }, [listWorkspaces, listProjects])
 
   useEffect(() => {
     loadData()
@@ -101,10 +108,23 @@ export const SlackPanel = () => {
     }
   }
 
+  const handleUpdateWorkspace = async (workspace: SlackWorkspace, updates: SlackWorkspaceUpdate) => {
+    await updateWorkspace(workspace.id, updates)
+    loadData()
+  }
+
   const handleSync = async (workspace: SlackWorkspace) => {
     await triggerSync(workspace.id)
     // Reload to show updated sync status
     loadData()
+  }
+
+  const handleUpdateChannel = async (channel: SlackChannel, updates: SlackChannelUpdate) => {
+    await updateChannel(channel.id, updates)
+
+    // Refresh channels
+    const channels = await listChannels(channel.workspace_id)
+    setChannelsByWorkspace(prev => ({ ...prev, [channel.workspace_id]: channels }))
   }
 
   const handleToggleChannelCollect = async (channel: SlackChannel) => {
@@ -118,11 +138,7 @@ export const SlackPanel = () => {
       newValue = null
     }
 
-    await updateChannel(channel.id, { collect_messages: newValue })
-
-    // Refresh channels
-    const channels = await listChannels(channel.workspace_id)
-    setChannelsByWorkspace(prev => ({ ...prev, [channel.workspace_id]: channels }))
+    await handleUpdateChannel(channel, { collect_messages: newValue })
   }
 
   if (loading) return <LoadingState />
@@ -150,6 +166,7 @@ export const SlackPanel = () => {
               key={workspace.id}
               workspace={workspace}
               channels={channelsByWorkspace[workspace.id] || []}
+              projects={projects}
               expanded={expandedWorkspace === workspace.id}
               onToggleExpand={() => {
                 setExpandedWorkspace(expandedWorkspace === workspace.id ? null : workspace.id)
@@ -158,9 +175,11 @@ export const SlackPanel = () => {
                 }
               }}
               onToggleCollect={() => handleToggleCollect(workspace)}
+              onUpdateWorkspace={(updates) => handleUpdateWorkspace(workspace, updates)}
               onSync={() => handleSync(workspace)}
               onDisconnect={() => setDisconnecting(workspace)}
               onToggleChannelCollect={handleToggleChannelCollect}
+              onUpdateChannel={handleUpdateChannel}
             />
           ))}
         </div>
@@ -180,25 +199,32 @@ export const SlackPanel = () => {
 interface WorkspaceCardProps {
   workspace: SlackWorkspace
   channels: SlackChannel[]
+  projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
   onToggleCollect: () => Promise<void>
+  onUpdateWorkspace: (updates: SlackWorkspaceUpdate) => Promise<void>
   onSync: () => Promise<void>
   onDisconnect: () => void
   onToggleChannelCollect: (channel: SlackChannel) => Promise<void>
+  onUpdateChannel: (channel: SlackChannel, updates: SlackChannelUpdate) => Promise<void>
 }
 
 const WorkspaceCard = ({
   workspace,
   channels,
+  projects,
   expanded,
   onToggleExpand,
   onToggleCollect,
+  onUpdateWorkspace,
   onSync,
   onDisconnect,
   onToggleChannelCollect,
+  onUpdateChannel,
 }: WorkspaceCardProps) => {
   const [toggling, setToggling] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   const handleToggle = async () => {
     setToggling(true)
@@ -206,6 +232,24 @@ const WorkspaceCard = ({
       await onToggleCollect()
     } finally {
       setToggling(false)
+    }
+  }
+
+  const handleProjectChange = async (projectId: number | undefined) => {
+    setUpdating(true)
+    try {
+      await onUpdateWorkspace({ project_id: projectId || null })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
+    setUpdating(true)
+    try {
+      await onUpdateWorkspace({ sensitivity })
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -237,19 +281,51 @@ const WorkspaceCard = ({
             </div>
           )}
         </div>
-        <button
-          className={cx(
-            'px-3 py-1 rounded text-sm',
-            workspace.collect_messages
-              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-              : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-            toggling && 'opacity-50'
-          )}
-          onClick={handleToggle}
-          disabled={toggling}
-        >
-          {workspace.collect_messages ? 'Collecting' : 'Not Collecting'}
-        </button>
+        <div className="flex items-center gap-1">
+          <select
+            className={cx(
+              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
+              updating && 'opacity-50'
+            )}
+            value={workspace.project_id || ''}
+            onChange={e => handleProjectChange(e.target.value ? parseInt(e.target.value) : undefined)}
+            disabled={updating}
+            title="Project"
+          >
+            <option value="">No project</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.title}</option>
+            ))}
+          </select>
+          <select
+            className={cx(
+              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
+              updating && 'opacity-50'
+            )}
+            value={workspace.sensitivity}
+            onChange={e => handleSensitivityChange(e.target.value as any)}
+            disabled={updating}
+            title="Sensitivity"
+          >
+            <option value="public">Public</option>
+            <option value="basic">Basic</option>
+            <option value="internal">Internal</option>
+            <option value="confidential">Confidential</option>
+          </select>
+          <button
+            className={cx(
+              'px-3 py-1 rounded text-sm',
+              workspace.collect_messages
+                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              toggling && 'opacity-50'
+            )}
+            onClick={handleToggle}
+            disabled={toggling}
+          >
+            {workspace.collect_messages ? 'Collecting' : 'Not Collecting'}
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 mt-3">
@@ -283,8 +359,10 @@ const WorkspaceCard = ({
               <ChannelRow
                 key={channel.id}
                 channel={channel}
+                projects={projects}
                 workspaceCollecting={workspace.collect_messages}
                 onToggle={() => onToggleChannelCollect(channel)}
+                onUpdate={(updates) => onUpdateChannel(channel, updates)}
               />
             ))}
           </div>
@@ -296,11 +374,13 @@ const WorkspaceCard = ({
 
 interface ChannelRowProps {
   channel: SlackChannel
+  projects: Project[]
   workspaceCollecting: boolean
   onToggle: () => Promise<void>
+  onUpdate: (updates: SlackChannelUpdate) => Promise<void>
 }
 
-const ChannelRow = ({ channel, workspaceCollecting, onToggle }: ChannelRowProps) => {
+const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate }: ChannelRowProps) => {
   const [toggling, setToggling] = useState(false)
 
   const handleToggle = async () => {
@@ -310,6 +390,15 @@ const ChannelRow = ({ channel, workspaceCollecting, onToggle }: ChannelRowProps)
     } finally {
       setToggling(false)
     }
+  }
+
+  const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value
+    onUpdate({ project_id: value ? parseInt(value, 10) : undefined })
+  }
+
+  const handleSensitivityChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    onUpdate({ sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })
   }
 
   const isInheriting = channel.collect_messages === null
@@ -325,51 +414,75 @@ const ChannelRow = ({ channel, workspaceCollecting, onToggle }: ChannelRowProps)
 
   return (
     <div className={cx(
-      "flex items-center justify-between py-1 px-2 rounded hover:bg-slate-50",
+      "flex items-center justify-between py-1 px-2 rounded hover:bg-slate-50 gap-2",
       channel.is_archived && "opacity-50"
     )}>
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-sm flex-1 min-w-0">
         <span className="text-slate-400">{typeIcon}</span>
         <span className={cx(
-          "text-slate-700",
+          "text-slate-700 truncate",
           channel.is_private && "italic"
         )}>
           {channel.name}
           {channel.is_archived && ' (archived)'}
         </span>
       </div>
-      <button
-        className={cx(
-          'px-2 py-0.5 rounded text-xs flex items-center gap-1',
-          toggling && 'opacity-50',
-          isInheriting
-            ? effectivelyCollecting
-              ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-              : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+      <div className="flex items-center gap-1">
+        <select
+          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+          value={channel.project_id || ''}
+          onChange={handleProjectChange}
+          disabled={channel.is_archived}
+        >
+          <option value="">No project</option>
+          {projects.map(p => (
+            <option key={p.id} value={p.id}>{p.title}</option>
+          ))}
+        </select>
+        <select
+          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+          value={channel.sensitivity}
+          onChange={handleSensitivityChange}
+          disabled={channel.is_archived}
+        >
+          <option value="public">Public</option>
+          <option value="basic">Basic</option>
+          <option value="internal">Internal</option>
+          <option value="confidential">Confidential</option>
+        </select>
+        <button
+          className={cx(
+            'px-2 py-0.5 rounded text-xs flex items-center gap-1',
+            toggling && 'opacity-50',
+            isInheriting
+              ? effectivelyCollecting
+                ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+              : channel.collect_messages
+                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                : 'bg-red-50 text-red-600 hover:bg-red-100'
+          )}
+          onClick={handleToggle}
+          disabled={toggling || channel.is_archived}
+          title={
+            isInheriting
+              ? `Inheriting from workspace (${workspaceCollecting ? 'collecting' : 'not collecting'})`
+              : channel.collect_messages
+                ? 'Explicitly collecting'
+                : 'Explicitly not collecting'
+          }
+        >
+          <span className={cx(
+            'w-2 h-2 rounded-full',
+            isInheriting ? 'border border-current' : 'bg-current'
+          )} />
+          {isInheriting
+            ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
             : channel.collect_messages
-              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-              : 'bg-red-50 text-red-600 hover:bg-red-100'
-        )}
-        onClick={handleToggle}
-        disabled={toggling || channel.is_archived}
-        title={
-          isInheriting
-            ? `Inheriting from workspace (${workspaceCollecting ? 'collecting' : 'not collecting'})`
-            : channel.collect_messages
-              ? 'Explicitly collecting'
-              : 'Explicitly not collecting'
-        }
-      >
-        <span className={cx(
-          'w-2 h-2 rounded-full',
-          isInheriting ? 'border border-current' : 'bg-current'
-        )} />
-        {isInheriting
-          ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
-          : channel.collect_messages
-            ? 'Collecting'
-            : 'Skipping'}
-      </button>
+              ? 'Collecting'
+              : 'Skipping'}
+        </button>
+      </div>
     </div>
   )
 }

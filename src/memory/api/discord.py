@@ -2,7 +2,7 @@
 
 import base64
 import binascii
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -62,10 +62,16 @@ class DiscordServerResponse(BaseModel):
     collect_messages: bool
     last_sync_at: str | None
     channel_count: int
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 class DiscordServerUpdate(BaseModel):
     collect_messages: bool | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 # --- Channel Models ---
@@ -79,10 +85,16 @@ class DiscordChannelResponse(BaseModel):
     channel_type: str
     collect_messages: bool | None
     effective_collect: bool
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 class DiscordChannelUpdate(BaseModel):
     collect_messages: bool | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 # --- Bot User Models ---
@@ -175,6 +187,8 @@ def server_to_response(server: DiscordServer) -> DiscordServerResponse:
         collect_messages=cast(bool, server.collect_messages),
         last_sync_at=server.last_sync_at.isoformat() if server.last_sync_at else None,
         channel_count=len(server.channels),
+        project_id=server.project_id,
+        sensitivity=cast(str, server.sensitivity) or "basic",
     )
 
 
@@ -188,6 +202,8 @@ def channel_to_response(channel: DiscordChannel) -> DiscordChannelResponse:
         channel_type=cast(str, channel.channel_type),
         collect_messages=channel.collect_messages,
         effective_collect=channel.should_collect,
+        project_id=channel.project_id,
+        sensitivity=cast(str, channel.sensitivity) or "basic",
     )
 
 
@@ -448,6 +464,10 @@ def update_server(
 
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
+    if updates.project_id is not None:
+        server.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        server.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(server)
@@ -478,6 +498,10 @@ def update_channel(
 
     # Allow setting to None (inherit) - check if key is present, not if value is None
     channel.collect_messages = updates.collect_messages
+    if updates.project_id is not None:
+        channel.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        channel.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(channel)

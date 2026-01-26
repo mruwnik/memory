@@ -32,10 +32,16 @@ export interface DiscordServer {
   collect_messages: boolean
   last_sync_at: string | null
   channel_count: number
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface DiscordServerUpdate {
   collect_messages?: boolean
+  // Access control
+  project_id?: number | null
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Discord Channels
@@ -47,10 +53,16 @@ export interface DiscordChannel {
   channel_type: string
   collect_messages: boolean | null
   effective_collect: boolean
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface DiscordChannelUpdate {
   collect_messages?: boolean | null
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Bot Users

@@ -12,11 +12,17 @@ export interface SlackWorkspace {
   sync_error: string | null
   channel_count: number
   user_count: number
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface SlackWorkspaceUpdate {
   collect_messages?: boolean
   sync_interval_seconds?: number
+  // Access control
+  project_id?: number | null
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Slack Channels
@@ -30,10 +36,16 @@ export interface SlackChannel {
   collect_messages: boolean | null
   effective_collect: boolean
   last_message_ts: string | null
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 export interface SlackChannelUpdate {
   collect_messages?: boolean | null
+  // Access control
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
 // Types for Slack Users

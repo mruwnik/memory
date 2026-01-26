@@ -29,6 +29,9 @@ class CalendarAccountCreate(BaseModel):
     check_interval: int = 15  # Minutes
     sync_past_days: int = 30
     sync_future_days: int = 90
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
 
 
 class CalendarAccountUpdate(BaseModel):
@@ -43,6 +46,9 @@ class CalendarAccountUpdate(BaseModel):
     sync_past_days: int | None = None
     sync_future_days: int | None = None
     active: bool | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 class GoogleAccountInfo(BaseModel):
@@ -69,6 +75,9 @@ class CalendarAccountResponse(BaseModel):
     active: bool
     created_at: str
     updated_at: str
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 def account_to_response(account: CalendarAccount) -> CalendarAccountResponse:
@@ -99,6 +108,8 @@ def account_to_response(account: CalendarAccount) -> CalendarAccountResponse:
         active=cast(bool, account.active),
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
+        project_id=account.project_id,
+        sensitivity=cast(str, account.sensitivity) or "basic",
     )
 
 
@@ -149,6 +160,8 @@ def create_account(
         check_interval=data.check_interval,
         sync_past_days=data.sync_past_days,
         sync_future_days=data.sync_future_days,
+        project_id=data.project_id,
+        sensitivity=data.sensitivity,
     )
     db.add(account)
     db.commit()
@@ -208,6 +221,10 @@ def update_account(
         account.sync_future_days = updates.sync_future_days
     if updates.active is not None:
         account.active = updates.active
+    if updates.project_id is not None:
+        account.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        account.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(account)

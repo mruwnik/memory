@@ -10,6 +10,7 @@ Multi-user design:
 
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -79,11 +80,17 @@ class SlackWorkspaceResponse(BaseModel):
     channel_count: int
     connected_users: int  # Number of users with credentials for this workspace
     user_connected: bool  # Whether the current user has credentials
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 class SlackWorkspaceUpdate(BaseModel):
     collect_messages: bool | None = None
     sync_interval_seconds: int | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 class SlackChannelResponse(BaseModel):
@@ -96,10 +103,16 @@ class SlackChannelResponse(BaseModel):
     collect_messages: bool | None
     effective_collect: bool
     last_message_ts: str | None
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 class SlackChannelUpdate(BaseModel):
     collect_messages: bool | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
 # --- Helper Functions ---
@@ -159,6 +172,8 @@ def workspace_to_response(
         channel_count=channel_count,
         connected_users=connected_users,
         user_connected=user_connected,
+        project_id=ws.project_id,
+        sensitivity=ws.sensitivity or "basic",
     )
 
 
@@ -173,6 +188,8 @@ def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
         collect_messages=channel.collect_messages,
         effective_collect=channel.should_collect,
         last_message_ts=channel.last_message_ts,
+        project_id=channel.project_id,
+        sensitivity=channel.sensitivity or "basic",
     )
 
 
@@ -434,6 +451,10 @@ def update_workspace(
         workspace.collect_messages = updates.collect_messages
     if updates.sync_interval_seconds is not None:
         workspace.sync_interval_seconds = updates.sync_interval_seconds
+    if updates.project_id is not None:
+        workspace.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        workspace.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(workspace)
@@ -541,6 +562,10 @@ def update_channel(
     get_workspace_with_access(db, channel.workspace_id, user)
 
     channel.collect_messages = updates.collect_messages
+    if updates.project_id is not None:
+        channel.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        channel.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(channel)

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, EmailAccount, GoogleAccount } from '@/hooks/useSources'
+import { useSources, EmailAccount, GoogleAccount, Project } from '@/hooks/useSources'
 import {
   SourceCard,
   Modal,
@@ -11,9 +11,10 @@ import {
 import { styles } from '../styles'
 
 export const EmailPanel = () => {
-  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts } = useSources()
+  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts, listProjects } = useSources()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -23,18 +24,20 @@ export const EmailPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const [emailData, googleData] = await Promise.all([
+      const [emailData, googleData, projectData] = await Promise.all([
         listEmailAccounts(),
-        listGoogleAccounts()
+        listGoogleAccounts(),
+        listProjects()
       ])
       setAccounts(emailData)
       setGoogleAccounts(googleData)
+      setProjects(projectData)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
     }
-  }, [listEmailAccounts, listGoogleAccounts])
+  }, [listEmailAccounts, listGoogleAccounts, listProjects])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
@@ -118,6 +121,7 @@ export const EmailPanel = () => {
       {showForm && (
         <EmailForm
           googleAccounts={googleAccounts}
+          projects={projects}
           onSubmit={handleCreate}
           onCancel={() => setShowForm(false)}
         />
@@ -127,6 +131,7 @@ export const EmailPanel = () => {
         <EmailForm
           account={editingAccount}
           googleAccounts={googleAccounts}
+          projects={projects}
           onSubmit={handleUpdate}
           onCancel={() => setEditingAccount(null)}
         />
@@ -138,11 +143,12 @@ export const EmailPanel = () => {
 interface EmailFormProps {
   account?: EmailAccount
   googleAccounts: GoogleAccount[]
+  projects: Project[]
   onSubmit: (data: any) => Promise<void>
   onCancel: () => void
 }
 
-const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormProps) => {
+const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: EmailFormProps) => {
   const [formData, setFormData] = useState({
     name: account?.name || '',
     email_address: account?.email_address || '',
@@ -158,6 +164,8 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
     folders: account?.folders || [],
     tags: account?.tags || [],
     send_enabled: account?.send_enabled ?? true,
+    project_id: account?.project_id || undefined as number | undefined,
+    sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -174,6 +182,8 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
         folders: formData.folders,
         tags: formData.tags,
         send_enabled: formData.send_enabled,
+        project_id: formData.project_id,
+        sensitivity: formData.sensitivity,
       }
 
       if (formData.account_type === 'imap') {
@@ -371,6 +381,39 @@ const EmailForm = ({ account, googleAccounts, onSubmit, onCancel }: EmailFormPro
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
+        </div>
+
+        <div className={styles.formRow}>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Project</label>
+            <select
+              value={formData.project_id || ''}
+              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
+              className={styles.formSelect}
+            >
+              <option value="">None</option>
+              {projects.map(project => (
+                <option key={project.id} value={project.id}>
+                  {project.title} ({project.repo_path})
+                </option>
+              ))}
+            </select>
+            <p className={styles.formHint}>Project for access control (from GitHub milestones)</p>
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Sensitivity</label>
+            <select
+              value={formData.sensitivity}
+              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
+              className={styles.formSelect}
+            >
+              <option value="public">Public</option>
+              <option value="basic">Basic</option>
+              <option value="internal">Internal</option>
+              <option value="confidential">Confidential</option>
+            </select>
+            <p className={styles.formHint}>Visibility level for emails from this account</p>
+          </div>
         </div>
 
         <div className={styles.formCheckbox}>

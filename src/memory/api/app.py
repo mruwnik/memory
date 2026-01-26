@@ -45,6 +45,7 @@ from memory.api.secrets import router as secrets_router
 from memory.api.users import router as users_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
+from memory.api.projects import router as projects_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,7 @@ app.include_router(secrets_router)
 app.include_router(users_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
+app.include_router(projects_router)
 
 
 # Add health check to MCP server instead of main app

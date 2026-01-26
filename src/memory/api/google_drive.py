@@ -57,6 +57,9 @@ class FolderCreate(BaseModel):
     include_shared: bool = False
     tags: list[str] = []
     check_interval: int = 60  # Minutes
+    # Access control
+    project_id: int | None = None
+    sensitivity: str = "basic"
 
 
 class FolderUpdate(BaseModel):
@@ -67,6 +70,9 @@ class FolderUpdate(BaseModel):
     check_interval: int | None = None
     active: bool | None = None
     exclude_folder_ids: list[str] | None = None
+    # Access control
+    project_id: int | None = None
+    sensitivity: str | None = None
 
 
 class FolderResponse(BaseModel):
@@ -81,6 +87,9 @@ class FolderResponse(BaseModel):
     last_sync_at: str | None
     active: bool
     exclude_folder_ids: list[str]
+    # Access control
+    project_id: int | None
+    sensitivity: str
 
 
 class AccountResponse(BaseModel):
@@ -454,6 +463,8 @@ def list_accounts(
                     ),
                     active=cast(bool, folder.active),
                     exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
+                    project_id=folder.project_id,
+                    sensitivity=cast(str, folder.sensitivity) or "basic",
                 )
                 for folder in account.folders
             ],
@@ -607,6 +618,8 @@ def add_folder(
         include_shared=folder.include_shared,
         tags=folder.tags,
         check_interval=folder.check_interval,
+        project_id=folder.project_id,
+        sensitivity=folder.sensitivity,
     )
     db.add(new_folder)
     db.commit()
@@ -624,6 +637,8 @@ def add_folder(
         last_sync_at=None,
         active=cast(bool, new_folder.active),
         exclude_folder_ids=[],
+        project_id=new_folder.project_id,
+        sensitivity=cast(str, new_folder.sensitivity) or "basic",
     )
 
 
@@ -663,6 +678,10 @@ def update_folder(
         folder.active = updates.active
     if updates.exclude_folder_ids is not None:
         folder.exclude_folder_ids = updates.exclude_folder_ids
+    if updates.project_id is not None:
+        folder.project_id = updates.project_id
+    if updates.sensitivity is not None:
+        folder.sensitivity = updates.sensitivity
 
     db.commit()
     db.refresh(folder)
@@ -679,6 +698,8 @@ def update_folder(
         last_sync_at=(folder.last_sync_at.isoformat() if folder.last_sync_at else None),
         active=cast(bool, folder.active),
         exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
+        project_id=folder.project_id,
+        sensitivity=cast(str, folder.sensitivity) or "basic",
     )
 
 

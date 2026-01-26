@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser } from '@/hooks/useDiscord'
+import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
+import { useSources, Project } from '@/hooks/useSources'
 import { useUsers, User } from '@/hooks/useUsers'
 import {
   Modal,
@@ -30,10 +31,12 @@ export const DiscordPanel = () => {
     removeBotUser,
   } = useDiscord()
   const { listUsers } = useUsers()
+  const { listProjects } = useSources()
 
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])
   const [channelsByServer, setChannelsByServer] = useState<Record<string, DiscordChannel[]>>({})
+  const [projects, setProjects] = useState<Project[]>([])
   const [expandedBot, setExpandedBot] = useState<string | null>(null)
   const [expandedServer, setExpandedServer] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -48,8 +51,12 @@ export const DiscordPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const botsData = await listBots()
+      const [botsData, projectsData] = await Promise.all([
+        listBots(),
+        listProjects()
+      ])
       setBots(botsData)
+      setProjects(projectsData)
 
       // If user has bots, load servers
       if (botsData.length > 0) {
@@ -61,7 +68,7 @@ export const DiscordPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listBots, listServers])
+  }, [listBots, listServers, listProjects])
 
   useEffect(() => {
     loadData()
@@ -157,6 +164,34 @@ export const DiscordPanel = () => {
     }
   }
 
+  const handleUpdateServer = async (server: DiscordServer, updates: DiscordServerUpdate) => {
+    await updateServer(server.id, updates)
+    // Refresh servers
+    const serversData = await listServers()
+    setServers(serversData)
+  }
+
+  const handleUpdateChannel = async (channel: DiscordChannel, updates: DiscordChannelUpdate) => {
+    const updatedChannel = await updateChannel(channel.id, updates)
+
+    // Refresh channels for this server, or update single channel for DMs
+    if (channel.server_id) {
+      const channels = await listChannels(channel.server_id)
+      setChannelsByServer(prev => ({ ...prev, [channel.server_id!]: channels }))
+    } else {
+      // For DM channels (no server_id), update the channel in place
+      setChannelsByServer(prev => {
+        const updated = { ...prev }
+        for (const serverId of Object.keys(updated)) {
+          updated[serverId] = updated[serverId].map(ch =>
+            ch.id === channel.id ? updatedChannel : ch
+          )
+        }
+        return updated
+      })
+    }
+  }
+
   const handleToggleChannelCollect = async (channel: DiscordChannel) => {
     // Cycle through: inherit (null) -> on (true) -> off (false) -> inherit (null)
     let newValue: boolean | null
@@ -168,26 +203,7 @@ export const DiscordPanel = () => {
       newValue = null
     }
 
-    const updatedChannel = await updateChannel(channel.id, { collect_messages: newValue })
-
-    // Refresh channels for this server, or update single channel for DMs
-    if (channel.server_id) {
-      const channels = await listChannels(channel.server_id)
-      setChannelsByServer(prev => ({ ...prev, [channel.server_id!]: channels }))
-    } else {
-      // For DM channels (no server_id), update the channel in place
-      // DM channels are stored under a special key
-      // Since DMs aren't currently shown in this UI, this is a defensive update
-      setChannelsByServer(prev => {
-        const updated = { ...prev }
-        for (const serverId of Object.keys(updated)) {
-          updated[serverId] = updated[serverId].map(ch =>
-            ch.id === channel.id ? updatedChannel : ch
-          )
-        }
-        return updated
-      })
-    }
+    await handleUpdateChannel(channel, { collect_messages: newValue })
   }
 
   if (loading) return <LoadingState />
@@ -216,6 +232,7 @@ export const DiscordPanel = () => {
               bot={bot}
               servers={servers}
               channelsByServer={channelsByServer}
+              projects={projects}
               expanded={expandedBot === bot.id}
               expandedServer={expandedServer}
               onToggleExpand={() => setExpandedBot(expandedBot === bot.id ? null : bot.id)}
@@ -229,7 +246,9 @@ export const DiscordPanel = () => {
               onRefresh={() => handleRefreshMetadata(bot.id)}
               onDelete={() => setDeletingBot(bot)}
               onToggleServerCollect={handleToggleServerCollect}
+              onUpdateServer={handleUpdateServer}
               onToggleChannelCollect={handleToggleChannelCollect}
+              onUpdateChannel={handleUpdateChannel}
               onGetInviteUrl={() => handleGetInviteUrl(bot.id)}
               onManageUsers={() => handleManageUsers(bot)}
             />
@@ -272,6 +291,7 @@ interface BotCardProps {
   bot: DiscordBot
   servers: DiscordServer[]
   channelsByServer: Record<string, DiscordChannel[]>
+  projects: Project[]
   expanded: boolean
   expandedServer: string | null
   onToggleExpand: () => void
@@ -280,7 +300,9 @@ interface BotCardProps {
   onRefresh: () => Promise<void>
   onDelete: () => void
   onToggleServerCollect: (server: DiscordServer) => Promise<void>
+  onUpdateServer: (server: DiscordServer, updates: DiscordServerUpdate) => Promise<void>
   onToggleChannelCollect: (channel: DiscordChannel) => Promise<void>
+  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<void>
   onGetInviteUrl: () => Promise<void>
   onManageUsers: () => Promise<void>
 }
@@ -289,6 +311,7 @@ const BotCard = ({
   bot,
   servers,
   channelsByServer,
+  projects,
   expanded,
   expandedServer,
   onToggleExpand,
@@ -297,7 +320,9 @@ const BotCard = ({
   onRefresh,
   onDelete,
   onToggleServerCollect,
+  onUpdateServer,
   onToggleChannelCollect,
+  onUpdateChannel,
   onGetInviteUrl,
   onManageUsers,
 }: BotCardProps) => {
@@ -373,10 +398,13 @@ const BotCard = ({
                 key={server.id}
                 server={server}
                 channels={channelsByServer[server.id] || []}
+                projects={projects}
                 expanded={expandedServer === server.id}
                 onToggleExpand={() => onExpandServer(server.id)}
                 onToggleCollect={() => onToggleServerCollect(server)}
+                onUpdate={(updates) => onUpdateServer(server, updates)}
                 onToggleChannelCollect={onToggleChannelCollect}
+                onUpdateChannel={onUpdateChannel}
               />
             ))}
           </div>
@@ -389,21 +417,28 @@ const BotCard = ({
 interface ServerCardProps {
   server: DiscordServer
   channels: DiscordChannel[]
+  projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
   onToggleCollect: () => Promise<void>
+  onUpdate: (updates: DiscordServerUpdate) => Promise<void>
   onToggleChannelCollect: (channel: DiscordChannel) => Promise<void>
+  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<void>
 }
 
 const ServerCard = ({
   server,
   channels,
+  projects,
   expanded,
   onToggleExpand,
   onToggleCollect,
+  onUpdate,
   onToggleChannelCollect,
+  onUpdateChannel,
 }: ServerCardProps) => {
   const [toggling, setToggling] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   const handleToggle = async () => {
     setToggling(true)
@@ -414,9 +449,27 @@ const ServerCard = ({
     }
   }
 
+  const handleProjectChange = async (projectId: number | undefined) => {
+    setUpdating(true)
+    try {
+      await onUpdate({ project_id: projectId || null })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
+    setUpdating(true)
+    try {
+      await onUpdate({ sensitivity })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   return (
     <div className="border border-slate-200 rounded p-3 bg-white">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-slate-800">{server.name}</span>
@@ -430,19 +483,51 @@ const ServerCard = ({
             {server.channel_count} channels
           </div>
         </div>
-        <button
-          className={cx(
-            'px-3 py-1 rounded text-sm',
-            server.collect_messages
-              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-              : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-            toggling && 'opacity-50'
-          )}
-          onClick={handleToggle}
-          disabled={toggling}
-        >
-          {server.collect_messages ? 'Collecting' : 'Not Collecting'}
-        </button>
+        <div className="flex items-center gap-1">
+          <select
+            className={cx(
+              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
+              updating && 'opacity-50'
+            )}
+            value={server.project_id || ''}
+            onChange={e => handleProjectChange(e.target.value ? parseInt(e.target.value) : undefined)}
+            disabled={updating}
+            title="Project"
+          >
+            <option value="">No project</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.title}</option>
+            ))}
+          </select>
+          <select
+            className={cx(
+              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
+              updating && 'opacity-50'
+            )}
+            value={server.sensitivity}
+            onChange={e => handleSensitivityChange(e.target.value as any)}
+            disabled={updating}
+            title="Sensitivity"
+          >
+            <option value="public">Public</option>
+            <option value="basic">Basic</option>
+            <option value="internal">Internal</option>
+            <option value="confidential">Confidential</option>
+          </select>
+          <button
+            className={cx(
+              'px-3 py-1 rounded text-sm',
+              server.collect_messages
+                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              toggling && 'opacity-50'
+            )}
+            onClick={handleToggle}
+            disabled={toggling}
+          >
+            {server.collect_messages ? 'Collecting' : 'Not Collecting'}
+          </button>
+        </div>
       </div>
 
       {/* Channels section */}
@@ -466,8 +551,10 @@ const ServerCard = ({
                 <ChannelRow
                   key={channel.id}
                   channel={channel}
+                  projects={projects}
                   serverCollecting={server.collect_messages}
                   onToggle={() => onToggleChannelCollect(channel)}
+                  onUpdate={(updates) => onUpdateChannel(channel, updates)}
                 />
               ))
             )}
@@ -480,12 +567,15 @@ const ServerCard = ({
 
 interface ChannelRowProps {
   channel: DiscordChannel
+  projects: Project[]
   serverCollecting: boolean
   onToggle: () => Promise<void>
+  onUpdate: (updates: DiscordChannelUpdate) => Promise<void>
 }
 
-const ChannelRow = ({ channel, serverCollecting, onToggle }: ChannelRowProps) => {
+const ChannelRow = ({ channel, projects, serverCollecting, onToggle, onUpdate }: ChannelRowProps) => {
   const [toggling, setToggling] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   const handleToggle = async () => {
     setToggling(true)
@@ -493,6 +583,24 @@ const ChannelRow = ({ channel, serverCollecting, onToggle }: ChannelRowProps) =>
       await onToggle()
     } finally {
       setToggling(false)
+    }
+  }
+
+  const handleProjectChange = async (projectId: number | undefined) => {
+    setUpdating(true)
+    try {
+      await onUpdate({ project_id: projectId || null })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
+    setUpdating(true)
+    try {
+      await onUpdate({ sensitivity })
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -510,45 +618,77 @@ const ChannelRow = ({ channel, serverCollecting, onToggle }: ChannelRowProps) =>
   }[channel.channel_type] || '#'
 
   return (
-    <div className="flex items-center justify-between py-1 px-2 ml-4 rounded hover:bg-slate-50">
-      <div className="flex items-center gap-2 text-sm">
+    <div className="flex items-center justify-between py-1 px-2 ml-4 rounded hover:bg-slate-50 gap-2">
+      <div className="flex items-center gap-2 text-sm flex-1 min-w-0">
         <span className="text-slate-400">{typeIcon}</span>
-        <span className="text-slate-700">{channel.name}</span>
+        <span className="text-slate-700 truncate">{channel.name}</span>
       </div>
-      <button
-        className={cx(
-          'px-2 py-0.5 rounded text-xs flex items-center gap-1',
-          toggling && 'opacity-50',
-          // Colors based on state
-          isInheriting
-            ? effectivelyCollecting
-              ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-              : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+      <div className="flex items-center gap-1">
+        <select
+          className={cx(
+            'text-xs py-0.5 px-1 rounded border border-slate-200 bg-white',
+            updating && 'opacity-50'
+          )}
+          value={channel.project_id || ''}
+          onChange={e => handleProjectChange(e.target.value ? parseInt(e.target.value) : undefined)}
+          disabled={updating}
+          title="Project"
+        >
+          <option value="">No project</option>
+          {projects.map(p => (
+            <option key={p.id} value={p.id}>{p.title}</option>
+          ))}
+        </select>
+        <select
+          className={cx(
+            'text-xs py-0.5 px-1 rounded border border-slate-200 bg-white',
+            updating && 'opacity-50'
+          )}
+          value={channel.sensitivity}
+          onChange={e => handleSensitivityChange(e.target.value as any)}
+          disabled={updating}
+          title="Sensitivity"
+        >
+          <option value="public">Public</option>
+          <option value="basic">Basic</option>
+          <option value="internal">Internal</option>
+          <option value="confidential">Confidential</option>
+        </select>
+        <button
+          className={cx(
+            'px-2 py-0.5 rounded text-xs flex items-center gap-1',
+            toggling && 'opacity-50',
+            // Colors based on state
+            isInheriting
+              ? effectivelyCollecting
+                ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+              : channel.collect_messages
+                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                : 'bg-red-50 text-red-600 hover:bg-red-100'
+          )}
+          onClick={handleToggle}
+          disabled={toggling}
+          title={
+            isInheriting
+              ? `Inheriting from server (${serverCollecting ? 'collecting' : 'not collecting'})`
+              : channel.collect_messages
+                ? 'Explicitly collecting'
+                : 'Explicitly not collecting'
+          }
+        >
+          {/* Status indicator */}
+          <span className={cx(
+            'w-2 h-2 rounded-full',
+            isInheriting ? 'border border-current' : 'bg-current'
+          )} />
+          {isInheriting
+            ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
             : channel.collect_messages
-              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-              : 'bg-red-50 text-red-600 hover:bg-red-100'
-        )}
-        onClick={handleToggle}
-        disabled={toggling}
-        title={
-          isInheriting
-            ? `Inheriting from server (${serverCollecting ? 'collecting' : 'not collecting'})`
-            : channel.collect_messages
-              ? 'Explicitly collecting'
-              : 'Explicitly not collecting'
-        }
-      >
-        {/* Status indicator */}
-        <span className={cx(
-          'w-2 h-2 rounded-full',
-          isInheriting ? 'border border-current' : 'bg-current'
-        )} />
-        {isInheriting
-          ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
-          : channel.collect_messages
-            ? 'Collecting'
-            : 'Skipping'}
-      </button>
+              ? 'Collecting'
+              : 'Skipping'}
+        </button>
+      </div>
     </div>
   )
 }
