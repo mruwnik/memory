@@ -100,8 +100,8 @@ def test_add_slack_message_success(
 
     result = slack.add_slack_message(**sample_message_data)
 
-    assert result["status"] == "created"
-    assert "message_ts" in result
+    assert result["status"] == "processed"
+    assert "slackmessage_id" in result
 
     # Verify the message was created in the database
     message = (
@@ -261,7 +261,7 @@ def test_add_slack_message_unique_per_channel(
 
     result = slack.add_slack_message(**sample_message_data)
 
-    assert result["status"] == "created"
+    assert result["status"] == "processed"
 
     # Verify both messages exist
     messages = (
@@ -441,7 +441,7 @@ def test_add_slack_message_creates_channel_if_missing(
 
     result = slack.add_slack_message(**sample_message_data)
 
-    assert result["status"] == "created"
+    assert result["status"] == "processed"
 
     # Verify channel was created
     channel = db_session.query(SlackChannel).filter_by(id=sample_message_data["channel_id"]).first()

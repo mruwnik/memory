@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -70,6 +71,13 @@ class SlackWorkspace(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # Access control: channels inherit these unless overridden
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
     # Relationships
     channels: Mapped[list[SlackChannel]] = relationship(
         "SlackChannel", back_populates="workspace", cascade="all, delete-orphan"
@@ -78,7 +86,11 @@ class SlackWorkspace(Base):
         "SlackUserCredentials", back_populates="workspace", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("slack_workspaces_collect_idx", "collect_messages"),)
+    __table_args__ = (
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_slack_workspace_sensitivity"),
+        Index("slack_workspaces_collect_idx", "collect_messages"),
+        Index("slack_workspaces_project_idx", "project_id"),
+    )
 
 
 class SlackUserCredentials(Base):
@@ -192,11 +204,12 @@ class SlackChannel(Base):
     # Collection setting: null = inherit from workspace, True/False = explicit override
     collect_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
-    # Access control: link to project (milestone) and sensitivity level
+    # Access control: link to project and sensitivity level
     project_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
     # Sync cursor for incremental message fetching
     last_message_ts: Mapped[str | None] = mapped_column(Text, nullable=True)

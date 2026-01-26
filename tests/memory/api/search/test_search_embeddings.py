@@ -264,8 +264,8 @@ def test_build_access_qdrant_filter_superadmin():
 
 
 def test_build_access_qdrant_filter_no_access():
-    """Test that empty access filter returns impossible condition."""
-    access_filter = AccessFilter(conditions=[])
+    """Test that empty access filter with no public bypass returns impossible condition."""
+    access_filter = AccessFilter(conditions=[], include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
     # Should return a condition that matches nothing
@@ -274,13 +274,24 @@ def test_build_access_qdrant_filter_no_access():
     assert result[0]["match"]["value"] == -1
 
 
+def test_build_access_qdrant_filter_no_access_with_public():
+    """Test that empty access filter with public bypass allows public items."""
+    access_filter = AccessFilter(conditions=[], include_public=True)
+    result = build_access_qdrant_filter(access_filter)
+
+    # Should allow public items only
+    assert len(result) == 1
+    assert result[0]["key"] == "sensitivity"
+    assert result[0]["match"]["value"] == "public"
+
+
 def test_build_access_qdrant_filter_single_project():
-    """Test access filter with single project membership."""
+    """Test access filter with single project membership (no public bypass)."""
     condition = AccessCondition(
         project_id=1,
         sensitivities=frozenset({"basic", "internal"}),
     )
-    access_filter = AccessFilter(conditions=[condition])
+    access_filter = AccessFilter(conditions=[condition], include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
     assert len(result) == 1
@@ -298,13 +309,41 @@ def test_build_access_qdrant_filter_single_project():
     assert set(sensitivity_condition["match"]["any"]) == {"basic", "internal"}
 
 
+def test_build_access_qdrant_filter_single_project_with_public():
+    """Test access filter with single project membership and public bypass."""
+    condition = AccessCondition(
+        project_id=1,
+        sensitivities=frozenset({"basic", "internal"}),
+    )
+    access_filter = AccessFilter(conditions=[condition], include_public=True)
+    result = build_access_qdrant_filter(access_filter)
+
+    # Should have 2 conditions: public bypass + project access
+    assert len(result) == 2
+
+    # Find public bypass condition
+    public_condition = next(r for r in result if r.get("key") == "sensitivity")
+    assert public_condition["match"]["value"] == "public"
+
+    # Find project access condition
+    project_result = next(r for r in result if "must" in r)
+    must_conditions = project_result["must"]
+    assert len(must_conditions) == 2
+
+    project_condition = next(c for c in must_conditions if c["key"] == "project_id")
+    assert project_condition["match"]["value"] == 1
+
+    sensitivity_condition = next(c for c in must_conditions if c["key"] == "sensitivity")
+    assert set(sensitivity_condition["match"]["any"]) == {"basic", "internal"}
+
+
 def test_build_access_qdrant_filter_multiple_projects():
-    """Test access filter with multiple project memberships."""
+    """Test access filter with multiple project memberships (no public bypass)."""
     conditions = [
         AccessCondition(project_id=1, sensitivities=frozenset({"basic"})),
         AccessCondition(project_id=2, sensitivities=frozenset({"basic", "internal", "confidential"})),
     ]
-    access_filter = AccessFilter(conditions=conditions)
+    access_filter = AccessFilter(conditions=conditions, include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
     # Should have two "should" conditions (one per project)
@@ -379,7 +418,8 @@ async def test_search_chunks_passes_access_filter_to_query():
         mock_query.return_value = {}
 
         condition = AccessCondition(project_id=1, sensitivities=frozenset({"basic"}))
-        access_filter = AccessFilter(conditions=[condition])
+        # Disable public bypass for simpler test assertions
+        access_filter = AccessFilter(conditions=[condition], include_public=False)
 
         data = [DataChunk(data=["test query"])]
         await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
@@ -399,21 +439,25 @@ async def test_search_chunks_passes_access_filter_to_query():
             None
         )
         assert access_nested is not None
-        # Verify the project_id condition is in the nested should
-        project_cond = access_nested["should"][0]["must"]
-        assert any(c.get("key") == "project_id" and c["match"]["value"] == 1 for c in project_cond)
+        # Find the project condition in the nested should (skip non-must entries like public bypass)
+        project_must = next(
+            (c["must"] for c in access_nested["should"] if "must" in c),
+            None
+        )
+        assert project_must is not None
+        assert any(c.get("key") == "project_id" and c["match"]["value"] == 1 for c in project_must)
 
 
 @pytest.mark.asyncio
 async def test_search_chunks_no_access_filter_returns_early():
-    """Test that empty access filter (no project access) returns empty without querying."""
+    """Test that empty access filter with no public bypass returns empty without querying."""
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
          patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
         mock_qdrant.get_qdrant_client.return_value = "mock_client"
         mock_query.return_value = {}
 
-        # Empty conditions = no project access
-        access_filter = AccessFilter(conditions=[])
+        # Empty conditions + no public bypass = no access at all
+        access_filter = AccessFilter(conditions=[], include_public=False)
 
         data = [DataChunk(data=["test query"])]
         result = await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
@@ -421,6 +465,37 @@ async def test_search_chunks_no_access_filter_returns_early():
         # Should return empty dict immediately without calling Qdrant
         assert result == {}
         mock_query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_no_project_access_but_public():
+    """Test that empty access filter with public bypass queries for public items."""
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        # Empty conditions but include_public=True = can still search public items
+        access_filter = AccessFilter(conditions=[], include_public=True)
+
+        data = [DataChunk(data=["test query"])]
+        await search_chunks(data, modalities={"text"}, filters={"access_filter": access_filter})
+
+        # Should still query Qdrant (for public items)
+        mock_query.assert_called_once()
+        call_kwargs = mock_query.call_args[1]
+        filters = call_kwargs.get("filters")
+        assert filters is not None
+        # Should have a filter for public sensitivity
+        public_filter = next(
+            (f for f in filters.get("must", [])
+             if "should" in f and any(
+                 c.get("key") == "sensitivity" and c.get("match", {}).get("value") == "public"
+                 for c in f["should"]
+             )),
+            None
+        )
+        assert public_filter is not None
 
 
 @pytest.mark.asyncio

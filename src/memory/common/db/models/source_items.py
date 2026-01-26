@@ -48,14 +48,17 @@ if TYPE_CHECKING:
         DiscordServer,
         DiscordUser,
     )
+    from memory.common.db.models.people import Person
     from memory.common.db.models.slack import (
         SlackChannel,
         SlackWorkspace,
     )
     from memory.common.db.models.sources import (
+        ArticleFeed,
         Book,
         CalendarAccount,
         EmailAccount,
+        GoogleFolder,
         GithubMilestone,
     )
     from memory.common.db.models.observations import ObservationContradiction
@@ -217,6 +220,10 @@ class MailMessage(SourceItem):
         Index("mail_account_idx", "email_account_id"),
         Index("mail_imap_uid_idx", "email_account_id", "folder", "imap_uid"),
     )
+
+    def get_data_source(self) -> Any:
+        """Get the email account for access control inheritance."""
+        return self.email_account
 
 
 class EmailAttachmentPayload(SourceItemPayload):
@@ -409,6 +416,32 @@ class DiscordMessage(SourceItem):
             return []  # Don't embed short messages
         return extract.extract_text(text, modality="message")
 
+    def get_data_source(self) -> Any:
+        """Get the data source for access control inheritance.
+
+        Hierarchical resolution: channel -> server -> None
+
+        Returns the most specific data source with access control settings:
+        1. Channel if it has explicit project_id
+        2. Server if channel exists and server is linked
+        3. None if no channel exists
+
+        Note: If channel exists but has no server link, we return None rather
+        than the channel, since a channel without project_id provides no useful
+        access control inheritance. The caller (resolve_access_control) will
+        then fall back to class defaults.
+        """
+        if not self.channel:
+            return None
+        # Prefer channel if it has explicit access control
+        if self.channel.project_id is not None:
+            return self.channel
+        # Fall back to server if available
+        if self.channel.server:
+            return self.channel.server
+        # Channel has no project_id and no server - return None to use class defaults
+        return None
+
 
 class SlackMessage(SourceItem):
     """Slack message collected from a channel or DM.
@@ -507,6 +540,32 @@ class SlackMessage(SourceItem):
             return []  # Don't embed short messages
         return extract.extract_text(text, modality="message")
 
+    def get_data_source(self) -> Any:
+        """Get the data source for access control inheritance.
+
+        Hierarchical resolution: channel -> workspace -> None
+
+        Returns the most specific data source with access control settings:
+        1. Channel if it has explicit project_id
+        2. Workspace if channel exists and workspace is linked
+        3. None if no channel exists
+
+        Note: If channel exists but has no workspace link, we return None rather
+        than the channel, since a channel without project_id provides no useful
+        access control inheritance. The caller (resolve_access_control) will
+        then fall back to class defaults.
+        """
+        if not self.channel:
+            return None
+        # Prefer channel if it has explicit access control
+        if self.channel.project_id is not None:
+            return self.channel
+        # Fall back to workspace if available
+        if self.channel.workspace:
+            return self.channel.workspace
+        # Channel has no project_id and no workspace - return None to use class defaults
+        return None
+
 
 class GitCommit(SourceItem):
     __tablename__ = "git_commit"
@@ -573,6 +632,9 @@ class ComicPayload(SourceItemPayload):
 class Comic(SourceItem):
     __tablename__ = "comic"
 
+    # Public by default - comics collected are typically from public webcomics
+    default_sensitivity = "public"
+
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
@@ -623,6 +685,9 @@ class BookSection(SourceItem):
     """Individual sections/chapters of books"""
 
     __tablename__ = "book_section"
+
+    # Public by default - books are typically world-readable
+    default_sensitivity = "public"
 
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
@@ -717,6 +782,9 @@ class BlogPostPayload(SourceItemPayload):
 class BlogPost(SourceItem):
     __tablename__ = "blog_post"
 
+    # Public by default - blogs are typically world-readable
+    default_sensitivity = "public"
+
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
@@ -734,6 +802,14 @@ class BlogPost(SourceItem):
     # Store original metadata from parser
     webpage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Link to article feed source
+    feed_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("article_feeds.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationship to article feed
+    feed: Mapped[ArticleFeed | None] = relationship("ArticleFeed", foreign_keys=[feed_id])
+
     __mapper_args__ = {
         "polymorphic_identity": "blog_post",
     }
@@ -743,7 +819,12 @@ class BlogPost(SourceItem):
         Index("blog_post_domain_idx", "domain"),
         Index("blog_post_published_idx", "published"),
         Index("blog_post_word_count_idx", "word_count"),
+        Index("blog_post_feed_idx", "feed_id"),
     )
+
+    def get_data_source(self) -> Any:
+        """Get the article feed for access control inheritance."""
+        return self.feed
 
     def as_payload(self) -> BlogPostPayload:
         published_date = self.published
@@ -780,6 +861,9 @@ class ForumPostPayload(SourceItemPayload):
 
 class ForumPost(SourceItem):
     __tablename__ = "forum_post"
+
+    # Public by default - forums are typically world-readable
+    default_sensitivity = "public"
 
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
@@ -1335,6 +1419,9 @@ class GoogleDoc(SourceItem):
     )
     folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # e.g., "My Drive/Work/Projects"
 
+    # Relationship to folder
+    folder: Mapped[GoogleFolder | None] = relationship("GoogleFolder", foreign_keys=[folder_id])
+
     # Authorship tracking
     owner: Mapped[str | None] = mapped_column(Text, nullable=True)  # Email of owner
     last_modified_by: Mapped[str | None] = mapped_column(Text, nullable=True)  # Email of last modifier
@@ -1381,6 +1468,10 @@ class GoogleDoc(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["doc"]
+
+    def get_data_source(self) -> Any:
+        """Get the Google folder for access control inheritance."""
+        return self.folder
 
 
 class TaskPayload(SourceItemPayload):
@@ -1607,6 +1698,10 @@ class CalendarEvent(SourceItem):
     def title(self) -> str | None:
         return self.event_title
 
+    def get_data_source(self) -> Any:
+        """Get the calendar account for access control inheritance."""
+        return self.calendar_account
+
 
 class MeetingPayload(SourceItemPayload):
     title: Annotated[str | None, "Title of the meeting"]
@@ -1674,6 +1769,16 @@ class Meeting(SourceItem):
         if not kwargs.get("modality"):
             kwargs["modality"] = "meeting"
         super().__init__(**kwargs)
+
+    @property
+    def attendees(self) -> list["Person"]:
+        """Alias for people relationship - provides semantic name for meeting attendees."""
+        return self.people
+
+    @attendees.setter
+    def attendees(self, value: list["Person"]) -> None:
+        """Set attendees (alias for people)."""
+        self.people = value
 
     def as_payload(self) -> MeetingPayload:
         spawned = getattr(self, "spawned_tasks", [])

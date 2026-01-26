@@ -343,9 +343,10 @@ def test_verify_items_no_items_found():
 
 
 @pytest.fixture
-def email_account(db_session):
+def email_account(db_session, test_user):
     account = EmailAccount(
-        user_id=1,
+        user_id=test_user.id,
+        name="Test Email Account",
         email_address="test@example.com",
         password="secret",
         imap_server="imap.example.com",
@@ -359,11 +360,11 @@ def email_account(db_session):
 
 
 @pytest.fixture
-def github_account(db_session):
+def github_account(db_session, test_user):
     account = GithubAccount(
-        user_id=1,
-        username="testuser",
-        auth_type="token",
+        user_id=test_user.id,
+        name="Test GitHub Account",
+        auth_type="pat",
         access_token="ghp_test",
         active=True,
     )
@@ -375,10 +376,9 @@ def github_account(db_session):
 @pytest.fixture
 def github_repo(db_session, github_account):
     repo = GithubRepo(
-        account=github_account,
+        account_id=github_account.id,
         owner="testorg",
         name="testrepo",
-        node_id="R_test",
     )
     db_session.add(repo)
     db_session.commit()
@@ -413,6 +413,7 @@ def github_items(db_session, github_repo):
             modality="github",
             sha256=f"ghash{i}".encode(),
             repo_id=github_repo.id,
+            repo_path=f"{github_repo.owner}/{github_repo.name}",
             number=i + 1,
             kind="issue",
             embed_status="STORED",

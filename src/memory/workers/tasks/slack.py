@@ -504,11 +504,13 @@ def add_slack_message(
 
     with make_session() as session:
         # Check if message exists (need AND logic for exact match)
+        # Messages are unique per workspace+channel+timestamp, not just workspace+timestamp
         existing = (
             session.query(SlackMessage)
             .filter(
                 SlackMessage.message_ts == message_ts,
                 SlackMessage.workspace_id == workspace_id,
+                SlackMessage.channel_id == channel_id,
             )
             .first()
         )

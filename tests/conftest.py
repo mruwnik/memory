@@ -160,12 +160,18 @@ def run_alembic_migrations(db_name: str) -> None:
     project_root = Path(__file__).parent.parent
     alembic_ini = project_root / "db" / "migrations" / "alembic.ini"
 
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-m", "alembic", "-c", str(alembic_ini), "upgrade", "head"],
         env={**os.environ, "DATABASE_URL": settings.make_db_url(db=db_name)},
-        check=True,
         capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Alembic migration failed:\n"
+            f"STDOUT: {result.stdout}\n"
+            f"STDERR: {result.stderr}"
+        )
 
 
 @pytest.fixture
@@ -176,6 +182,8 @@ def test_db():
     Returns:
         The URL to the test database
     """
+    from memory.common.db import connection as db_connection
+
     test_db_name = get_test_db_name()
 
     # Create test database
@@ -185,6 +193,15 @@ def test_db():
         pytest.skip(f"Failed to create test database: {e}")
         raise  # unreachable, but tells type checker pytest.skip doesn't return
 
+    # Reset the connection module's cached globals so it picks up the new DB_URL
+    # This is necessary because make_session() caches the engine globally
+    old_engine = db_connection._engine
+    old_factory = db_connection._session_factory
+    old_scoped = db_connection._scoped_session
+    db_connection._engine = None
+    db_connection._session_factory = None
+    db_connection._scoped_session = None
+
     try:
         run_alembic_migrations(test_db_name)
 
@@ -192,6 +209,11 @@ def test_db():
         with patch("memory.common.settings.DB_URL", test_db_url):
             yield test_db_url
     finally:
+        # Restore old cached values (or leave as None if they were None)
+        db_connection._engine = old_engine
+        db_connection._session_factory = old_factory
+        db_connection._scoped_session = old_scoped
+
         # Clean up - drop the test database
         drop_test_database(test_db_name)
 
@@ -330,10 +352,13 @@ def mock_voyage_client():
 
 @pytest.fixture(autouse=True)
 def mock_api_keys():
-    """Mock API keys so tests don't fail on missing keys."""
+    """Mock API keys and secrets so tests don't fail on missing keys."""
+    # Generate a valid 32-byte hex key for encryption (64 hex chars)
+    test_encryption_key = "0" * 64
     with (
         patch.object(settings, "ANTHROPIC_API_KEY", "test-anthropic-key"),
         patch.object(settings, "OPENAI_API_KEY", "test-openai-key"),
+        patch.object(settings, "SECRETS_ENCRYPTION_KEY", test_encryption_key),
     ):
         yield
 

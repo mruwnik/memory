@@ -105,10 +105,21 @@ class ArticleFeed(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # Access control: items inherit these unless overridden (default public for blogs)
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="public")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+    project: Mapped["GithubMilestone | None"] = relationship("GithubMilestone", foreign_keys=[project_id])
+
     # Add indexes
     __table_args__ = (
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_article_feed_sensitivity"),
         Index("article_feeds_active_idx", "active", "last_checked_at"),
         Index("article_feeds_tags_idx", "tags", postgresql_using="gin"),
+        Index("article_feeds_project_idx", "project_id"),
     )
 
 
@@ -153,6 +164,13 @@ class EmailAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # Access control: items inherit these unless overridden
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
     user: Mapped[User] = relationship("User", foreign_keys=[user_id], backref="email_accounts")
     google_account: Mapped[GoogleAccount | None] = relationship("GoogleAccount", foreign_keys=[google_account_id])
     messages: Mapped[list[MailMessage]] = relationship(
@@ -161,14 +179,17 @@ class EmailAccount(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    project: Mapped["GithubMilestone | None"] = relationship("GithubMilestone", foreign_keys=[project_id])
 
     __table_args__ = (
         CheckConstraint("account_type IN ('imap', 'gmail')"),
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_email_account_sensitivity"),
         Index("email_accounts_address_idx", "email_address", unique=True),
         Index("email_accounts_active_idx", "active", "last_sync_at"),
         Index("email_accounts_tags_idx", "tags", postgresql_using="gin"),
         Index("email_accounts_type_idx", "account_type"),
         Index("email_accounts_user_idx", "user_id"),
+        Index("email_accounts_project_idx", "project_id"),
     )
 
     @validates("smtp_port")
@@ -291,7 +312,16 @@ class GithubRepo(Base):
 
 
 class GithubMilestone(Base):
-    """GitHub milestone for tracking progress toward goals."""
+    """Project for access control and tracking (backed by GitHub milestones).
+
+    Projects are the central entity for access control. Each project has:
+    - Collaborators with roles (contributor, manager, admin)
+    - Optional parent for hierarchical organization
+    - Link to GitHub milestone for sync
+
+    Note: This model is aliased as Project for API clarity, but the underlying
+    table remains 'github_milestones' to avoid conflict with coding sessions.
+    """
 
     __tablename__ = "github_milestones"
 
@@ -310,6 +340,14 @@ class GithubMilestone(Base):
     state: Mapped[str] = mapped_column(Text, nullable=False)  # 'open' or 'closed'
     due_on: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Hierarchical projects
+    parent_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    parent: Mapped["GithubMilestone | None"] = relationship(
+        "GithubMilestone", remote_side="GithubMilestone.id", backref="children"
+    )
+
     # Timestamps from GitHub
     github_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -325,7 +363,7 @@ class GithubMilestone(Base):
 
     # Relationships
     repo: Mapped[GithubRepo] = relationship("GithubRepo", backref=backref("milestones", passive_deletes=True))
-    # foreign_keys needed because SourceItem.project_id also references github_milestones
+    # foreign_keys needed because SourceItem.project_id also references projects
     items: Mapped[list[GithubItem]] = relationship(
         "GithubItem", back_populates="milestone_rel", foreign_keys="[GithubItem.milestone_id]"
     )
@@ -335,8 +373,10 @@ class GithubMilestone(Base):
 
     __table_args__ = (
         UniqueConstraint("repo_id", "number", name="unique_milestone_per_repo"),
-        Index("github_milestones_repo_idx", "repo_id"),
-        Index("github_milestones_due_idx", "due_on"),
+        Index("projects_repo_idx", "repo_id"),
+        Index("projects_due_idx", "due_on"),
+        Index("projects_parent_idx", "parent_id"),
+        CheckConstraint("id != parent_id", name="ck_milestone_not_self_parent"),
     )
 
     @hybrid_property
@@ -347,7 +387,11 @@ class GithubMilestone(Base):
         return f"{self.repo.owner}/{self.repo.name}:{self.number}"
 
 
-# Junction table for milestone/project collaborators
+# Alias for API clarity - GithubMilestone represents "projects" in access control
+Project = GithubMilestone
+
+
+# Junction table for project collaborators
 project_collaborators = Table(
     "project_collaborators",
     Base.metadata,
@@ -715,12 +759,22 @@ class GoogleFolder(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # Access control: items inherit these unless overridden
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
     # Relationships
     account: Mapped[GoogleAccount] = relationship("GoogleAccount", back_populates="folders")
+    project: Mapped["GithubMilestone | None"] = relationship("GithubMilestone", foreign_keys=[project_id])
 
     __table_args__ = (
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_google_folder_sensitivity"),
         UniqueConstraint("account_id", "folder_id", name="unique_folder_per_account"),
         Index("google_folders_active_idx", "active", "last_sync_at"),
+        Index("google_folders_project_idx", "project_id"),
     )
 
 
@@ -767,11 +821,21 @@ class CalendarAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # Access control: items inherit these unless overridden
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
     # Relationships
     google_account: Mapped[GoogleAccount | None] = relationship("GoogleAccount", foreign_keys=[google_account_id])
+    project: Mapped["GithubMilestone | None"] = relationship("GithubMilestone", foreign_keys=[project_id])
 
     __table_args__ = (
         CheckConstraint("calendar_type IN ('caldav', 'google')"),
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_calendar_account_sensitivity"),
         Index("calendar_accounts_active_idx", "active", "last_sync_at"),
         Index("calendar_accounts_type_idx", "calendar_type"),
+        Index("calendar_accounts_project_idx", "project_id"),
     )

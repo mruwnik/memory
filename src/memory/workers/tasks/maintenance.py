@@ -1,12 +1,16 @@
+import itertools
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
+from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import select
-from sqlalchemy.orm import contains_eager
+from sqlalchemy.orm import contains_eager, selectinload
 
 from memory.common import collections, embedding, extract, qdrant, settings
+from memory.common.db.models.discord import DiscordChannel, DiscordServer
+from memory.common.db.models.slack import SlackChannel, SlackWorkspace
 from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
@@ -21,6 +25,7 @@ from memory.common.celery_app import (
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
+    UPDATE_SOURCE_ACCESS_CONTROL,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, Project, Session, SourceItem
@@ -466,4 +471,257 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
         "deleted_sessions": deleted_sessions,
         "deleted_files": deleted_files,
         "deleted_projects": deleted_projects,
+    }
+
+
+# Mapping of source types to (model, item query function)
+DATA_SOURCE_TYPES = {
+    "email_account": "EmailAccount",
+    "slack_channel": "SlackChannel",
+    "slack_workspace": "SlackWorkspace",
+    "discord_channel": "DiscordChannel",
+    "discord_server": "DiscordServer",
+    "calendar_account": "CalendarAccount",
+    "google_folder": "GoogleFolder",
+    "article_feed": "ArticleFeed",
+}
+
+
+def get_items_for_source(
+    session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
+):
+    """Get items that belong to a data source for access control updates.
+
+    Items are eager-loaded with their chunks to avoid N+1 queries when
+    iterating over items and accessing item.chunks in the caller.
+    """
+    from memory.common.db.models.source_items import (
+        BlogPost,
+        CalendarEvent,
+        DiscordMessage,
+        GoogleDoc,
+        MailMessage,
+        SlackMessage,
+    )
+
+    if source_type == "email_account":
+        return (
+            session.query(MailMessage)
+            .options(selectinload(MailMessage.chunks))
+            .filter(MailMessage.email_account_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "slack_channel":
+        return (
+            session.query(SlackMessage)
+            .options(selectinload(SlackMessage.chunks))
+            .filter(SlackMessage.channel_id == str(source_id))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "slack_workspace":
+        # Get all messages in channels belonging to this workspace
+        channel_ids = [
+            c.id for c in session.query(SlackChannel.id)
+            .filter(SlackChannel.workspace_id == str(source_id))
+            .all()
+        ]
+        if not channel_ids:
+            return []
+        return (
+            session.query(SlackMessage)
+            .options(selectinload(SlackMessage.chunks))
+            .filter(SlackMessage.channel_id.in_(channel_ids))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "discord_channel":
+        return (
+            session.query(DiscordMessage)
+            .options(selectinload(DiscordMessage.chunks))
+            .filter(DiscordMessage.channel_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "discord_server":
+        # Get all messages in channels belonging to this server
+        channel_ids = [
+            c.id for c in session.query(DiscordChannel.id)
+            .filter(DiscordChannel.server_id == source_id)
+            .all()
+        ]
+        if not channel_ids:
+            return []
+        return (
+            session.query(DiscordMessage)
+            .options(selectinload(DiscordMessage.chunks))
+            .filter(DiscordMessage.channel_id.in_(channel_ids))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "calendar_account":
+        return (
+            session.query(CalendarEvent)
+            .options(selectinload(CalendarEvent.chunks))
+            .filter(CalendarEvent.calendar_account_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "google_folder":
+        return (
+            session.query(GoogleDoc)
+            .options(selectinload(GoogleDoc.chunks))
+            .filter(GoogleDoc.folder_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    elif source_type == "article_feed":
+        return (
+            session.query(BlogPost)
+            .options(selectinload(BlogPost.chunks))
+            .filter(BlogPost.feed_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    else:
+        raise ValueError(f"Unknown source type: {source_type}")
+
+
+def get_data_source_model(source_type: str):
+    """Get the SQLAlchemy model for a data source type."""
+    from memory.common.db.models.sources import (
+        ArticleFeed,
+        CalendarAccount,
+        EmailAccount,
+        GoogleFolder,
+    )
+
+    models = {
+        "email_account": EmailAccount,
+        "slack_channel": SlackChannel,
+        "slack_workspace": SlackWorkspace,
+        "discord_channel": DiscordChannel,
+        "discord_server": DiscordServer,
+        "calendar_account": CalendarAccount,
+        "google_folder": GoogleFolder,
+        "article_feed": ArticleFeed,
+    }
+    if source_type not in models:
+        raise ValueError(f"Unknown source type: {source_type}")
+    return models[source_type]
+
+
+@app.task(name=UPDATE_SOURCE_ACCESS_CONTROL, bind=True, max_retries=3)
+def update_source_access_control(
+    self, source_type: str, source_id: int | str, config_version: int
+):
+    """Update Qdrant payloads when data source access config changes.
+
+    When a data source's project_id or sensitivity changes, this task updates
+    the resolved values in Qdrant payloads for all items belonging to that source.
+
+    Args:
+        source_type: Type of data source (email_account, slack_channel, etc.)
+        source_id: ID of the data source
+        config_version: Version number to detect stale jobs (race condition mitigation)
+
+    The config_version parameter prevents race conditions: if a newer config change
+    happens during processing, this job will abort because the version won't match.
+
+    Retries on transient Qdrant failures (connection errors, API errors) if no
+    progress has been made yet. Once updates start succeeding, errors are logged
+    but processing continues to avoid losing partial progress.
+    """
+    logger.info(
+        f"Updating access control for {source_type} {source_id} (version {config_version})"
+    )
+
+    model = get_data_source_model(source_type)
+    client = qdrant.get_qdrant_client()
+    updated_items = 0
+    updated_chunks = 0
+    errors = 0
+
+    with make_session() as session:
+        # Get the data source and verify config_version
+        source = session.get(model, source_id)
+        if source is None:
+            logger.warning(f"Data source {source_type} {source_id} not found")
+            return {"status": "not_found"}
+
+        current_version = getattr(source, "config_version", None)
+        if current_version is not None and current_version != config_version:
+            logger.info(
+                f"Stale job: source version {current_version} != job version {config_version}"
+            )
+            return {"status": "stale", "reason": "config_version_mismatch"}
+
+        # Process items in batches
+        batch_size = 100
+
+        for batch_num in itertools.count():
+            items = get_items_for_source(
+                session, source_type, source_id, offset=batch_num * batch_size, limit=batch_size
+            )
+            if not items:
+                break
+
+            for item in items:
+                # Get resolved access control values
+                resolved_project_id, resolved_sensitivity = item.resolve_access_control()
+
+                # Update Qdrant payload for each chunk
+                for chunk in item.chunks:
+                    if not chunk.id:
+                        continue
+
+                    try:
+                        qdrant.set_payload(
+                            client,
+                            chunk.collection_name,
+                            str(chunk.id),
+                            {
+                                "project_id": resolved_project_id,
+                                "sensitivity": resolved_sensitivity,
+                            },
+                        )
+                        updated_chunks += 1
+                    except (UnexpectedResponse, ApiException, ConnectionError) as e:
+                        # Retry on transient failures if we haven't made progress yet
+                        if updated_chunks == 0:
+                            logger.warning(
+                                f"Transient error updating chunk {chunk.id}, retrying task: {e}"
+                            )
+                            raise self.retry(exc=e, countdown=60)
+                        # Once we've made progress, log and continue to avoid losing work
+                        logger.error(
+                            f"Failed to update chunk {chunk.id} payload: {e}"
+                        )
+                        errors += 1
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to update chunk {chunk.id} payload: {e}"
+                        )
+                        errors += 1
+
+                updated_items += 1
+
+    logger.info(
+        f"Updated {updated_items} items ({updated_chunks} chunks, {errors} errors) for "
+        f"{source_type} {source_id}"
+    )
+    return {
+        "status": "success",
+        "updated_items": updated_items,
+        "updated_chunks": updated_chunks,
+        "errors": errors,
     }

@@ -19,7 +19,10 @@ from memory.common.access_control import (
 class MockUser:
     """Mock user for testing."""
 
-    def __init__(self, id: int = 1, scopes: list[str] | None = None):
+    id: int | None
+    scopes: list[str]
+
+    def __init__(self, id: int | None = 1, scopes: list[str] | None = None):
         self.id = id
         self.scopes = scopes or []
 
@@ -36,13 +39,17 @@ class MockSourceItem:
 
 
 def test_role_sensitivity_contributor():
-    """Contributors can only see basic content."""
-    assert ROLE_SENSITIVITY[ProjectRole.CONTRIBUTOR] == frozenset({SensitivityLevel.BASIC})
+    """Contributors can see public and basic content."""
+    assert ROLE_SENSITIVITY[ProjectRole.CONTRIBUTOR] == frozenset({
+        SensitivityLevel.PUBLIC,
+        SensitivityLevel.BASIC,
+    })
 
 
 def test_role_sensitivity_manager():
-    """Managers can see basic and internal content."""
+    """Managers can see public, basic, and internal content."""
     assert ROLE_SENSITIVITY[ProjectRole.MANAGER] == frozenset({
+        SensitivityLevel.PUBLIC,
         SensitivityLevel.BASIC,
         SensitivityLevel.INTERNAL,
     })
@@ -51,6 +58,7 @@ def test_role_sensitivity_manager():
 def test_role_sensitivity_admin():
     """Admins can see all sensitivity levels."""
     assert ROLE_SENSITIVITY[ProjectRole.ADMIN] == frozenset({
+        SensitivityLevel.PUBLIC,
         SensitivityLevel.BASIC,
         SensitivityLevel.INTERNAL,
         SensitivityLevel.CONFIDENTIAL,
@@ -320,7 +328,7 @@ def test_build_access_filter_single_project():
     assert len(result.conditions) == 1
     condition = result.conditions[0]
     assert condition.project_id == 1
-    assert condition.sensitivities == frozenset({"basic", "internal"})
+    assert condition.sensitivities == frozenset({"public", "basic", "internal"})
 
 
 def test_build_access_filter_multiple_projects():
@@ -335,8 +343,8 @@ def test_build_access_filter_multiple_projects():
     # Find conditions by project_id
     cond_by_project = {c.project_id: c for c in result.conditions}
 
-    assert cond_by_project[1].sensitivities == frozenset({"basic"})
-    assert cond_by_project[2].sensitivities == frozenset({"basic", "internal", "confidential"})
+    assert cond_by_project[1].sensitivities == frozenset({"public", "basic"})
+    assert cond_by_project[2].sensitivities == frozenset({"public", "basic", "internal", "confidential"})
 
 
 def test_build_access_filter_invalid_role_skipped():

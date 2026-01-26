@@ -112,6 +112,9 @@ REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
 VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
 VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 
+# Access control tasks
+UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
+
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE

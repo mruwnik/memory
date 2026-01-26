@@ -49,7 +49,7 @@ def mock_voyage_embed_text():
 
 
 @pytest.fixture
-def test_email_account(db_session):
+def test_email_account(db_session, test_user):
     """Create a test email account for integration testing."""
     account = EmailAccount(
         name="Test Account",
@@ -62,6 +62,7 @@ def test_email_account(db_session):
         folders=["INBOX", "Sent", "Archive"],
         tags=["test", "integration"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(account)
     db_session.commit()
@@ -207,7 +208,7 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
 
 
 @pytest.fixture
-def gmail_email_account(db_session):
+def gmail_email_account(db_session, test_user):
     """Create a test Gmail email account with linked GoogleAccount."""
     google_account = GoogleAccount(
         name="Test Google Account",
@@ -216,6 +217,7 @@ def gmail_email_account(db_session):
         refresh_token="test_refresh_token",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(google_account)
     db_session.flush()
@@ -228,6 +230,7 @@ def gmail_email_account(db_session):
         folders=["INBOX"],
         tags=["test", "gmail"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(account)
     db_session.commit()

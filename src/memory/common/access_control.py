@@ -18,23 +18,52 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, FrozenSet, Literal
+from typing import TYPE_CHECKING, Any, FrozenSet, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+    from sqlalchemy.orm.scoping import scoped_session
 
     from memory.common.db.models.source_item import SourceItem
     from memory.common.db.models.users import User
 
+
+# Protocols for duck-typed access control checks
+# These allow tests to use simple mock objects without importing full models
+# Using Any return types to accommodate SQLAlchemy's Mapped[T] types
+
+
+@runtime_checkable
+class UserLike(Protocol):
+    """Protocol for objects that can be checked for access control."""
+
+    @property
+    def id(self) -> Any: ...
+
+    @property
+    def scopes(self) -> Any: ...
+
+
+@runtime_checkable
+class SourceItemLike(Protocol):
+    """Protocol for objects that can be checked for item access."""
+
+    @property
+    def project_id(self) -> Any: ...
+
+    @property
+    def sensitivity(self) -> Any: ...
+
 logger = logging.getLogger(__name__)
 
 # Type alias for database columns and TypedDict fields
-SensitivityLevelLiteral = Literal["basic", "internal", "confidential"]
+SensitivityLevelLiteral = Literal["public", "basic", "internal", "confidential"]
 
 
 class SensitivityLevel(str, Enum):
     """Content sensitivity levels, from least to most restricted."""
 
+    PUBLIC = "public"  # Visible to all authenticated users (books, blogs, forums)
     BASIC = "basic"
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
@@ -50,10 +79,17 @@ class ProjectRole(str, Enum):
 
 # Maps roles to the sensitivity levels they can access
 ROLE_SENSITIVITY: dict[ProjectRole, FrozenSet[SensitivityLevel]] = {
-    ProjectRole.CONTRIBUTOR: frozenset({SensitivityLevel.BASIC}),
-    ProjectRole.MANAGER: frozenset({SensitivityLevel.BASIC, SensitivityLevel.INTERNAL}),
+    ProjectRole.CONTRIBUTOR: frozenset({SensitivityLevel.PUBLIC, SensitivityLevel.BASIC}),
+    ProjectRole.MANAGER: frozenset(
+        {SensitivityLevel.PUBLIC, SensitivityLevel.BASIC, SensitivityLevel.INTERNAL}
+    ),
     ProjectRole.ADMIN: frozenset(
-        {SensitivityLevel.BASIC, SensitivityLevel.INTERNAL, SensitivityLevel.CONFIDENTIAL}
+        {
+            SensitivityLevel.PUBLIC,
+            SensitivityLevel.BASIC,
+            SensitivityLevel.INTERNAL,
+            SensitivityLevel.CONFIDENTIAL,
+        }
     ),
 }
 
@@ -89,13 +125,15 @@ class AccessFilter:
     """Filter for search queries based on user's project collaborations."""
 
     conditions: list[AccessCondition]
+    person_id: int | None = None  # For person override filtering
+    include_public: bool = True  # Whether to include public items
 
     def is_empty(self) -> bool:
-        """Check if filter has no conditions (user has no access)."""
+        """Check if filter has no conditions (user has no project access)."""
         return len(self.conditions) == 0
 
 
-def has_admin_scope(user: "User") -> bool:
+def has_admin_scope(user: UserLike) -> bool:
     """Check if user has admin scope (superadmin access)."""
     scopes = getattr(user, "scopes", None)
     if scopes is None:
@@ -103,7 +141,7 @@ def has_admin_scope(user: "User") -> bool:
     return "*" in scopes or "admin" in scopes
 
 
-def get_user_project_roles(db: "Session", user: "User") -> dict[int, str]:
+def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User") -> dict[int, str]:
     """
     Get the user's roles in each project they collaborate on.
 
@@ -134,8 +172,8 @@ def normalize_sensitivity(sensitivity: SensitivityLevel | str) -> str:
 
 
 def user_can_access(
-    user: "User",
-    item: "SourceItem",
+    user: UserLike,
+    item: SourceItemLike,
     project_roles: dict[int, str] | None = None,
 ) -> bool:
     """
@@ -151,6 +189,19 @@ def user_can_access(
     """
     # Superadmins see everything
     if has_admin_scope(user):
+        return True
+
+    # Person override: if user's person is attached to item, grant full access
+    # This allows people to see content they're associated with (emails, meetings, etc.)
+    person = getattr(user, "person", None)
+    if person is not None:
+        item_people = getattr(item, "people", None) or []
+        if any(p.id == person.id for p in item_people):
+            return True
+
+    # Public sensitivity bypasses project membership check
+    item_sensitivity = normalize_sensitivity(item.sensitivity or "basic")
+    if item_sensitivity == "public":
         return True
 
     # Unclassified content (no project) is NOT visible to regular users
@@ -173,13 +224,11 @@ def user_can_access(
     if allowed is None:
         return False
 
-    # Normalize sensitivity for comparison
-    item_sensitivity = normalize_sensitivity(item.sensitivity)
     return item_sensitivity in allowed
 
 
 def user_can_create_in_project(
-    user: "User",
+    user: UserLike,
     project_id: int,
     sensitivity: SensitivityLevel | str,
     project_roles: dict[int, str] | None = None,
@@ -215,7 +264,7 @@ def user_can_create_in_project(
 
 
 def build_access_filter(
-    user: "User",
+    user: UserLike,
     project_roles: dict[int, str] | None = None,
 ) -> AccessFilter | None:
     """
@@ -232,9 +281,13 @@ def build_access_filter(
     if has_admin_scope(user):
         return None
 
+    # Get person ID for person override filtering
+    person = getattr(user, "person", None)
+    person_id = person.id if person else None
+
     if project_roles is None:
-        # No roles provided - return empty filter (no access)
-        return AccessFilter(conditions=[])
+        # No roles provided - still allow public items and person override
+        return AccessFilter(conditions=[], person_id=person_id, include_public=True)
 
     conditions = []
 
@@ -250,7 +303,7 @@ def build_access_filter(
                 )
             )
 
-    return AccessFilter(conditions=conditions)
+    return AccessFilter(conditions=conditions, person_id=person_id, include_public=True)
 
 
 def get_allowed_project_ids(project_roles: dict[int, str]) -> set[int]:
@@ -271,13 +324,15 @@ def get_max_sensitivity_for_project(
     if allowed is None:
         return None
 
-    # Return highest sensitivity in the set based on count
-    # (contributor=1, manager=2, admin=3)
+    # Return highest sensitivity in the set
+    # Order: confidential > internal > basic > public
     if "confidential" in allowed:
         return SensitivityLevel.CONFIDENTIAL
     elif "internal" in allowed:
         return SensitivityLevel.INTERNAL
     elif "basic" in allowed:
         return SensitivityLevel.BASIC
+    elif "public" in allowed:
+        return SensitivityLevel.PUBLIC
 
     return None

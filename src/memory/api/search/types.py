@@ -75,7 +75,13 @@ class SearchResult(BaseModel):
         )
 
 
-class SearchFilters(TypedDict):
+class MCPSearchFilters(TypedDict):
+    """Search filters exposed via MCP API.
+
+    This is a subset of SearchFilters that excludes internal fields like
+    access_filter and source_ids which should not be set by external callers.
+    """
+
     # Size filters
     min_size: NotRequired[int]
     max_size: NotRequired[int]
@@ -103,15 +109,24 @@ class SearchFilters(TypedDict):
     # Confidence filters
     min_confidences: NotRequired[dict[str, float]]
 
-    # ID filters
-    source_ids: NotRequired[list[int] | None]
-
     # Subject filter (for observations)
     subject: NotRequired[str]
 
     # Person filter - only return items associated with this person
     # Items without a 'people' field in metadata are included (not filtered out)
     person_id: NotRequired[int]
+
+
+class SearchFilters(MCPSearchFilters):
+    """Full search filters including internal fields.
+
+    Extends MCPSearchFilters with fields that should only be set internally:
+    - source_ids: Pre-filtered list of source IDs
+    - access_filter: Access control filter built from user's project memberships
+    """
+
+    # ID filters (internal - set by search pipeline)
+    source_ids: NotRequired[list[int] | None]
 
     # Access control filter (built from user's project memberships).
     # Semantics:

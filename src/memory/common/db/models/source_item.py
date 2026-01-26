@@ -8,7 +8,7 @@ import pathlib
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Annotated, Sequence, TypedDict
+from typing import TYPE_CHECKING, Any, Annotated, Sequence, TypedDict, cast
 import uuid
 
 from PIL import Image
@@ -334,6 +334,11 @@ class SourceItem(Base):
         String(20), nullable=False, default="basic", server_default="basic"
     )
 
+    # Class-level defaults for access control inheritance
+    # Subclasses can override (e.g., Book, BlogPost default to "public")
+    default_project_id: int | None = None
+    default_sensitivity: str = "basic"
+
     # Person associations (for filtering content by person)
     # Many-to-many relationship via source_item_people junction table
     # Using lazy="select" (default) to avoid eager loading on every query.
@@ -356,7 +361,7 @@ class SourceItem(Base):
             "verification_failures >= 0", name="verification_failures_non_negative"
         ),
         CheckConstraint(
-            "sensitivity IN ('basic', 'internal', 'confidential')",
+            "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
             name="valid_sensitivity_level",
         ),
         Index("source_modality_idx", "modality"),
@@ -447,7 +452,7 @@ class SourceItem(Base):
         or `joinedload(SourceItem.people)` when querying to avoid N+1 queries.
         """
         # Use "basic" as fallback since SQLAlchemy defaults may not apply before flush
-        sensitivity: SensitivityLevel = self.sensitivity or "basic"
+        sensitivity = cast(SensitivityLevel, self.sensitivity or "basic")
         return SourceItemPayload(
             source_id=self.id,
             tags=self.tags,
@@ -493,3 +498,48 @@ class SourceItem(Base):
             "filename": self.filename,
             "mime_type": self.mime_type,
         }
+
+    def get_data_source(self) -> Any:
+        """
+        Get the data source for this item (e.g., EmailAccount, SlackWorkspace).
+
+        Subclasses override to return their specific data source.
+        Used for resolving inherited project_id and sensitivity.
+
+        Returns:
+            The data source object, or None if no data source.
+        """
+        return None
+
+    def resolve_access_control(self) -> tuple[int | None, str]:
+        """
+        Resolve project_id and sensitivity from item, data source, or class defaults.
+
+        Resolution order (first non-None wins):
+        1. Item's own project_id/sensitivity
+        2. Data source's project_id/sensitivity (e.g., EmailAccount, SlackChannel)
+        3. Class-level defaults (default_project_id, default_sensitivity)
+
+        Returns:
+            Tuple of (resolved_project_id, resolved_sensitivity)
+        """
+        source = self.get_data_source()
+
+        # Resolve project_id: item -> source -> class default
+        project_id = self.project_id
+        if project_id is None and source is not None:
+            project_id = getattr(source, "project_id", None)
+        if project_id is None:
+            project_id = self.default_project_id
+
+        # Resolve sensitivity: item -> source -> class default
+        # Note: sensitivity column is NOT NULL with server_default="basic", but SQLAlchemy
+        # may not apply defaults until flush. For in-memory objects before commit, sensitivity
+        # could be None. We also check for empty string as an additional safety measure.
+        sensitivity = self.sensitivity
+        if not sensitivity and source is not None:
+            sensitivity = getattr(source, "sensitivity", None)
+        if not sensitivity:
+            sensitivity = self.default_sensitivity
+
+        return project_id, sensitivity

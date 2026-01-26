@@ -273,6 +273,9 @@ def test_create_mail_message(db_session):
         "size": 412,
         "tags": ["test"],
         "filename": None,
+        "people": [],
+        "project_id": None,
+        "sensitivity": "basic",
     }
 
 
@@ -527,8 +530,21 @@ def test_delete_email_vectors(db_session, qdrant, mock_uuid4):
     # (vectors are deleted from qdrant)
 
 
-def test_create_mail_message_with_account(db_session):
+def test_create_mail_message_with_account(db_session, test_user):
     """Test creating a mail message with account_id and imap_uid."""
+    # Create a real email account for the foreign key
+    email_account = EmailAccount(
+        name="Test Account",
+        email_address="test@example.com",
+        account_type="imap",
+        folders=["INBOX"],
+        tags=["test"],
+        active=True,
+        user_id=test_user.id,
+    )
+    db_session.add(email_account)
+    db_session.flush()
+
     raw_email = (
         "From: sender@example.com\n"
         "To: recipient@example.com\n"
@@ -549,13 +565,13 @@ def test_create_mail_message_with_account(db_session):
         folder=folder,
         tags=["test"],
         parsed_email=parsed_email,
-        email_account_id=123,
+        email_account_id=email_account.id,
         imap_uid="456",
     )
     db_session.commit()
 
     # Verify the new fields
-    assert mail_message.email_account_id == 123
+    assert mail_message.email_account_id == email_account.id
     assert mail_message.imap_uid == "456"
 
 
@@ -565,7 +581,7 @@ def test_create_mail_message_with_account(db_session):
 
 
 @pytest.fixture
-def gmail_account(db_session):
+def gmail_account(db_session, test_user):
     """Create a test Gmail account with linked GoogleAccount."""
     google_account = GoogleAccount(
         name="Test Google Account",
@@ -574,6 +590,7 @@ def gmail_account(db_session):
         refresh_token="test_refresh_token",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(google_account)
     db_session.flush()
@@ -586,6 +603,7 @@ def gmail_account(db_session):
         folders=["INBOX"],
         tags=["test", "gmail"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(email_account)
     db_session.commit()
@@ -699,6 +717,7 @@ def test_find_and_delete_removed_emails(db_session, gmail_account, qdrant, mock_
         db_session, gmail_account.id, server_message_ids
     )
     deleted = delete_emails(emails_to_delete, db_session)
+    db_session.flush()  # Persist deletes before querying
 
     assert deleted == 1
 
@@ -784,7 +803,7 @@ def test_get_gmail_message_ids(db_session, gmail_account):
     assert service is mock_service
 
 
-def test_get_gmail_message_ids_no_google_account(db_session):
+def test_get_gmail_message_ids_no_google_account(db_session, test_user):
     """Test that get_gmail_message_ids raises error without GoogleAccount."""
     email_account = EmailAccount(
         name="Bad Gmail Account",
@@ -794,6 +813,7 @@ def test_get_gmail_message_ids_no_google_account(db_session):
         folders=["INBOX"],
         tags=["test"],
         active=True,
+        user_id=test_user.id,
     )
     db_session.add(email_account)
     db_session.commit()

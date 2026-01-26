@@ -81,7 +81,7 @@ def list_collaborators(args):
         print("-" * 55)
         for row in rows:
             person = session.query(Person).filter(Person.id == row.person_id).first()
-            name = person.name if person else f"(unknown person {row.person_id})"
+            name = person.display_name if person else f"(unknown person {row.person_id})"
             print(f"{row.person_id:<12} {name:<30} {row.role:<12}")
 
 
@@ -117,7 +117,7 @@ def add_collaborator(args):
                     .values(role=args.role)
                 )
                 session.commit()
-                print(f"Updated {person.name} role to '{args.role}' in project '{project.slug}'")
+                print(f"Updated {person.display_name} role to '{args.role}' in project '{project.slug}'")
             else:
                 print(f"Error: Person already in project. Use --update to change role.")
                 sys.exit(1)
@@ -131,7 +131,7 @@ def add_collaborator(args):
             )
         )
         session.commit()
-        print(f"Added {person.name} to project '{project.slug}' as {args.role}")
+        print(f"Added {person.display_name} to project '{project.slug}' as {args.role}")
 
 
 def remove_collaborator(args):
@@ -165,7 +165,7 @@ def remove_collaborator(args):
             )
         )
         session.commit()
-        print(f"Removed {person.name} from project '{project.slug}'")
+        print(f"Removed {person.display_name} from project '{project.slug}'")
 
 
 def grant_admin(args):

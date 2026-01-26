@@ -121,7 +121,6 @@ def create_mail_message(
         Newly created MailMessage
     """
     raw_email = parsed_email["raw_email"]
-    body = parsed_email["body"]
     mail_message = MailMessage(
         modality="mail",
         sha256=parsed_email["hash"],
@@ -134,7 +133,7 @@ def create_mail_message(
         sender=parsed_email["sender"],
         recipients=parsed_email["recipients"],
         sent_at=parsed_email["sent_at"],
-        content=body,
+        content=raw_email,
         folder=folder,
         email_account_id=email_account_id,
         imap_uid=imap_uid,

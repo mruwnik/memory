@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.api.search.search import search as search_base
-from memory.api.search.types import SearchConfig, SearchFilters
+from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
 from memory.common.celery_app import SYNC_NOTE, SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
@@ -177,7 +177,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
 @visible_when(require_scopes("read"))
 async def search(
     query: str,
-    filters: SearchFilters = {},
+    filters: MCPSearchFilters = {},
     modalities: set[str] = set(),
     limit: int = 20,
     previews: bool = False,
@@ -538,7 +538,7 @@ async def get_item(id: int, include_content: bool = True) -> dict:
 @visible_when(require_scopes("read"))
 async def list_items(
     modalities: set[str] = set(),
-    filters: SearchFilters = {},
+    filters: MCPSearchFilters = {},
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "inserted_at",
@@ -651,7 +651,7 @@ async def list_items(
 @visible_when(require_scopes("read"))
 async def count_items(
     modalities: set[str] = set(),
-    filters: SearchFilters = {},
+    filters: MCPSearchFilters = {},
 ) -> dict:
     """
     Count items matching criteria without retrieving them.

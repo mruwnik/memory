@@ -22,7 +22,9 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm.scoping import scoped_session
+from sqlalchemy.orm.session import Session
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
@@ -90,7 +92,7 @@ class AccessLog(Base):
 
 
 def log_access(
-    db: Session,
+    db: Session | scoped_session[Session],
     user_id: int,
     action: str,
     query: str | None = None,

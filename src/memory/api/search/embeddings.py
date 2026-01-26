@@ -23,23 +23,40 @@ def build_access_qdrant_filter(
     """
     Build Qdrant filter conditions from an AccessFilter.
 
-    Returns a list of "should" conditions where each condition represents
-    a project + allowed sensitivities combination. At least one must match.
+    Returns a list of "should" conditions where ANY one must match for access.
+    Conditions include:
+    - Person override: user's person is in the 'people' array
+    - Public bypass: sensitivity is "public"
+    - Project access: project_id matches a project + sensitivity is allowed
 
     If access_filter is None (superadmin), returns empty list (no filtering).
-    If access_filter has no conditions, returns a filter that matches nothing.
+    If access_filter has no conditions AND no person override AND no public bypass,
+    returns a filter that matches nothing.
+
+    Note: Unlike BM25, Qdrant stores *resolved* values in the payload at ingestion
+    time (project_id and sensitivity already include inheritance from data sources).
     """
     if access_filter is None:
         # Superadmin - no access filtering
         return []
 
-    if access_filter.is_empty():
-        # User has no project access - match nothing
-        # Use an impossible condition
-        return [{"key": "project_id", "match": {"value": -1}}]
+    should_conditions: list[dict[str, Any]] = []
 
-    # Build should conditions for each project membership
-    should_conditions = []
+    # Person override: if user's person is in the 'people' array, grant access
+    if access_filter.person_id is not None:
+        should_conditions.append({
+            "key": "people",
+            "match": {"any": [access_filter.person_id]}
+        })
+
+    # Public bypass: items with sensitivity "public" are visible to all authenticated users
+    if access_filter.include_public:
+        should_conditions.append({
+            "key": "sensitivity",
+            "match": {"value": "public"}
+        })
+
+    # Project access conditions
     for condition in access_filter.conditions:
         # Each condition: project_id must match AND sensitivity must be in allowed set
         project_condition = {
@@ -49,6 +66,10 @@ def build_access_qdrant_filter(
             ]
         }
         should_conditions.append(project_condition)
+
+    if not should_conditions:
+        # No access conditions at all - match nothing
+        return [{"key": "project_id", "match": {"value": -1}}]
 
     return should_conditions
 
@@ -262,16 +283,22 @@ async def search_chunks(
         # Distinguish between "no access" and "has project access" cases:
         #
         # - "No access" case: build_access_qdrant_filter returns a single condition
-        #   with a "key" field (e.g., {"key": "project_id", "match": {"value": -1}}).
+        #   with {"key": "project_id", "match": {"value": -1}}.
         #   This is an impossible condition that matches nothing.
         #
-        # - "Has access" case: Returns list of nested {"must": [...]} conditions,
-        #   one per project. These don't have a top-level "key" field.
+        # - "Has access" case: Returns list of conditions that may include:
+        #   - Public bypass: {"key": "sensitivity", "match": {"value": "public"}}
+        #   - Person override: {"key": "people", "match": {"any": [...]}}
+        #   - Project access: {"must": [...]}
         #
-        # We detect the "no access" case by checking for a single condition with "key".
-        is_no_access_condition = len(access_conditions) == 1 and "key" in access_conditions[0]
-        if is_no_access_condition:
-            # User has no project access - return empty results without querying Qdrant
+        # We detect the "no access" case by checking for the specific impossible condition.
+        is_impossible_condition = (
+            len(access_conditions) == 1
+            and access_conditions[0].get("key") == "project_id"
+            and access_conditions[0].get("match", {}).get("value") == -1
+        )
+        if is_impossible_condition:
+            # User has no project access and no public bypass - return empty results
             return {}
 
         # Multiple project conditions - wrap as nested Filter with should

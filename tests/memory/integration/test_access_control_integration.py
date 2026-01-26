@@ -754,7 +754,7 @@ def test_qdrant_search_superadmin_no_filter(db_session, qdrant, project_alpha):
 
 
 def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
-    """Test that empty access filter (no project access) matches nothing."""
+    """Test that empty access filter (no project access, no public bypass) matches nothing."""
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
     from memory.api.search.embeddings import build_access_qdrant_filter
@@ -767,8 +767,8 @@ def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
     )
     process_content_item(note, db_session)
 
-    # Empty access filter (user has no project memberships)
-    access_filter = AccessFilter(conditions=[])
+    # Empty access filter without public bypass (user has no access at all)
+    access_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(access_filter)
 
     # Should return impossible condition
@@ -1324,9 +1324,10 @@ def test_adversarial_empty_access_filter_blocks_everything(
     db_session, qdrant, project_alpha
 ):
     """
-    ATTACK: User with no project access should see NOTHING.
+    ATTACK: User with no project access should see only public items.
 
-    This tests the empty filter edge case.
+    With include_public=True (default), users can see public items even without
+    project access. Basic/internal/confidential items remain hidden.
     """
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
@@ -1342,8 +1343,50 @@ def test_adversarial_empty_access_filter_blocks_everything(
     )
     process_content_item(basic_note, db_session)
 
-    # User has NO project access
+    # User has NO project access but include_public is True by default
     empty_filter = AccessFilter(conditions=[])
+    qdrant_conditions = build_access_qdrant_filter(empty_filter)
+
+    # Should return public sensitivity filter (users can see public items)
+    assert len(qdrant_conditions) == 1
+    assert qdrant_conditions[0]["key"] == "sensitivity"
+    assert qdrant_conditions[0]["match"]["value"] == "public"
+
+    results = qdrant.scroll(
+        collection_name="text",
+        scroll_filter={"should": qdrant_conditions},
+        with_payload=True,
+        limit=100,
+    )[0]
+
+    # Should find NOTHING (basic items don't match public filter)
+    assert len(results) == 0, "Empty filter returned non-public results!"
+
+
+def test_adversarial_empty_access_filter_no_public_blocks_everything(
+    db_session, qdrant, project_alpha
+):
+    """
+    ATTACK: User with no project access AND include_public=False should see NOTHING.
+
+    This tests the truly empty filter edge case.
+    """
+    from memory.common.content_processing import process_content_item
+    from memory.common.access_control import AccessFilter
+    from memory.api.search.embeddings import build_access_qdrant_filter
+
+    # Create a basic note
+    basic_note = Note(
+        content="Even basic content should be hidden from unauthorized users",
+        modality="text",
+        sha256=unique_sha256("empty-filter-no-public-test"),
+        project_id=project_alpha.id,
+        sensitivity="basic",
+    )
+    process_content_item(basic_note, db_session)
+
+    # User has NO project access AND no public bypass
+    empty_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(empty_filter)
 
     # Should return impossible condition
@@ -1425,7 +1468,8 @@ def test_adversarial_mixed_valid_invalid_roles(db_session, project_alpha):
         None,
     )
     assert alpha_condition is not None
-    assert alpha_condition.sensitivities == frozenset({"basic"})
+    # Contributors have access to public and basic sensitivity levels
+    assert alpha_condition.sensitivities == frozenset({"public", "basic"})
 
 
 def test_adversarial_invalid_sensitivity_level_not_indexed(db_session, qdrant, project_alpha):

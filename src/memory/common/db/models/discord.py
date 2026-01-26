@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -119,12 +120,23 @@ class DiscordServer(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # Access control: channels inherit these unless overridden
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
     # Relationships
     channels: Mapped[list[DiscordChannel]] = relationship(
         "DiscordChannel", back_populates="server", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("discord_servers_collect_idx", "collect_messages"),)
+    __table_args__ = (
+        CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_discord_server_sensitivity"),
+        Index("discord_servers_collect_idx", "collect_messages"),
+        Index("discord_servers_project_idx", "project_id"),
+    )
 
 
 class DiscordChannel(Base):
@@ -144,11 +156,12 @@ class DiscordChannel(Base):
     # Collection setting: null = inherit from server, True/False = explicit override
     collect_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
-    # Access control: link to project (milestone) and sensitivity level
+    # Access control: link to project and sensitivity level
     project_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
