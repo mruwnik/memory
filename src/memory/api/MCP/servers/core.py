@@ -751,6 +751,10 @@ async def list_items(
             query = query.filter(SourceItem.size <= max_size)
         if source_ids := filters.get("source_ids"):
             query = query.filter(SourceItem.id.in_(source_ids))
+        if min_created_at := filters.get("min_created_at"):
+            query = query.filter(SourceItem.inserted_at >= min_created_at)
+        if max_created_at := filters.get("max_created_at"):
+            query = query.filter(SourceItem.inserted_at <= max_created_at)
 
         # Metadata filters - require joining specific tables
         if folder_path := filters.get("folder_path"):
@@ -858,6 +862,10 @@ async def count_items(
             base_query = base_query.filter(SourceItem.size <= max_size)
         if source_ids := filters.get("source_ids"):
             base_query = base_query.filter(SourceItem.id.in_(source_ids))
+        if min_created_at := filters.get("min_created_at"):
+            base_query = base_query.filter(SourceItem.inserted_at >= min_created_at)
+        if max_created_at := filters.get("max_created_at"):
+            base_query = base_query.filter(SourceItem.inserted_at <= max_created_at)
 
         # Get total
         total = base_query.count()

@@ -184,6 +184,12 @@ async def search_bm25(
             or access_filter is not None
             or person_id is not None
         )
+
+        # Date filters on Chunk.created_at
+        if min_created_at := filters.get("min_created_at"):
+            items_query = items_query.filter(Chunk.created_at >= min_created_at)
+        if max_created_at := filters.get("max_created_at"):
+            items_query = items_query.filter(Chunk.created_at <= max_created_at)
         if needs_source_join:
             items_query = items_query.join(
                 SourceItem, SourceItem.id == Chunk.source_id
