@@ -10,8 +10,10 @@ import {
   ConfirmDialog,
 } from '../shared'
 import { styles, cx } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const SlackPanel = () => {
+  const { userId } = useSourcesContext()
   const {
     getAuthorizeUrl,
     listWorkspaces,
@@ -36,7 +38,7 @@ export const SlackPanel = () => {
     setError(null)
     try {
       const [workspacesData, projectsData] = await Promise.all([
-        listWorkspaces(),
+        listWorkspaces(userId),
         listProjects()
       ])
       setWorkspaces(workspacesData)
@@ -46,7 +48,7 @@ export const SlackPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces, listProjects])
+  }, [listWorkspaces, listProjects, userId])
 
   useEffect(() => {
     loadData()

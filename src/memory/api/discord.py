@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import discord as discord_client
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
@@ -212,11 +212,17 @@ def channel_to_response(channel: DiscordChannel) -> DiscordChannelResponse:
 
 @router.get("/bots")
 def list_bots(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[DiscordBotResponse]:
-    """List Discord bots the user is authorized to use."""
-    bots = get_user_bots(db, user.id)
+    """List Discord bots. Admins can view any user's authorized bots."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    # If resolved_user_id is None (admin viewing all), show all bots
+    if resolved_user_id is None:
+        bots = db.query(DiscordBot).all()
+    else:
+        bots = get_user_bots(db, resolved_user_id)
 
     # Check connection status for each bot
     responses = []

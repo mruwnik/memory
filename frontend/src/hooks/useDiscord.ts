@@ -86,8 +86,9 @@ export const useDiscord = () => {
 
   // === Bot Operations ===
 
-  const listBots = useCallback(async (): Promise<DiscordBot[]> => {
-    const response = await apiCall('/discord/bots')
+  const listBots = useCallback(async (userId?: number): Promise<DiscordBot[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/discord/bots${params}`)
     if (!response.ok) throw new Error('Failed to fetch Discord bots')
     return response.json()
   }, [apiCall])

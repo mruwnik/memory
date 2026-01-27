@@ -150,7 +150,7 @@ def add_discord_message(
 
         # Create new message
         discord_message = DiscordMessage(
-            modality="text",
+            modality="message",
             sha256=content_hash,
             content=content,
             bot_id=bot_id,

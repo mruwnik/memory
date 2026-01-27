@@ -78,8 +78,9 @@ export const useSlack = () => {
 
   // === Workspace Operations ===
 
-  const listWorkspaces = useCallback(async (): Promise<SlackWorkspace[]> => {
-    const response = await apiCall('/slack/workspaces')
+  const listWorkspaces = useCallback(async (userId?: number): Promise<SlackWorkspace[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/slack/workspaces${params}`)
     if (!response.ok) throw new Error('Failed to fetch Slack workspaces')
     return response.json()
   }, [apiCall])

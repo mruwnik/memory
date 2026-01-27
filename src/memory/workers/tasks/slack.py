@@ -582,7 +582,7 @@ def add_slack_message(
 
         # Create message
         message = SlackMessage(
-            modality="text",
+            modality="message",
             sha256=content_hash,
             content=content,
             message_ts=message_ts,

@@ -355,23 +355,32 @@ def _fetch_google_calendar_events(
             except Exception:
                 calendar_name = calendar_id
 
-            events_result = (
-                service.events()
-                .list(
-                    calendarId=calendar_id,
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    singleEvents=True,
-                    orderBy="startTime",
+            # Paginate through all events (Google Calendar API returns max 250 by default)
+            page_token = None
+            while True:
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id,
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        maxResults=2500,  # Maximum allowed by Google API
+                        pageToken=page_token,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
 
-            for event in events_result.get("items", []):
-                try:
-                    events.append(_parse_google_event(event, calendar_name))
-                except Exception as e:
-                    logger.error(f"Error parsing Google event: {e}")
+                for event in events_result.get("items", []):
+                    try:
+                        events.append(_parse_google_event(event, calendar_name))
+                    except Exception as e:
+                        logger.error(f"Error parsing Google event: {e}")
+
+                page_token = events_result.get("nextPageToken")
+                if not page_token:
+                    break
 
         except Exception as e:
             logger.error(f"Error fetching events from calendar {calendar_id}: {e}")

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
 from memory.common.db.connection import get_session
@@ -401,24 +401,31 @@ async def slack_callback(
 
 @router.get("/workspaces")
 def list_workspaces(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[SlackWorkspaceResponse]:
-    """List Slack workspaces the current user has credentials for."""
-    # Get workspace IDs where user has credentials
-    user_workspace_ids = [
-        cred.workspace_id
-        for cred in db.query(SlackUserCredentials).filter(
-            SlackUserCredentials.user_id == user.id
+    """List Slack workspaces. Admins can view any user's workspaces."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
+    # If resolved_user_id is None (admin viewing all), show all workspaces
+    if resolved_user_id is None:
+        workspaces = db.query(SlackWorkspace).all()
+    else:
+        # Get workspace IDs where the resolved user has credentials
+        user_workspace_ids = [
+            cred.workspace_id
+            for cred in db.query(SlackUserCredentials).filter(
+                SlackUserCredentials.user_id == resolved_user_id
+            ).all()
+        ]
+
+        if not user_workspace_ids:
+            return []
+
+        workspaces = db.query(SlackWorkspace).filter(
+            SlackWorkspace.id.in_(user_workspace_ids)
         ).all()
-    ]
-
-    if not user_workspace_ids:
-        return []
-
-    workspaces = db.query(SlackWorkspace).filter(
-        SlackWorkspace.id.in_(user_workspace_ids)
-    ).all()
 
     return [workspace_to_response(w, db, user) for w in workspaces]
 

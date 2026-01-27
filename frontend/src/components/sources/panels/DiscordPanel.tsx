@@ -13,8 +13,10 @@ import {
   ConfirmDialog,
 } from '../shared'
 import { styles, cx } from '../styles'
+import { useSourcesContext } from '../Sources'
 
 export const DiscordPanel = () => {
+  const { userId } = useSourcesContext()
   const {
     listBots,
     createBot,
@@ -52,7 +54,7 @@ export const DiscordPanel = () => {
     setError(null)
     try {
       const [botsData, projectsData] = await Promise.all([
-        listBots(),
+        listBots(userId),
         listProjects()
       ])
       setBots(botsData)
@@ -68,7 +70,7 @@ export const DiscordPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listBots, listServers, listProjects])
+  }, [listBots, listServers, listProjects, userId])
 
   useEffect(() => {
     loadData()
