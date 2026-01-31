@@ -12,14 +12,13 @@ from sqlalchemy.orm import Session
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import discord as discord_client
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import Person, User
 from memory.common.db.models.discord import (
     DiscordBot,
     DiscordChannel,
     DiscordServer,
     DiscordUser,
 )
-from memory.common.db.models.people import Person
 from memory.common.discord_data import (
     fetch_servers,
     get_bot_for_user,

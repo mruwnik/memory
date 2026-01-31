@@ -50,15 +50,15 @@ class ReactionRequest(BaseModel):
 class RoleMemberRequest(BaseModel):
     bot_id: int
     guild_id: int | str  # Accepts ID (int) or name (str)
-    role_id: int
-    user_id: int
+    role_id: int | str  # Accepts ID as int or string
+    user_id: int | str  # Accepts ID as int or string
 
 
 class ChannelPermissionRequest(BaseModel):
     bot_id: int
-    channel_id: int
-    role_id: int | None = None
-    user_id: int | None = None
+    channel_id: int | str  # Accepts ID (int) or string
+    role_id: int | str | None = None  # Accepts ID (int) or string
+    user_id: int | str | None = None  # Accepts ID (int) or string
     allow: list[str] | None = None  # Permission names to allow
     deny: list[str] | None = None  # Permission names to deny
 
@@ -67,9 +67,10 @@ class CreateChannelRequest(BaseModel):
     bot_id: int
     guild_id: int | str  # Accepts ID (int) or name (str)
     name: str
-    category_id: int | None = None
+    category_id: int | str | None = None  # Accepts ID (int or string)
+    category_name: str | None = None  # Alternative: category name
     topic: str | None = None
-    copy_permissions_from: int | None = None  # Channel ID to copy permissions from
+    copy_permissions_from: int | str | None = None  # Channel ID to copy permissions from
 
 
 class CreateCategoryRequest(BaseModel):
@@ -83,6 +84,17 @@ class DeleteChannelRequest(BaseModel):
     channel_id: int | None = None
     channel_name: str | None = None
     guild_id: int | str | None = None  # Accepts ID (int) or name (str), required if using channel_name
+
+
+class EditChannelRequest(BaseModel):
+    bot_id: int
+    channel_id: int | str | None = None  # Accepts ID (int or string)
+    channel_name: str | None = None  # Alternative: channel name for lookup
+    guild_id: int | str | None = None  # Required when using channel_name
+    new_name: str | None = None  # New channel name
+    new_topic: str | None = None  # New topic (use empty string to clear)
+    category_id: int | str | None = None  # Move to category by ID
+    category_name: str | None = None  # Move to category by name (use empty string to remove from category)
 
 
 @asynccontextmanager
@@ -406,12 +418,13 @@ async def list_roles(guild_id: str, bot_id: int) -> dict[str, Any]:
 
     roles = [
         {
-            "id": role.id,
+            "id": str(role.id),  # String to preserve precision
             "name": role.name,
             "color": role.color.value,
             "position": role.position,
             "mentionable": role.mentionable,
             "member_count": len(role.members),
+            "managed": role.managed,  # True if managed by integration (can't be assigned)
         }
         for role in guild.roles
         if not role.is_default()  # Skip @everyone
@@ -420,12 +433,12 @@ async def list_roles(guild_id: str, bot_id: int) -> dict[str, Any]:
 
 
 @app.get("/guilds/{guild_id}/roles/{role_id}/members")
-async def list_role_members(guild_id: str, role_id: int, bot_id: int) -> dict[str, Any]:
+async def list_role_members(guild_id: str, role_id: str, bot_id: int) -> dict[str, Any]:
     """List all members with a specific role (guild_id can be ID or name)."""
     mgr = get_manager()
     collector = get_collector_or_404(mgr, bot_id)
     guild = get_guild_or_404(collector, guild_id)
-    role = get_role_or_404(guild, role_id)
+    role = get_role_or_404(guild, int(role_id))
 
     members = [
         {
@@ -445,8 +458,10 @@ async def add_role_member(request: RoleMemberRequest) -> dict[str, Any]:
     mgr = get_manager()
     collector = get_collector_or_404(mgr, request.bot_id)
     guild = get_guild_or_404(collector, request.guild_id)
-    role = get_role_or_404(guild, request.role_id)
-    member = get_member_or_404(guild, request.user_id)
+    role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
+    user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
+    role = get_role_or_404(guild, role_id)
+    member = get_member_or_404(guild, user_id)
 
     async with discord_api_errors("manage this role"):
         await member.add_roles(role, reason="Added via MCP")
@@ -459,8 +474,10 @@ async def remove_role_member(request: RoleMemberRequest) -> dict[str, Any]:
     mgr = get_manager()
     collector = get_collector_or_404(mgr, request.bot_id)
     guild = get_guild_or_404(collector, request.guild_id)
-    role = get_role_or_404(guild, request.role_id)
-    member = get_member_or_404(guild, request.user_id)
+    role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
+    user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
+    role = get_role_or_404(guild, role_id)
+    member = get_member_or_404(guild, user_id)
 
     async with discord_api_errors("manage this role"):
         await member.remove_roles(role, reason="Removed via MCP")
@@ -501,14 +518,20 @@ async def set_channel_permission(request: ChannelPermissionRequest) -> dict[str,
     """Set permission overwrite for a role or user on a channel."""
     mgr = get_manager()
     collector = get_collector_or_404(mgr, request.bot_id)
-    channel = await get_channel_or_404(collector, request.channel_id)
+
+    # Convert string IDs to int
+    channel_id = int(request.channel_id) if isinstance(request.channel_id, str) else request.channel_id
+    role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
+    user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
+
+    channel = await get_channel_or_404(collector, channel_id)
 
     # Determine target (role or user)
     target: discord.Role | discord.Member
-    if request.role_id:
-        target = get_role_or_404(channel.guild, request.role_id)
-    elif request.user_id:
-        target = get_member_or_404(channel.guild, request.user_id)
+    if role_id:
+        target = get_role_or_404(channel.guild, role_id)
+    elif user_id:
+        target = get_member_or_404(channel.guild, user_id)
     else:
         raise HTTPException(status_code=400, detail="Must specify role_id or user_id")
 
@@ -567,11 +590,11 @@ async def list_categories(guild_id: str, bot_id: int) -> dict[str, Any]:
 
     categories = [
         {
-            "id": cat.id,
+            "id": str(cat.id),  # String to preserve precision
             "name": cat.name,
             "position": cat.position,
             "channel_count": len(cat.channels),
-            "channels": [{"id": ch.id, "name": ch.name} for ch in cat.channels],
+            "channels": [{"id": str(ch.id), "name": ch.name} for ch in cat.channels],
         }
         for cat in guild.categories
     ]
@@ -585,12 +608,20 @@ async def create_channel(request: CreateChannelRequest) -> dict[str, Any]:
     collector = get_collector_or_404(mgr, request.bot_id)
     guild = get_guild_or_404(collector, request.guild_id)
 
-    # Get category if specified
+    # Get category if specified (by ID or name)
     category = None
-    if request.category_id:
-        category = guild.get_channel(request.category_id)
+    if request.category_id is not None:
+        cat_id = int(request.category_id) if isinstance(request.category_id, str) else request.category_id
+        category = guild.get_channel(cat_id)
         if not isinstance(category, discord.CategoryChannel):
             raise HTTPException(status_code=400, detail=f"Channel {request.category_id} is not a category")
+    elif request.category_name is not None:
+        for cat in guild.categories:
+            if cat.name.lower() == request.category_name.lower():
+                category = cat
+                break
+        if category is None:
+            raise HTTPException(status_code=404, detail=f"Category '{request.category_name}' not found")
 
     # Get permissions to copy if specified
     overwrites = None
@@ -704,6 +735,100 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
                 "id": channel_id,
                 "name": channel_name,
                 "type": channel_type,
+            },
+        }
+
+
+@app.post("/channels/edit")
+async def edit_channel(request: EditChannelRequest) -> dict[str, Any]:
+    """Edit a channel's properties (name, topic, category)."""
+    mgr = get_manager()
+    collector = get_collector_or_404(mgr, request.bot_id)
+
+    # Resolve channel
+    channel = None
+    if request.channel_id is not None:
+        chan_id = int(request.channel_id) if isinstance(request.channel_id, str) else request.channel_id
+        channel = collector.client.get_channel(chan_id)
+        if channel is None:
+            try:
+                channel = await collector.client.fetch_channel(chan_id)
+            except discord.NotFound:
+                pass
+    elif request.channel_name is not None:
+        if request.guild_id is None:
+            raise HTTPException(status_code=400, detail="guild_id required when using channel_name")
+        guild = get_guild_or_404(collector, request.guild_id)
+        # First try cache
+        for ch in guild.channels:
+            if ch.name.lower() == request.channel_name.lower():
+                channel = ch
+                break
+        # If not in cache, fetch all channels from Discord
+        if channel is None:
+            fetched_channels = await guild.fetch_channels()
+            for ch in fetched_channels:
+                if ch.name.lower() == request.channel_name.lower():
+                    channel = ch
+                    break
+
+    if channel is None:
+        identifier = request.channel_id or request.channel_name
+        raise HTTPException(status_code=404, detail=f"Channel '{identifier}' not found")
+
+    # Only text channels can be edited this way
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(status_code=400, detail="Only text channels can be edited")
+
+    # Build edit kwargs
+    edit_kwargs: dict[str, Any] = {"reason": "Edited via MCP"}
+
+    if request.new_name is not None:
+        edit_kwargs["name"] = request.new_name
+
+    if request.new_topic is not None:
+        edit_kwargs["topic"] = request.new_topic if request.new_topic else None
+
+    # Handle category change
+    if request.category_id is not None or request.category_name is not None:
+        guild = channel.guild
+        new_category = None
+
+        if request.category_id is not None:
+            if request.category_id == "" or request.category_id == 0:
+                # Remove from category
+                new_category = None
+            else:
+                cat_id = int(request.category_id) if isinstance(request.category_id, str) else request.category_id
+                new_category = guild.get_channel(cat_id)
+                if not isinstance(new_category, discord.CategoryChannel):
+                    raise HTTPException(status_code=400, detail=f"Channel {request.category_id} is not a category")
+        elif request.category_name is not None:
+            if request.category_name == "":
+                # Remove from category
+                new_category = None
+            else:
+                for cat in guild.categories:
+                    if cat.name.lower() == request.category_name.lower():
+                        new_category = cat
+                        break
+                if new_category is None and request.category_name != "":
+                    raise HTTPException(status_code=404, detail=f"Category '{request.category_name}' not found")
+
+        edit_kwargs["category"] = new_category
+
+    if len(edit_kwargs) == 1:  # Only has "reason"
+        raise HTTPException(status_code=400, detail="No changes specified")
+
+    async with discord_api_errors("edit channel"):
+        await channel.edit(**edit_kwargs)
+        return {
+            "success": True,
+            "channel": {
+                "id": str(channel.id),
+                "name": channel.name,
+                "topic": channel.topic,
+                "category": channel.category.name if channel.category else None,
             },
         }
 

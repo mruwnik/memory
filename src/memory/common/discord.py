@@ -184,8 +184,8 @@ def list_roles(bot_id: int, guild_id: int | str) -> dict[str, Any] | None:
         return None
 
 
-def list_role_members(bot_id: int, guild_id: int | str, role_id: int) -> dict[str, Any] | None:
-    """List all members with a specific role (guild_id can be ID or name)."""
+def list_role_members(bot_id: int, guild_id: int | str, role_id: int | str) -> dict[str, Any] | None:
+    """List all members with a specific role (guild_id and role_id can be ID or string)."""
     try:
         response = requests.get(
             f"{get_api_url()}/guilds/{guild_id}/roles/{role_id}/members",
@@ -199,8 +199,8 @@ def list_role_members(bot_id: int, guild_id: int | str, role_id: int) -> dict[st
         return None
 
 
-def add_role_member(bot_id: int, guild_id: int | str, role_id: int, user_id: int) -> dict[str, Any] | None:
-    """Add a user to a role (guild_id can be ID or name)."""
+def add_role_member(bot_id: int, guild_id: int | str, role_id: int | str, user_id: int | str) -> dict[str, Any] | None:
+    """Add a user to a role (IDs can be int or string)."""
     try:
         response = requests.post(
             f"{get_api_url()}/roles/add_member",
@@ -214,8 +214,8 @@ def add_role_member(bot_id: int, guild_id: int | str, role_id: int, user_id: int
         return None
 
 
-def remove_role_member(bot_id: int, guild_id: int | str, role_id: int, user_id: int) -> dict[str, Any] | None:
-    """Remove a user from a role (guild_id can be ID or name)."""
+def remove_role_member(bot_id: int, guild_id: int | str, role_id: int | str, user_id: int | str) -> dict[str, Any] | None:
+    """Remove a user from a role (IDs can be int or string)."""
     try:
         response = requests.post(
             f"{get_api_url()}/roles/remove_member",
@@ -251,13 +251,13 @@ def get_channel_permissions(bot_id: int, channel_id: int) -> dict[str, Any] | No
 
 def set_channel_permission(
     bot_id: int,
-    channel_id: int,
-    role_id: int | None = None,
-    user_id: int | None = None,
+    channel_id: int | str,
+    role_id: int | str | None = None,
+    user_id: int | str | None = None,
     allow: list[str] | None = None,
     deny: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Set permission overwrite for a role or user on a channel."""
+    """Set permission overwrite for a role or user on a channel (IDs can be int or string)."""
     try:
         response = requests.post(
             f"{get_api_url()}/channels/set_permission",
@@ -319,9 +319,10 @@ def create_channel(
     bot_id: int,
     guild_id: int | str,
     name: str,
-    category_id: int | None = None,
+    category_id: int | str | None = None,
+    category_name: str | None = None,
     topic: str | None = None,
-    copy_permissions_from: int | None = None,
+    copy_permissions_from: int | str | None = None,
 ) -> dict[str, Any] | None:
     """Create a new text channel (guild_id can be ID or name)."""
     try:
@@ -332,6 +333,7 @@ def create_channel(
                 "guild_id": guild_id,
                 "name": name,
                 "category_id": category_id,
+                "category_name": category_name,
                 "topic": topic,
                 "copy_permissions_from": copy_permissions_from,
             },
@@ -382,6 +384,40 @@ def delete_channel(
     except requests.RequestException as e:
         identifier = channel_id or channel_name
         logger.error(f"Failed to delete channel {identifier}: {e}")
+        return None
+
+
+def edit_channel(
+    bot_id: int,
+    channel_id: int | str | None = None,
+    channel_name: str | None = None,
+    guild_id: int | str | None = None,
+    new_name: str | None = None,
+    new_topic: str | None = None,
+    category_id: int | str | None = None,
+    category_name: str | None = None,
+) -> dict[str, Any] | None:
+    """Edit a channel's properties (name, topic, category)."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/channels/edit",
+            json={
+                "bot_id": bot_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "guild_id": guild_id,
+                "new_name": new_name,
+                "new_topic": new_topic,
+                "category_id": category_id,
+                "category_name": category_name,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        identifier = channel_id or channel_name
+        logger.error(f"Failed to edit channel {identifier}: {e}")
         return None
 
 

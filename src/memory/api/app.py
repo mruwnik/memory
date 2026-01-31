@@ -60,7 +60,55 @@ limiter = Limiter(
 # Create the MCP http app to get its lifespan
 mcp_http_app = mcp.http_app(stateless_http=True)
 
-app = FastAPI(title="Knowledge Base API", lifespan=mcp_http_app.lifespan)
+# OpenAPI tag descriptions for better documentation organization
+tags_metadata = [
+    {"name": "auth", "description": "Authentication and authorization endpoints"},
+    {"name": "users", "description": "User management"},
+    {"name": "source-items", "description": "Manage ingested content items"},
+    {"name": "jobs", "description": "Background job monitoring and management"},
+    {"name": "sessions", "description": "User session management"},
+    {"name": "google-drive", "description": "Google Drive integration for content ingestion"},
+    {"name": "email-accounts", "description": "Email account configuration for ingestion"},
+    {"name": "article-feeds", "description": "RSS/Atom feed subscriptions"},
+    {"name": "github-sources", "description": "GitHub repository ingestion"},
+    {"name": "calendar-accounts", "description": "Calendar integration"},
+    {"name": "meetings", "description": "Meeting transcripts and summaries"},
+    {"name": "content-sources", "description": "Content source configuration"},
+    {"name": "metrics", "description": "System metrics and statistics"},
+    {"name": "telemetry", "description": "Usage telemetry"},
+    {"name": "polls", "description": "Create and manage polls"},
+    {"name": "docker-logs", "description": "Docker container log access"},
+    {"name": "claude-snapshots", "description": "Claude conversation snapshots"},
+    {"name": "claude-environments", "description": "Claude environment management"},
+    {"name": "cloud-claude", "description": "Cloud Claude integration"},
+    {"name": "secrets", "description": "Secret management"},
+    {"name": "discord", "description": "Discord integration"},
+    {"name": "slack", "description": "Slack integration"},
+    {"name": "projects", "description": "Project management"},
+]
+
+app = FastAPI(
+    title="Memory Knowledge Base API",
+    description="""
+Personal knowledge base API for ingesting, indexing, and searching across your digital content.
+
+## Features
+
+- **Semantic Search**: Vector-based similarity search across all content
+- **Content Ingestion**: Ingest emails, documents, web pages, ebooks, and more
+- **MCP Integration**: Model Context Protocol support for AI assistants
+- **Observations**: AI assistants can record and recall user preferences
+
+## Authentication
+
+Most endpoints require authentication via:
+- **Session cookie**: For browser-based access
+- **Bearer token**: API key in `Authorization: Bearer <token>` header
+    """,
+    version="1.0.0",
+    openapi_tags=tags_metadata,
+    lifespan=mcp_http_app.lifespan,
+)
 app.state.limiter = limiter
 
 # Rate limit exception handler
