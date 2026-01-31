@@ -207,6 +207,21 @@ def test_embed_source_item(
         assert sample_mail_message.chunks == sample_chunks
 
 
+def test_embed_source_item_skipped_when_should_embed_false(sample_mail_message):
+    """Test that embed_source_item sets SKIPPED when should_embed returns False."""
+    from unittest.mock import PropertyMock
+
+    # Use PropertyMock for safer property patching that won't affect parallel tests
+    with patch.object(
+        MailMessage, "should_embed", new_callable=PropertyMock, return_value=False
+    ):
+        result = embed_source_item(sample_mail_message)
+
+    assert result == 0
+    assert sample_mail_message.embed_status == "SKIPPED"
+    assert sample_mail_message.chunks == []
+
+
 def test_push_to_qdrant_success(qdrant):
     # Create items with different statuses
     item1 = MailMessage(

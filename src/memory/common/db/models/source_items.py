@@ -389,12 +389,16 @@ class DiscordMessage(SourceItem):
         return f"{author_name}: {self.content}"
 
     @property
+    def should_embed(self) -> bool:
+        """Skip embedding for very short messages (< 20 chars)."""
+        return bool(self.content) and len(self.content) >= 20
+
+    @property
     def embedding_text(self) -> str:
         """Text to use for embedding. Returns empty string for short messages."""
-        if not self.content or len(self.content) < 20:
-            return ""  # Skip embedding for very short messages
-        author_name = self.author.username if self.author else "unknown"
-        return f"{author_name}: {self.content}"
+        if not self.should_embed:
+            return ""
+        return self.title
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""
@@ -512,13 +516,17 @@ class SlackMessage(SourceItem):
         return f"{name}: {content}"
 
     @property
+    def should_embed(self) -> bool:
+        """Skip embedding for very short messages (< 20 chars)."""
+        content = self.resolved_content or self.content or ""
+        return len(content) >= 20
+
+    @property
     def embedding_text(self) -> str:
         """Text to use for embedding. Returns empty string for short messages."""
-        content = self.resolved_content or self.content or ""
-        if len(content) < 20:
-            return ""  # Skip embedding for very short messages
-        name = self.author_name or self.author_id or "unknown"
-        return f"{name}: {content}"
+        if not self.should_embed:
+            return ""
+        return self.title
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""

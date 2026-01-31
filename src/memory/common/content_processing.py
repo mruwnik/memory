@@ -134,7 +134,7 @@ def embed_source_item(source_item: SourceItem) -> int:
 
     Processes the source item through the embedding pipeline, creating
     chunks and their corresponding vector embeddings. Updates the item's
-    embed_status based on success or failure.
+    embed_status based on success, skip, or failure.
 
     Args:
         source_item: The SourceItem to embed
@@ -144,8 +144,17 @@ def embed_source_item(source_item: SourceItem) -> int:
 
     Side effects:
         - Sets source_item.chunks with generated chunks
-        - Sets source_item.embed_status to "QUEUED" or "FAILED"
+        - Sets source_item.embed_status to "QUEUED", "SKIPPED", or "FAILED"
     """
+    # Check if content should be embedded (e.g., not too short)
+    if not source_item.should_embed:
+        source_item.embed_status = "SKIPPED"  # type: ignore
+        logger.debug(
+            f"Skipping embedding for {type(source_item).__name__}: "
+            f"{getattr(source_item, 'title', 'unknown')} (should_embed=False)"
+        )
+        return 0
+
     try:
         chunks = embedding.embed_source_item(source_item)
         if chunks:
@@ -292,6 +301,8 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     session.flush()
 
     if not chunks_count:
+        # Reflect actual embed_status in task result
+        status = "skipped" if item.embed_status == "SKIPPED" else "failed"
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     try:
@@ -302,9 +313,10 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )
     except Exception as e:
+        status = "failed"
+        item.embed_status = "FAILED"  # type: ignore
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
         logger.error(traceback.format_exc())
-        item.embed_status = "FAILED"  # type: ignore
     session.commit()
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))

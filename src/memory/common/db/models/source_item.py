@@ -356,7 +356,7 @@ class SourceItem(Base):
 
     # Add table-level constraint and indexes
     __table_args__ = (
-        CheckConstraint("embed_status IN ('RAW','QUEUED','STORED','FAILED')"),
+        CheckConstraint("embed_status IN ('RAW','QUEUED','STORED','FAILED','SKIPPED')"),
         CheckConstraint(
             "verification_failures >= 0", name="verification_failures_non_negative"
         ),
@@ -476,6 +476,19 @@ class SourceItem(Base):
         metrics (e.g., karma, view count, citations).
         """
         return 1.0
+
+    @property
+    def should_embed(self) -> bool:
+        """
+        Return whether this item should be embedded.
+
+        Default is True. Subclasses can override to skip embedding for
+        content that isn't suitable (e.g., very short messages, empty content).
+
+        When False, the item's embed_status should be set to SKIPPED rather
+        than attempting embedding and getting FAILED.
+        """
+        return True
 
     @property
     def title(self) -> str | None:
