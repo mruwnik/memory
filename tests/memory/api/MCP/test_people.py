@@ -507,6 +507,9 @@ async def test_list_people_various_tags(db_session, sample_people, tag, expected
         ("jones", ["charlie_jones"]),
         ("example.com", []),  # Not searching in contact_info
         ("UX", ["bob_smith"]),  # Case insensitive search in notes
+        ("@alice_c", ["alice_chen"]),  # Search in aliases
+        ("alice.chen@work.com", ["alice_chen"]),  # Search in aliases (email format)
+        ("@bobsmith", ["bob_smith"]),  # Search in aliases
     ],
 )
 async def test_list_people_various_searches(
@@ -521,3 +524,18 @@ async def test_list_people_various_searches(
 
     result_identifiers = [r["identifier"] for r in results]
     assert result_identifiers == expected_identifiers
+
+
+@pytest.mark.asyncio
+async def test_get_person_by_alias(db_session, sample_people):
+    """Test getting a person by alias instead of identifier."""
+    from memory.api.MCP.servers.people import get_person
+
+    get_person_fn = get_fn(get_person)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        # Get by alias
+        result = await get_person_fn(identifier="alice.chen@work.com")
+
+    assert result is not None
+    assert result["identifier"] == "alice_chen"
+    assert result["display_name"] == "Alice Chen"

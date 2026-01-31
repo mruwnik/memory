@@ -1,6 +1,20 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 
+// Types for Collaborators
+export interface Collaborator {
+  person_id: number
+  person_identifier: string
+  display_name: string
+  role: 'contributor' | 'manager' | 'admin'
+}
+
+export interface CollaboratorInput {
+  person_id?: number
+  person_identifier?: string
+  role?: 'contributor' | 'manager' | 'admin'
+}
+
 // Types for Projects
 export interface Project {
   id: number
@@ -14,6 +28,8 @@ export interface Project {
   // Hierarchy
   parent_id: number | null
   children_count: number
+  // Collaborators
+  collaborators: Collaborator[]
 }
 
 export interface ProjectTreeNode {
@@ -31,6 +47,7 @@ export interface ProjectCreate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
+  collaborators?: CollaboratorInput[]
 }
 
 export interface ProjectUpdate {
@@ -38,6 +55,7 @@ export interface ProjectUpdate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
+  collaborators?: CollaboratorInput[]
 }
 
 export const useProjects = () => {

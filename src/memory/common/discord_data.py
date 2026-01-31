@@ -41,7 +41,7 @@ def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot 
 
 def fetch_channel_history(
     session: DBSession,
-    channel_id: int | None,
+    channel_id: int | str | None,
     channel_name: str | None,
     before_dt: datetime | None,
     after_dt: datetime | None,
@@ -52,7 +52,7 @@ def fetch_channel_history(
 
     Args:
         session: Database session
-        channel_id: Discord channel ID (snowflake)
+        channel_id: Discord channel ID (snowflake, can be string or int)
         channel_name: Discord channel name
         before_dt: Only get messages before this time
         after_dt: Only get messages after this time
@@ -63,10 +63,10 @@ def fetch_channel_history(
     """
     # Resolve channel
     if channel_id is not None:
-        resolved_channel_id = channel_id
-        channel = session.get(DiscordChannel, channel_id)
+        resolved_channel_id = int(channel_id) if isinstance(channel_id, str) else channel_id
+        channel = session.get(DiscordChannel, resolved_channel_id)
         channel_info = {
-            "id": channel_id,
+            "id": resolved_channel_id,
             "name": channel.name if channel else "unknown",
         }
     else:

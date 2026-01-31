@@ -493,7 +493,7 @@ def github_repo(db_session, github_account):
 
 @pytest.fixture
 def project(db_session, github_repo):
-    """Create a GitHub milestone (project) for testing."""
+    """Create a GitHub-backed Project for testing."""
     from memory.common.db.models.sources import Project
 
     milestone = Project(

@@ -7,19 +7,44 @@ Projects can be:
 Projects support hierarchical organization via parent_id.
 """
 
-from typing import Literal, cast
+from typing import Literal, Self, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
-from memory.common.db.models.sources import Project, GithubRepo
+from memory.common.db.models.people import Person
+from memory.common.db.models.sources import Project, project_collaborators
+from memory.common.people import find_person
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+class CollaboratorInput(BaseModel):
+    """Input for setting a project collaborator."""
+
+    person_id: int | None = None
+    person_identifier: str | None = None
+    role: Literal["contributor", "manager", "admin"] = "contributor"
+
+    @model_validator(mode="after")
+    def require_one_identifier(self) -> Self:
+        if not self.person_id and not self.person_identifier:
+            raise ValueError("Either person_id or person_identifier required")
+        return self
+
+
+class CollaboratorResponse(BaseModel):
+    """A project collaborator with their role."""
+
+    person_id: int
+    person_identifier: str
+    display_name: str
+    role: str
 
 
 class ProjectResponse(BaseModel):
@@ -34,6 +59,8 @@ class ProjectResponse(BaseModel):
     # Hierarchy
     parent_id: int | None
     children_count: int
+    # Collaborators
+    collaborators: list[CollaboratorResponse]
 
 
 class ProjectCreate(BaseModel):
@@ -41,6 +68,7 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     state: Literal["open", "closed"] = "open"
     parent_id: int | None = None
+    collaborators: list[CollaboratorInput] | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -48,6 +76,7 @@ class ProjectUpdate(BaseModel):
     description: str | None = None
     state: Literal["open", "closed"] | None = None
     parent_id: int | None = None
+    collaborators: list[CollaboratorInput] | None = None
 
 
 class ProjectTreeNode(BaseModel):
@@ -61,7 +90,84 @@ class ProjectTreeNode(BaseModel):
     children: list["ProjectTreeNode"]
 
 
-def project_to_response(project: Project, children_count: int = 0) -> ProjectResponse:
+def get_collaborators(db: Session, project_id: int) -> list[CollaboratorResponse]:
+    """Get collaborators for a project."""
+    # Use a JOIN to fetch collaborators with person data in a single query
+    rows = db.execute(
+        project_collaborators.select()
+        .add_columns(
+            Person.id.label("person_id"),
+            Person.identifier.label("person_identifier"),
+            Person.display_name.label("person_display_name"),
+        )
+        .join(Person, Person.id == project_collaborators.c.person_id)
+        .where(project_collaborators.c.project_id == project_id)
+    ).fetchall()
+
+    return [
+        CollaboratorResponse(
+            person_id=row.person_id,
+            person_identifier=row.person_identifier,
+            display_name=row.person_display_name,
+            role=row.role,
+        )
+        for row in rows
+    ]
+
+
+def resolve_collaborator_person(db: Session, collab: CollaboratorInput) -> Person:
+    """Resolve a CollaboratorInput to a Person, raising HTTPException if not found."""
+    if collab.person_id:
+        person = db.get(Person, collab.person_id)
+        if not person:
+            raise HTTPException(
+                status_code=400, detail=f"Person with id {collab.person_id} not found"
+            )
+        return person
+
+    person = find_person(db, collab.person_identifier)
+    if not person:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Person with identifier '{collab.person_identifier}' not found",
+        )
+    return person
+
+
+def sync_collaborators(
+    db: Session, project_id: int, collaborators: list[CollaboratorInput]
+) -> None:
+    """Replace all collaborators for a project with the given list.
+
+    Deduplicates by person, using the last role if a person appears multiple times.
+    """
+    # Resolve all people and dedupe (last one wins)
+    resolved: dict[int, str] = {}
+    for collab in collaborators:
+        person = resolve_collaborator_person(db, collab)
+        resolved[cast(int, person.id)] = collab.role
+
+    # Delete existing collaborators
+    db.execute(
+        project_collaborators.delete().where(
+            project_collaborators.c.project_id == project_id
+        )
+    )
+
+    # Insert new collaborators
+    for person_id, role in resolved.items():
+        db.execute(
+            project_collaborators.insert().values(
+                project_id=project_id,
+                person_id=person_id,
+                role=role,
+            )
+        )
+
+
+def project_to_response(
+    db: Session, project: Project, children_count: int = 0
+) -> ProjectResponse:
     """Convert a project model to response."""
     repo_path = None
     if project.repo:
@@ -77,6 +183,7 @@ def project_to_response(project: Project, children_count: int = 0) -> ProjectRes
         number=project.number,
         parent_id=project.parent_id,
         children_count=children_count,
+        collaborators=get_collaborators(db, cast(int, project.id)),
     )
 
 
@@ -124,7 +231,7 @@ def list_projects(
             children_counts = {parent_id: count for parent_id, count in counts}
 
     return [
-        project_to_response(p, children_counts.get(cast(int, p.id), 0))
+        project_to_response(db, p, children_counts.get(cast(int, p.id), 0))
         for p in projects
     ]
 
@@ -197,7 +304,7 @@ def get_project(
         .scalar()
     ) or 0
 
-    return project_to_response(project, children_count)
+    return project_to_response(db, project, children_count)
 
 
 @router.post("")
@@ -236,7 +343,12 @@ def create_project(
     db.commit()
     db.refresh(project)
 
-    return project_to_response(project)
+    # Sync collaborators if provided
+    if data.collaborators:
+        sync_collaborators(db, new_id, data.collaborators)
+        db.commit()
+
+    return project_to_response(db, project)
 
 
 @router.patch("/{project_id}")
@@ -298,6 +410,10 @@ def update_project(
         if data.state is not None:
             project.state = data.state
 
+    # Sync collaborators if explicitly provided (even if empty list)
+    if "collaborators" in (data.model_fields_set or set()):
+        sync_collaborators(db, project_id, data.collaborators or [])
+
     db.commit()
     db.refresh(project)
 
@@ -308,7 +424,7 @@ def update_project(
         .scalar()
     ) or 0
 
-    return project_to_response(project, children_count)
+    return project_to_response(db, project, children_count)
 
 
 @router.delete("/{project_id}")

@@ -15,6 +15,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
+    DiscordServer,
     DiscordUser,
     UserSession,
 )
@@ -81,13 +82,58 @@ async def _call_discord_api(func, *args, error_msg: str) -> dict[str, Any]:
     return result
 
 
+def _to_snowflake(value: int | str) -> int:
+    """Convert a snowflake ID (int or string) to int."""
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"Invalid snowflake ID: '{value}' is not a valid integer")
+    return value
+
+
+def _resolve_guild_id(
+    session: DBSession,
+    guild_id: int | str | None,
+    guild_name: str | None,
+) -> int:
+    """
+    Resolve a guild ID from either guild_id or guild_name.
+
+    Args:
+        session: Database session
+        guild_id: Discord guild ID (snowflake) as int or string
+        guild_name: Discord server name to look up
+
+    Returns:
+        The resolved guild ID as int
+
+    Raises:
+        ValueError: If neither is provided or guild_name not found
+    """
+    if guild_id is not None:
+        return _to_snowflake(guild_id)
+
+    if guild_name is None:
+        raise ValueError("Must specify either guild_id or guild_name")
+
+    server = (
+        session.query(DiscordServer)
+        .filter(DiscordServer.name == guild_name)
+        .first()
+    )
+    if not server:
+        raise ValueError(f"Server '{guild_name}' not found")
+    return server.id
+
+
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def send_message(
     message: str,
-    channel_id: int | None = None,
+    channel_id: int | str | None = None,
     channel_name: str | None = None,
-    user_id: int | None = None,
+    user_id: int | str | None = None,
     username: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
@@ -203,7 +249,7 @@ async def send_message(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def channel_history(
-    channel_id: int | None = None,
+    channel_id: int | str | None = None,
     channel_name: str | None = None,
     limit: int = 50,
     before: str | None = None,
@@ -285,14 +331,16 @@ async def list_channels(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def list_roles(
-    guild_id: int,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     List all roles in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -300,54 +348,65 @@ async def list_roles(
     """
     resolved_bot_id = resolve_bot_id(bot_id)
 
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+
     return await _call_discord_api(
         discord_client.list_roles,
         resolved_bot_id,
-        guild_id,
-        error_msg=f"Failed to list roles for guild {guild_id}",
+        resolved_guild_id,
+        error_msg=f"Failed to list roles for guild {resolved_guild_id}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def list_role_members(
-    guild_id: int,
-    role_id: int,
+    role_id: int | str,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     List all members who have a specific role.
 
     Args:
-        guild_id: Discord server/guild ID
-        role_id: Role ID to list members for
+        role_id: Role ID to list members for (snowflake, can be string or int)
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with role name and list of members (id, username, display_name)
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_role_id = _to_snowflake(role_id)
+
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
 
     return await _call_discord_api(
         discord_client.list_role_members,
         resolved_bot_id,
-        guild_id,
-        role_id,
-        error_msg=f"Failed to list members for role {role_id}",
+        resolved_guild_id,
+        resolved_role_id,
+        error_msg=f"Failed to list members for role {resolved_role_id}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def list_categories(
-    guild_id: int,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     List all categories in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -355,11 +414,14 @@ async def list_categories(
     """
     resolved_bot_id = resolve_bot_id(bot_id)
 
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+
     return await _call_discord_api(
         discord_client.list_categories,
         resolved_bot_id,
-        guild_id,
-        error_msg=f"Failed to list categories for guild {guild_id}",
+        resolved_guild_id,
+        error_msg=f"Failed to list categories for guild {resolved_guild_id}",
     )
 
 
@@ -371,64 +433,78 @@ async def list_categories(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def add_user_to_role(
-    guild_id: int,
-    role_id: int,
-    user_id: int,
+    role_id: int | str,
+    user_id: int | str,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Add a user to a Discord role.
 
     Args:
-        guild_id: Discord server/guild ID
-        role_id: Role ID to add user to
-        user_id: User ID to add
+        role_id: Role ID to add user to (snowflake, can be string or int)
+        user_id: User ID to add (snowflake, can be string or int)
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status, user name, and role name
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_role_id = _to_snowflake(role_id)
+    resolved_user_id = _to_snowflake(user_id)
+
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
 
     return await _call_discord_api(
         discord_client.add_role_member,
         resolved_bot_id,
-        guild_id,
-        role_id,
-        user_id,
-        error_msg=f"Failed to add user {user_id} to role {role_id}",
+        resolved_guild_id,
+        resolved_role_id,
+        resolved_user_id,
+        error_msg=f"Failed to add user {resolved_user_id} to role {resolved_role_id}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def role_remove(
-    guild_id: int,
-    role_id: int,
-    user_id: int,
+    role_id: int | str,
+    user_id: int | str,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Remove a user from a Discord role.
 
     Args:
-        guild_id: Discord server/guild ID
-        role_id: Role ID to remove user from
-        user_id: User ID to remove
+        role_id: Role ID to remove user from (snowflake, can be string or int)
+        user_id: User ID to remove (snowflake, can be string or int)
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status, user name, and role name
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_role_id = _to_snowflake(role_id)
+    resolved_user_id = _to_snowflake(user_id)
+
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
 
     return await _call_discord_api(
         discord_client.remove_role_member,
         resolved_bot_id,
-        guild_id,
-        role_id,
-        user_id,
-        error_msg=f"Failed to remove user {user_id} from role {role_id}",
+        resolved_guild_id,
+        resolved_role_id,
+        resolved_user_id,
+        error_msg=f"Failed to remove user {resolved_user_id} from role {resolved_role_id}",
     )
 
 
@@ -437,10 +513,46 @@ async def role_remove(
 # =============================================================================
 
 
+def _resolve_channel_id(
+    session: DBSession,
+    channel_id: int | str | None,
+    channel_name: str | None,
+) -> int:
+    """
+    Resolve a channel ID from either channel_id or channel_name.
+
+    Args:
+        session: Database session
+        channel_id: Discord channel ID (snowflake) as int or string
+        channel_name: Discord channel name to look up
+
+    Returns:
+        The resolved channel ID as int
+
+    Raises:
+        ValueError: If neither is provided or channel_name not found
+    """
+    if channel_id is not None:
+        return _to_snowflake(channel_id)
+
+    if channel_name is None:
+        raise ValueError("Must specify either channel_id or channel_name")
+
+    channel = (
+        session.query(DiscordChannel)
+        .filter(DiscordChannel.name == channel_name)
+        .first()
+    )
+    if not channel:
+        raise ValueError(f"Channel '{channel_name}' not found")
+    return channel.id
+
+
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def perms(
-    channel_id: int,
+    channel_id: int | str | None = None,
+    channel_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -449,7 +561,8 @@ async def perms(
     Shows which roles and users have special permissions on the channel.
 
     Args:
-        channel_id: Discord channel ID
+        channel_id: Discord channel ID (snowflake, can be string or int)
+        channel_name: Discord channel name (alternative to channel_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -457,20 +570,24 @@ async def perms(
     """
     resolved_bot_id = resolve_bot_id(bot_id)
 
+    with make_session() as session:
+        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
+
     return await _call_discord_api(
         discord_client.get_channel_permissions,
         resolved_bot_id,
-        channel_id,
-        error_msg=f"Failed to get permissions for channel {channel_id}",
+        resolved_channel_id,
+        error_msg=f"Failed to get permissions for channel {resolved_channel_id}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def set_perms(
-    channel_id: int,
-    role_id: int | None = None,
-    user_id: int | None = None,
+    channel_id: int | str | None = None,
+    channel_name: str | None = None,
+    role_id: int | str | None = None,
+    user_id: int | str | None = None,
     allow: list[str] | None = None,
     deny: list[str] | None = None,
     bot_id: int | None = None,
@@ -482,7 +599,8 @@ async def set_perms(
     manage_messages, manage_channels, add_reactions, attach_files, embed_links
 
     Args:
-        channel_id: Discord channel ID
+        channel_id: Discord channel ID (snowflake, can be string or int)
+        channel_name: Discord channel name (alternative to channel_id)
         role_id: Role ID to set permissions for (mutually exclusive with user_id)
         user_id: User ID to set permissions for (mutually exclusive with role_id)
         allow: List of permission names to allow
@@ -496,24 +614,30 @@ async def set_perms(
         raise ValueError("Must specify either role_id or user_id")
 
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_role_id = _to_snowflake(role_id) if role_id else None
+    resolved_user_id = _to_snowflake(user_id) if user_id else None
+
+    with make_session() as session:
+        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
 
     return await _call_discord_api(
         discord_client.set_channel_permission,
         resolved_bot_id,
-        channel_id,
-        role_id,
-        user_id,
+        resolved_channel_id,
+        resolved_role_id,
+        resolved_user_id,
         allow,
         deny,
-        error_msg=f"Failed to set permissions for channel {channel_id}",
+        error_msg=f"Failed to set permissions for channel {resolved_channel_id}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def del_perms(
-    channel_id: int,
-    target_id: int,
+    target_id: int | str,
+    channel_id: int | str | None = None,
+    channel_name: str | None = None,
     target_type: str = "role",
     bot_id: int | None = None,
 ) -> dict[str, Any]:
@@ -521,8 +645,9 @@ async def del_perms(
     Remove permission overwrite for a role or user from a channel.
 
     Args:
-        channel_id: Discord channel ID
-        target_id: Role or user ID to remove permissions for
+        target_id: Role or user ID to remove permissions for (snowflake, can be string or int)
+        channel_id: Discord channel ID (snowflake, can be string or int)
+        channel_name: Discord channel name (alternative to channel_id)
         target_type: "role" or "user" (default: "role")
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
@@ -530,14 +655,18 @@ async def del_perms(
         Dict with success status
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_target_id = _to_snowflake(target_id)
+
+    with make_session() as session:
+        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
 
     return await _call_discord_api(
         discord_client.remove_channel_permission,
         resolved_bot_id,
-        channel_id,
-        target_id,
+        resolved_channel_id,
+        resolved_target_id,
         target_type,
-        error_msg=f"Failed to remove permissions for channel {channel_id}",
+        error_msg=f"Failed to remove permissions for channel {resolved_channel_id}",
     )
 
 
@@ -549,37 +678,44 @@ async def del_perms(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def create_channel(
-    guild_id: int,
     name: str,
-    category_id: int | None = None,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
+    category_id: int | str | None = None,
     topic: str | None = None,
-    copy_permissions_from: int | None = None,
+    copy_permissions_from: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Create a new text channel in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID
         name: Channel name
-        category_id: Optional category to create channel in
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
+        category_id: Optional category to create channel in (snowflake, can be string or int)
         topic: Optional channel topic/description
-        copy_permissions_from: Optional channel ID to copy permissions from
+        copy_permissions_from: Optional channel ID to copy permissions from (snowflake, can be string or int)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status and new channel info
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_category_id = _to_snowflake(category_id) if category_id else None
+    resolved_copy_from = _to_snowflake(copy_permissions_from) if copy_permissions_from else None
+
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
 
     return await _call_discord_api(
         discord_client.create_channel,
         resolved_bot_id,
-        guild_id,
+        resolved_guild_id,
         name,
-        category_id,
+        resolved_category_id,
         topic,
-        copy_permissions_from,
+        resolved_copy_from,
         error_msg=f"Failed to create channel {name}",
     )
 
@@ -587,16 +723,18 @@ async def create_channel(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def create_category(
-    guild_id: int,
     name: str,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Create a new category in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID
         name: Category name
+        guild_id: Discord server/guild ID (snowflake, can be string or int)
+        guild_name: Discord server name (alternative to guild_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -604,10 +742,13 @@ async def create_category(
     """
     resolved_bot_id = resolve_bot_id(bot_id)
 
+    with make_session() as session:
+        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+
     return await _call_discord_api(
         discord_client.create_category,
         resolved_bot_id,
-        guild_id,
+        resolved_guild_id,
         name,
         error_msg=f"Failed to create category {name}",
     )

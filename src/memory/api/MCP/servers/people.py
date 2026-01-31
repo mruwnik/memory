@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from sqlalchemy import Text
+from sqlalchemy import Text, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
@@ -197,7 +197,11 @@ async def get_person(identifier: str) -> dict | None:
     logger.info(f"MCP: Getting person: {identifier}")
 
     with make_session() as session:
+        # First try exact identifier match
         person = session.query(Person).filter(Person.identifier == identifier).first()
+        if not person:
+            # Fall back to searching aliases
+            person = session.query(Person).filter(Person.aliases.contains([identifier])).first()  # type: ignore[union-attr]
         if not person:
             return None
         return _person_to_dict(person)
@@ -236,10 +240,17 @@ async def list_people(
 
         if search:
             search_term = f"%{search.lower()}%"
+            # Search in aliases array using EXISTS with unnest for ILIKE matching
+            # We use a raw SQL fragment for the array search since SQLAlchemy
+            # doesn't have great support for unnest + ILIKE
+            alias_match = text(
+                "EXISTS (SELECT 1 FROM unnest(aliases) AS alias WHERE alias ILIKE :search_pattern)"
+            ).bindparams(search_pattern=search_term)
             query = query.filter(
                 (Person.display_name.ilike(search_term))  # type: ignore[union-attr]
                 | (Person.content.ilike(search_term))  # type: ignore[union-attr]
                 | (Person.identifier.ilike(search_term))  # type: ignore[union-attr]
+                | alias_match
             )
 
         query = query.order_by(Person.display_name).offset(offset).limit(limit)

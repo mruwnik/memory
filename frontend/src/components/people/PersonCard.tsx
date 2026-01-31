@@ -121,24 +121,28 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete }: Pers
                 Contact Information
               </h4>
               <dl className="grid gap-2">
-                {Object.entries(person.contact_info).map(([key, value]) => (
-                  <div key={key} className="flex">
-                    <dt className="text-sm text-slate-500 w-24 flex-shrink-0 capitalize">{key}:</dt>
-                    <dd className="text-sm text-slate-700">
-                      {key === 'email' ? (
-                        <a href={`mailto:${value}`} className="text-primary hover:underline">
-                          {value}
-                        </a>
-                      ) : key === 'phone' ? (
-                        <a href={`tel:${value}`} className="text-primary hover:underline">
-                          {value}
-                        </a>
-                      ) : (
-                        value
-                      )}
-                    </dd>
-                  </div>
-                ))}
+                {Object.entries(person.contact_info).map(([key, value]) => {
+                  // Skip complex nested objects (e.g., slack workspace data)
+                  if (typeof value !== 'string') return null
+                  return (
+                    <div key={key} className="flex">
+                      <dt className="text-sm text-slate-500 w-24 flex-shrink-0 capitalize">{key}:</dt>
+                      <dd className="text-sm text-slate-700">
+                        {key === 'email' ? (
+                          <a href={`mailto:${value}`} className="text-primary hover:underline">
+                            {value}
+                          </a>
+                        ) : key === 'phone' ? (
+                          <a href={`tel:${value}`} className="text-primary hover:underline">
+                            {value}
+                          </a>
+                        ) : (
+                          value
+                        )}
+                      </dd>
+                    </div>
+                  )
+                })}
               </dl>
             </div>
           )}

@@ -97,8 +97,11 @@ const Calendar = () => {
   }, [getEventsForMonths])
 
   useEffect(() => {
+    // For admins, wait until user list is loaded before fetching events
+    // to avoid fetching all users' events then re-fetching filtered
+    if (isAdmin && !usersLoaded) return
     loadEvents(currentDate, selectedUserIds)
-  }, [loadEvents, currentDate, selectedUserIds])
+  }, [loadEvents, currentDate, selectedUserIds, isAdmin, usersLoaded])
 
   // Get unique calendar names for filter
   const calendarNames = useMemo(() => {
@@ -664,12 +667,16 @@ const Calendar = () => {
                     <div>
                       <div className="text-xs text-slate-500 mb-1">Contact</div>
                       <div className="space-y-1">
-                        {Object.entries(selectedAttendee.person.contact_info).map(([key, value]) => (
-                          <div key={key} className="text-sm">
-                            <span className="text-slate-500 capitalize">{key}: </span>
-                            <span className="text-slate-800">{value}</span>
-                          </div>
-                        ))}
+                        {Object.entries(selectedAttendee.person.contact_info).map(([key, value]) => {
+                          // Skip complex nested objects (e.g., slack workspace data)
+                          if (typeof value !== 'string') return null
+                          return (
+                            <div key={key} className="text-sm">
+                              <span className="text-slate-500 capitalize">{key}: </span>
+                              <span className="text-slate-800">{value}</span>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
