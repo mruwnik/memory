@@ -340,3 +340,17 @@ SECRETS_ENCRYPTION_SALT = os.getenv(
 # Memory stack identifier - used for network naming with Claude orchestrator
 # Set to "prod" or "dev" to separate environments
 MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
+
+
+def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Parse comma-separated env var into a frozenset."""
+    value = os.getenv(key, "")
+    if not value.strip():
+        return default
+    return frozenset(s.strip().lower() for s in value.split(",") if s.strip())
+
+
+# MCP server configuration
+# Comma-separated list of server names to disable (e.g., "slack,forecast")
+# Valid names: books, core, discord, email, forecast, github, meta, organizer, people, polling, schedule, slack
+DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")

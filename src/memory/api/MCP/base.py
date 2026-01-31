@@ -3,6 +3,7 @@ import pathlib
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from sqlalchemy import text
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
@@ -10,23 +11,17 @@ from starlette.templating import Jinja2Templates
 from memory.api.MCP.oauth_provider import SimpleOAuthProvider
 from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 from memory.api.MCP.metrics_middleware import MetricsMiddleware
-from memory.api.MCP.servers.books import books_mcp
-from memory.api.MCP.servers.core import core_mcp
-from memory.api.MCP.servers.discord import discord_mcp
-from memory.api.MCP.servers.email import email_mcp
-from memory.api.MCP.servers.slack import slack_mcp
-from memory.api.MCP.servers.forecast import forecast_mcp
-from memory.api.MCP.servers.github import github_mcp
-from memory.api.MCP.servers.meta import meta_mcp
-from memory.api.MCP.servers.organizer import organizer_mcp
-from memory.api.MCP.servers.people import people_mcp
-from memory.api.MCP.servers.polling import polling_mcp
-from memory.api.MCP.servers.schedule import schedule_mcp
-from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
+from memory.api.MCP.servers import (
+    MCPServer,
+    get_enabled_servers,
+    get_server_instance,
+    is_server_enabled,
+)
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.common.db.models import OAuthState, UserSession
 from memory.common.db.models.users import HumanUser
+from memory.common.qdrant import get_qdrant_client
 
 logger = logging.getLogger(__name__)
 engine = get_engine()
@@ -45,9 +40,19 @@ mcp = FastMCP(
 )
 
 
-# List of prefixes used when mounting subservers
+# Build list of enabled server prefixes dynamically
 # Used by middleware to strip prefixes when looking up visibility checkers
-SUBSERVER_PREFIXES = ["core", "discord", "email", "forecast", "github", "organizer", "people", "polling", "schedule", "books", "meta", "slack"]
+SUBSERVER_PREFIXES = list(get_enabled_servers())
+
+# Startup validation
+if not SUBSERVER_PREFIXES:
+    raise ValueError(
+        "DISABLED_MCP_SERVERS disables all servers - this is probably a mistake"
+    )
+if MCPServer.CORE.value not in SUBSERVER_PREFIXES:
+    logger.warning(
+        "Core MCP server is disabled - search and observations will be unavailable"
+    )
 
 
 def _get_user_info_for_middleware() -> dict:
@@ -81,7 +86,9 @@ mcp.add_middleware(
 
 # Add metrics middleware to record tool call timing
 mcp.add_middleware(
-    MetricsMiddleware(get_user_info=_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES)
+    MetricsMiddleware(
+        get_user_info=_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES
+    )
 )
 
 
@@ -178,8 +185,6 @@ def get_user_scopes() -> list[str]:
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
     """Health check endpoint that verifies all dependencies are accessible."""
-    from sqlalchemy import text
-
     checks = {"mcp_oauth": "enabled"}
     all_healthy = True
 
@@ -195,8 +200,6 @@ async def health_check(request: Request):
 
     # Check Qdrant connection
     try:
-        from memory.common.qdrant import get_qdrant_client
-
         client = get_qdrant_client()
         client.get_collections()
         checks["qdrant"] = "healthy"
@@ -211,19 +214,17 @@ async def health_check(request: Request):
 
 
 # Inject auth provider into subservers that need it
-set_schedule_auth(get_current_user)
+if is_server_enabled(MCPServer.SCHEDULE):
+    from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
 
-# Mount all subservers onto the main MCP server
+    set_schedule_auth(get_current_user)
+
+# Mount only enabled subservers onto the main MCP server
 # Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
-mcp.mount(core_mcp, prefix="core")
-mcp.mount(discord_mcp, prefix="discord")
-mcp.mount(email_mcp, prefix="email")
-mcp.mount(forecast_mcp, prefix="forecast")
-mcp.mount(github_mcp, prefix="github")
-mcp.mount(organizer_mcp, prefix="organizer")
-mcp.mount(people_mcp, prefix="people")
-mcp.mount(polling_mcp, prefix="polling")
-mcp.mount(schedule_mcp, prefix="schedule")
-mcp.mount(books_mcp, prefix="books")
-mcp.mount(meta_mcp, prefix="meta")
-mcp.mount(slack_mcp, prefix="slack")
+for server in MCPServer:
+    if is_server_enabled(server):
+        mcp.mount(get_server_instance(server), prefix=server.value)
+        logger.info(f"Mounted MCP server: {server.value}")
+
+if settings.DISABLED_MCP_SERVERS:
+    logger.info(f"Disabled MCP servers: {settings.DISABLED_MCP_SERVERS}")
