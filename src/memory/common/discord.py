@@ -169,8 +169,8 @@ def refresh_discord_metadata() -> dict[str, Any] | None:
 # =============================================================================
 
 
-def list_roles(bot_id: int, guild_id: int) -> dict[str, Any] | None:
-    """List all roles in a guild."""
+def list_roles(bot_id: int, guild_id: int | str) -> dict[str, Any] | None:
+    """List all roles in a guild (guild_id can be ID or name)."""
     try:
         response = requests.get(
             f"{get_api_url()}/guilds/{guild_id}/roles",
@@ -184,8 +184,8 @@ def list_roles(bot_id: int, guild_id: int) -> dict[str, Any] | None:
         return None
 
 
-def list_role_members(bot_id: int, guild_id: int, role_id: int) -> dict[str, Any] | None:
-    """List all members with a specific role."""
+def list_role_members(bot_id: int, guild_id: int | str, role_id: int) -> dict[str, Any] | None:
+    """List all members with a specific role (guild_id can be ID or name)."""
     try:
         response = requests.get(
             f"{get_api_url()}/guilds/{guild_id}/roles/{role_id}/members",
@@ -199,8 +199,8 @@ def list_role_members(bot_id: int, guild_id: int, role_id: int) -> dict[str, Any
         return None
 
 
-def add_role_member(bot_id: int, guild_id: int, role_id: int, user_id: int) -> dict[str, Any] | None:
-    """Add a user to a role."""
+def add_role_member(bot_id: int, guild_id: int | str, role_id: int, user_id: int) -> dict[str, Any] | None:
+    """Add a user to a role (guild_id can be ID or name)."""
     try:
         response = requests.post(
             f"{get_api_url()}/roles/add_member",
@@ -214,8 +214,8 @@ def add_role_member(bot_id: int, guild_id: int, role_id: int, user_id: int) -> d
         return None
 
 
-def remove_role_member(bot_id: int, guild_id: int, role_id: int, user_id: int) -> dict[str, Any] | None:
-    """Remove a user from a role."""
+def remove_role_member(bot_id: int, guild_id: int | str, role_id: int, user_id: int) -> dict[str, Any] | None:
+    """Remove a user from a role (guild_id can be ID or name)."""
     try:
         response = requests.post(
             f"{get_api_url()}/roles/remove_member",
@@ -300,8 +300,8 @@ def remove_channel_permission(
 # =============================================================================
 
 
-def list_categories(bot_id: int, guild_id: int) -> dict[str, Any] | None:
-    """List all categories in a guild."""
+def list_categories(bot_id: int, guild_id: int | str) -> dict[str, Any] | None:
+    """List all categories in a guild (guild_id can be ID or name)."""
     try:
         response = requests.get(
             f"{get_api_url()}/guilds/{guild_id}/categories",
@@ -317,13 +317,13 @@ def list_categories(bot_id: int, guild_id: int) -> dict[str, Any] | None:
 
 def create_channel(
     bot_id: int,
-    guild_id: int,
+    guild_id: int | str,
     name: str,
     category_id: int | None = None,
     topic: str | None = None,
     copy_permissions_from: int | None = None,
 ) -> dict[str, Any] | None:
-    """Create a new text channel."""
+    """Create a new text channel (guild_id can be ID or name)."""
     try:
         response = requests.post(
             f"{get_api_url()}/channels/create",
@@ -344,8 +344,8 @@ def create_channel(
         return None
 
 
-def create_category(bot_id: int, guild_id: int, name: str) -> dict[str, Any] | None:
-    """Create a new category."""
+def create_category(bot_id: int, guild_id: int | str, name: str) -> dict[str, Any] | None:
+    """Create a new category (guild_id can be ID or name)."""
     try:
         response = requests.post(
             f"{get_api_url()}/categories/create",
@@ -356,6 +356,32 @@ def create_category(bot_id: int, guild_id: int, name: str) -> dict[str, Any] | N
         return response.json()
     except requests.RequestException as e:
         logger.error(f"Failed to create category {name}: {e}")
+        return None
+
+
+def delete_channel(
+    bot_id: int,
+    channel_id: int | None = None,
+    channel_name: str | None = None,
+    guild_id: int | str | None = None,
+) -> dict[str, Any] | None:
+    """Delete a channel or category by ID or name (guild_id can be ID or name)."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/channels/delete",
+            json={
+                "bot_id": bot_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "guild_id": guild_id,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        identifier = channel_id or channel_name
+        logger.error(f"Failed to delete channel {identifier}: {e}")
         return None
 
 

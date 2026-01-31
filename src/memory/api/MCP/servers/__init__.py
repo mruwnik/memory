@@ -98,7 +98,8 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.slack import slack_mcp
 
             return slack_mcp
-    raise ValueError(f"Unknown server: {server}")
+        case _:
+            raise ValueError(f"Unknown server: {server}")
 
 
 __all__ = [

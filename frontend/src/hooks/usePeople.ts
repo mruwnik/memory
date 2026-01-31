@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useMCP } from './useMCP'
 
 export interface Person {
+  id: number
   identifier: string
   display_name: string
   aliases: string[]

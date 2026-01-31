@@ -74,9 +74,9 @@ def resolve_bot_id(bot_id: int | None) -> int:
         return _get_default_bot(session).id
 
 
-async def _call_discord_api(func, *args, error_msg: str) -> dict[str, Any]:
+async def _call_discord_api(func, *args, error_msg: str, **kwargs) -> dict[str, Any]:
     """Call a discord_client function and raise on None result."""
-    result = await asyncio.to_thread(func, *args)
+    result = await asyncio.to_thread(func, *args, **kwargs)
     if result is None:
         raise ValueError(error_msg)
     return result
@@ -751,4 +751,84 @@ async def create_category(
         resolved_guild_id,
         name,
         error_msg=f"Failed to create category {name}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def delete_channel(
+    channel_id: int | str | None = None,
+    channel_name: str | None = None,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Delete a Discord channel or category.
+
+    Args:
+        channel_id: Discord channel/category ID (snowflake, can be string or int)
+        channel_name: Discord channel/category name (alternative to channel_id)
+        guild_id: Discord server/guild ID (required when using channel_name)
+        guild_name: Discord server name (alternative to guild_id)
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status and deleted channel/category info
+    """
+    if channel_id is None and channel_name is None:
+        raise ValueError("Must specify either channel_id or channel_name")
+
+    if channel_name is not None and guild_id is None and guild_name is None:
+        raise ValueError("guild_id or guild_name is required when using channel_name")
+
+    resolved_bot_id = resolve_bot_id(bot_id)
+    resolved_channel_id = _to_snowflake(channel_id) if channel_id is not None else None
+
+    # Resolve guild_id if channel_name is used
+    resolved_guild_id = None
+    if channel_name is not None:
+        with make_session() as session:
+            resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+
+    identifier = channel_id or channel_name
+    return await _call_discord_api(
+        discord_client.delete_channel,
+        resolved_bot_id,
+        error_msg=f"Failed to delete channel {identifier}",
+        channel_id=resolved_channel_id,
+        channel_name=channel_name if resolved_channel_id is None else None,
+        guild_id=resolved_guild_id,
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def delete_category(
+    category_id: int | str | None = None,
+    category_name: str | None = None,
+    guild_id: int | str | None = None,
+    guild_name: str | None = None,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Delete a Discord category.
+
+    Args:
+        category_id: Discord category ID (snowflake, can be string or int)
+        category_name: Discord category name (alternative to category_id)
+        guild_id: Discord server/guild ID (required when using category_name)
+        guild_name: Discord server name (alternative to guild_id)
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status and deleted category info
+    """
+    # Categories are just a type of channel in Discord, so reuse delete_channel
+    return await delete_channel(
+        channel_id=category_id,
+        channel_name=category_name,
+        guild_id=guild_id,
+        guild_name=guild_name,
+        bot_id=bot_id,
     )

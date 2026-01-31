@@ -20,7 +20,7 @@ interface DayCell {
 
 const Calendar = () => {
   const { getEventsForMonths, clearCache } = useCalendar()
-  const { hasScope, user: currentUser } = useAuth()
+  const { hasScope, user: currentUser, isLoading: authLoading } = useAuth()
   const { listUsers } = useUsers()
   const { listPeople } = usePeople()
 
@@ -97,11 +97,13 @@ const Calendar = () => {
   }, [getEventsForMonths])
 
   useEffect(() => {
+    // Wait for auth to load before fetching - we need to know if user is admin
+    if (authLoading) return
     // For admins, wait until user list is loaded before fetching events
     // to avoid fetching all users' events then re-fetching filtered
     if (isAdmin && !usersLoaded) return
     loadEvents(currentDate, selectedUserIds)
-  }, [loadEvents, currentDate, selectedUserIds, isAdmin, usersLoaded])
+  }, [loadEvents, currentDate, selectedUserIds, isAdmin, usersLoaded, authLoading])
 
   // Get unique calendar names for filter
   const calendarNames = useMemo(() => {

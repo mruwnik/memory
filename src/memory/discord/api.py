@@ -49,7 +49,7 @@ class ReactionRequest(BaseModel):
 
 class RoleMemberRequest(BaseModel):
     bot_id: int
-    guild_id: int
+    guild_id: int | str  # Accepts ID (int) or name (str)
     role_id: int
     user_id: int
 
@@ -65,7 +65,7 @@ class ChannelPermissionRequest(BaseModel):
 
 class CreateChannelRequest(BaseModel):
     bot_id: int
-    guild_id: int
+    guild_id: int | str  # Accepts ID (int) or name (str)
     name: str
     category_id: int | None = None
     topic: str | None = None
@@ -74,8 +74,15 @@ class CreateChannelRequest(BaseModel):
 
 class CreateCategoryRequest(BaseModel):
     bot_id: int
-    guild_id: int
+    guild_id: int | str  # Accepts ID (int) or name (str)
     name: str
+
+
+class DeleteChannelRequest(BaseModel):
+    bot_id: int
+    channel_id: int | None = None
+    channel_name: str | None = None
+    guild_id: int | str | None = None  # Accepts ID (int) or name (str), required if using channel_name
 
 
 @asynccontextmanager
@@ -119,11 +126,34 @@ def get_collector_or_404(mgr: CollectorManager, bot_id: int):
     return collector
 
 
-def get_guild_or_404(collector, guild_id: int) -> discord.Guild:
-    """Get guild or raise 404."""
-    guild = collector.get_guild(guild_id)
+def get_guild_or_404(collector, guild_id: int | str) -> discord.Guild:
+    """Get guild by ID (int) or name (str), or raise 404.
+
+    Note: Numeric strings are always treated as IDs, never names.
+    Name matching prefers exact case match, falls back to case-insensitive.
+    """
+    # If it's a string that looks like an int, convert it
+    if isinstance(guild_id, str):
+        try:
+            guild_id_int = int(guild_id)
+            guild = collector.get_guild(guild_id_int)
+        except ValueError:
+            # It's a name, search by name (exact match first, then case-insensitive)
+            guild = None
+            case_insensitive_match = None
+            for g in collector.client.guilds:
+                if g.name == guild_id:
+                    guild = g
+                    break
+                if case_insensitive_match is None and g.name.lower() == guild_id.lower():
+                    case_insensitive_match = g
+            else:
+                guild = case_insensitive_match
+    else:
+        guild = collector.get_guild(guild_id)
+
     if not guild:
-        raise HTTPException(status_code=404, detail=f"Guild {guild_id} not found")
+        raise HTTPException(status_code=404, detail=f"Guild '{guild_id}' not found")
     return guild
 
 
@@ -368,8 +398,8 @@ async def refresh_metadata() -> dict[str, Any]:
 
 
 @app.get("/guilds/{guild_id}/roles")
-async def list_roles(guild_id: int, bot_id: int) -> dict[str, Any]:
-    """List all roles in a guild."""
+async def list_roles(guild_id: str, bot_id: int) -> dict[str, Any]:
+    """List all roles in a guild (guild_id can be ID or name)."""
     mgr = get_manager()
     collector = get_collector_or_404(mgr, bot_id)
     guild = get_guild_or_404(collector, guild_id)
@@ -390,8 +420,8 @@ async def list_roles(guild_id: int, bot_id: int) -> dict[str, Any]:
 
 
 @app.get("/guilds/{guild_id}/roles/{role_id}/members")
-async def list_role_members(guild_id: int, role_id: int, bot_id: int) -> dict[str, Any]:
-    """List all members with a specific role."""
+async def list_role_members(guild_id: str, role_id: int, bot_id: int) -> dict[str, Any]:
+    """List all members with a specific role (guild_id can be ID or name)."""
     mgr = get_manager()
     collector = get_collector_or_404(mgr, bot_id)
     guild = get_guild_or_404(collector, guild_id)
@@ -529,8 +559,8 @@ async def remove_channel_permission(
 
 
 @app.get("/guilds/{guild_id}/categories")
-async def list_categories(guild_id: int, bot_id: int) -> dict[str, Any]:
-    """List all categories in a guild."""
+async def list_categories(guild_id: str, bot_id: int) -> dict[str, Any]:
+    """List all categories in a guild (guild_id can be ID or name)."""
     mgr = get_manager()
     collector = get_collector_or_404(mgr, bot_id)
     guild = get_guild_or_404(collector, guild_id)
@@ -570,13 +600,15 @@ async def create_channel(request: CreateChannelRequest) -> dict[str, Any]:
             overwrites = dict(source_channel.overwrites)
 
     async with discord_api_errors("create channels"):
-        channel = await guild.create_text_channel(
-            name=request.name,
-            category=category,
-            topic=request.topic,
-            overwrites=overwrites,
-            reason="Created via MCP",
-        )
+        kwargs: dict[str, Any] = {
+            "name": request.name,
+            "category": category,
+            "topic": request.topic,
+            "reason": "Created via MCP",
+        }
+        if overwrites is not None:
+            kwargs["overwrites"] = overwrites
+        channel = await guild.create_text_channel(**kwargs)
         return {
             "success": True,
             "channel": {
@@ -604,6 +636,74 @@ async def create_category(request: CreateCategoryRequest) -> dict[str, Any]:
             "category": {
                 "id": category.id,
                 "name": category.name,
+            },
+        }
+
+
+@app.post("/channels/delete")
+async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
+    """Delete a channel or category by ID or name."""
+    if request.channel_id is None and request.channel_name is None:
+        raise HTTPException(status_code=400, detail="Must specify either channel_id or channel_name")
+
+    mgr = get_manager()
+    collector = get_collector_or_404(mgr, request.bot_id)
+
+    channel = None
+
+    if request.channel_id is not None:
+        # Find by ID across all guilds
+        for guild in collector.client.guilds:
+            channel = guild.get_channel(request.channel_id)
+            if channel:
+                break
+    else:
+        # Find by name - requires guild_id to avoid ambiguity
+        if request.guild_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="guild_id is required when using channel_name"
+            )
+        guild = get_guild_or_404(collector, request.guild_id)
+
+        # Search all channels (including categories) by name
+        # Prefer exact case match, fall back to case-insensitive
+        case_insensitive_match = None
+        for ch in guild.channels:
+            if ch.name == request.channel_name:
+                channel = ch
+                break
+            if case_insensitive_match is None and ch.name.lower() == request.channel_name.lower():
+                case_insensitive_match = ch
+        else:
+            # No exact match found, use case-insensitive match if available
+            channel = case_insensitive_match
+
+    if not channel:
+        identifier = request.channel_id or request.channel_name
+        raise HTTPException(status_code=404, detail=f"Channel '{identifier}' not found")
+
+    channel_id = channel.id
+    channel_name = channel.name
+    if isinstance(channel, discord.CategoryChannel):
+        channel_type = "category"
+    elif isinstance(channel, discord.VoiceChannel):
+        channel_type = "voice"
+    elif isinstance(channel, discord.ForumChannel):
+        channel_type = "forum"
+    elif isinstance(channel, discord.StageChannel):
+        channel_type = "stage"
+    else:
+        channel_type = "text"
+
+    async with discord_api_errors("delete channels"):
+        await channel.delete(reason="Deleted via MCP")
+        return {
+            "success": True,
+            "deleted": {
+                "id": channel_id,
+                "name": channel_name,
+                "type": channel_type,
             },
         }
 
