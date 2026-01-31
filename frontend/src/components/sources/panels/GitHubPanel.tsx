@@ -561,8 +561,10 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
 
   if (loading) {
     return (
-      <div className="min-h-60 flex items-center justify-center text-sm text-slate-500">
-        Loading repositories...
+      <div className="min-h-60 flex flex-col items-center justify-center text-sm text-slate-500">
+        <div className="w-6 h-6 border-2 border-slate-200 border-t-primary rounded-full animate-spin mb-2"></div>
+        <p>Loading repositories...</p>
+        <p className="text-xs text-slate-400 mt-1">This may take a moment for large accounts</p>
       </div>
     )
   }

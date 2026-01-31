@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
+import { useAuth } from '@/hooks/useAuth'
+import { useUsers, User } from '@/hooks/useUsers'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -16,41 +18,87 @@ interface DayCell {
 }
 
 const Calendar = () => {
-  const { getUpcomingEvents } = useCalendar()
+  const { getEventsForMonths, clearCache } = useCalendar()
+  const { hasScope, user: currentUser } = useAuth()
+  const { listUsers } = useUsers()
+
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
+  const [selectedDayEvents, setSelectedDayEvents] = useState<{ date: Date; events: CalendarEvent[] } | null>(null)
+  const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(new Set())
+  const [showCalendarFilter, setShowCalendarFilter] = useState(false)
 
-  const loadEvents = useCallback(async (date: Date) => {
+  // User filtering (admin only)
+  const isAdmin = hasScope('admin') || hasScope('*')
+  const [users, setUsers] = useState<User[]>([])
+  const [enabledUsers, setEnabledUsers] = useState<Set<number>>(new Set())
+  const [showUserFilter, setShowUserFilter] = useState(false)
+  const [usersLoaded, setUsersLoaded] = useState(false)
+
+  // Load users for admin
+  useEffect(() => {
+    if (!isAdmin) return
+
+    const loadUsers = async () => {
+      try {
+        const userList = await listUsers()
+        // Only show human users
+        const humanUsers = userList.filter(u => u.user_type === 'human')
+        setUsers(humanUsers)
+        // Default: only current user enabled
+        if (currentUser) {
+          setEnabledUsers(new Set([currentUser.id]))
+        }
+        setUsersLoaded(true)
+      } catch {
+        // Silently fail - user filter just won't appear
+      }
+    }
+
+    loadUsers()
+  }, [isAdmin, listUsers, currentUser])
+
+  // Get userIds to filter by (undefined = all users for non-admins)
+  const selectedUserIds = useMemo(() => {
+    if (!isAdmin || !usersLoaded) return undefined
+    // If all users are selected, don't filter (better performance)
+    if (enabledUsers.size === users.length) return undefined
+    return Array.from(enabledUsers)
+  }, [isAdmin, usersLoaded, enabledUsers, users.length])
+
+  const loadEvents = useCallback(async (date: Date, userIds?: number[]) => {
     setLoading(true)
     setError(null)
     try {
-      // Calculate range for the month view (include overflow days)
-      const year = date.getFullYear()
-      const month = date.getMonth()
-      // Start from first day of previous month (for overflow)
-      const startDate = new Date(year, month - 1, 1)
-      // End at last day of next month (for overflow)
-      const endDate = new Date(year, month + 2, 0)
-
-      const data = await getUpcomingEvents({
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-        limit: 200,
-      })
+      const data = await getEventsForMonths(date.getFullYear(), date.getMonth(), userIds)
       setEvents(data)
+      // Initialize enabled calendars with all unique calendar names
+      const calendarNames = new Set(data.map(e => e.calendar_name || 'Unknown').filter(Boolean))
+      setEnabledCalendars(prev => prev.size === 0 ? calendarNames : prev)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load events')
     } finally {
       setLoading(false)
     }
-  }, [getUpcomingEvents])
+  }, [getEventsForMonths])
 
   useEffect(() => {
-    loadEvents(currentDate)
-  }, [loadEvents, currentDate])
+    loadEvents(currentDate, selectedUserIds)
+  }, [loadEvents, currentDate, selectedUserIds])
+
+  // Get unique calendar names for filter
+  const calendarNames = useMemo(() => {
+    const names = new Set(events.map(e => e.calendar_name || 'Unknown'))
+    return Array.from(names).sort()
+  }, [events])
+
+  // Filter events by enabled calendars
+  const filteredEvents = useMemo(() => {
+    return events.filter(e => enabledCalendars.has(e.calendar_name || 'Unknown'))
+  }, [events, enabledCalendars])
 
   // Generate calendar grid for current month view
   const calendarDays = useMemo((): DayCell[] => {
@@ -78,7 +126,7 @@ const Calendar = () => {
         date,
         isCurrentMonth: false,
         isToday: date.getTime() === today.getTime(),
-        events: getEventsForDate(date, events),
+        events: getEventsForDate(date, filteredEvents),
       })
     }
 
@@ -89,7 +137,7 @@ const Calendar = () => {
         date,
         isCurrentMonth: true,
         isToday: date.getTime() === today.getTime(),
-        events: getEventsForDate(date, events),
+        events: getEventsForDate(date, filteredEvents),
       })
     }
 
@@ -101,12 +149,12 @@ const Calendar = () => {
         date,
         isCurrentMonth: false,
         isToday: date.getTime() === today.getTime(),
-        events: getEventsForDate(date, events),
+        events: getEventsForDate(date, filteredEvents),
       })
     }
 
     return days
-  }, [currentDate, events])
+  }, [currentDate, filteredEvents])
 
   const goToPreviousMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1))
@@ -120,10 +168,57 @@ const Calendar = () => {
     setCurrentDate(new Date())
   }
 
+  const toggleCalendar = (name: string) => {
+    setEnabledCalendars(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) {
+        next.delete(name)
+      } else {
+        next.add(name)
+      }
+      return next
+    })
+  }
+
+  const selectAllCalendars = () => setEnabledCalendars(new Set(calendarNames))
+  const selectNoCalendars = () => setEnabledCalendars(new Set())
+
+  const toggleUser = (userId: number) => {
+    setEnabledUsers(prev => {
+      const next = new Set(prev)
+      if (next.has(userId)) {
+        next.delete(userId)
+      } else {
+        next.add(userId)
+      }
+      return next
+    })
+    // Clear cache when user selection changes
+    clearCache()
+  }
+
+  const selectAllUsers = () => {
+    setEnabledUsers(new Set(users.map(u => u.id)))
+    clearCache()
+  }
+  const selectNoUsers = () => {
+    setEnabledUsers(new Set())
+    clearCache()
+  }
+
   const formatEventTime = (event: CalendarEvent) => {
     if (event.all_day) return ''
     const date = new Date(event.start_time)
     return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '')
+  }
+
+  const formatDateHeader = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })
   }
 
   return (
@@ -136,6 +231,118 @@ const Calendar = () => {
           {MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}
         </h1>
         <div className="flex gap-2">
+          {/* User Filter Dropdown (Admin only) */}
+          {isAdmin && users.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setShowUserFilter(!showUserFilter)}
+                className="px-3 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-sm flex items-center gap-2"
+              >
+                <span>Users</span>
+                <span className="text-xs text-slate-400">
+                  ({enabledUsers.size}/{users.length})
+                </span>
+              </button>
+              {showUserFilter && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowUserFilter(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64 max-h-80 overflow-auto">
+                    <div className="p-2 border-b border-slate-100 flex gap-2">
+                      <button
+                        onClick={selectAllUsers}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        onClick={selectNoUsers}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Select none
+                      </button>
+                    </div>
+                    <div className="p-2 space-y-1">
+                      {users.map(user => (
+                        <label
+                          key={user.id}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={enabledUsers.has(user.id)}
+                            onChange={() => toggleUser(user.id)}
+                            className="rounded border-slate-300 text-primary focus:ring-primary"
+                          />
+                          <span className="text-sm text-slate-700 truncate">
+                            {user.name}
+                            {user.id === currentUser?.id && (
+                              <span className="text-slate-400 ml-1">(you)</span>
+                            )}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Calendar Filter Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowCalendarFilter(!showCalendarFilter)}
+              className="px-3 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-sm flex items-center gap-2"
+            >
+              <span>Calendars</span>
+              <span className="text-xs text-slate-400">
+                ({enabledCalendars.size}/{calendarNames.length})
+              </span>
+            </button>
+            {showCalendarFilter && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowCalendarFilter(false)}
+                />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-72 max-h-80 overflow-auto">
+                  <div className="p-2 border-b border-slate-100 flex gap-2">
+                    <button
+                      onClick={selectAllCalendars}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Select all
+                    </button>
+                    <button
+                      onClick={selectNoCalendars}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Select none
+                    </button>
+                  </div>
+                  <div className="p-2 space-y-1">
+                    {calendarNames.map(name => (
+                      <label
+                        key={name}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={enabledCalendars.has(name)}
+                          onChange={() => toggleCalendar(name)}
+                          className="rounded border-slate-300 text-primary focus:ring-primary"
+                        />
+                        <span className="text-sm text-slate-700 truncate">{name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={goToPreviousMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&lt;</button>
           <button onClick={goToToday} className="px-4 h-9 bg-primary text-white rounded-md hover:bg-primary-dark">Today</button>
           <button onClick={goToNextMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&gt;</button>
@@ -145,7 +352,7 @@ const Calendar = () => {
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4 flex justify-between items-center">
           <p>{error}</p>
-          <button onClick={() => loadEvents(currentDate)} className="text-primary hover:underline">Retry</button>
+          <button onClick={() => loadEvents(currentDate, selectedUserIds)} className="text-primary hover:underline">Retry</button>
         </div>
       )}
 
@@ -198,7 +405,15 @@ const Calendar = () => {
                 </div>
               ))}
               {day.events.length > 4 && (
-                <div className="text-xs text-slate-500 pl-1">+{day.events.length - 4} more</div>
+                <button
+                  className="text-xs text-slate-500 pl-1 hover:text-primary hover:underline cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedDayEvents({ date: day.date, events: day.events })
+                  }}
+                >
+                  +{day.events.length - 4} more
+                </button>
               )}
             </div>
           </div>
@@ -208,6 +423,66 @@ const Calendar = () => {
       {loading && (
         <div className="fixed inset-0 bg-white/80 flex items-center justify-center z-10">
           <div className="text-slate-600">Loading events...</div>
+        </div>
+      )}
+
+      {/* Day Events Modal (for +N more) */}
+      {selectedDayEvents && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedDayEvents(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between p-6 border-b border-slate-100 sticky top-0 bg-white">
+              <h2 className="text-lg font-semibold text-slate-800">
+                {formatDateHeader(selectedDayEvents.date)}
+              </h2>
+              <button
+                className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
+                onClick={() => setSelectedDayEvents(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="p-4 space-y-2">
+              {selectedDayEvents.events.map((event) => (
+                <div
+                  key={`${event.id}-${event.start_time}`}
+                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                    event.all_day
+                      ? 'bg-primary/10 hover:bg-primary/20'
+                      : 'bg-slate-50 hover:bg-slate-100'
+                  }`}
+                  onClick={() => {
+                    setSelectedDayEvents(null)
+                    setSelectedEvent(event)
+                  }}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-16 shrink-0 text-sm">
+                      {event.all_day ? (
+                        <span className="text-primary font-medium">All day</span>
+                      ) : (
+                        <span className="text-slate-600">{formatEventTime(event)}</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-slate-800">{event.event_title}</div>
+                      {event.location && (
+                        <div className="text-xs text-slate-500 truncate">{event.location}</div>
+                      )}
+                      {event.calendar_name && (
+                        <div className="text-xs text-slate-400 mt-1">{event.calendar_name}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -324,17 +599,44 @@ const Calendar = () => {
   )
 }
 
+/** Dedupe key: normalize title + date for comparison */
+function getDedupeKey(event: CalendarEvent): string {
+  const title = event.event_title.toLowerCase().trim()
+  const eventDate = new Date(event.start_time)
+  // For all-day events, just use the date; for timed events, include time
+  if (event.all_day) {
+    return `${title}|${eventDate.getFullYear()}-${eventDate.getMonth()}-${eventDate.getDate()}`
+  }
+  return `${title}|${event.start_time}`
+}
+
 function getEventsForDate(date: Date, events: CalendarEvent[]): CalendarEvent[] {
-  const dateStr = date.toISOString().split('T')[0]
-  return events.filter(event => {
+  const year = date.getFullYear()
+  const month = date.getMonth()
+  const day = date.getDate()
+
+  const dayEvents = events.filter(event => {
     if (!event.start_time) return false
     try {
-      const eventDate = new Date(event.start_time).toISOString().split('T')[0]
-      return eventDate === dateStr
+      const eventDate = new Date(event.start_time)
+      return eventDate.getFullYear() === year &&
+             eventDate.getMonth() === month &&
+             eventDate.getDate() === day
     } catch {
       return false
     }
-  }).sort((a, b) => {
+  })
+
+  // Deduplicate events with same title at same time (e.g., holidays in multiple calendars)
+  const seen = new Set<string>()
+  const deduped = dayEvents.filter(event => {
+    const key = getDedupeKey(event)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
+  return deduped.sort((a, b) => {
     // All-day events first, then by time
     if (a.all_day && !b.all_day) return -1
     if (!a.all_day && b.all_day) return 1

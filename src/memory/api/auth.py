@@ -306,10 +306,11 @@ def require_key_types(*allowed_types: str):
 
 
 def get_user_account(db: DBSession, model: type[T], account_id: int, user: User) -> T:
-    """Get an account by ID, ensuring it belongs to the user.
+    """Get an account by ID, ensuring it belongs to the user or user is admin.
 
     Generic helper for verifying ownership of user-scoped resources.
     Returns 404 for both "not found" and "not yours" to avoid leaking info.
+    Admins can access any account.
 
     Args:
         db: Database session
@@ -318,15 +319,15 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
         user: Current authenticated user
 
     Returns:
-        The account if found and owned by user
+        The account if found and owned by user (or user is admin)
 
     Raises:
-        HTTPException: 404 if account not found or not owned by user
+        HTTPException: 404 if account not found or not owned by user (and not admin)
     """
     account = db.get(model, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if account.user_id != user.id:  # type: ignore[attr-defined]
+    if account.user_id != user.id and not has_admin_scope(user):  # type: ignore[attr-defined]
         raise HTTPException(status_code=404, detail="Account not found")
     return account
 

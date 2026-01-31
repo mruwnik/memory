@@ -433,6 +433,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
         per_page: int = 100,
         sort: str = "updated",
         max_repos: int | None = None,
+        include_archived: bool = False,
     ) -> Generator[dict[str, Any], None, None]:
         """List repositories accessible to the authenticated user/app.
 
@@ -447,6 +448,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
             per_page: Number of repos to fetch per API request (max 100).
             sort: Sort order for repos (default: updated).
             max_repos: Maximum number of repos to return. None means no limit (fetch all).
+            include_archived: Whether to include archived repos (default: False).
         """
         if self.credentials.auth_type == "app":
             url = f"{GITHUB_API_URL}/installation/repositories"
@@ -477,6 +479,8 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
             for repo in repos:
                 if max_repos is not None and repos_yielded >= max_repos:
                     return
+                if not include_archived and repo.get("archived", False):
+                    continue
                 yield {
                     "owner": repo["owner"]["login"],
                     "name": repo["name"],

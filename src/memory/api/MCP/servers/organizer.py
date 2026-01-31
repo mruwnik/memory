@@ -27,6 +27,7 @@ async def get_upcoming_events(
     end_date: str | None = None,
     days: int = 7,
     limit: int = 50,
+    user_ids: list[int] | None = None,
 ) -> list[EventDict]:
     """
     Get calendar events within a time span.
@@ -39,6 +40,8 @@ async def get_upcoming_events(
         end_date: ISO format end date. Defaults to start_date + days if not provided.
         days: Number of days from start_date if end_date not specified (default 7, max 365)
         limit: Maximum number of events to return (default 50, max 200)
+        user_ids: If provided, only return events from calendars owned by these users.
+                  Admin-only feature for viewing other users' calendars.
 
     Returns: List of events with id, event_title, start_time, end_time, all_day,
              location, calendar_name, recurrence_rule. Sorted by start_time.
@@ -49,7 +52,7 @@ async def get_upcoming_events(
     range_start, range_end = parse_date_range(start_date, end_date, days)
 
     with make_session() as session:
-        return get_events_in_range(session, range_start, range_end, limit)
+        return get_events_in_range(session, range_start, range_end, limit, user_ids)
 
 
 # =============================================================================

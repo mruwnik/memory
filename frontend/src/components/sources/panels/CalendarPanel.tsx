@@ -44,7 +44,7 @@ export const CalendarPanel = () => {
         listCalendarAccounts(userId),
         listGoogleAccounts(userId),
         listProjects(),
-        getUpcomingEvents({ days: 365, limit: 200 })
+        getUpcomingEvents({ days: 365, limit: 200, userIds: userId ? [userId] : undefined })
       ])
       setAccounts(calendarData)
       setGoogleAccounts(googleData)

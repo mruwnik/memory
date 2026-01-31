@@ -9,6 +9,7 @@ from dateutil.rrule import rrulestr
 
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
+from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 
 
 class EventDict(TypedDict):
@@ -95,6 +96,7 @@ def get_events_in_range(
     start_date: datetime,
     end_date: datetime,
     limit: int = 200,
+    user_ids: list[int] | None = None,
 ) -> list[EventDict]:
     """Get all calendar events (including expanded recurring) in a date range.
 
@@ -103,27 +105,40 @@ def get_events_in_range(
         start_date: Start of the date range (inclusive)
         end_date: End of the date range (inclusive)
         limit: Maximum number of events to return
+        user_ids: If provided, only return events from calendars owned by these users
 
     Returns:
         List of event dictionaries, sorted by start_time
     """
-    # Get non-recurring events in range
-    non_recurring = (
-        session.query(CalendarEvent)
-        .filter(
-            CalendarEvent.start_time >= start_date,
-            CalendarEvent.start_time <= end_date,
-            CalendarEvent.recurrence_rule.is_(None),
+    # Build base query with optional user filtering
+    def apply_user_filter(query):  # type: ignore[no-untyped-def]
+        if user_ids is None:
+            return query
+        # Join through CalendarAccount -> GoogleAccount to filter by user_id
+        # CalDAV accounts without google_account are included for all users
+        return (
+            query
+            .outerjoin(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
+            .outerjoin(GoogleAccount, CalendarAccount.google_account_id == GoogleAccount.id)
+            .filter(
+                (GoogleAccount.user_id.in_(user_ids)) |
+                (CalendarAccount.google_account_id.is_(None))  # Include CalDAV accounts
+            )
         )
-        .all()
+
+    # Get non-recurring events in range
+    non_recurring_query = session.query(CalendarEvent).filter(
+        CalendarEvent.start_time >= start_date,
+        CalendarEvent.start_time <= end_date,
+        CalendarEvent.recurrence_rule.is_(None),
     )
+    non_recurring = apply_user_filter(non_recurring_query).all()
 
     # Get all recurring events (they might have occurrences in range)
-    recurring = (
-        session.query(CalendarEvent)
-        .filter(CalendarEvent.recurrence_rule.isnot(None))
-        .all()
+    recurring_query = session.query(CalendarEvent).filter(
+        CalendarEvent.recurrence_rule.isnot(None)
     )
+    recurring = apply_user_filter(recurring_query).all()
 
     results: list[tuple[datetime, EventDict]] = []
 

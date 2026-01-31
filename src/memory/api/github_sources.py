@@ -356,6 +356,7 @@ class AvailableProjectResponse(BaseModel):
 def list_available_repos(
     account_id: int,
     limit: int | None = None,
+    include_archived: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AvailableRepoResponse]:
@@ -364,6 +365,7 @@ def list_available_repos(
     Args:
         account_id: GitHub account ID.
         limit: Maximum number of repos to return. None or 0 means fetch all available repos.
+        include_archived: Whether to include archived repos (default: False).
     """
     account = get_user_account(db, GithubAccount, account_id, user)
 
@@ -381,7 +383,7 @@ def list_available_repos(
         client = GithubClient(credentials)
 
         repos = []
-        for repo in client.list_repos(max_repos=max_repos):
+        for repo in client.list_repos(max_repos=max_repos, include_archived=include_archived):
             repos.append(AvailableRepoResponse(**repo))
         return repos
     except Exception as e:
