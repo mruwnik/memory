@@ -75,6 +75,12 @@ VALID_SCOPES: list[ScopeInfo] = [
         "description": "Send messages and access Discord channels",
         "category": "integrations",
     },
+    {
+        "value": "discord-admin",
+        "label": "Discord Admin",
+        "description": "Manage Discord roles, permissions, and channels",
+        "category": "integrations",
+    },
     # Research & Analysis
     {
         "value": "forecast",

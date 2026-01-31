@@ -59,7 +59,7 @@ if TYPE_CHECKING:
         CalendarAccount,
         EmailAccount,
         GoogleFolder,
-        GithubMilestone,
+        Project,
     )
     from memory.common.db.models.observations import ObservationContradiction
 
@@ -1029,15 +1029,15 @@ class GithubItem(SourceItem):
     assignees: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     milestone_id: Mapped[int | None] = mapped_column(
         BigInteger,
-        ForeignKey("github_milestones.id", ondelete="SET NULL"),
+        ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
     )
     comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # Relationship to milestone
-    # foreign_keys needed because SourceItem.project_id also references github_milestones
-    milestone_rel: Mapped[GithubMilestone | None] = relationship(
-        "GithubMilestone", back_populates="items", foreign_keys=[milestone_id]
+    # Relationship to milestone/project
+    # foreign_keys needed because SourceItem.project_id also references projects
+    milestone_rel: Mapped[Project | None] = relationship(
+        "Project", back_populates="items", foreign_keys=[milestone_id]
     )
 
     # Relationship to PR-specific data

@@ -73,7 +73,7 @@ class SlackWorkspace(Base):
 
     # Access control: channels inherit these unless overridden
     project_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -206,7 +206,7 @@ class SlackChannel(Base):
 
     # Access control: link to project and sensitivity level
     project_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

@@ -61,7 +61,7 @@ export const useCalendar = () => {
     if (userIds && userIds.length > 0) {
       params.user_ids = userIds
     }
-    const result = await mcpCall('organizer_get_upcoming_events', params) as CalendarEvent[][] | null
+    const result = await mcpCall('organizer_upcoming', params) as CalendarEvent[][] | null
     return result?.[0] || []
   }, [mcpCall])
 
@@ -137,7 +137,7 @@ export const useCalendar = () => {
     if (filters.userIds && filters.userIds.length > 0) {
       params.user_ids = filters.userIds
     }
-    const result = await mcpCall('organizer_get_upcoming_events', params) as CalendarEvent[][] | null
+    const result = await mcpCall('organizer_upcoming', params) as CalendarEvent[][] | null
     return result?.[0] || []
   }, [mcpCall])
 

@@ -9,6 +9,7 @@ from memory.common.celery_app import (
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_METRICS,
     COLLECT_SYSTEM_METRICS,
+    PROCESS_RAW_ITEMS,
     REINGEST_MISSING_CHUNKS,
     REFRESH_METRIC_SUMMARIES,
     SYNC_ALL_COMICS,
@@ -95,6 +96,10 @@ app.conf.beat_schedule.update({
     "cleanup-old-claude-sessions": {
         "task": CLEANUP_OLD_CLAUDE_SESSIONS,
         "schedule": crontab(hour="3", minute="30"),  # Daily at 3:30 AM
+    },
+    "process-raw-items": {
+        "task": PROCESS_RAW_ITEMS,
+        "schedule": crontab(hour="4", minute="0"),  # Daily at 4 AM
     },
 })
 

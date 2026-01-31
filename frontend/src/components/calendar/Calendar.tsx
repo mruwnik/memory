@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
+import { usePeople, Person } from '@/hooks/usePeople'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -21,6 +22,7 @@ const Calendar = () => {
   const { getEventsForMonths, clearCache } = useCalendar()
   const { hasScope, user: currentUser } = useAuth()
   const { listUsers } = useUsers()
+  const { listPeople } = usePeople()
 
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,6 +32,9 @@ const Calendar = () => {
   const [selectedDayEvents, setSelectedDayEvents] = useState<{ date: Date; events: CalendarEvent[] } | null>(null)
   const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(new Set())
   const [showCalendarFilter, setShowCalendarFilter] = useState(false)
+
+  // Attendee popup state
+  const [selectedAttendee, setSelectedAttendee] = useState<{ email: string; person: Person | null; loading: boolean } | null>(null)
 
   // User filtering (admin only)
   const isAdmin = hasScope('admin') || hasScope('*')
@@ -75,9 +80,15 @@ const Calendar = () => {
     try {
       const data = await getEventsForMonths(date.getFullYear(), date.getMonth(), userIds)
       setEvents(data)
-      // Initialize enabled calendars with all unique calendar names
-      const calendarNames = new Set(data.map(e => e.calendar_name || 'Unknown').filter(Boolean))
-      setEnabledCalendars(prev => prev.size === 0 ? calendarNames : prev)
+      // Add any new calendar names to enabled set (preserves user's deselections)
+      const newCalendarNames = new Set(data.map(e => e.calendar_name || 'Unknown').filter(Boolean))
+      setEnabledCalendars(prev => {
+        if (prev.size === 0) return newCalendarNames
+        // Add any calendars that weren't in the previous set
+        const updated = new Set(prev)
+        newCalendarNames.forEach(name => updated.add(name))
+        return updated
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load events')
     } finally {
@@ -219,6 +230,17 @@ const Calendar = () => {
       month: 'long',
       day: 'numeric'
     })
+  }
+
+  const handleAttendeeClick = async (email: string) => {
+    setSelectedAttendee({ email, person: null, loading: true })
+    try {
+      // Search for person by email (matches against aliases and contact_info)
+      const people = await listPeople({ search: email, limit: 1 })
+      setSelectedAttendee({ email, person: people[0] || null, loading: false })
+    } catch {
+      setSelectedAttendee({ email, person: null, loading: false })
+    }
   }
 
   return (
@@ -578,11 +600,104 @@ const Calendar = () => {
                   <span className="w-24 text-sm text-slate-500 shrink-0">Attendees</span>
                   <div className="flex flex-wrap gap-1">
                     {selectedEvent.attendees.map((email, i) => (
-                      <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">
+                      <button
+                        key={i}
+                        onClick={() => handleAttendeeClick(email)}
+                        className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded hover:bg-slate-200 hover:text-slate-800 transition-colors cursor-pointer"
+                      >
                         {email}
-                      </span>
+                      </button>
                     ))}
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Attendee Person Popup */}
+      {selectedAttendee && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
+          onClick={() => setSelectedAttendee(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-sm w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between p-4 border-b border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-800">{selectedAttendee.email}</h3>
+              <button
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                onClick={() => setSelectedAttendee(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="p-4">
+              {selectedAttendee.loading ? (
+                <div className="text-center py-4 text-slate-500">Loading...</div>
+              ) : selectedAttendee.person ? (
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-lg font-medium text-slate-800">{selectedAttendee.person.display_name}</div>
+                    {selectedAttendee.person.identifier && (
+                      <div className="text-xs text-slate-400">@{selectedAttendee.person.identifier}</div>
+                    )}
+                  </div>
+
+                  {selectedAttendee.person.aliases && selectedAttendee.person.aliases.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Also known as</div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedAttendee.person.aliases.map((alias, i) => (
+                          <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                            {alias}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedAttendee.person.contact_info && Object.keys(selectedAttendee.person.contact_info).length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Contact</div>
+                      <div className="space-y-1">
+                        {Object.entries(selectedAttendee.person.contact_info).map(([key, value]) => (
+                          <div key={key} className="text-sm">
+                            <span className="text-slate-500 capitalize">{key}: </span>
+                            <span className="text-slate-800">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedAttendee.person.tags && selectedAttendee.person.tags.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Tags</div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedAttendee.person.tags.map((tag, i) => (
+                          <span key={i} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedAttendee.person.notes && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Notes</div>
+                      <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedAttendee.person.notes}</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <div className="text-slate-500 mb-2">No profile found for this person</div>
+                  <div className="text-xs text-slate-400">You can add them to your contacts via the People section</div>
                 </div>
               )}
             </div>

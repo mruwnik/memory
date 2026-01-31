@@ -15,10 +15,10 @@ from memory.api.MCP.servers.meta import (
 )
 from memory.api.MCP.servers.forecast import (
     get_forecasts,
-    get_market_history,
+    history,
     get_market_depth,
     compare_forecasts,
-    get_resolved_markets,
+    resolved,
 )
 from memory.common.markets import (
     format_manifold_market,
@@ -1015,13 +1015,13 @@ def test_filter_kalshi_market_includes_liquidity_score():
     assert result["liquidity_score"] > 0
 
 
-# ====== get_market_history tests ======
+# ====== history tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-async def test_get_market_history_kalshi(mock_scope):
-    """get_market_history fetches Kalshi candlesticks."""
+async def test_history_kalshi(mock_scope):
+    """history fetches Kalshi candlesticks."""
 
     _history_cache.clear()
 
@@ -1033,7 +1033,7 @@ async def test_get_market_history_kalshi(mock_scope):
         ]
 
     with patch("memory.api.MCP.servers.forecast.get_kalshi_history", mock_kalshi_history):
-        result = await get_market_history.fn(market_id="TEST", source="kalshi", period="7d")
+        result = await history.fn(market_id="TEST", source="kalshi", period="7d")
 
     assert result["market_id"] == "TEST"
     assert result["source"] == "kalshi"
@@ -1043,8 +1043,8 @@ async def test_get_market_history_kalshi(mock_scope):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-async def test_get_market_history_caches_results(mock_scope, mock_aiohttp_session):
-    """get_market_history caches results."""
+async def test_history_caches_results(mock_scope, mock_aiohttp_session):
+    """history caches results."""
 
     mock_session_cm, mock_response = mock_aiohttp_session
     _history_cache.clear()
@@ -1064,9 +1064,9 @@ async def test_get_market_history_caches_results(mock_scope, mock_aiohttp_sessio
 
     with patch("memory.common.markets.aiohttp.ClientSession", return_value=mock_session_cm):
         # First call
-        await get_market_history.fn(market_id="CACHE", source="kalshi", period="7d")
+        await history.fn(market_id="CACHE", source="kalshi", period="7d")
         # Second call - should use cache
-        await get_market_history.fn(market_id="CACHE", source="kalshi", period="7d")
+        await history.fn(market_id="CACHE", source="kalshi", period="7d")
 
     # Cache key should be found for second call
     assert len(_history_cache) >= 1
@@ -1200,13 +1200,13 @@ async def test_compare_forecasts_empty_results(mock_compare_data, mock_scope):
     assert result["disagreement"] is None
 
 
-# ====== get_resolved_markets tests ======
+# ====== resolved tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-async def test_get_resolved_markets_manifold(mock_scope):
-    """get_resolved_markets fetches resolved Manifold markets."""
+async def test_resolved_manifold(mock_scope):
+    """resolved fetches resolved Manifold markets."""
 
     # Mock the manifold resolved helper
     async def mock_manifold_resolved(term, since):
@@ -1223,7 +1223,7 @@ async def test_get_resolved_markets_manifold(mock_scope):
         ]
 
     with patch("memory.api.MCP.servers.forecast.get_manifold_resolved", mock_manifold_resolved):
-        result = await get_resolved_markets.fn(term="test", sources=["manifold"])
+        result = await resolved.fn(term="test", sources=["manifold"])
 
     assert len(result) == 1
     assert result[0]["market_id"] == "m1"

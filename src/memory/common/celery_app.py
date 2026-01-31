@@ -57,6 +57,8 @@ REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
 REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
 REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
 REINGEST_ALL_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_all_empty_source_items"
+PROCESS_RAW_ITEMS = f"{MAINTENANCE_ROOT}.process_raw_items"
+PROCESS_RAW_ITEM = f"{MAINTENANCE_ROOT}.process_raw_item"
 UPDATE_METADATA_FOR_SOURCE_ITEMS = (
     f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
 )

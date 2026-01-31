@@ -99,7 +99,7 @@ async def get_forecasts(
 
 
 @forecast_mcp.tool()
-async def clear_forecast_cache() -> dict:
+async def clear_cache() -> dict:
     """Clear all cached forecast data.
 
     Useful for debugging or when you need fresh data immediately.
@@ -118,7 +118,7 @@ async def clear_forecast_cache() -> dict:
 
 
 @forecast_mcp.tool()
-async def get_market_history(
+async def history(
     market_id: str,
     source: MarketSource,
     period: Literal["1d", "7d", "30d", "all"] = "7d",
@@ -360,7 +360,7 @@ async def compare_forecasts(
 
 
 @forecast_mcp.tool()
-async def get_resolved_markets(
+async def resolved(
     term: str | None = None,
     since: str | None = None,
     sources: list[MarketSource] | None = None,

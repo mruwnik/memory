@@ -82,7 +82,12 @@ class GithubPRDataDict(TypedDict):
 
 
 class GithubMilestoneData(TypedDict):
-    """Parsed milestone data ready for storage."""
+    """Parsed milestone data ready for storage.
+
+    Note: This TypedDict retains the "Milestone" name because it represents
+    raw GitHub API milestone data, distinct from our Project model which may
+    or may not be backed by a GitHub milestone.
+    """
 
     github_id: int
     number: int

@@ -175,7 +175,9 @@ class SimpleOAuthProvider(OAuthProvider):
                 else:
                     client_id = "frontend"
 
-                logger.info(f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}")
+                logger.info(
+                    f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}"
+                )
                 return FastMCPAccessToken(
                     token=token,
                     client_id=client_id,
@@ -186,7 +188,9 @@ class SimpleOAuthProvider(OAuthProvider):
             api_key_record = lookup_api_key(token, session)
             if api_key_record and api_key_record.is_valid():
                 user = api_key_record.user
-                logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
+                logger.info(
+                    f"User {user.name} (id={user.id}) authenticated via API key"
+                )
                 # Use API key scopes if set, otherwise fall back to user scopes
                 scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
                 return FastMCPAccessToken(
@@ -400,7 +404,9 @@ class SimpleOAuthProvider(OAuthProvider):
             api_key_record = lookup_api_key(token, session)
             if api_key_record and api_key_record.is_valid():
                 user = api_key_record.user
-                logger.info(f"User {user.name} (id={user.id}) authenticated via API key")
+                logger.info(
+                    f"User {user.name} (id={user.id}) authenticated via API key"
+                )
                 # Use API key scopes if set, otherwise fall back to user scopes
                 scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
                 return AccessToken(

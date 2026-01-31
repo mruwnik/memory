@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 
-class ProjectPayload(TypedDict):
-    id: Annotated[int, "Project ID"]
+class CodingProjectPayload(TypedDict):
+    id: Annotated[int, "Coding project ID"]
     directory: Annotated[str, "Project directory path"]
     name: Annotated[str | None, "Optional friendly name"]
     source: Annotated[str | None, "Source identifier (hostname, IP, etc)"]
@@ -40,7 +40,7 @@ class ProjectPayload(TypedDict):
 
 class SessionPayload(TypedDict):
     session_id: Annotated[str, "Session UUID (primary key)"]
-    project_id: Annotated[int | None, "Associated project ID"]
+    coding_project_id: Annotated[int | None, "Associated coding project ID"]
     parent_session_id: Annotated[str | None, "Parent session UUID (for subagents)"]
     git_branch: Annotated[str | None, "Git branch name"]
     tool_version: Annotated[str | None, "Tool version (e.g., Claude Code version)"]
@@ -50,14 +50,14 @@ class SessionPayload(TypedDict):
     transcript_path: Annotated[str | None, "Path to JSONL transcript file"]
 
 
-class Project(Base):
+class CodingProject(Base):
     """
     A coding project, corresponding to a working directory.
 
     Projects group sessions that were run in the same directory.
     """
 
-    __tablename__ = "projects"
+    __tablename__ = "coding_projects"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
@@ -85,18 +85,18 @@ class Project(Base):
 
     # Relationships
     sessions: Mapped[list[Session]] = relationship(
-        "Session", back_populates="project", cascade="all, delete-orphan"
+        "Session", back_populates="coding_project", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "directory", name="unique_user_project"),
-        Index("idx_projects_user", "user_id"),
-        Index("idx_projects_directory", "directory"),
-        Index("idx_projects_source", "source"),
+        UniqueConstraint("user_id", "directory", name="unique_user_coding_project"),
+        Index("idx_coding_projects_user", "user_id"),
+        Index("idx_coding_projects_directory", "directory"),
+        Index("idx_coding_projects_source", "source"),
     )
 
-    def as_payload(self) -> ProjectPayload:
-        return ProjectPayload(
+    def as_payload(self) -> CodingProjectPayload:
+        return CodingProjectPayload(
             id=self.id,
             directory=self.directory,
             name=self.name,
@@ -127,14 +127,14 @@ class Session(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", lazy="select")
 
-    # Optional project association
-    project_id: Mapped[int | None] = mapped_column(
+    # Optional coding project association
+    coding_project_id: Mapped[int | None] = mapped_column(
         BigInteger,
-        ForeignKey("projects.id", ondelete="SET NULL"),
+        ForeignKey("coding_projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    project: Mapped[Project | None] = relationship("Project", back_populates="sessions")
+    coding_project: Mapped[CodingProject | None] = relationship("CodingProject", back_populates="sessions")
 
     # Parent session (for subagents) - references by UUID
     parent_session_id: Mapped[PyUUID | None] = mapped_column(
@@ -165,7 +165,7 @@ class Session(Base):
 
     __table_args__ = (
         Index("idx_sessions_user", "user_id"),
-        Index("idx_sessions_project", "project_id"),
+        Index("idx_sessions_coding_project", "coding_project_id"),
         Index("idx_sessions_parent", "parent_session_id"),
         Index("idx_sessions_started", "started_at"),
         Index("idx_sessions_ended", "ended_at"),
@@ -175,7 +175,7 @@ class Session(Base):
     def as_payload(self) -> SessionPayload:
         return SessionPayload(
             session_id=str(self.id),
-            project_id=self.project_id,
+            coding_project_id=self.coding_project_id,
             parent_session_id=str(self.parent_session_id) if self.parent_session_id else None,
             git_branch=self.git_branch,
             tool_version=self.tool_version,

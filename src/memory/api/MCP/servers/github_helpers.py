@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     GithubItem,
-    GithubMilestone,
+    Project,
     GithubProject,
     GithubTeam,
 )
@@ -145,8 +145,8 @@ def list_issues(
             if isinstance(milestone, int):
                 query = query.filter(GithubItem.milestone_id == milestone)
             else:
-                query = query.join(GithubMilestone).filter(
-                    GithubMilestone.title == milestone
+                query = query.join(Project).filter(
+                    Project.title == milestone
                 )
         if project_status:
             query = query.filter(GithubItem.project_status == project_status)
@@ -183,7 +183,7 @@ def list_milestones(
     limit = min(limit, 200)
 
     with make_session() as session:
-        query = session.query(GithubMilestone).join(GithubRepo)
+        query = session.query(Project).join(GithubRepo)
 
         if repo:
             parts = repo.split("/")
@@ -195,17 +195,17 @@ def list_milestones(
                 )
 
         if state:
-            query = query.filter(GithubMilestone.state == state)
+            query = query.filter(Project.state == state)
 
         if has_due_date is True:
-            query = query.filter(GithubMilestone.due_on.isnot(None))
+            query = query.filter(Project.due_on.isnot(None))
         elif has_due_date is False:
-            query = query.filter(GithubMilestone.due_on.is_(None))
+            query = query.filter(Project.due_on.is_(None))
 
         query = query.order_by(
-            desc(GithubMilestone.due_on.isnot(None)),
-            GithubMilestone.due_on,
-            desc(GithubMilestone.github_updated_at),
+            desc(Project.due_on.isnot(None)),
+            Project.due_on,
+            desc(Project.github_updated_at),
         ).limit(limit)
 
         milestones = query.all()
@@ -461,12 +461,12 @@ def fetch_milestone(repo: str, number: int) -> dict:
         owner, name = parts
 
         ms = (
-            session.query(GithubMilestone)
+            session.query(Project)
             .join(GithubRepo)
             .filter(
                 GithubRepo.owner == owner,
                 GithubRepo.name == name,
-                GithubMilestone.number == number,
+                Project.number == number,
             )
             .first()
         )
@@ -867,10 +867,10 @@ def sync_issue_to_database(
     milestone_id = None
     if fetched.get("milestone_number"):
         ms = (
-            session.query(GithubMilestone)
+            session.query(Project)
             .filter(
-                GithubMilestone.repo_id == repo_obj.id,
-                GithubMilestone.number == fetched["milestone_number"],
+                Project.repo_id == repo_obj.id,
+                Project.number == fetched["milestone_number"],
             )
             .first()
         )

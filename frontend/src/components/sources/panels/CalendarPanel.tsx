@@ -40,11 +40,22 @@ export const CalendarPanel = () => {
     setLoading(true)
     setError(null)
     try {
+      // Calculate date range: 30 days in past to 90 days in future
+      const startDate = new Date()
+      startDate.setDate(startDate.getDate() - 30)
+      const endDate = new Date()
+      endDate.setDate(endDate.getDate() + 90)
+
       const [calendarData, googleData, projectData, eventsData] = await Promise.all([
         listCalendarAccounts(userId),
         listGoogleAccounts(userId),
         listProjects(),
-        getUpcomingEvents({ days: 365, limit: 200, userIds: userId ? [userId] : undefined })
+        getUpcomingEvents({
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
+          limit: 500,
+          userIds: userId ? [userId] : undefined
+        })
       ])
       setAccounts(calendarData)
       setGoogleAccounts(googleData)

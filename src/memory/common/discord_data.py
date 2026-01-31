@@ -180,7 +180,9 @@ def fetch_channels(
             "name": ch.name,
             "type": ch.channel_type,
             "server_id": str(ch.server_id) if ch.server_id else None,
+            "category_id": str(ch.category_id) if ch.category_id else None,
             "collect_messages": ch.should_collect,
+            "project_id": ch.project_id,
         })
 
     return {"channels": formatted, "count": len(formatted)}

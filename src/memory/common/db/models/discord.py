@@ -122,7 +122,7 @@ class DiscordServer(Base):
 
     # Access control: channels inherit these unless overridden
     project_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -148,6 +148,9 @@ class DiscordChannel(Base):
     server_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("discord_servers.id", ondelete="SET NULL"), nullable=True
     )
+    category_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )  # Discord category snowflake ID (not a FK - fetched from Discord on demand)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     channel_type: Mapped[str] = mapped_column(
         Text, nullable=False
@@ -158,7 +161,7 @@ class DiscordChannel(Base):
 
     # Access control: link to project and sensitivity level
     project_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("github_milestones.id", ondelete="SET NULL"), nullable=True
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -176,6 +179,7 @@ class DiscordChannel(Base):
     __table_args__ = (
         Index("discord_channels_server_idx", "server_id"),
         Index("discord_channels_project_idx", "project_id"),
+        Index("discord_channels_category_idx", "category_id"),
     )
 
     @property

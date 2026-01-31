@@ -4,7 +4,7 @@ Database models for access control.
 This module provides:
 - AccessLog: Audit log for access control events
 
-Note: Projects are now GitHub milestones (GithubMilestone model in sources.py).
+Note: Projects are defined in the Project model in sources.py.
 Project collaborators are linked via the project_collaborators junction table.
 """
 

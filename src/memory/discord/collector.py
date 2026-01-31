@@ -90,11 +90,15 @@ def ensure_channel(
     if channel_id is None:
         raise ValueError("Channel is missing an identifier.")
 
+    # Get category_id if available (TextChannel, VoiceChannel have it)
+    category_id = getattr(channel, "category_id", None)
+
     channel_model = session.get(DiscordChannel, channel_id)
     if channel_model is None:
         channel_model = DiscordChannel(
             id=channel_id,
             server_id=guild_id,
+            category_id=category_id,
             name=getattr(channel, "name", f"Channel {channel_id}"),
             channel_type=get_channel_type(channel),
         )
@@ -104,6 +108,9 @@ def ensure_channel(
         name = getattr(channel, "name", None)
         if name and channel_model.name != name:
             channel_model.name = name
+        # Update category_id if changed
+        if category_id is not None and channel_model.category_id != category_id:
+            channel_model.category_id = category_id
     return channel_model
 
 

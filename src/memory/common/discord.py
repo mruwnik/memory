@@ -164,6 +164,201 @@ def refresh_discord_metadata() -> dict[str, Any] | None:
         return None
 
 
+# =============================================================================
+# Role Management
+# =============================================================================
+
+
+def list_roles(bot_id: int, guild_id: int) -> dict[str, Any] | None:
+    """List all roles in a guild."""
+    try:
+        response = requests.get(
+            f"{get_api_url()}/guilds/{guild_id}/roles",
+            params={"bot_id": bot_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to list roles for guild {guild_id}: {e}")
+        return None
+
+
+def list_role_members(bot_id: int, guild_id: int, role_id: int) -> dict[str, Any] | None:
+    """List all members with a specific role."""
+    try:
+        response = requests.get(
+            f"{get_api_url()}/guilds/{guild_id}/roles/{role_id}/members",
+            params={"bot_id": bot_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to list members for role {role_id}: {e}")
+        return None
+
+
+def add_role_member(bot_id: int, guild_id: int, role_id: int, user_id: int) -> dict[str, Any] | None:
+    """Add a user to a role."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/roles/add_member",
+            json={"bot_id": bot_id, "guild_id": guild_id, "role_id": role_id, "user_id": user_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to add user {user_id} to role {role_id}: {e}")
+        return None
+
+
+def remove_role_member(bot_id: int, guild_id: int, role_id: int, user_id: int) -> dict[str, Any] | None:
+    """Remove a user from a role."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/roles/remove_member",
+            json={"bot_id": bot_id, "guild_id": guild_id, "role_id": role_id, "user_id": user_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to remove user {user_id} from role {role_id}: {e}")
+        return None
+
+
+# =============================================================================
+# Channel Permissions
+# =============================================================================
+
+
+def get_channel_permissions(bot_id: int, channel_id: int) -> dict[str, Any] | None:
+    """Get permission overwrites for a channel."""
+    try:
+        response = requests.get(
+            f"{get_api_url()}/channels/{channel_id}/permissions",
+            params={"bot_id": bot_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to get permissions for channel {channel_id}: {e}")
+        return None
+
+
+def set_channel_permission(
+    bot_id: int,
+    channel_id: int,
+    role_id: int | None = None,
+    user_id: int | None = None,
+    allow: list[str] | None = None,
+    deny: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Set permission overwrite for a role or user on a channel."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/channels/set_permission",
+            json={
+                "bot_id": bot_id,
+                "channel_id": channel_id,
+                "role_id": role_id,
+                "user_id": user_id,
+                "allow": allow,
+                "deny": deny,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to set permissions for channel {channel_id}: {e}")
+        return None
+
+
+def remove_channel_permission(
+    bot_id: int, channel_id: int, target_id: int, target_type: str = "role"
+) -> dict[str, Any] | None:
+    """Remove permission overwrite for a role or user from a channel."""
+    try:
+        response = requests.delete(
+            f"{get_api_url()}/channels/{channel_id}/permissions/{target_id}",
+            params={"bot_id": bot_id, "target_type": target_type},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to remove permissions for channel {channel_id}: {e}")
+        return None
+
+
+# =============================================================================
+# Channel/Category Management
+# =============================================================================
+
+
+def list_categories(bot_id: int, guild_id: int) -> dict[str, Any] | None:
+    """List all categories in a guild."""
+    try:
+        response = requests.get(
+            f"{get_api_url()}/guilds/{guild_id}/categories",
+            params={"bot_id": bot_id},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to list categories for guild {guild_id}: {e}")
+        return None
+
+
+def create_channel(
+    bot_id: int,
+    guild_id: int,
+    name: str,
+    category_id: int | None = None,
+    topic: str | None = None,
+    copy_permissions_from: int | None = None,
+) -> dict[str, Any] | None:
+    """Create a new text channel."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/channels/create",
+            json={
+                "bot_id": bot_id,
+                "guild_id": guild_id,
+                "name": name,
+                "category_id": category_id,
+                "topic": topic,
+                "copy_permissions_from": copy_permissions_from,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to create channel {name}: {e}")
+        return None
+
+
+def create_category(bot_id: int, guild_id: int, name: str) -> dict[str, Any] | None:
+    """Create a new category."""
+    try:
+        response = requests.post(
+            f"{get_api_url()}/categories/create",
+            json={"bot_id": bot_id, "guild_id": guild_id, "name": name},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to create category {name}: {e}")
+        return None
+
+
 # Convenience functions
 def send_error_message(bot_id: int, message: str) -> bool:
     """Send an error message to the error channel"""

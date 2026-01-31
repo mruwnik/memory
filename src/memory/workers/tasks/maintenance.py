@@ -23,12 +23,14 @@ from memory.common.celery_app import (
     REINGEST_ITEM,
     REINGEST_EMPTY_SOURCE_ITEMS,
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
+    PROCESS_RAW_ITEMS,
+    PROCESS_RAW_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_SOURCE_ACCESS_CONTROL,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, Project, Session, SourceItem
+from memory.common.db.models import Chunk, CodingProject, Session, SourceItem
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
@@ -159,6 +161,88 @@ def reingest_all_empty_source_items():
     logger.info("Reingesting all empty source items")
     for item_type in SourceItem.registry._class_registry.keys():
         reingest_empty_source_items.delay(item_type)  # type: ignore
+
+
+@app.task(name=PROCESS_RAW_ITEM)
+def process_raw_item(item_id: int, item_type: str):
+    """Process a single RAW item - generate embeddings and store in Qdrant.
+
+    Args:
+        item_id: ID of the source item to process
+        item_type: Type name (e.g., 'slack_message', 'discord_message')
+
+    Returns:
+        Task result dict with status and metadata
+    """
+    logger.info(f"Processing RAW item {item_type} {item_id}")
+    try:
+        class_ = get_item_class(item_type)
+    except ValueError as e:
+        logger.error(f"Error getting item class: {e}")
+        return {"status": "error", "error": str(e)}
+
+    with make_session() as session:
+        item = session.get(class_, item_id)
+        if not item:
+            return {"status": "error", "error": f"Item {item_id} not found"}
+
+        if item.embed_status != "RAW":
+            return {
+                "status": "skipped",
+                "reason": f"Item already processed (status={item.embed_status})",
+            }
+
+        return process_content_item(item, session)
+
+
+@app.task(name=PROCESS_RAW_ITEMS)
+def process_raw_items(
+    item_type: str | None = None,
+    modality: str | None = None,
+    batch_size: int = 100,
+):
+    """Find and process all items with embed_status='RAW'.
+
+    Can filter by item_type (e.g., 'slack_message') or modality (e.g., 'message').
+    Dispatches individual process_raw_item tasks for each item found.
+
+    Args:
+        item_type: Filter by specific item type (optional)
+        modality: Filter by modality (optional, e.g., 'message', 'mail')
+        batch_size: Maximum items to process per run (default 100)
+
+    Returns:
+        Dict with status and count of items queued for processing
+    """
+    logger.info(
+        f"Finding RAW items to process (item_type={item_type}, modality={modality})"
+    )
+
+    with make_session() as session:
+        query = session.query(SourceItem.id, SourceItem.type).filter(
+            SourceItem.embed_status == "RAW"
+        )
+
+        if item_type:
+            try:
+                class_ = get_item_class(item_type)
+                query = session.query(class_.id, class_.type).filter(
+                    class_.embed_status == "RAW"
+                )
+            except ValueError as e:
+                logger.error(f"Error getting item class: {e}")
+                return {"status": "error", "error": str(e)}
+
+        if modality:
+            query = query.filter(SourceItem.modality == modality)
+
+        items = query.limit(batch_size).all()
+        logger.info(f"Found {len(items)} RAW items to process")
+
+        for item_id, type_name in items:
+            process_raw_item.delay(item_id, type_name)  # type: ignore
+
+        return {"status": "success", "queued": len(items)}
 
 
 def check_batch(batch: Sequence[Chunk]) -> dict:
@@ -452,8 +536,8 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
 
         # Clean up orphaned projects (no remaining sessions)
         orphaned_projects = (
-            db_session.query(Project)
-            .filter(~Project.sessions.any())
+            db_session.query(CodingProject)
+            .filter(~CodingProject.sessions.any())
             .all()
         )
 

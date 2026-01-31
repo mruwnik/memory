@@ -65,6 +65,22 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
+def resolve_bot_id(bot_id: int | None) -> int:
+    """Resolve bot_id, using default bot if None."""
+    if bot_id is not None:
+        return bot_id
+    with make_session() as session:
+        return _get_default_bot(session).id
+
+
+async def _call_discord_api(func, *args, error_msg: str) -> dict[str, Any]:
+    """Call a discord_client function and raise on None result."""
+    result = await asyncio.to_thread(func, *args)
+    if result is None:
+        raise ValueError(error_msg)
+    return result
+
+
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def send_message(
@@ -147,7 +163,9 @@ async def send_message(
                 "success": success,
                 "type": "channel",
                 "target": target,
-                "message_preview": message[:100] + "..." if len(message) > 100 else message,
+                "message_preview": message[:100] + "..."
+                if len(message) > 100
+                else message,
             }
 
         # Resolve user for DM
@@ -184,7 +202,7 @@ async def send_message(
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
-async def get_channel_history(
+async def channel_history(
     channel_id: int | None = None,
     channel_name: str | None = None,
     limit: int = 50,
@@ -262,3 +280,334 @@ async def list_channels(
         return await asyncio.to_thread(
             fetch_channels, session, server_id, server_name, include_dms
         )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord"), has_discord_bots)
+async def list_roles(
+    guild_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    List all roles in a Discord server.
+
+    Args:
+        guild_id: Discord server/guild ID
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with roles list including id, name, color, position, member_count
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.list_roles,
+        resolved_bot_id,
+        guild_id,
+        error_msg=f"Failed to list roles for guild {guild_id}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def list_role_members(
+    guild_id: int,
+    role_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    List all members who have a specific role.
+
+    Args:
+        guild_id: Discord server/guild ID
+        role_id: Role ID to list members for
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with role name and list of members (id, username, display_name)
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.list_role_members,
+        resolved_bot_id,
+        guild_id,
+        role_id,
+        error_msg=f"Failed to list members for role {role_id}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def list_categories(
+    guild_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    List all categories in a Discord server.
+
+    Args:
+        guild_id: Discord server/guild ID
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with categories list including id, name, position, and child channels
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.list_categories,
+        resolved_bot_id,
+        guild_id,
+        error_msg=f"Failed to list categories for guild {guild_id}",
+    )
+
+
+# =============================================================================
+# Role Management Tools
+# =============================================================================
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def add_user_to_role(
+    guild_id: int,
+    role_id: int,
+    user_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Add a user to a Discord role.
+
+    Args:
+        guild_id: Discord server/guild ID
+        role_id: Role ID to add user to
+        user_id: User ID to add
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status, user name, and role name
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.add_role_member,
+        resolved_bot_id,
+        guild_id,
+        role_id,
+        user_id,
+        error_msg=f"Failed to add user {user_id} to role {role_id}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def role_remove(
+    guild_id: int,
+    role_id: int,
+    user_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Remove a user from a Discord role.
+
+    Args:
+        guild_id: Discord server/guild ID
+        role_id: Role ID to remove user from
+        user_id: User ID to remove
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status, user name, and role name
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.remove_role_member,
+        resolved_bot_id,
+        guild_id,
+        role_id,
+        user_id,
+        error_msg=f"Failed to remove user {user_id} from role {role_id}",
+    )
+
+
+# =============================================================================
+# Channel Permission Tools
+# =============================================================================
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def perms(
+    channel_id: int,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Get permission overwrites for a Discord channel.
+
+    Shows which roles and users have special permissions on the channel.
+
+    Args:
+        channel_id: Discord channel ID
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with channel name and list of permission overwrites
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.get_channel_permissions,
+        resolved_bot_id,
+        channel_id,
+        error_msg=f"Failed to get permissions for channel {channel_id}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def set_perms(
+    channel_id: int,
+    role_id: int | None = None,
+    user_id: int | None = None,
+    allow: list[str] | None = None,
+    deny: list[str] | None = None,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Set permission overwrite for a role or user on a channel.
+
+    Common permission names: view_channel, send_messages, read_message_history,
+    manage_messages, manage_channels, add_reactions, attach_files, embed_links
+
+    Args:
+        channel_id: Discord channel ID
+        role_id: Role ID to set permissions for (mutually exclusive with user_id)
+        user_id: User ID to set permissions for (mutually exclusive with role_id)
+        allow: List of permission names to allow
+        deny: List of permission names to deny
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status
+    """
+    if not role_id and not user_id:
+        raise ValueError("Must specify either role_id or user_id")
+
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.set_channel_permission,
+        resolved_bot_id,
+        channel_id,
+        role_id,
+        user_id,
+        allow,
+        deny,
+        error_msg=f"Failed to set permissions for channel {channel_id}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def del_perms(
+    channel_id: int,
+    target_id: int,
+    target_type: str = "role",
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Remove permission overwrite for a role or user from a channel.
+
+    Args:
+        channel_id: Discord channel ID
+        target_id: Role or user ID to remove permissions for
+        target_type: "role" or "user" (default: "role")
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.remove_channel_permission,
+        resolved_bot_id,
+        channel_id,
+        target_id,
+        target_type,
+        error_msg=f"Failed to remove permissions for channel {channel_id}",
+    )
+
+
+# =============================================================================
+# Channel/Category Management Tools
+# =============================================================================
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def create_channel(
+    guild_id: int,
+    name: str,
+    category_id: int | None = None,
+    topic: str | None = None,
+    copy_permissions_from: int | None = None,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Create a new text channel in a Discord server.
+
+    Args:
+        guild_id: Discord server/guild ID
+        name: Channel name
+        category_id: Optional category to create channel in
+        topic: Optional channel topic/description
+        copy_permissions_from: Optional channel ID to copy permissions from
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status and new channel info
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.create_channel,
+        resolved_bot_id,
+        guild_id,
+        name,
+        category_id,
+        topic,
+        copy_permissions_from,
+        error_msg=f"Failed to create channel {name}",
+    )
+
+
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def create_category(
+    guild_id: int,
+    name: str,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Create a new category in a Discord server.
+
+    Args:
+        guild_id: Discord server/guild ID
+        name: Category name
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status and new category info
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    return await _call_discord_api(
+        discord_client.create_category,
+        resolved_bot_id,
+        guild_id,
+        name,
+        error_msg=f"Failed to create category {name}",
+    )

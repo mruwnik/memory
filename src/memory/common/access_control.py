@@ -2,12 +2,12 @@
 Access control logic for project-based RBAC.
 
 This module provides role-based access control for content in the knowledge base.
-Users are linked to Persons who are collaborators on projects (GitHub milestones),
+Users are linked to Persons who are collaborators on projects,
 and content has sensitivity levels (basic, internal, confidential).
 
 Key design decisions:
-- Projects are GitHub milestones with collaborators (Person entries)
-- User -> Person -> project_collaborators -> GithubMilestone
+- Projects (originally GitHub milestones) with collaborators (Person entries)
+- User -> Person -> project_collaborators -> Project
 - NULL project_id = superadmin only (prevents accidental exposure)
 - Superadmins (users with admin scope) bypass filters but access is still logged
 - Defense in depth: filter at Qdrant, BM25, AND final merge

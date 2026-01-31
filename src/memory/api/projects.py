@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
-from memory.common.db.models.sources import GithubMilestone, GithubRepo
+from memory.common.db.models.sources import Project, GithubRepo
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -61,7 +61,7 @@ class ProjectTreeNode(BaseModel):
     children: list["ProjectTreeNode"]
 
 
-def project_to_response(project: GithubMilestone, children_count: int = 0) -> ProjectResponse:
+def project_to_response(project: Project, children_count: int = 0) -> ProjectResponse:
     """Convert a project model to response."""
     repo_path = None
     if project.repo:
@@ -95,19 +95,19 @@ def list_projects(
         parent_id: Filter by parent (use 0 for root-level only)
         include_children: If true, include child count for each project
     """
-    query = db.query(GithubMilestone)
+    query = db.query(Project)
 
     if state:
-        query = query.filter(GithubMilestone.state == state)
+        query = query.filter(Project.state == state)
 
     if parent_id is not None:
         if parent_id == 0:
             # Root level projects only
-            query = query.filter(GithubMilestone.parent_id.is_(None))
+            query = query.filter(Project.parent_id.is_(None))
         else:
-            query = query.filter(GithubMilestone.parent_id == parent_id)
+            query = query.filter(Project.parent_id == parent_id)
 
-    query = query.order_by(GithubMilestone.title)
+    query = query.order_by(Project.title)
     projects = query.all()
 
     # Get children counts if requested
@@ -116,9 +116,9 @@ def list_projects(
         project_ids = [p.id for p in projects]
         if project_ids:
             counts = (
-                db.query(GithubMilestone.parent_id, func.count(GithubMilestone.id))
-                .filter(GithubMilestone.parent_id.in_(project_ids))
-                .group_by(GithubMilestone.parent_id)
+                db.query(Project.parent_id, func.count(Project.id))
+                .filter(Project.parent_id.in_(project_ids))
+                .group_by(Project.parent_id)
                 .all()
             )
             children_counts = {parent_id: count for parent_id, count in counts}
@@ -136,21 +136,21 @@ def get_project_tree(
     db: Session = Depends(get_session),
 ) -> list[ProjectTreeNode]:
     """Get projects as a nested tree structure."""
-    query = db.query(GithubMilestone)
+    query = db.query(Project)
 
     if state:
-        query = query.filter(GithubMilestone.state == state)
+        query = query.filter(Project.state == state)
 
-    query = query.order_by(GithubMilestone.title)
+    query = query.order_by(Project.title)
     all_projects = query.all()
 
     # Build a map of id -> project
-    project_map: dict[int, GithubMilestone] = {
+    project_map: dict[int, Project] = {
         cast(int, p.id): p for p in all_projects
     }
 
     # Build a map of parent_id -> children
-    children_map: dict[int | None, list[GithubMilestone]] = {}
+    children_map: dict[int | None, list[Project]] = {}
     for p in all_projects:
         parent = p.parent_id
         if parent not in children_map:
@@ -182,14 +182,14 @@ def get_project(
     db: Session = Depends(get_session),
 ) -> ProjectResponse:
     """Get a single project by ID."""
-    project = db.get(GithubMilestone, project_id)
+    project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Count children
     children_count = (
-        db.query(func.count(GithubMilestone.id))
-        .filter(GithubMilestone.parent_id == project_id)
+        db.query(func.count(Project.id))
+        .filter(Project.parent_id == project_id)
         .scalar()
     ) or 0
 
@@ -205,20 +205,20 @@ def create_project(
     """Create a new standalone project (not GitHub-backed)."""
     # Validate parent exists if specified
     if data.parent_id is not None:
-        parent = db.get(GithubMilestone, data.parent_id)
+        parent = db.get(Project, data.parent_id)
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
 
     # Generate a unique ID for standalone projects
     # Use negative IDs to avoid collision with GitHub milestone IDs
     max_negative_id = (
-        db.query(func.min(GithubMilestone.id))
-        .filter(GithubMilestone.id < 0)
+        db.query(func.min(Project.id))
+        .filter(Project.id < 0)
         .scalar()
     )
     new_id = (max_negative_id or 0) - 1
 
-    project = GithubMilestone(
+    project = Project(
         id=new_id,
         repo_id=None,  # Standalone project
         github_id=None,
@@ -247,7 +247,7 @@ def update_project(
     Note: GitHub-backed projects can only have parent_id updated locally.
     Title, description, and state are synced from GitHub.
     """
-    project = db.get(GithubMilestone, project_id)
+    project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -265,7 +265,7 @@ def update_project(
     if data.parent_id is not None:
         if data.parent_id == project_id:
             raise HTTPException(status_code=400, detail="Project cannot be its own parent")
-        parent = db.get(GithubMilestone, data.parent_id)
+        parent = db.get(Project, data.parent_id)
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
         # Check for circular reference
@@ -273,7 +273,7 @@ def update_project(
         while current.parent_id is not None:
             if current.parent_id == project_id:
                 raise HTTPException(status_code=400, detail="Circular parent reference detected")
-            current = db.get(GithubMilestone, current.parent_id)
+            current = db.get(Project, current.parent_id)
             if not current:
                 break
 
@@ -299,8 +299,8 @@ def update_project(
 
     # Count children
     children_count = (
-        db.query(func.count(GithubMilestone.id))
-        .filter(GithubMilestone.parent_id == project_id)
+        db.query(func.count(Project.id))
+        .filter(Project.parent_id == project_id)
         .scalar()
     ) or 0
 
@@ -318,7 +318,7 @@ def delete_project(
     GitHub-backed projects cannot be deleted (they are synced from GitHub).
     Children of deleted projects will have their parent_id set to NULL.
     """
-    project = db.get(GithubMilestone, project_id)
+    project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

@@ -73,7 +73,7 @@ from memory.common.db.models.sources import (
     EmailAccount,
     GithubAccount,
     GithubRepo,
-    GithubMilestone,
+    Project,
     GithubProject,
     GithubTeam,
     GoogleOAuthConfig,
@@ -116,8 +116,8 @@ from memory.common.db.models.telemetry import (
     TelemetryEvent,
 )
 from memory.common.db.models.sessions import (
-    Project,
-    ProjectPayload,
+    CodingProject,
+    CodingProjectPayload,
     Session,
     SessionPayload,
 )
@@ -214,7 +214,7 @@ __all__ = [
     "EmailAccount",
     "GithubAccount",
     "GithubRepo",
-    "GithubMilestone",
+    "Project",
     "GithubProject",
     "GithubTeam",
     "GoogleOAuthConfig",
@@ -251,9 +251,9 @@ __all__ = [
     "MetricEvent",
     # Telemetry
     "TelemetryEvent",
-    # Sessions
-    "Project",
-    "ProjectPayload",
+    # Sessions (coding projects)
+    "CodingProject",
+    "CodingProjectPayload",
     "Session",
     "SessionPayload",
     # Jobs

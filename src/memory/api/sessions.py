@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models import Project, Session, User
+from memory.common.db.models import CodingProject, Session, User
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,8 @@ class BatchIngestResponse(BaseModel):
     duplicates: int
 
 
-class ProjectResponse(BaseModel):
-    """Project information."""
+class CodingProjectResponse(BaseModel):
+    """CodingProject information."""
 
     id: int
     directory: str
@@ -157,11 +157,11 @@ class ToolUsageResponse(BaseModel):
     tools: list[ToolUsageStats]
 
 
-class ProjectListResponse(BaseModel):
+class CodingProjectListResponse(BaseModel):
     """List of projects."""
 
     total: int
-    projects: list[ProjectResponse]
+    projects: list[CodingProjectResponse]
 
 
 class SessionListResponse(BaseModel):
@@ -202,19 +202,19 @@ def count_transcript_events(transcript_path: str) -> int:
 
 def get_or_create_project(
     db_session, user_id: int, directory: str, source: str | None = None
-) -> Project:
+) -> CodingProject:
     """Get or create a project for the given directory."""
     project = (
-        db_session.query(Project)
+        db_session.query(CodingProject)
         .filter(
-            Project.user_id == user_id,
-            Project.directory == directory,
+            CodingProject.user_id == user_id,
+            CodingProject.directory == directory,
         )
         .first()
     )
 
     if not project:
-        project = Project(
+        project = CodingProject(
             user_id=user_id,
             directory=directory,
             source=source,
@@ -233,7 +233,7 @@ def get_or_create_session(
     db_session,
     user_id: int,
     session_uuid: UUID,
-    project: Project | None = None,
+    project: CodingProject | None = None,
     parent_session_uuid: str | None = None,
     git_branch: str | None = None,
     tool_version: str | None = None,
@@ -259,7 +259,7 @@ def get_or_create_session(
     session = Session(
         id=session_uuid,
         user_id=user_id,
-        project_id=project_id,
+        coding_project_id=project_id,
         parent_session_id=parent_session_id,
         git_branch=git_branch,
         tool_version=tool_version,
@@ -399,27 +399,27 @@ async def ingest_session_events_batch(
     )
 
 
-@router.get("/projects", response_model=ProjectListResponse)
+@router.get("/projects", response_model=CodingProjectListResponse)
 def list_projects(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
-) -> ProjectListResponse:
+) -> CodingProjectListResponse:
     """List all projects for the current user."""
     with make_session() as db_session:
         query = (
-            db_session.query(Project)
-            .filter(Project.user_id == user.id)
-            .order_by(Project.last_accessed_at.desc())
+            db_session.query(CodingProject)
+            .filter(CodingProject.user_id == user.id)
+            .order_by(CodingProject.last_accessed_at.desc())
         )
 
         total = query.count()
         projects = query.offset(offset).limit(limit).all()
 
-        return ProjectListResponse(
+        return CodingProjectListResponse(
             total=total,
             projects=[
-                ProjectResponse(
+                CodingProjectResponse(
                     id=p.id,
                     directory=p.directory,
                     name=p.name,
@@ -446,12 +446,12 @@ def list_sessions(
     with make_session() as db_session:
         query = (
             db_session.query(Session)
-            .options(joinedload(Session.project))
+            .options(joinedload(Session.coding_project))
             .filter(Session.user_id == user.id)
         )
 
         if project_id is not None:
-            query = query.filter(Session.project_id == project_id)
+            query = query.filter(Session.coding_project_id == project_id)
 
         query = query.order_by(Session.started_at.desc())
 
@@ -463,8 +463,8 @@ def list_sessions(
             sessions=[
                 SessionResponse(
                     session_id=str(s.id),
-                    project_id=s.project_id,
-                    project_directory=s.project.directory if s.project else None,
+                    project_id=s.coding_project_id,
+                    project_directory=s.coding_project.directory if s.coding_project else None,
                     parent_session_id=str(s.parent_session_id)
                     if s.parent_session_id
                     else None,

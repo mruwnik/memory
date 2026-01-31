@@ -13,7 +13,7 @@ from memory.common.celery_app import (
     SYNC_GITHUB_PROJECTS,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubPRData, GithubMilestone, GithubProject
+from memory.common.db.models import GithubItem, GithubPRData, Project, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import (
     GithubClient,
@@ -38,13 +38,13 @@ def _sync_milestone(
     session: Any,
     repo: GithubRepo,
     milestone_data: GithubMilestoneData,
-) -> GithubMilestone:
+) -> Project:
     """Sync a milestone, creating or updating as needed."""
     existing = (
-        session.query(GithubMilestone)
+        session.query(Project)
         .filter(
-            GithubMilestone.repo_id == repo.id,
-            GithubMilestone.number == milestone_data["number"],
+            Project.repo_id == repo.id,
+            Project.number == milestone_data["number"],
         )
         .first()
     )
@@ -60,7 +60,7 @@ def _sync_milestone(
         return existing
 
     # Create new milestone
-    milestone = GithubMilestone(
+    milestone = Project(
         repo_id=repo.id,
         github_id=milestone_data["github_id"],
         number=milestone_data["number"],
@@ -334,10 +334,10 @@ def _lookup_milestone_id(
 
     # Try to find in database first
     milestone = (
-        session.query(GithubMilestone)
+        session.query(Project)
         .filter(
-            GithubMilestone.repo_id == repo.id,
-            GithubMilestone.number == milestone_number,
+            Project.repo_id == repo.id,
+            Project.number == milestone_number,
         )
         .first()
     )

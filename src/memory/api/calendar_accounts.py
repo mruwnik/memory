@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user
+from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -115,11 +115,24 @@ def account_to_response(account: CalendarAccount) -> CalendarAccountResponse:
 
 @router.get("")
 def list_accounts(
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[CalendarAccountResponse]:
-    """List all calendar accounts."""
-    accounts = db.query(CalendarAccount).all()
+    """List calendar accounts. Admins can view any user's accounts or all accounts."""
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    query = db.query(CalendarAccount)
+
+    if resolved_user_id is not None:
+        # Filter by user: join through GoogleAccount to get user_id
+        # CalDAV accounts without google_account are excluded when filtering by user
+        query = (
+            query
+            .outerjoin(GoogleAccount, CalendarAccount.google_account_id == GoogleAccount.id)
+            .filter(GoogleAccount.user_id == resolved_user_id)
+        )
+
+    accounts = query.all()
     return [account_to_response(account) for account in accounts]
 
 

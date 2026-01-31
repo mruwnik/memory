@@ -21,7 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
-    from memory.common.db.models.sources import GithubMilestone, GithubUser
+    from memory.common.db.models.sources import Project, GithubUser
     from memory.common.db.models.users import User
 
 import memory.common.extract as extract
@@ -74,9 +74,9 @@ class Person(SourceItem):
         "GithubUser", back_populates="person"
     )
 
-    # Projects (milestones) this person collaborates on
-    projects: Mapped[list["GithubMilestone"]] = relationship(
-        "GithubMilestone", secondary="project_collaborators", back_populates="collaborators"
+    # Projects this person collaborates on
+    projects: Mapped[list["Project"]] = relationship(
+        "Project", secondary="project_collaborators", back_populates="collaborators"
     )
 
     # Note: Slack user data is stored in contact_info["slack"] as:
