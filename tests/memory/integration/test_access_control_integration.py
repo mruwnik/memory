@@ -16,7 +16,7 @@ import pytest
 
 from memory.common.db.models import Note
 from memory.common.db.models.people import Person
-from memory.common.db.models.sources import GithubAccount, GithubRepo, GithubMilestone
+from memory.common.db.models.sources import GithubAccount, GithubRepo, Project
 from memory.common.db.models.users import HumanUser
 
 
@@ -118,7 +118,7 @@ def github_repo(db_session, github_account):
 @pytest.fixture
 def project_alpha(db_session, github_repo):
     """Create a GitHub milestone (project) named Alpha."""
-    milestone = GithubMilestone(
+    milestone = Project(
         repo_id=github_repo.id,
         github_id=100,
         number=1,
@@ -133,7 +133,7 @@ def project_alpha(db_session, github_repo):
 @pytest.fixture
 def project_beta(db_session, github_repo):
     """Create a GitHub milestone (project) named Beta."""
-    milestone = GithubMilestone(
+    milestone = Project(
         repo_id=github_repo.id,
         github_id=101,
         number=2,

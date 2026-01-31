@@ -482,6 +482,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
                 if not include_archived and repo.get("archived", False):
                     continue
                 yield {
+                    "id": repo["id"],  # GitHub's numeric repo ID
                     "owner": repo["owner"]["login"],
                     "name": repo["name"],
                     "full_name": repo["full_name"],
@@ -495,3 +496,21 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
                 break
 
             page += 1
+
+    def get_repo(self, owner: str, name: str) -> dict[str, Any] | None:
+        """Fetch a single repository by owner and name.
+
+        Args:
+            owner: Repository owner (org or user).
+            name: Repository name.
+
+        Returns:
+            Repository data dict with id, owner, name, etc., or None if not found.
+        """
+        url = f"{GITHUB_API_URL}/repos/{owner}/{name}"
+        response = self.session.get(url, timeout=30)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        self._handle_rate_limit(response)
+        return response.json()

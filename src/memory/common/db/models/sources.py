@@ -264,6 +264,7 @@ class GithubRepo(Base):
     )
 
     # Repository identification
+    github_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # GitHub's numeric repo ID
     owner: Mapped[str] = mapped_column(Text, nullable=False)  # org or user
     name: Mapped[str] = mapped_column(Text, nullable=False)  # repo name
 
@@ -302,7 +303,9 @@ class GithubRepo(Base):
     account: Mapped[GithubAccount] = relationship("GithubAccount", back_populates="repos")
 
     __table_args__ = (
-        UniqueConstraint("account_id", "owner", "name", name="unique_repo_per_account"),
+        # Case-insensitive uniqueness (functional index created in migration)
+        # UniqueConstraint is replaced by: CREATE UNIQUE INDEX unique_repo_per_account_ci
+        #   ON github_repos (account_id, LOWER(owner), LOWER(name))
         Index("github_repos_active_idx", "active", "last_sync_at"),
         Index("github_repos_owner_name_idx", "owner", "name"),
     )

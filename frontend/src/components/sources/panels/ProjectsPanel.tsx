@@ -90,18 +90,24 @@ export const ProjectsPanel = () => {
           {/* View toggle */}
           <div className="flex border border-slate-200 rounded-lg overflow-hidden">
             <button
+              type="button"
               className={cx(
-                'px-3 py-1.5 text-sm',
-                viewMode === 'tree' ? 'bg-primary text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                'px-3 py-1.5 text-sm cursor-pointer transition-colors',
+                viewMode === 'tree'
+                  ? 'bg-primary text-white hover:bg-primary-dark'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'
               )}
               onClick={() => setViewMode('tree')}
             >
               Tree
             </button>
             <button
+              type="button"
               className={cx(
-                'px-3 py-1.5 text-sm border-l border-slate-200',
-                viewMode === 'list' ? 'bg-primary text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                'px-3 py-1.5 text-sm border-l border-slate-200 cursor-pointer transition-colors',
+                viewMode === 'list'
+                  ? 'bg-primary text-white hover:bg-primary-dark'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'
               )}
               onClick={() => setViewMode('list')}
             >
@@ -120,14 +126,20 @@ export const ProjectsPanel = () => {
           actionLabel="Create Project"
           onAction={() => setShowCreateModal(true)}
         />
-      ) : viewMode === 'tree' && tree.length > 0 ? (
+      ) : viewMode === 'tree' ? (
         <div className={styles.sourceList}>
-          <ProjectTree
-            nodes={tree}
-            onEdit={setEditingProject}
-            onDelete={setDeletingProject}
-            projects={projects}
-          />
+          {tree.length > 0 ? (
+            <ProjectTree
+              nodes={tree}
+              onEdit={setEditingProject}
+              onDelete={setDeletingProject}
+              projects={projects}
+            />
+          ) : (
+            <p className="text-slate-500 text-sm">
+              No hierarchical structure. All projects are top-level or have invalid parents.
+            </p>
+          )}
         </div>
       ) : (
         <div className={styles.sourceList}>

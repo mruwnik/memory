@@ -1,5 +1,7 @@
 """Tests for GitHub Sources API endpoints."""
 
+from unittest.mock import Mock, patch
+
 import pytest
 
 from memory.common.db.models import User
@@ -294,8 +296,19 @@ def test_delete_account_not_owned(client, db_session, user, other_user):
 # ====== POST /github/accounts/{account_id}/repos tests ======
 
 
-def test_create_repo_success(client, db_session, user):
+@patch("memory.api.github_sources.GithubClient")
+def test_create_repo_success(mock_client_class, client, db_session, user):
     """Create GitHub repo succeeds."""
+    # Setup mock to return canonical repo info from GitHub
+    mock_client = Mock()
+    mock_client.get_repo.return_value = {
+        "id": 12345,
+        "owner": {"login": "octocat"},
+        "name": "Hello-World",
+        "full_name": "octocat/Hello-World",
+    }
+    mock_client_class.return_value = mock_client
+
     account = GithubAccount(
         user_id=user.id,
         name="Test Account",
@@ -318,15 +331,27 @@ def test_create_repo_success(client, db_session, user):
 
     assert response.status_code == 200
 
-    # Verify repo was created in database
+    # Verify repo was created in database with github_id
     repo = db_session.query(GithubRepo).filter_by(name="Hello-World").first()
     assert repo is not None
     assert repo.owner == "octocat"
     assert repo.account_id == account.id
+    assert repo.github_id == 12345
 
 
-def test_create_repo_with_filters(client, db_session, user):
+@patch("memory.api.github_sources.GithubClient")
+def test_create_repo_with_filters(mock_client_class, client, db_session, user):
     """Create GitHub repo with filters succeeds."""
+    # Setup mock to return canonical repo info from GitHub
+    mock_client = Mock()
+    mock_client.get_repo.return_value = {
+        "id": 12345,
+        "owner": {"login": "octocat"},
+        "name": "Hello-World",
+        "full_name": "octocat/Hello-World",
+    }
+    mock_client_class.return_value = mock_client
+
     account = GithubAccount(
         user_id=user.id,
         name="Test Account",

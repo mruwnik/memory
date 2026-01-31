@@ -5,6 +5,7 @@ from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, get_user_account, has_admin_scope, resolve_user_filter
@@ -43,6 +44,7 @@ class GithubAccountUpdate(BaseModel):
 class GithubRepoResponse(BaseModel):
     id: int
     account_id: int
+    github_id: int | None  # GitHub's numeric repo ID
     owner: str
     name: str
     repo_path: str
@@ -114,6 +116,7 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
     return GithubRepoResponse(
         id=cast(int, repo.id),
         account_id=cast(int, repo.account_id),
+        github_id=cast(int | None, repo.github_id),
         owner=cast(str, repo.owner),
         name=cast(str, repo.name),
         repo_path=repo.repo_path,
@@ -334,6 +337,7 @@ def validate_account(
 
 
 class AvailableRepoResponse(BaseModel):
+    id: int  # GitHub's numeric repo ID
     owner: str
     name: str
     full_name: str
@@ -460,15 +464,41 @@ def add_repo(
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Add a repo to track for a GitHub account."""
-    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
+    account = get_user_account(db, GithubAccount, account_id, user)
 
-    # Check for duplicate
+    # Fetch repo from GitHub to validate and get canonical info
+    try:
+        credentials = GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+        client = GithubClient(credentials)
+        github_repo = client.get_repo(data.owner, data.name)
+        if not github_repo:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Repository {data.owner}/{data.name} not found or not accessible",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch repo from GitHub: {e}")
+
+    # Use canonical owner/name from GitHub (correct casing)
+    github_id = github_repo["id"]
+    canonical_owner = github_repo["owner"]["login"]
+    canonical_name = github_repo["name"]
+
+    # Check for duplicate (case-insensitive, matches the database constraint)
     existing = (
         db.query(GithubRepo)
         .filter(
             GithubRepo.account_id == account_id,
-            GithubRepo.owner == data.owner,
-            GithubRepo.name == data.name,
+            func.lower(GithubRepo.owner) == canonical_owner.lower(),
+            func.lower(GithubRepo.name) == canonical_name.lower(),
         )
         .first()
     )
@@ -477,8 +507,9 @@ def add_repo(
 
     repo = GithubRepo(
         account_id=account_id,
-        owner=data.owner,
-        name=data.name,
+        github_id=github_id,
+        owner=canonical_owner,
+        name=canonical_name,
         track_issues=data.track_issues,
         track_prs=data.track_prs,
         track_comments=data.track_comments,

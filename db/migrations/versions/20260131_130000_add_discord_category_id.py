@@ -9,7 +9,7 @@
 3. Renames existing 'projects' table (for coding sessions) to 'coding_projects'
    to free up the 'projects' name.
 
-Revision ID: 20260131_150000
+Revision ID: 20260131_130000
 Revises: 20260131_120000
 Create Date: 2026-01-31
 
@@ -19,7 +19,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "20260131_150000"
+revision = "20260131_130000"
 down_revision = "20260131_120000"
 branch_labels = None
 depends_on = None

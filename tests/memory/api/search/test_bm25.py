@@ -494,9 +494,9 @@ def github_repo(db_session, github_account):
 @pytest.fixture
 def project(db_session, github_repo):
     """Create a GitHub milestone (project) for testing."""
-    from memory.common.db.models.sources import GithubMilestone
+    from memory.common.db.models.sources import Project
 
-    milestone = GithubMilestone(
+    milestone = Project(
         repo_id=github_repo.id,
         github_id=100,
         number=1,
@@ -511,9 +511,9 @@ def project(db_session, github_repo):
 @pytest.fixture
 def second_project(db_session, github_repo):
     """Create a second GitHub milestone (project) for testing."""
-    from memory.common.db.models.sources import GithubMilestone
+    from memory.common.db.models.sources import Project
 
-    milestone = GithubMilestone(
+    milestone = Project(
         repo_id=github_repo.id,
         github_id=101,
         number=2,

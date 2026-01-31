@@ -150,9 +150,13 @@ def get_project_tree(
     }
 
     # Build a map of parent_id -> children
+    # Projects with orphaned parent_id (parent not in project_map) are treated as top-level
     children_map: dict[int | None, list[Project]] = {}
     for p in all_projects:
         parent = p.parent_id
+        # Treat orphaned projects (parent doesn't exist) as top-level
+        if parent is not None and parent not in project_map:
+            parent = None
         if parent not in children_map:
             children_map[parent] = []
         children_map[parent].append(p)
