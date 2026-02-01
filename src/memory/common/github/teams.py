@@ -467,3 +467,58 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
         except Exception as e:
             logger.warning(f"Failed to remove {username} from {org}/{team_slug}: {e}")
             return False
+
+    def create_team(
+        self,
+        org: str,
+        name: str,
+        description: str | None = None,
+        privacy: str = "closed",
+    ) -> dict[str, Any] | None:
+        """Create a new team in a GitHub organization.
+
+        Uses REST API: POST /orgs/{org}/teams
+
+        Args:
+            org: Organization login name
+            name: Team name (will be slugified for the URL-safe slug)
+            description: Optional team description
+            privacy: "closed" (visible to org members) or "secret" (only to team members)
+
+        Returns:
+            Team data dict with keys: id, slug, name, description, privacy
+            or None if creation failed
+        """
+        payload: dict[str, Any] = {
+            "name": name,
+            "privacy": privacy,
+        }
+        if description:
+            payload["description"] = description
+
+        try:
+            response = self.session.post(
+                f"{GITHUB_API_URL}/orgs/{org}/teams",
+                json=payload,
+                timeout=30,
+            )
+            if response.status_code == 422:
+                # Team may already exist
+                error_data = response.json()
+                logger.info(f"Team creation issue for {org}/{name}: {error_data}")
+                return None
+            response.raise_for_status()
+            self._handle_rate_limit(response)
+
+            data = response.json()
+            return {
+                "id": data["id"],
+                "node_id": data.get("node_id"),
+                "slug": data["slug"],
+                "name": data["name"],
+                "description": data.get("description"),
+                "privacy": data.get("privacy"),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to create team {name} in {org}: {e}")
+            return None

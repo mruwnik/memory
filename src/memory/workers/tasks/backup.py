@@ -69,6 +69,48 @@ def get_cipher() -> Fernet:
     return Fernet(key)
 
 
+# Maximum size for in-memory Fernet encryption (100MB)
+# Larger files use streaming openssl encryption to avoid OOM
+MAX_FERNET_SIZE = 100 * 1024 * 1024
+
+
+def encrypt_file_streaming(input_path: Path, output_path: Path) -> None:
+    """Encrypt a file using openssl for streaming (avoids loading into memory).
+
+    Uses AES-256-CBC with PBKDF2 key derivation, compatible with:
+        openssl enc -d -aes-256-cbc -pbkdf2 -in file.enc -out file -pass env:BACKUP_ENCRYPTION_KEY
+
+    Security note: The encryption key is passed via environment variable rather than
+    command line to avoid exposure in `ps aux`. However, processes with root access
+    or same UID can still read it via /proc/<pid>/environ during subprocess execution.
+    For higher security requirements, consider using openssl's -pass file: option
+    with a temporary file (mode 0600) that's deleted after the subprocess starts.
+    """
+    if not settings.BACKUP_ENCRYPTION_KEY:
+        raise ValueError("BACKUP_ENCRYPTION_KEY not set in environment")
+
+    # Use openssl for streaming encryption - doesn't load entire file into memory
+    # Pass key via environment variable (not command line) to avoid exposure in ps aux
+    # Use minimal environment to avoid leaking other secrets to subprocess
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "BACKUP_ENCRYPTION_KEY": settings.BACKUP_ENCRYPTION_KEY,
+    }
+    result = subprocess.run(
+        [
+            "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt",
+            "-in", str(input_path),
+            "-out", str(output_path),
+            "-pass", "env:BACKUP_ENCRYPTION_KEY",
+        ],
+        capture_output=True,
+        timeout=3600,  # 1 hour timeout for large files
+        env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"openssl encryption failed: {result.stderr.decode()}")
+
+
 @contextmanager
 def create_tarball_file(directory: Path):
     """Create a gzipped tarball of a directory using a temp file.
@@ -135,7 +177,8 @@ def sync_unencrypted_directory(path: Path) -> dict:
 def backup_encrypted_directory(path: Path) -> dict:
     """Create encrypted tarball of directory and upload to S3.
 
-    Uses streaming via temp files to avoid loading large directories into memory.
+    Uses streaming encryption for large files to avoid OOM.
+    Small files (<100MB) use Fernet, large files use openssl streaming.
     """
     if not path.exists():
         logger.warning(f"Directory does not exist: {path}")
@@ -150,22 +193,53 @@ def backup_encrypted_directory(path: Path) -> dict:
         tar_size = tar_path.stat().st_size
         logger.info(f"Created tarball of {path} ({tar_size} bytes)")
 
-        # Read, encrypt, and write to another temp file
         logger.info(f"Encrypting {path}...")
-        cipher = get_cipher()
 
-        # For Fernet, we still need to load into memory for encryption
-        # but at least we're not holding both tarball AND encrypted in memory
-        tarball_bytes = tar_path.read_bytes()
+        s3_client = boto3.client("s3", region_name=settings.S3_BACKUP_REGION)
 
-    # Encrypt (tarball_bytes freed after this)
-    encrypted_bytes = cipher.encrypt(tarball_bytes)
-    del tarball_bytes  # Free memory before upload
+        # Use streaming encryption for large files to avoid OOM
+        if tar_size > MAX_FERNET_SIZE:
+            logger.info(f"Using streaming encryption for large file ({tar_size} bytes)")
+            # Create temp file for encrypted output
+            enc_fd, enc_path = tempfile.mkstemp(suffix=".enc")
+            os.close(enc_fd)
+            try:
+                encrypt_file_streaming(tar_path, Path(enc_path))
+                enc_size = os.path.getsize(enc_path)
 
-    # Upload to S3
-    s3_client = boto3.client("s3", region_name=settings.S3_BACKUP_REGION)
+                # Use upload_file for streaming upload (doesn't load into memory)
+                s3_key = f"{settings.S3_BACKUP_PREFIX}/{path.name}.tar.gz.ssl"
+                logger.info(
+                    f"Uploading encrypted {path} to s3://{settings.S3_BACKUP_BUCKET}/{s3_key}"
+                )
+                s3_client.upload_file(
+                    enc_path,
+                    settings.S3_BACKUP_BUCKET,
+                    s3_key,
+                    ExtraArgs={"ServerSideEncryption": "AES256"},
+                )
+                return {
+                    "uploaded": True,
+                    "directory": path,
+                    "size_bytes": enc_size,
+                    "s3_key": s3_key,
+                    "encryption": "openssl",
+                }
+            except Exception as e:
+                logger.error(f"Failed to upload {path}: {e}")
+                return {"uploaded": False, "directory": path, "error": str(e)}
+            finally:
+                if os.path.exists(enc_path):
+                    os.unlink(enc_path)
+        else:
+            # Small files: use Fernet (keeps backward compatibility)
+            cipher = get_cipher()
+            tarball_bytes = tar_path.read_bytes()
+            encrypted_bytes = cipher.encrypt(tarball_bytes)
+            del tarball_bytes
+
+    # Upload small files using put_object (already in memory)
     s3_key = f"{settings.S3_BACKUP_PREFIX}/{path.name}.tar.gz.enc"
-
     try:
         logger.info(
             f"Uploading encrypted {path} to s3://{settings.S3_BACKUP_BUCKET}/{s3_key}"
@@ -181,6 +255,7 @@ def backup_encrypted_directory(path: Path) -> dict:
             "directory": path,
             "size_bytes": len(encrypted_bytes),
             "s3_key": s3_key,
+            "encryption": "fernet",
         }
     except Exception as e:
         logger.error(f"Failed to upload {path}: {e}")

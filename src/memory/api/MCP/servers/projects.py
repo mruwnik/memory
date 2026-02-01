@@ -253,11 +253,11 @@ async def fetch(
 @projects_mcp.tool()
 @visible_when(require_scopes("projects"))
 async def upsert(
-    title: str,
+    title: str | None = None,
     team_ids: list[int] | None = None,
     project_id: int | None = None,
     description: str | None = None,
-    state: Literal["open", "closed"] = "open",
+    state: Literal["open", "closed"] | None = None,
     parent_id: int | None = None,
     clear_parent: bool = False,
 ) -> dict:
@@ -265,7 +265,7 @@ async def upsert(
     Create or update a standalone project.
 
     If project_id is provided, updates the existing project.
-    Otherwise, creates a new project (requires team_ids).
+    Otherwise, creates a new project (requires title and team_ids).
 
     Projects must be assigned to at least one team for access control.
     Multiple teams can be assigned at creation for shared access.
@@ -274,11 +274,11 @@ async def upsert(
     Title, description, and state are synced from GitHub for those projects.
 
     Args:
-        title: Project title
+        title: Project title (required for create, optional for update)
         team_ids: List of team IDs to assign (required for new projects)
         project_id: ID of existing project to update (omit for create)
         description: Optional project description
-        state: Project state ('open' or 'closed', default: 'open')
+        state: Project state ('open' or 'closed')
         parent_id: Optional parent project ID for hierarchy
         clear_parent: If true, removes the parent (sets to NULL)
 
@@ -293,9 +293,8 @@ async def upsert(
             description="First quarter development sprint",
         )
 
-        # Update existing project
+        # Update existing project (only change state)
         upsert(
-            title="Q1 2026 Sprint - Updated",
             project_id=-1,
             state="closed",
         )
@@ -311,9 +310,11 @@ async def upsert(
                 session, user, project_id, title, description, state, parent_id, clear_parent
             )
 
-        # CREATE path
+        # CREATE path - title is required
+        if not title:
+            return {"error": "title is required for new projects", "project": None}
         return await _create_project(
-            session, user, title, team_ids, description, state, parent_id
+            session, user, title, team_ids, description, state or "open", parent_id
         )
 
 

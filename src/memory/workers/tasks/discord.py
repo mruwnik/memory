@@ -37,6 +37,10 @@ from memory.common.content_processing import (
 logger = logging.getLogger(__name__)
 
 
+# Max image size to download (50 MB)
+MAX_IMAGE_SIZE = 50 * 1024 * 1024
+
+
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
     """Download images from URLs and save to disk. Returns relative file paths."""
     image_dir = settings.DISCORD_STORAGE_DIR / str(message_id)
@@ -45,22 +49,37 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
     saved_paths = []
     for url in image_urls:
         try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
+            # Stream download with size limit to prevent OOM
+            with requests.get(url, timeout=30, stream=True) as response:
+                response.raise_for_status()
 
-            # Generate filename from URL hash
-            url_hash = hashlib.md5(url.encode()).hexdigest()
-            ext = pathlib.Path(url).suffix or ".jpg"
-            ext = ext.split("?")[0]
-            filename = f"{url_hash}{ext}"
-            local_path = image_dir / filename
+                # Check Content-Length if available
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_IMAGE_SIZE:
+                    logger.warning(f"Skipping large image ({content_length} bytes): {url}")
+                    continue
 
-            # Save image
-            local_path.write_bytes(response.content)
+                # Generate filename from URL hash
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                ext = pathlib.Path(url).suffix or ".jpg"
+                ext = ext.split("?")[0]
+                filename = f"{url_hash}{ext}"
+                local_path = image_dir / filename
 
-            # Store relative path from FILE_STORAGE_DIR
-            relative_path = local_path.relative_to(settings.FILE_STORAGE_DIR)
-            saved_paths.append(str(relative_path))
+                # Stream to file with size tracking
+                downloaded = 0
+                with local_path.open("wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        downloaded += len(chunk)
+                        if downloaded > MAX_IMAGE_SIZE:
+                            logger.warning(f"Image exceeded size limit during download: {url}")
+                            local_path.unlink(missing_ok=True)
+                            break
+                        f.write(chunk)
+                    else:
+                        # Loop completed without break - download successful
+                        relative_path = local_path.relative_to(settings.FILE_STORAGE_DIR)
+                        saved_paths.append(str(relative_path))
 
         except Exception as e:
             logger.error(f"Failed to download/save image from {url}: {e}")

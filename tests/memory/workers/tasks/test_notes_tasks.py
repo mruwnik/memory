@@ -1018,11 +1018,8 @@ def test_track_git_changes_logging(
 
 
 @patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.people.sync_profile_from_file")
-def test_sync_notes_routes_profiles_to_sync_profile_from_file(
-    mock_sync_profile, mock_sync_note, mock_make_session, tmp_path
-):
-    """Test that sync_notes routes profile files to sync_profile_from_file."""
+def test_sync_notes_skips_profile_files(mock_sync_note, mock_make_session, tmp_path):
+    """Test that sync_notes skips profile files in the profiles folder."""
 
     # Create notes dir with profile and regular notes
     notes_dir = tmp_path / "notes"
@@ -1046,7 +1043,6 @@ Profile notes."""
     )
 
     mock_sync_note.delay.return_value = Mock(id="task-note")
-    mock_sync_profile.delay.return_value = Mock(id="task-profile")
 
     with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
         with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
@@ -1055,25 +1051,19 @@ Profile notes."""
     # Should have found 2 files total
     assert result["notes_num"] == 2
 
-    # Regular note should go to sync_note
+    # Only regular note should be synced (profile is skipped)
     assert mock_sync_note.delay.call_count == 1
     note_call_args = mock_sync_note.delay.call_args
     assert note_call_args[1]["subject"] == "regular_note"
 
-    # Profile should go to sync_profile_from_file
-    assert mock_sync_profile.delay.call_count == 1
-    profile_call_args = mock_sync_profile.delay.call_args
-    assert "profiles/john_doe.md" in profile_call_args[0][0]
-
 
 @patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.people.sync_profile_from_file")
 @patch("memory.workers.tasks.notes.git_command")
 @patch("memory.workers.tasks.notes.check_git_command")
-def test_track_git_changes_routes_profiles_to_sync_profile_from_file(
-    mock_check_git, mock_git_command, mock_sync_profile, mock_sync_note, tmp_path
+def test_track_git_changes_skips_profile_files(
+    mock_check_git, mock_git_command, mock_sync_note, tmp_path
 ):
-    """Test that track_git_changes routes profile files to sync_profile_from_file."""
+    """Test that track_git_changes skips profile files in the profiles folder."""
     from unittest.mock import Mock
 
     # Create notes dir structure
@@ -1112,7 +1102,6 @@ Jane's notes."""
     ]
 
     mock_sync_note.delay.return_value = Mock(id="task-note")
-    mock_sync_profile.delay.return_value = Mock(id="task-profile")
 
     with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
         with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
@@ -1122,53 +1111,35 @@ Jane's notes."""
     assert "regular_note.md" in result["changed_files"]
     assert "profiles/jane_doe.md" in result["changed_files"]
 
-    # Regular note should go to sync_note
+    # Only regular note should be synced (profile is skipped)
     assert mock_sync_note.delay.call_count == 1
     note_call_args = mock_sync_note.delay.call_args
     assert note_call_args[1]["subject"] == "regular_note"
     assert note_call_args[1]["save_to_file"] is False
 
-    # Profile should go to sync_profile_from_file
-    assert mock_sync_profile.delay.call_count == 1
-    profile_call_args = mock_sync_profile.delay.call_args
-    assert profile_call_args[0][0] == "profiles/jane_doe.md"
-
 
 @patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.people.sync_profile_from_file")
-def test_sync_notes_skips_existing_profiles(
-    mock_sync_profile, mock_sync_note, mock_make_session, tmp_path
-):
-    """Test that sync_notes skips profiles that already have a Person record."""
-    from memory.common.db.models import Person
-
-    # Create notes dir with profile
+def test_sync_notes_skips_all_profiles(mock_sync_note, mock_make_session, tmp_path):
+    """Test that sync_notes skips all profile files in the profiles folder."""
+    # Create notes dir with profile and regular note
     notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+
+    regular_note = notes_dir / "regular.md"
+    regular_note.write_text("Regular content")
+
     profiles_dir = notes_dir / "profiles"
     profiles_dir.mkdir(parents=True, exist_ok=True)
-
-    profile_file = profiles_dir / "existing_person.md"
+    profile_file = profiles_dir / "some_person.md"
     profile_file.write_text("Profile content")
 
-    # Create existing Person in database
-    sha256 = create_content_hash("person:existing_person")
-    existing_person = Person(
-        identifier="existing_person",
-        display_name="Existing Person",
-        modality="person",
-        mime_type="text/plain",
-        sha256=sha256,
-        size=0,
-    )
-    mock_make_session.add(existing_person)
-    mock_make_session.commit()
-
-    mock_sync_profile.delay.return_value = Mock(id="task-profile")
+    mock_sync_note.delay.return_value = Mock(id="task-note")
 
     with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
         with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
             result = notes.sync_notes(str(notes_dir))
 
-    # Should not call sync_profile_from_file for existing person
-    assert mock_sync_profile.delay.call_count == 0
-    assert result["new_profiles"] == 0
+    # Should find both files but only sync the regular note
+    assert result["notes_num"] == 2
+    assert result["new_notes"] == 1
+    assert mock_sync_note.delay.call_count == 1

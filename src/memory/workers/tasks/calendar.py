@@ -232,10 +232,11 @@ def fetch_caldav_events(
     since: datetime,
     until: datetime,
 ) -> list[EventData]:
-    """Fetch events from a CalDAV server.
+    """Fetch events from a CalDAV server within the specified date range.
 
-    Fetches ALL events (not date-filtered) to preserve recurring events with RRULE.
-    Recurring events are expanded at query time, not sync time.
+    Uses CalDAV date_search to fetch only events in the range, which:
+    - Limits memory usage for large calendars
+    - Still returns recurring events with RRULE that overlap the range
     """
     client = caldav.DAVClient(url=url, username=username, password=password)
     principal = client.principal()
@@ -248,9 +249,9 @@ def fetch_caldav_events(
             continue
 
         try:
-            # Fetch ALL events to get recurring events with RRULE intact
-            # We expand recurring events at query time, not sync time
-            vevents = calendar.events()
+            # Use date_search to fetch only events in the range
+            # This returns recurring events with RRULE intact (not expanded)
+            vevents = calendar.date_search(start=since, end=until, expand=False)
             for vevent in vevents:
                 try:
                     events.append(parse_caldav_event(vevent, calendar_name))

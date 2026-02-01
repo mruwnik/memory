@@ -17,6 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from sqlalchemy.orm import Session as DBSession
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models import CodingProject, Session, User
+from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,96 @@ def read_transcript(
     return safe_loads(transcript_file, offset, offset + limit)
 
 
+def extract_tool_usage_telemetry(
+    event: SessionEvent,
+    user_id: int,
+    session_id: str,
+) -> list[TelemetryEvent]:
+    """
+    Extract tool usage telemetry from an assistant event with tool_use blocks.
+
+    Returns a list of TelemetryEvent records (one per tool call) to be saved.
+    """
+    if event.type != "assistant":
+        return []
+
+    message = event.message or {}
+    content = message.get("content", [])
+    usage = message.get("usage", {})
+
+    if not content or not usage:
+        return []
+
+    # Find tool_use blocks in content
+    tools_in_message = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            tool_name = block.get("name", "unknown")
+            tools_in_message.append(tool_name)
+
+    if not tools_in_message:
+        return []
+
+    # Get token counts from usage
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+
+    # Parse event timestamp
+    event_timestamp = datetime.now(timezone.utc)
+    if event.timestamp:
+        try:
+            event_timestamp = datetime.fromisoformat(
+                event.timestamp.replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # Split tokens evenly if multiple tools in one message, distributing remainder.
+    # NOTE: This is an approximation. When multiple tools are called in one assistant
+    # message, we cannot determine which tool consumed which tokens. Dividing evenly
+    # may misattribute costs (e.g., a cheap Read + expensive WebSearch would each get
+    # half the tokens). This is acceptable for aggregate metrics but individual tool
+    # costs should be treated as estimates when num_tools > 1.
+    num_tools = len(tools_in_message)
+    telemetry_events = []
+
+    # Calculate base values and remainders for accurate distribution
+    input_base, input_remainder = divmod(input_tokens, num_tools)
+    output_base, output_remainder = divmod(output_tokens, num_tools)
+    cache_read_base, cache_read_remainder = divmod(cache_read, num_tools)
+    cache_creation_base, cache_creation_remainder = divmod(cache_creation, num_tools)
+
+    for i, tool_name in enumerate(tools_in_message):
+        # Distribute remainder tokens to first tools (one extra token each until exhausted)
+        tool_input = input_base + (1 if i < input_remainder else 0)
+        tool_output = output_base + (1 if i < output_remainder else 0)
+        tool_cache_read = cache_read_base + (1 if i < cache_read_remainder else 0)
+        tool_cache_creation = cache_creation_base + (1 if i < cache_creation_remainder else 0)
+        total = tool_input + tool_output + tool_cache_read + tool_cache_creation
+
+        telemetry_events.append(
+            TelemetryEvent(
+                timestamp=event_timestamp,
+                user_id=user_id,
+                event_type="metric",
+                name="tool.token.usage",
+                value=float(total),
+                session_id=session_id,
+                tool_name=tool_name,
+                attributes={
+                    "input_tokens": tool_input,
+                    "output_tokens": tool_output,
+                    "cache_read_input_tokens": tool_cache_read,
+                    "cache_creation_input_tokens": tool_cache_creation,
+                },
+            )
+        )
+
+    return telemetry_events
+
+
 def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
     try:
         session_uuid = UUID(session_id)
@@ -368,6 +459,13 @@ def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
         )
 
         accepted = append_events_to_transcript(session, events)
+
+        # Extract and save tool usage telemetry
+        for event in events:
+            telemetry_events = extract_tool_usage_telemetry(event, user_id, session_id)
+            for te in telemetry_events:
+                db_session.add(te)
+
         db_session.commit()
 
     return accepted
@@ -678,35 +776,20 @@ def compute_call_stats(per_call_totals: list[int]) -> ToolCallStats | None:
     )
 
 
-@router.get("/stats/tool-usage", response_model=ToolUsageResponse)
-def get_tool_usage_stats(
-    from_time: datetime | None = Query(None, alias="from", description="Start time"),
-    to_time: datetime | None = Query(None, alias="to", description="End time"),
-    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
-    db: DBSession = Depends(get_session),
+def get_tool_usage_stats_from_transcripts(
+    from_time: datetime,
+    to_time: datetime,
+    resolved_user_id: int | None,
+    db: DBSession,
 ) -> ToolUsageResponse:
     """
-    Get aggregated token usage statistics by tool.
+    Fallback: Get tool usage by parsing transcript files.
 
-    Parses session transcripts to correlate tool calls with token usage.
-
-    Admins (users with '*' or 'admin' scope) can:
-    - Omit user_id to see tool usage across all users
-    - Specify user_id to filter to a specific user's sessions
+    Used during the transition period before telemetry backfill is complete.
     """
-    resolved_user_id = resolve_user_filter(user_id, user, db)
-
-    # Default to last 7 days
-    if to_time is None:
-        to_time = datetime.now(timezone.utc)
-    if from_time is None:
-        from_time = to_time - timedelta(days=7)
-
     from sqlalchemy import or_
 
-    # Get sessions that overlap with the time range:
-    # - started before to_time AND (ended after from_time OR still ongoing)
+    # Get sessions that overlap with the time range
     query = db.query(Session).filter(
         Session.started_at <= to_time,
         or_(
@@ -715,7 +798,6 @@ def get_tool_usage_stats(
         ),
     )
 
-    # Apply user filter
     if resolved_user_id is not None:
         query = query.filter(Session.user_id == resolved_user_id)
 
@@ -747,12 +829,114 @@ def get_tool_usage_stats(
             aggregated[tool_name]["input_tokens"] += stats["input_tokens"]
             aggregated[tool_name]["output_tokens"] += stats["output_tokens"]
             aggregated[tool_name]["cache_read_tokens"] += stats["cache_read_tokens"]
-            aggregated[tool_name]["cache_creation_tokens"] += stats[
-                "cache_creation_tokens"
-            ]
-            aggregated[tool_name]["per_call_totals"].extend(
-                stats.get("per_call_totals", [])
-            )
+            aggregated[tool_name]["cache_creation_tokens"] += stats["cache_creation_tokens"]
+            aggregated[tool_name]["per_call_totals"].extend(stats.get("per_call_totals", []))
+
+    # Convert to response format
+    tools = [
+        ToolUsageStats(
+            tool_name=name,
+            call_count=stats["call_count"],
+            input_tokens=stats["input_tokens"],
+            output_tokens=stats["output_tokens"],
+            cache_read_tokens=stats["cache_read_tokens"],
+            cache_creation_tokens=stats["cache_creation_tokens"],
+            total_tokens=(
+                stats["input_tokens"]
+                + stats["output_tokens"]
+                + stats["cache_read_tokens"]
+                + stats["cache_creation_tokens"]
+            ),
+            per_call=compute_call_stats(stats["per_call_totals"]),
+        )
+        for name, stats in aggregated.items()
+    ]
+
+    tools.sort(key=lambda t: t.total_tokens, reverse=True)
+
+    return ToolUsageResponse(
+        from_time=from_time.isoformat(),
+        to_time=to_time.isoformat(),
+        session_count=len(sessions),
+        tools=tools,
+    )
+
+
+@router.get("/stats/tool-usage", response_model=ToolUsageResponse)
+def get_tool_usage_stats(
+    from_time: datetime | None = Query(None, alias="from", description="Start time"),
+    to_time: datetime | None = Query(None, alias="to", description="End time"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> ToolUsageResponse:
+    """
+    Get aggregated token usage statistics by tool.
+
+    Queries the telemetry_events table for tool.token.usage events.
+
+    Admins (users with '*' or 'admin' scope) can:
+    - Omit user_id to see tool usage across all users
+    - Specify user_id to filter to a specific user's sessions
+    """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+
+    # Default to last 7 days
+    if to_time is None:
+        to_time = datetime.now(timezone.utc)
+    if from_time is None:
+        from_time = to_time - timedelta(days=7)
+
+    # Query tool.token.usage events (one row per tool call)
+    # value = total tokens, attributes has breakdown
+    query = db.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "tool.token.usage",
+        TelemetryEvent.timestamp >= from_time,
+        TelemetryEvent.timestamp <= to_time,
+    )
+
+    # Apply user filter
+    if resolved_user_id is not None:
+        query = query.filter(TelemetryEvent.user_id == resolved_user_id)
+
+    events = query.all()
+
+    # Aggregate by tool
+    aggregated: dict[str, dict] = {}
+    for event in events:
+        tool_name = event.tool_name or "unknown"
+        if tool_name not in aggregated:
+            aggregated[tool_name] = {
+                "call_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "per_call_totals": [],
+            }
+
+        attrs = event.attributes or {}
+        aggregated[tool_name]["call_count"] += 1
+        aggregated[tool_name]["input_tokens"] += attrs.get("input_tokens", 0)
+        aggregated[tool_name]["output_tokens"] += attrs.get("output_tokens", 0)
+        aggregated[tool_name]["cache_read_tokens"] += attrs.get("cache_read_input_tokens", 0)
+        aggregated[tool_name]["cache_creation_tokens"] += attrs.get("cache_creation_input_tokens", 0)
+        aggregated[tool_name]["per_call_totals"].append(int(event.value or 0))
+
+    # Get session count for the time range
+    session_count_query = db.query(func.count(func.distinct(TelemetryEvent.session_id))).filter(
+        TelemetryEvent.name == "tool.token.usage",
+        TelemetryEvent.timestamp >= from_time,
+        TelemetryEvent.timestamp <= to_time,
+    )
+    if resolved_user_id is not None:
+        session_count_query = session_count_query.filter(TelemetryEvent.user_id == resolved_user_id)
+    session_count = session_count_query.scalar() or 0
+
+    # If no tool.token.usage events yet, fall back to parsing transcripts
+    # This handles the transition period before backfill
+    if not aggregated:
+        return get_tool_usage_stats_from_transcripts(from_time, to_time, resolved_user_id, db)
 
     # Convert to response format
     tools = [
@@ -780,6 +964,6 @@ def get_tool_usage_stats(
     return ToolUsageResponse(
         from_time=from_time.isoformat(),
         to_time=to_time.isoformat(),
-        session_count=len(sessions),
+        session_count=session_count,
         tools=tools,
     )

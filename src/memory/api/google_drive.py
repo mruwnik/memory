@@ -102,21 +102,39 @@ class AccountResponse(BaseModel):
     folders: list[FolderResponse]
 
 
-# OAuth State storage (temporary, for OAuth flow)
+# OAuth State storage using Redis for multi-worker support
 class GoogleOAuthState:
-    """In-memory OAuth state storage. In production, use the database."""
+    """Redis-backed OAuth state storage. Works across multiple workers."""
 
-    _states: dict[str, int] = {}  # state -> user_id
+    # State expires after 10 minutes
+    STATE_TTL_SECONDS = 600
+    KEY_PREFIX = "google_oauth_state:"
+
+    @classmethod
+    def _get_redis(cls):
+        import redis
+        from memory.common import settings
+        return redis.from_url(settings.REDIS_URL)
 
     @classmethod
     def create(cls, user_id: int) -> str:
         state = secrets.token_urlsafe(32)
-        cls._states[state] = user_id
+        key = f"{cls.KEY_PREFIX}{state}"
+        cls._get_redis().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
         return state
 
     @classmethod
     def validate(cls, state: str) -> int | None:
-        return cls._states.pop(state, None)
+        key = f"{cls.KEY_PREFIX}{state}"
+        redis_client = cls._get_redis()
+        # Get and delete atomically using pipeline
+        pipe = redis_client.pipeline()
+        pipe.get(key)
+        pipe.delete(key)
+        result, _ = pipe.execute()
+        if result is None:
+            return None
+        return int(result)
 
 
 class OAuthConfigResponse(BaseModel):

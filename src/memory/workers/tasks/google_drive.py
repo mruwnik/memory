@@ -143,13 +143,16 @@ def _update_existing_doc(
             client = qdrant.get_qdrant_client()
             qdrant.delete_points(client, cast(str, existing.modality), chunk_ids)
         except IOError as e:
-            logger.error(f"Error deleting chunks: {e}")
+            # Re-raise to fail the task - leaving stale vectors causes duplicate results
+            logger.error(f"Error deleting chunks from Qdrant: {e}")
+            raise
 
-    # Delete chunks from database
-    for chunk in existing_chunks:
-        session.delete(chunk)
+    # Delete chunks from database (clear before delete to avoid SQLAlchemy issues)
+    chunks_to_delete = list(existing_chunks)
     if existing.chunks is not None:
         existing.chunks.clear()
+    for chunk in chunks_to_delete:
+        session.delete(chunk)
 
     # Update the existing item
     existing.content = file_data["content"]

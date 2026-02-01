@@ -38,6 +38,11 @@ from memory.common.formatters import observation
 logger = logging.getLogger(__name__)
 
 
+def escape_like(s: str) -> str:
+    """Escape ILIKE metacharacters to prevent pattern injection."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def get_current_user_access_filter() -> AccessFilter | None:
     """
     Get access filter for the current MCP user.
@@ -735,8 +740,9 @@ async def list_items(
 
         # Metadata filters - require joining specific tables
         if folder_path := filters.get("folder_path"):
+            escaped = escape_like(folder_path)
             query = query.join(GoogleDoc).filter(
-                GoogleDoc.folder_path.ilike(f"%{folder_path}%")
+                GoogleDoc.folder_path.ilike(f"%{escaped}%", escape="\\")
             )
         if sender := filters.get("sender"):
             query = (

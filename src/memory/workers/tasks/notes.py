@@ -208,15 +208,20 @@ def sync_note(
 
     # Git operations MUST be outside the database transaction to avoid
     # holding the connection during slow network I/O
-    if save_to_file:
+    note_id = result.get("note_id") or result.get("id")
+    if save_to_file and note_id:
         with git_tracking(
             settings.NOTES_STORAGE_DIR, f"Sync note {filename}: {subject}"
         ):
             # Re-fetch note for file operations (session is closed)
             with make_session() as session:
-                note = session.get(Note, result.get("note_id"))
+                note = session.get(Note, note_id)
                 if note:
                     note.save_to_file()
+                else:
+                    logger.error(f"Note {note_id} not found after commit - skipping file save")
+    elif save_to_file:
+        logger.error(f"No note_id in result, cannot save to file: {result}")
 
     return result
 
@@ -228,44 +233,29 @@ def sync_notes(folder: str):
     logger.info(f"Syncing notes from {folder}")
 
     new_notes = 0
-    new_profiles = 0
     all_files = list(path.rglob("*.md"))
-
-    # Import here to avoid circular imports
-    from memory.common.db.models import Person
-    from memory.workers.tasks.people import sync_profile_from_file
 
     with make_session() as session:
         for filename in all_files:
             relative_path = filename.relative_to(path).as_posix()
 
-            # Check if this is a profile file
+            # Skip profile files (handled separately)
             if relative_path.startswith(f"{settings.PROFILES_FOLDER}/"):
-                # Check if person already exists
-                identifier = filename.stem
-                existing = (
-                    session.query(Person)
-                    .filter(Person.identifier == identifier)
-                    .first()
+                continue
+
+            if not check_content_exists(
+                session, Note, filename=filename.as_posix()
+            ):
+                new_notes += 1
+                sync_note.delay(  # type: ignore[attr-defined]
+                    subject=filename.stem,
+                    content=filename.read_text(),
+                    filename=relative_path,
                 )
-                if not existing:
-                    new_profiles += 1
-                    sync_profile_from_file.delay(relative_path)  # type: ignore[attr-defined]
-            else:
-                if not check_content_exists(
-                    session, Note, filename=filename.as_posix()
-                ):
-                    new_notes += 1
-                    sync_note.delay(  # type: ignore[attr-defined]
-                        subject=filename.stem,
-                        content=filename.read_text(),
-                        filename=relative_path,
-                    )
 
     return {
         "notes_num": len(all_files),
         "new_notes": new_notes,
-        "new_profiles": new_profiles,
     }
 
 
@@ -337,19 +327,16 @@ def track_git_changes():
             logger.warning(f"File not found: {filename}")
             continue
 
-        # Check if this is a profile file
+        # Skip profile files (handled separately)
         if filename.startswith(f"{settings.PROFILES_FOLDER}/"):
-            # Import here to avoid circular imports
-            from memory.workers.tasks.people import sync_profile_from_file
+            continue
 
-            sync_profile_from_file.delay(filename)  # type: ignore[attr-defined]
-        else:
-            sync_note.delay(  # type: ignore[attr-defined]
-                subject=file.stem,
-                content=file.read_text(),
-                filename=filename,
-                save_to_file=False,
-            )
+        sync_note.delay(  # type: ignore[attr-defined]
+            subject=file.stem,
+            content=file.read_text(),
+            filename=filename,
+            save_to_file=False,
+        )
 
     return {
         "status": "success",

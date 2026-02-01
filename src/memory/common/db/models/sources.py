@@ -668,8 +668,21 @@ class GoogleOAuthConfig(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True, default="default")
     client_id: Mapped[str] = mapped_column(Text, nullable=False)
-    client_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    client_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     project_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def client_secret(self) -> str | None:
+        if self.client_secret_encrypted is None:
+            return None
+        return decrypt_value(self.client_secret_encrypted)
+
+    @client_secret.setter
+    def client_secret(self, value: str | None) -> None:
+        if value is None:
+            self.client_secret_encrypted = None
+        else:
+            self.client_secret_encrypted = encrypt_value(value)
     auth_uri: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="https://accounts.google.com/o/oauth2/auth"
     )
@@ -728,10 +741,36 @@ class GoogleAccount(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # Google account email
 
-    # OAuth2 tokens
-    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # OAuth2 tokens (encrypted at rest)
+    access_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    refresh_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def access_token(self) -> str | None:
+        if self.access_token_encrypted is None:
+            return None
+        return decrypt_value(self.access_token_encrypted)
+
+    @access_token.setter
+    def access_token(self, value: str | None) -> None:
+        if value is None:
+            self.access_token_encrypted = None
+        else:
+            self.access_token_encrypted = encrypt_value(value)
+
+    @property
+    def refresh_token(self) -> str | None:
+        if self.refresh_token_encrypted is None:
+            return None
+        return decrypt_value(self.refresh_token_encrypted)
+
+    @refresh_token.setter
+    def refresh_token(self, value: str | None) -> None:
+        if value is None:
+            self.refresh_token_encrypted = None
+        else:
+            self.refresh_token_encrypted = encrypt_value(value)
 
     # Scopes granted
     scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")

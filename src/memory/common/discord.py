@@ -5,11 +5,15 @@ Simple HTTP client that communicates with the Discord collector's API server.
 """
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
 from memory.common import settings
+from memory.common.db.models import DiscordServer
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +233,49 @@ def remove_role_member(bot_id: int, guild_id: int | str, role_id: int | str, use
         return None
 
 
+def create_role(
+    bot_id: int,
+    guild_id: int | str,
+    name: str,
+    color: int | None = None,
+    permissions: int | None = None,
+    mentionable: bool = False,
+    hoist: bool = False,
+) -> dict[str, Any] | None:
+    """Create a role in a Discord guild.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Guild ID (int or string)
+        name: Role name
+        color: RGB color integer (optional)
+        permissions: Permission bitfield (optional)
+        mentionable: Whether the role is mentionable
+        hoist: Whether to display role separately in member list
+
+    Returns:
+        Created role data or None on failure
+    """
+    try:
+        response = requests.post(
+            f"{get_api_url()}/guilds/{guild_id}/roles",
+            json={
+                "bot_id": bot_id,
+                "name": name,
+                "color": color,
+                "permissions": permissions,
+                "mentionable": mentionable,
+                "hoist": hoist,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to create role {name} in guild {guild_id}: {e}")
+        return None
+
+
 # =============================================================================
 # Channel Permissions
 # =============================================================================
@@ -419,6 +466,93 @@ def edit_channel(
         identifier = channel_id or channel_name
         logger.error(f"Failed to edit channel {identifier}: {e}")
         return None
+
+
+# =============================================================================
+# Resolution Helpers
+# =============================================================================
+
+
+def resolve_guild(guild: int | str | None, session: "Session | None" = None) -> int | None:
+    """Resolve guild ID from either numeric ID or server name.
+
+    Args:
+        guild: Numeric guild ID (int or numeric string) or server name, or None
+        session: Database session (required only for name lookups)
+
+    Returns:
+        Resolved guild ID as int, or None if guild is None
+
+    Raises:
+        ValueError: If guild is a name string but session is None, or name not found
+    """
+    if guild is None:
+        return None
+
+    # Try as numeric first
+    if isinstance(guild, int):
+        return guild
+    try:
+        return int(guild)
+    except ValueError:
+        pass
+
+    # It's a name string - need database lookup
+    if session is None:
+        raise ValueError("Database session required to resolve guild by name")
+
+    server = session.query(DiscordServer).filter(DiscordServer.name == guild).first()
+    if not server:
+        raise ValueError(f"Discord server '{guild}' not found")
+    return server.id
+
+
+def resolve_role(
+    role: int | str | None,
+    guild_id: int,
+    bot_id: int,
+    create_if_missing: bool = False,
+) -> tuple[int | None, bool]:
+    """Resolve role ID from either numeric ID or role name.
+
+    Args:
+        role: Numeric role ID or role name string, or None
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+        create_if_missing: If True and role name doesn't exist, create it
+
+    Returns:
+        Tuple of (role_id or None, was_created)
+
+    Raises:
+        ValueError: If role name not found and create_if_missing is False
+    """
+    if role is None:
+        return None, False
+
+    # Try as numeric first
+    if isinstance(role, int):
+        return role, False
+    try:
+        return int(role), False
+    except ValueError:
+        pass
+
+    # It's a name - look up via Discord API
+    roles_result = list_roles(bot_id, guild_id)
+    if roles_result:
+        for r in roles_result.get("roles", []):
+            if r["name"].lower() == role.lower():
+                return int(r["id"]), False
+
+    # Not found - create if requested
+    if create_if_missing:
+        new_role = create_role(bot_id, guild_id, name=role)
+        if new_role and new_role.get("success") and new_role.get("role"):
+            return int(new_role["role"]["id"]), True
+        raise ValueError(f"Failed to create Discord role '{role}'")
+
+    raise ValueError(f"Discord role '{role}' not found in guild")
 
 
 # Convenience functions

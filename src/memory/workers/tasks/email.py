@@ -34,27 +34,54 @@ logger = logging.getLogger(__name__)
 EMAIL_SYNC_LOCK_TIMEOUT = 900
 
 
+class EmailSyncLock:
+    """Distributed lock for email sync with renewal capability."""
+
+    def __init__(self, account_id: int):
+        self.account_id = account_id
+        self.lock_key = f"memory:lock:email_sync:{account_id}"
+        self.lock_value = str(uuid.uuid4())
+        self.redis_client = redis.from_url(settings.REDIS_URL)
+        self.acquired = False
+
+    def extend(self) -> bool:
+        """Extend the lock TTL if we still own it. Returns True if successful."""
+        # Atomically check ownership and extend TTL
+        extend_script = """
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("expire", KEYS[1], ARGV[2])
+        else
+            return 0
+        end
+        """
+        result = self.redis_client.eval(
+            extend_script, 1, self.lock_key, self.lock_value, EMAIL_SYNC_LOCK_TIMEOUT
+        )
+        return bool(result)
+
+
 @contextlib.contextmanager
-def email_sync_lock(account_id: int) -> Generator[bool, None, None]:
+def email_sync_lock(account_id: int) -> Generator[EmailSyncLock | None, None, None]:
     """Distributed lock for email account sync to prevent duplicate processing.
 
-    Yields True if lock acquired, False if another sync is in progress.
+    Yields an EmailSyncLock object if acquired (with extend() method for renewal),
+    or None if another sync is in progress.
 
     Uses a unique lock value to prevent releasing another process's lock
     if this lock expires during a long-running operation.
     """
-    redis_client = redis.from_url(settings.REDIS_URL)
-    lock_key = f"memory:lock:email_sync:{account_id}"
-    lock_value = str(uuid.uuid4())
+    lock = EmailSyncLock(account_id)
 
-    acquired = redis_client.set(lock_key, lock_value, nx=True, ex=EMAIL_SYNC_LOCK_TIMEOUT)
-    if not acquired:
+    lock.acquired = bool(
+        lock.redis_client.set(lock.lock_key, lock.lock_value, nx=True, ex=EMAIL_SYNC_LOCK_TIMEOUT)
+    )
+    if not lock.acquired:
         logger.info(f"Email sync lock already held for account {account_id}, skipping")
-        yield False
+        yield None
         return
 
     try:
-        yield True
+        yield lock
     finally:
         # Only release the lock if we still own it (atomic check-and-delete)
         release_script = """
@@ -64,7 +91,7 @@ def email_sync_lock(account_id: int) -> Generator[bool, None, None]:
             return 0
         end
         """
-        redis_client.eval(release_script, 1, lock_key, lock_value)
+        lock.redis_client.eval(release_script, 1, lock.lock_key, lock.lock_value)
 
 
 @app.task(name=PROCESS_EMAIL)
@@ -148,11 +175,16 @@ def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
     return cast(datetime, account.last_sync_at) or datetime(1970, 1, 1)
 
 
+# Extend lock every N messages during batch processing
+LOCK_EXTEND_INTERVAL = 100
+
+
 def process_email_batch(
     account: EmailAccount,
     db: DBSession,
     messages: Generator[tuple[str, str], None, None],
     folder: str = "INBOX",
+    lock: EmailSyncLock | None = None,
 ) -> dict:
     """
     Process a batch of emails, queuing them for async processing.
@@ -162,6 +194,7 @@ def process_email_batch(
         db: Database session
         messages: Generator yielding (message_id, raw_email) tuples
         folder: Folder name for the messages
+        lock: Optional lock to extend during long-running operations
 
     Returns:
         Stats dict with messages_found, new_messages, errors
@@ -172,6 +205,22 @@ def process_email_batch(
 
     for message_id, raw_email in messages:
         messages_found += 1
+
+        # Extend lock periodically to prevent expiry during long syncs
+        if lock and messages_found % LOCK_EXTEND_INTERVAL == 0:
+            if not lock.extend():
+                logger.warning(f"Failed to extend lock, another sync may have started - aborting")
+                # Mark lock as not acquired to signal we should stop
+                lock.acquired = False
+                # Return partial stats - caller should check for incomplete sync
+                return {
+                    "messages_found": messages_found,
+                    "new_messages": new_messages,
+                    "errors": errors,
+                    "aborted": True,
+                    "abort_reason": "lock_extension_failed",
+                }
+
         try:
             parsed_email = parse_email_message(raw_email, message_id)
             if check_content_exists(
@@ -215,6 +264,7 @@ def sync_imap_messages(
     account: EmailAccount,
     db: DBSession,
     cutoff_date: datetime,
+    lock: EmailSyncLock | None = None,
 ) -> dict:
     """Sync emails from an IMAP account."""
     folders_to_process: list[str] = cast(list[str], account.folders) or ["INBOX"]
@@ -235,6 +285,10 @@ def sync_imap_messages(
 
     with imap_connection(account) as conn:
         for folder in folders_to_process:
+            # Extend lock before each folder (folders can be large)
+            if lock:
+                lock.extend()
+
             folder_stats = process_folder(
                 conn, folder, account, cutoff_date, message_processor
             )
@@ -260,6 +314,7 @@ def sync_gmail_messages(
     account: EmailAccount,
     db: DBSession,
     cutoff_date: datetime,
+    lock: EmailSyncLock | None = None,
 ) -> dict:
     """Sync emails from a Gmail account using the Gmail API."""
     # Get all message IDs from Gmail (single API call)
@@ -279,7 +334,7 @@ def sync_gmail_messages(
 
     # Fetch content only for new messages
     messages = fetch_gmail_messages_by_ids(service, new_message_ids)
-    stats = process_email_batch(account, db, messages, folder="INBOX")
+    stats = process_email_batch(account, db, messages, folder="INBOX", lock=lock)
 
     # Delete emails that are no longer in Gmail (reuse server_message_ids)
     emails_to_delete = find_removed_emails(
@@ -311,8 +366,8 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
     logger.info(f"Syncing account {account_id} since {since_date}")
 
     # Use distributed lock to prevent concurrent syncs of the same account
-    with email_sync_lock(account_id) as lock_acquired:
-        if not lock_acquired:
+    with email_sync_lock(account_id) as lock:
+        if lock is None:
             return {"status": "skipped", "reason": "sync already in progress"}
 
         with make_session() as db:
@@ -326,9 +381,13 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
 
             try:
                 if account_type == "gmail":
-                    stats = sync_gmail_messages(account, db, cutoff_date)
+                    stats = sync_gmail_messages(account, db, cutoff_date, lock)
                 else:
-                    stats = sync_imap_messages(account, db, cutoff_date)
+                    stats = sync_imap_messages(account, db, cutoff_date, lock)
+
+                # Don't finalize if sync was aborted (e.g., lock extension failed)
+                if stats.get("aborted"):
+                    return {"status": "aborted", **stats}
 
                 finalize_sync(account, db)
 

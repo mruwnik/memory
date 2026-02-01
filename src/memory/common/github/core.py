@@ -68,31 +68,46 @@ class GithubClientCore:
         if variables:
             payload["variables"] = variables
 
-        try:
-            response = self.session.post(
-                GITHUB_GRAPHQL_URL,
-                json=payload,
-                timeout=timeout,
-            )
+        max_rate_limit_retries = 3
+        response = None
+        for attempt in range(max_rate_limit_retries + 1):
+            try:
+                response = self.session.post(
+                    GITHUB_GRAPHQL_URL,
+                    json=payload,
+                    timeout=timeout,
+                )
+            except requests.RequestException as e:
+                op = operation_name or "GraphQL request"
+                logger.warning(f"Failed {op}: {e}")
+                return None, None
+
             # Handle rate limit errors (403) with retry
-            if response.status_code == 403:
-                remaining = response.headers.get(RATE_LIMIT_REMAINING_HEADER)
-                if remaining is not None and int(remaining) == 0:
-                    reset_time = int(response.headers.get(RATE_LIMIT_RESET_HEADER, 0))
-                    sleep_time = max(reset_time - time.time(), 0) + 1
-                    logger.warning(f"GitHub rate limited, sleeping for {sleep_time}s then retrying")
-                    time.sleep(sleep_time)
-                    # Retry once after waiting
-                    response = self.session.post(
-                        GITHUB_GRAPHQL_URL,
-                        json=payload,
-                        timeout=timeout,
-                    )
-            response.raise_for_status()
-            self._handle_rate_limit(response)
-        except requests.RequestException as e:
+            if response.status_code != 403:
+                response.raise_for_status()
+                self._handle_rate_limit(response)
+                break
+
+            remaining = response.headers.get(RATE_LIMIT_REMAINING_HEADER)
+            if remaining is None or int(remaining) != 0:
+                response.raise_for_status()
+                self._handle_rate_limit(response)
+                break
+
+            if attempt >= max_rate_limit_retries:
+                continue  # Will fall through to else block
+
+            reset_time = int(response.headers.get(RATE_LIMIT_RESET_HEADER, 0))
+            sleep_time = max(reset_time - time.time(), 0) + 1
+            logger.warning(
+                f"GitHub rate limited, sleeping for {sleep_time}s "
+                f"(attempt {attempt + 1}/{max_rate_limit_retries})"
+            )
+            time.sleep(sleep_time)
+        else:
+            # All retries exhausted (only reachable if we hit rate limit every time)
             op = operation_name or "GraphQL request"
-            logger.warning(f"Failed {op}: {e}")
+            logger.warning(f"{op} failed: rate limit exhausted after {max_rate_limit_retries} retries")
             return None, None
 
         result = response.json()

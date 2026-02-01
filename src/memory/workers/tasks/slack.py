@@ -12,6 +12,7 @@ Note: User data is not stored in a separate SlackUser table. Instead:
 """
 
 import hashlib
+import json
 import logging
 import pathlib
 import re
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+import redis
 from sqlalchemy.exc import IntegrityError
 
 from memory.common import settings
@@ -52,6 +54,35 @@ from memory.common.content_processing import (
 from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
 
 logger = logging.getLogger(__name__)
+
+# Cache TTL for Slack user mappings (5 minutes)
+USER_CACHE_TTL_SECONDS = 300
+
+
+def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
+    """Get user ID -> name mapping with Redis caching.
+
+    Caches the result for 5 minutes to avoid N API calls when processing
+    multiple messages from the same workspace.
+    """
+    redis_client = redis.from_url(settings.REDIS_URL)
+    cache_key = f"slack_users:{workspace_id}"
+
+    # Try cache first
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    # Cache miss - fetch from API
+    try:
+        with SlackClient(access_token) as client:
+            users_by_id = build_user_cache(client)
+        # Cache the result
+        redis_client.setex(cache_key, USER_CACHE_TTL_SECONDS, json.dumps(users_by_id))
+        return users_by_id
+    except SlackAPIError:
+        logger.warning("Failed to fetch user list for mention resolution")
+        return {}
 
 
 def resolve_mentions(content: str, users_by_id: dict[str, str]) -> str:
@@ -531,15 +562,10 @@ def add_slack_message(
         credentials = get_workspace_credentials(session, workspace_id)
         access_token = credentials.access_token if credentials else None
 
-        # Build user cache for mention resolution (done per-message to ensure fresh data)
-        # This is slightly inefficient but ensures we don't miss users
+        # Get user mapping with Redis caching (avoids N*M API calls)
         users_by_id: dict[str, str] = {}
         if access_token:
-            try:
-                with SlackClient(access_token) as client:
-                    users_by_id = build_user_cache(client)
-            except SlackAPIError:
-                logger.warning("Failed to fetch user list for mention resolution")
+            users_by_id = get_cached_user_mapping(workspace_id, access_token)
 
         # Resolve mentions
         resolved_content = resolve_mentions(content, users_by_id)

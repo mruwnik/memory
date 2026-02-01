@@ -273,10 +273,14 @@ def test_update_existing_doc_updates_fields(
 
 @patch("memory.workers.tasks.google_drive.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
-def test_update_existing_doc_handles_qdrant_error(
+def test_update_existing_doc_raises_on_qdrant_error(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
 ):
-    """Handles Qdrant deletion errors gracefully."""
+    """Qdrant deletion errors are re-raised to prevent data loss.
+
+    If Qdrant deletion fails but we continue to delete DB chunks,
+    we'd end up with orphaned vectors causing duplicate search results.
+    """
     chunk = Mock(id=1)
     mock_existing_doc.chunks = [chunk]
     mock_existing_doc.content_hash = "old_hash"
@@ -285,7 +289,6 @@ def test_update_existing_doc_handles_qdrant_error(
 
     mock_qdrant.get_qdrant_client.side_effect = IOError("Connection failed")
 
-    # Should not raise, just log error
-    result = _update_existing_doc(session, mock_existing_doc, mock_folder, sample_file_data)
-
-    assert result["status"] == "success"
+    # Should raise to prevent partial state (orphaned vectors)
+    with pytest.raises(IOError, match="Connection failed"):
+        _update_existing_doc(session, mock_existing_doc, mock_folder, sample_file_data)

@@ -67,7 +67,10 @@ class SlackClient:
 
             # Handle rate limiting with retry
             if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
-                retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                try:
+                    retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                except (ValueError, TypeError):
+                    retry_after = DEFAULT_RETRY_AFTER
                 logger.warning(
                     f"Slack rate limited on {method}, waiting {retry_after}s "
                     f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
@@ -103,7 +106,10 @@ async def async_slack_call(access_token: str, method: str, **params) -> dict:
 
             # Handle rate limiting with retry
             if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
-                retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                try:
+                    retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                except (ValueError, TypeError):
+                    retry_after = DEFAULT_RETRY_AFTER
                 logger.warning(
                     f"Slack rate limited on {method}, waiting {retry_after}s "
                     f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
@@ -133,15 +139,17 @@ def _paginate(
         client: SlackClient instance
         method: Slack API method name
         response_key: Key in response containing items (e.g., "members", "channels")
-        params: Initial API parameters (will be mutated to add cursor)
+        params: Initial API parameters (copied, not mutated)
         check_has_more: If True, also check "has_more" field (for conversations.*)
     """
+    # Copy to avoid mutating caller's dict
+    request_params = dict(params)
     cursor = None
     while True:
         if cursor:
-            params["cursor"] = cursor
+            request_params["cursor"] = cursor
 
-        response = client.call(method, **params)
+        response = client.call(method, **request_params)
         items = response.get(response_key, [])
 
         if not items:

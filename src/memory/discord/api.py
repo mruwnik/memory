@@ -97,6 +97,15 @@ class EditChannelRequest(BaseModel):
     category_name: str | None = None  # Move to category by name (use empty string to remove from category)
 
 
+class CreateRoleRequest(BaseModel):
+    bot_id: int
+    name: str
+    color: int | None = None  # RGB color integer
+    permissions: int | None = None  # Permission bitfield
+    mentionable: bool = False
+    hoist: bool = False  # Whether the role should be displayed separately in member list
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage collector lifecycle."""
@@ -482,6 +491,40 @@ async def remove_role_member(request: RoleMemberRequest) -> dict[str, Any]:
     async with discord_api_errors("manage this role"):
         await member.remove_roles(role, reason="Removed via MCP")
         return {"success": True, "user": member.display_name, "role": role.name}
+
+
+@app.post("/guilds/{guild_id}/roles")
+async def create_role(guild_id: str, request: CreateRoleRequest) -> dict[str, Any]:
+    """Create a new role in a guild."""
+    mgr = get_manager()
+    collector = get_collector_or_404(mgr, request.bot_id)
+    guild = get_guild_or_404(collector, guild_id)
+
+    # Build role kwargs
+    kwargs: dict[str, Any] = {
+        "name": request.name,
+        "mentionable": request.mentionable,
+        "hoist": request.hoist,
+        "reason": "Created via MCP",
+    }
+    if request.color is not None:
+        kwargs["color"] = discord.Color(request.color)
+    if request.permissions is not None:
+        kwargs["permissions"] = discord.Permissions(request.permissions)
+
+    async with discord_api_errors("create roles"):
+        role = await guild.create_role(**kwargs)
+        return {
+            "success": True,
+            "role": {
+                "id": str(role.id),
+                "name": role.name,
+                "color": role.color.value,
+                "position": role.position,
+                "mentionable": role.mentionable,
+                "hoist": role.hoist,
+            },
+        }
 
 
 # =============================================================================

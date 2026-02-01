@@ -5,7 +5,7 @@ updates on row modification. Useful for detecting stuck processing jobs
 and tracking when items were last modified.
 
 Revision ID: 20260201_source_item_updated_at
-Revises: 20260201_encrypt_credentials
+Revises: 20260201_encrypt_google_credentials
 Create Date: 2026-02-01
 """
 
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "20260201_source_item_updated_at"
-down_revision: Union[str, None] = "20260201_encrypt_credentials"
+down_revision: Union[str, None] = "20260201_encrypt_google_credentials"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

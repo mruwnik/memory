@@ -253,7 +253,8 @@ def extract_and_update_meeting(
         )
         meeting.summary = extracted.get("summary", "")
         meeting.notes = extracted.get("notes", "")
-        meeting.extraction_status = "complete"
+        # Note: status stays "processing" until embedding completes in execute_meeting_processing
+        meeting.extraction_status = "extracted"
 
         created_tasks = create_action_item_tasks(
             session, meeting, extracted.get("action_items", [])
@@ -397,6 +398,10 @@ def execute_meeting_processing(
         session.refresh(meeting)
         embed_result = process_content_item(meeting, session)
 
+        # Only mark complete after both extraction AND embedding succeed
+        meeting.extraction_status = "complete"
+        session.commit()
+
         if job_id:
             job_utils.complete_job(
                 session, job_id, result_id=meeting.id, result_type="Meeting"
@@ -418,7 +423,11 @@ def execute_meeting_processing(
 
     except Exception as e:
         logger.exception(f"Failed to process meeting {meeting.id}: {e}")
-        meeting.extraction_status = "failed"
+        # Only mark as "failed" if extraction itself failed (status still "processing")
+        # If status is "extracted", extraction succeeded but embedding failed - preserve that
+        if meeting.extraction_status == "processing":
+            meeting.extraction_status = "failed"
+        # If "extracted", leave it so we know extraction worked but embedding didn't
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
         session.commit()

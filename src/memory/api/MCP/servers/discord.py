@@ -579,6 +579,51 @@ async def role_remove(
     )
 
 
+@discord_mcp.tool()
+@visible_when(require_scopes("discord-admin"), has_discord_bots)
+async def create(
+    name: str,
+    guild: int | str | None = None,
+    color: int | None = None,
+    mentionable: bool = False,
+    hoist: bool = False,
+    bot_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Create a new Discord role in a server.
+
+    Args:
+        name: Name for the new role
+        guild: Discord server - can be numeric ID or server name
+        color: RGB color integer for the role (optional)
+        mentionable: Whether the role can be mentioned (default: false)
+        hoist: Whether the role should be displayed separately (default: false)
+        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+
+    Returns:
+        Dict with success status and new role info (id, name, color, position)
+    """
+    resolved_bot_id = resolve_bot_id(bot_id)
+
+    with make_session() as session:
+        resolved_guild_id = discord_client.resolve_guild(guild, session)
+        if resolved_guild_id is None:
+            raise ValueError("Must specify guild")
+
+    return await _call_discord_api(
+        discord_client.create_role,
+        resolved_bot_id,
+        resolved_guild_id,
+        name,
+        error_msg=f"Failed to create role {name}",
+        color=color,
+        mentionable=mentionable,
+        hoist=hoist,
+    )
+
+
+
+
 # =============================================================================
 # Channel Permission Tools
 # =============================================================================

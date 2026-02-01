@@ -174,8 +174,11 @@ def authenticate_by_api_key(
     if allowed_key_types and matched_key.key_type not in allowed_key_types:
         return None, None
 
+    # Eagerly load user before handle_api_key_use, which may delete/commit
+    # (for one-time keys). This prevents DetachedInstanceError on lazy load.
+    user = matched_key.user
     handle_api_key_use(matched_key, db)
-    return matched_key.user, matched_key
+    return user, matched_key
 
 
 def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:

@@ -86,33 +86,35 @@ def test_encrypt_decrypt_tarball(sample_files):
     """Test full tarball creation, encryption, and decryption."""
     emails_dir = settings.FILE_STORAGE_DIR / "emails"
 
-    # Create tarball
-    tarball_bytes = backup.create_tarball(emails_dir)
-    assert len(tarball_bytes) > 0
+    # Create tarball using context manager
+    with backup.create_tarball_file(emails_dir) as tar_path:
+        assert tar_path is not None
+        tarball_bytes = tar_path.read_bytes()
+        assert len(tarball_bytes) > 0
 
-    # Encrypt
-    with patch.object(settings, "BACKUP_ENCRYPTION_KEY", "tarball-key"):
-        cipher = backup.get_cipher()
-        encrypted = cipher.encrypt(tarball_bytes)
+        # Encrypt
+        with patch.object(settings, "BACKUP_ENCRYPTION_KEY", "tarball-key"):
+            cipher = backup.get_cipher()
+            encrypted = cipher.encrypt(tarball_bytes)
 
-        # Decrypt
-        decrypted = cipher.decrypt(encrypted)
+            # Decrypt
+            decrypted = cipher.decrypt(encrypted)
 
-    assert decrypted == tarball_bytes
+        assert decrypted == tarball_bytes
 
-    # Verify tarball can be extracted
-    tar_buffer = io.BytesIO(decrypted)
-    with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
-        members = tar.getmembers()
-        assert len(members) >= 2  # At least 2 email files
+        # Verify tarball can be extracted
+        tar_buffer = io.BytesIO(decrypted)
+        with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
+            members = tar.getmembers()
+            assert len(members) >= 2  # At least 2 email files
 
-        # Extract and verify content
-        for member in members:
-            if member.isfile():
-                extracted = tar.extractfile(member)
-                assert extracted is not None
-                content = extracted.read().decode()
-                assert "Content of emails/" in content
+            # Extract and verify content
+            for member in members:
+                if member.isfile():
+                    extracted = tar.extractfile(member)
+                    assert extracted is not None
+                    content = extracted.read().decode()
+                    assert "Content of emails/" in content
 
 
 def test_different_keys_produce_different_ciphertext():
@@ -140,26 +142,29 @@ def test_missing_encryption_key_raises_error():
 def test_create_tarball_with_files(sample_files):
     """Test creating tarball from directory with files."""
     notes_dir = settings.FILE_STORAGE_DIR / "notes"
-    tarball_bytes = backup.create_tarball(notes_dir)
 
-    assert len(tarball_bytes) > 0
+    with backup.create_tarball_file(notes_dir) as tar_path:
+        assert tar_path is not None
+        tarball_bytes = tar_path.read_bytes()
+        assert len(tarball_bytes) > 0
 
-    # Verify it's a valid gzipped tarball
-    tar_buffer = io.BytesIO(tarball_bytes)
-    with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
-        members = tar.getmembers()
-        filenames = [m.name for m in members if m.isfile()]
-        assert len(filenames) >= 2
-        assert any("note1.md" in f for f in filenames)
-        assert any("note2.md" in f for f in filenames)
+        # Verify it's a valid gzipped tarball
+        tar_buffer = io.BytesIO(tarball_bytes)
+        with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
+            members = tar.getmembers()
+            filenames = [m.name for m in members if m.isfile()]
+            assert len(filenames) >= 2
+            assert any("note1.md" in f for f in filenames)
+            assert any("note2.md" in f for f in filenames)
 
 
 def test_create_tarball_nonexistent_directory():
     """Test creating tarball from nonexistent directory."""
     nonexistent = settings.FILE_STORAGE_DIR / "does_not_exist"
-    tarball_bytes = backup.create_tarball(nonexistent)
 
-    assert tarball_bytes == b""
+    with backup.create_tarball_file(nonexistent) as tar_path:
+        # Nonexistent directory yields None
+        assert tar_path is None
 
 
 def test_create_tarball_empty_directory():
@@ -167,15 +172,17 @@ def test_create_tarball_empty_directory():
     empty_dir = settings.FILE_STORAGE_DIR / "empty"
     empty_dir.mkdir(parents=True, exist_ok=True)
 
-    tarball_bytes = backup.create_tarball(empty_dir)
+    with backup.create_tarball_file(empty_dir) as tar_path:
+        assert tar_path is not None
+        tarball_bytes = tar_path.read_bytes()
 
-    # Should create tarball with just the directory entry
-    assert len(tarball_bytes) > 0
-    tar_buffer = io.BytesIO(tarball_bytes)
-    with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
-        members = tar.getmembers()
-        assert len(members) >= 1
-        assert members[0].isdir()
+        # Should create tarball with just the directory entry
+        assert len(tarball_bytes) > 0
+        tar_buffer = io.BytesIO(tarball_bytes)
+        with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
+            members = tar.getmembers()
+            assert len(members) >= 1
+            assert members[0].isdir()
 
 
 def test_sync_unencrypted_success(sample_files, backup_settings):
@@ -310,22 +317,23 @@ def test_backup_disabled():
 
 
 def test_backup_full_execution(sample_files, mock_s3_client, backup_settings):
-    """Test full backup execution dispatches tasks for all directories."""
+    """Test full backup execution processes all directories."""
     with (
         patch.object(backup, "backup_to_s3") as mock_task,
         patch.object(backup, "backup_lock") as mock_lock,
     ):
-        mock_task.delay = Mock()
+        mock_task.return_value = {"uploaded": True}
         mock_lock.return_value.__enter__ = Mock()
         mock_lock.return_value.__exit__ = Mock(return_value=None)
 
         result = backup.backup_all_to_s3()
 
     assert result["status"] == "success"
-    assert "message" in result
+    assert "directories" in result
+    assert "results" in result
 
-    # Verify task was queued for each storage directory
-    assert mock_task.delay.call_count == len(settings.storage_dirs)
+    # Verify task was called for each storage directory (runs synchronously now)
+    assert mock_task.call_count == len(settings.storage_dirs)
 
 
 def test_backup_handles_partial_failures(
