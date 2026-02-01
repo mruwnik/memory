@@ -9,7 +9,7 @@ Affected tables:
 - google_oauth_config: client_secret -> client_secret_encrypted
 - google_accounts: access_token -> access_token_encrypted, refresh_token -> refresh_token_encrypted
 
-Revision ID: 20260201_encrypt_google_credentials
+Revision ID: 20260201_encrypt_google
 Revises: 20260201_encrypt_credentials
 Create Date: 2026-02-01
 """
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 # revision identifiers, used by Alembic.
-revision: str = "20260201_encrypt_google_credentials"
+revision: str = "20260201_encrypt_google"
 down_revision: Union[str, None] = "20260201_encrypt_credentials"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,22 +1,27 @@
 """
 Celery tasks for executing scheduled LLM calls and sending messages.
 
-TODO: The Discord sending functionality needs to be reimplemented
-to use the new DiscordBot/CollectorManager system for message sending.
+Supports multiple notification channels: Discord, Slack, Email.
 """
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import Any
 
+from memory.common import discord as discord_utils
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_CALL,
     RUN_SCHEDULED_CALLS,
     app,
 )
-from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledLLMCall
 from memory.common.content_processing import safe_task_execution
+from memory.common.db.connection import make_session
+from memory.common.db.models import DiscordBot, EmailAccount, ScheduledLLMCall
+from memory.common.db.models.slack import SlackUserCredentials
+from memory.common.email_sender import get_account_by_address, prepare_send_config, send_email
+from memory.common.slack import async_slack_call
 
 logger = logging.getLogger(__name__)
 
@@ -24,46 +29,205 @@ logger = logging.getLogger(__name__)
 # Should be longer than task_time_limit (1 hour) to allow for legitimate long-running tasks
 STALE_EXECUTION_TIMEOUT_HOURS = 2
 
+# Discord message size limit
+DISCORD_MESSAGE_LIMIT = 2000
 
-def call_llm_for_scheduled(_session, scheduled_call: ScheduledLLMCall) -> str | None:
-    """Call LLM with tools support for scheduled calls.
 
-    TODO: This needs to be reimplemented - the old LLM calling code was removed
-    during the Discord simplification. For now, if no model is specified,
-    we just return the message directly.
+@dataclass
+class MessageParams:
+    """Parameters extracted from ScheduledLLMCall for sending messages.
+
+    Using a dataclass avoids DetachedInstanceError by extracting primitives
+    from the SQLAlchemy object before passing to send functions.
     """
-    if scheduled_call.model:
-        # LLM processing not yet reimplemented
-        logger.warning(
-            f"LLM model {scheduled_call.model} specified but LLM calling not yet reimplemented"
-        )
+    channel_type: str
+    channel_identifier: str
+    message: str
+    user_id: int
+    topic: str | None
+    data: dict[str, Any]
+
+
+def extract_message_params(scheduled_call: ScheduledLLMCall) -> MessageParams | None:
+    """Extract message parameters from a ScheduledLLMCall.
+
+    Returns None if required fields are missing.
+    """
+    if not scheduled_call.channel_type or not scheduled_call.channel_identifier:
         return None
 
-    # If no model specified, just return the message as-is
-    return cast(str, scheduled_call.message)
-
-
-def send_to_discord(_bot_id: int, scheduled_call: ScheduledLLMCall, response: str):
-    """Send the response to Discord user or channel.
-
-    TODO: This needs to use the new CollectorManager to send messages
-    via the Discord bot. For now, this is a no-op that logs a warning.
-    """
-    channel_id = scheduled_call.discord_channel.id if scheduled_call.discord_channel else None
-    user_name = scheduled_call.discord_user.username if scheduled_call.discord_user else None
-
-    logger.warning(
-        f"Discord sending not yet implemented. Would send to "
-        f"channel={channel_id}, user={user_name}: {response[:100]}..."
+    return MessageParams(
+        channel_type=scheduled_call.channel_type,
+        channel_identifier=scheduled_call.channel_identifier,
+        message=scheduled_call.message,
+        user_id=scheduled_call.user_id,
+        topic=scheduled_call.topic,
+        data=scheduled_call.data or {},
     )
-    # TODO: Implement using CollectorManager.send_message() or CollectorManager.send_dm()
+
+
+def send_via_discord(params: MessageParams) -> bool:
+    """Send message via Discord DM."""
+    user_id = params.channel_identifier
+    if not user_id:
+        logger.error("No Discord user ID for scheduled call")
+        return False
+
+    # Get bot ID from the scheduled call's data or user's first bot
+    bot_id = params.data.get("discord_bot_id")
+
+    if not bot_id:
+        with make_session() as session:
+            bot = (
+                session.query(DiscordBot)
+                .filter(DiscordBot.user_id == params.user_id)
+                .first()
+            )
+            if bot:
+                bot_id = bot.id
+            else:
+                logger.error(f"No Discord bot found for user {params.user_id}")
+                return False
+
+    # Truncate message if it exceeds Discord's limit
+    message = params.message
+    if len(message) > DISCORD_MESSAGE_LIMIT:
+        message = message[:DISCORD_MESSAGE_LIMIT - 3] + "..."
+        logger.warning(f"Discord message truncated from {len(params.message)} to {DISCORD_MESSAGE_LIMIT} chars")
+
+    success = discord_utils.send_dm(bot_id, user_id, message)
+    if success:
+        logger.info(f"Discord DM sent to user {user_id}")
+    else:
+        logger.error(f"Failed to send Discord DM to user {user_id}")
+    return success
+
+
+def send_via_slack(params: MessageParams) -> bool:
+    """Send message via Slack DM."""
+    user_id = params.channel_identifier
+    message = params.message
+
+    if not user_id:
+        logger.error("No Slack user ID for scheduled call")
+        return False
+
+    # Get Slack token for the user
+    with make_session() as session:
+        credentials = (
+            session.query(SlackUserCredentials)
+            .filter(SlackUserCredentials.user_id == params.user_id)
+            .first()
+        )
+        if not credentials or not credentials.access_token:
+            logger.error(f"No Slack credentials for user {params.user_id}")
+            return False
+        slack_token = credentials.access_token
+
+    async def send():
+        # Open DM channel
+        data = await async_slack_call(slack_token, "conversations.open", users=user_id)
+        channel = data.get("channel", {})
+        channel_id = channel.get("id")
+        if not channel_id:
+            raise ValueError(f"Failed to open DM with Slack user {user_id}")
+
+        # Send message
+        await async_slack_call(
+            slack_token,
+            "chat.postMessage",
+            channel=channel_id,
+            text=message,
+        )
+
+    try:
+        # Use get_event_loop to handle cases where a loop may already exist
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            # Already in an async context - create a new thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, send())
+                future.result(timeout=30)
+        else:
+            asyncio.run(send())
+
+        logger.info(f"Slack DM sent to user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send Slack DM: {e}")
+        return False
+
+
+def send_via_email(params: MessageParams) -> bool:
+    """Send message via email."""
+    to_address = params.channel_identifier
+    if not to_address:
+        logger.error("No email address for scheduled call")
+        return False
+
+    # Get sender's email account
+    from_address = params.data.get("from_address")
+
+    with make_session() as session:
+        if from_address:
+            account = get_account_by_address(session, params.user_id, from_address)
+        else:
+            account = (
+                session.query(EmailAccount)
+                .filter(
+                    EmailAccount.user_id == params.user_id,
+                    EmailAccount.active.is_(True),
+                )
+                .first()
+            )
+
+        if not account:
+            logger.error(f"No email account for user {params.user_id}")
+            return False
+
+        config = prepare_send_config(session, account)
+
+    subject = params.data.get("subject", params.topic or "Notification")
+
+    result = send_email(
+        config=config,
+        to=[to_address],
+        subject=subject,
+        body=params.message,
+    )
+
+    if result.success:
+        logger.info(f"Email sent to {to_address}")
+        return True
+    logger.error(f"Failed to send email: {result.error}")
+    return False
+
+
+def send_message(params: MessageParams) -> bool:
+    """Send message via the appropriate channel."""
+    channel_type = params.channel_type
+
+    if channel_type == "discord":
+        return send_via_discord(params)
+    elif channel_type == "slack":
+        return send_via_slack(params)
+    elif channel_type == "email":
+        return send_via_email(params)
+
+    logger.error(f"Unknown channel_type: {channel_type}")
+    return False
 
 
 @app.task(bind=True, name=EXECUTE_SCHEDULED_CALL)
 @safe_task_execution
 def execute_scheduled_call(self, scheduled_call_id: str):
     """
-    Execute a scheduled LLM call and send the response to Discord.
+    Execute a scheduled LLM call and send the response.
 
     Args:
         scheduled_call_id: The ID of the scheduled call to execute
@@ -85,61 +249,37 @@ def execute_scheduled_call(self, scheduled_call_id: str):
             )
             return {"error": f"Call is not ready (status: {scheduled_call.status})"}
 
-        # Update status to executing
-        scheduled_call.status = "executing"
-        scheduled_call.executed_at = datetime.now(timezone.utc)
-        session.commit()
-
-        logger.info(f"Calling LLM with model {scheduled_call.model}")
-
-        # Make the LLM call with tools support
-        try:
-            response = call_llm_for_scheduled(session, scheduled_call)
-        except Exception:
-            logger.exception("Failed to generate LLM response")
+        # Extract params to avoid DetachedInstanceError when send functions open their own sessions
+        params = extract_message_params(scheduled_call)
+        if not params:
+            logger.error(f"Missing channel_type or channel_identifier for {scheduled_call_id}")
             scheduled_call.status = "failed"
-            scheduled_call.error_message = "LLM call failed"
+            scheduled_call.error_message = "Missing channel configuration"
             session.commit()
-            return {
-                "success": False,
-                "error": "LLM call failed",
-                "scheduled_call_id": scheduled_call_id,
-            }
+            return {"error": "Missing channel configuration"}
 
-        if not response:
-            scheduled_call.status = "failed"
-            scheduled_call.error_message = "No response from LLM"
-            session.commit()
-            return {
-                "success": False,
-                "error": "No response from LLM",
-                "scheduled_call_id": scheduled_call_id,
-            }
-
-        # Store the response
-        scheduled_call.response = response
-        scheduled_call.status = "completed"
-        session.commit()
-
-        logger.info(f"LLM call completed for {scheduled_call_id}")
-
-        # Send to Discord
+        # Send via the appropriate channel
         try:
-            send_to_discord(cast(int, scheduled_call.user_id), scheduled_call, response)
-            logger.info(f"Response sent to Discord for {scheduled_call_id}")
-        except Exception as discord_error:
-            logger.error(f"Failed to send to Discord: {discord_error}")
-            # Don't mark as failed since the LLM call succeeded
-            data = scheduled_call.data or {}
-            data["discord_error"] = str(discord_error)
-            scheduled_call.data = data
-            session.commit()
+            sent = send_message(params)
+            if sent:
+                scheduled_call.status = "completed"
+                scheduled_call.executed_at = datetime.now(timezone.utc)
+                logger.info(f"Message sent for {scheduled_call_id}")
+            else:
+                scheduled_call.status = "failed"
+                scheduled_call.error_message = "Failed to send message"
+                logger.error(f"Failed to send message for {scheduled_call_id}")
+        except Exception as send_error:
+            logger.error(f"Failed to send message: {send_error}")
+            scheduled_call.status = "failed"
+            scheduled_call.error_message = str(send_error)
+
+        session.commit()
 
         return {
-            "success": True,
+            "success": scheduled_call.status == "completed",
             "scheduled_call_id": scheduled_call_id,
-            "response": response[:100] + "..." if len(response) > 100 else response,
-            "discord_sent": True,
+            "channel_type": params.channel_type,
         }
 
 
@@ -156,7 +296,9 @@ def run_scheduled_calls():
     with make_session() as session:
         # First, recover stale "executing" tasks that have been stuck too long
         # This handles cases where workers crashed mid-execution
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_EXECUTION_TIMEOUT_HOURS)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=STALE_EXECUTION_TIMEOUT_HOURS
+        )
         stale_calls = (
             session.query(ScheduledLLMCall)
             .filter(

@@ -424,7 +424,7 @@ def safe_task_execution(
             task_self = args[0] if args and hasattr(args[0], "request") else None
             if task_self and hasattr(task_self, "request"):
                 request = task_self.request
-                if hasattr(request, "delivery_info"):
+                if hasattr(request, "delivery_info") and request.delivery_info:
                     queue = request.delivery_info.get("routing_key")
                     if queue:
                         labels["queue"] = queue

@@ -6,9 +6,6 @@ import uuid
 from memory.common.db.models import (
     ScheduledLLMCall,
     HumanUser,
-    DiscordUser,
-    DiscordChannel,
-    DiscordServer,
 )
 from memory.workers.tasks import scheduled_calls
 
@@ -27,45 +24,7 @@ def sample_user(db_session):
 
 
 @pytest.fixture
-def sample_discord_user(db_session):
-    """Create a sample Discord user for testing."""
-    discord_user = DiscordUser(
-        id=123456789,
-        username="testuser",
-    )
-    db_session.add(discord_user)
-    db_session.commit()
-    return discord_user
-
-
-@pytest.fixture
-def sample_discord_server(db_session):
-    """Create a sample Discord server for testing."""
-    server = DiscordServer(
-        id=987654321,
-        name="Test Server",
-    )
-    db_session.add(server)
-    db_session.commit()
-    return server
-
-
-@pytest.fixture
-def sample_discord_channel(db_session, sample_discord_server):
-    """Create a sample Discord channel for testing."""
-    channel = DiscordChannel(
-        id=111222333,
-        name="test-channel",
-        channel_type="text",
-        server_id=sample_discord_server.id,
-    )
-    db_session.add(channel)
-    db_session.commit()
-    return channel
-
-
-@pytest.fixture
-def pending_scheduled_call(db_session, sample_user, sample_discord_user):
+def pending_scheduled_call(db_session, sample_user):
     """Create a pending scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -75,7 +34,8 @@ def pending_scheduled_call(db_session, sample_user, sample_discord_user):
         model=None,  # No model means message returned as-is
         message="What is the weather like today?",
         system_prompt="You are a helpful assistant.",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     db_session.add(call)
@@ -84,7 +44,7 @@ def pending_scheduled_call(db_session, sample_user, sample_discord_user):
 
 
 @pytest.fixture
-def completed_scheduled_call(db_session, sample_user, sample_discord_channel):
+def completed_scheduled_call(db_session, sample_user):
     """Create a completed scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -95,7 +55,8 @@ def completed_scheduled_call(db_session, sample_user, sample_discord_channel):
         model=None,
         message="Tell me a joke.",
         system_prompt="You are a funny assistant.",
-        discord_channel_id=sample_discord_channel.id,
+        channel_type="slack",
+        channel_identifier="U12345678",
         status="completed",
         response="Why did the chicken cross the road? To get to the other side!",
     )
@@ -105,7 +66,7 @@ def completed_scheduled_call(db_session, sample_user, sample_discord_channel):
 
 
 @pytest.fixture
-def future_scheduled_call(db_session, sample_user, sample_discord_user):
+def future_scheduled_call(db_session, sample_user):
     """Create a future scheduled call for testing."""
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -114,7 +75,8 @@ def future_scheduled_call(db_session, sample_user, sample_discord_user):
         scheduled_time=datetime.now(timezone.utc) + timedelta(hours=1),
         model=None,
         message="What will happen tomorrow?",
-        discord_user_id=sample_discord_user.id,
+        channel_type="email",
+        channel_identifier="user@example.com",
         status="pending",
     )
     db_session.add(call)
@@ -122,44 +84,23 @@ def future_scheduled_call(db_session, sample_user, sample_discord_user):
     return call
 
 
-def test_send_to_discord_user_logs_warning(pending_scheduled_call, caplog):
-    """Test that send_to_discord logs a warning (currently a stub)."""
-    response = "This is a test response."
-
-    scheduled_calls.send_to_discord(999999999, pending_scheduled_call, response)
-
-    # The current implementation is a stub that logs a warning
-    assert "Discord sending not yet implemented" in caplog.text
-
-
-def test_send_to_discord_channel_logs_warning(completed_scheduled_call, caplog):
-    """Test that send_to_discord logs a warning for channel (currently a stub)."""
-    response = "This is a channel response."
-
-    scheduled_calls.send_to_discord(999999999, completed_scheduled_call, response)
-
-    # The current implementation is a stub that logs a warning
-    assert "Discord sending not yet implemented" in caplog.text
-
-
-@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.send_message")
 def test_execute_scheduled_call_success(
-    mock_send_discord, pending_scheduled_call, db_session
+    mock_send_message, pending_scheduled_call, db_session
 ):
     """Test successful execution of a scheduled LLM call."""
+    mock_send_message.return_value = True
+
     result = scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
 
     # Verify result
     assert result["success"] is True
     assert result["scheduled_call_id"] == pending_scheduled_call.id
-    # When model is None, message is returned as-is
-    assert result["response"] == "What is the weather like today?"
+    assert result["channel_type"] == "discord"
 
     # Verify database was updated
     db_session.refresh(pending_scheduled_call)
     assert pending_scheduled_call.status == "completed"
-    assert pending_scheduled_call.response == "What is the weather like today?"
-    assert pending_scheduled_call.executed_at is not None
 
 
 def test_execute_scheduled_call_not_found(db_session):
@@ -179,11 +120,13 @@ def test_execute_scheduled_call_not_pending(completed_scheduled_call, db_session
     assert result == {"error": "Call is not ready (status: completed)"}
 
 
-@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
+@patch("memory.workers.tasks.scheduled_calls.send_message")
 def test_execute_scheduled_call_with_default_system_prompt(
-    mock_send_discord, db_session, sample_user, sample_discord_user
+    mock_send_message, db_session, sample_user
 ):
     """Test execution when system_prompt is None, should use default."""
+    mock_send_message.return_value = True
+
     # Create call without system prompt
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
@@ -193,7 +136,8 @@ def test_execute_scheduled_call_with_default_system_prompt(
         model=None,
         message="Test prompt",
         system_prompt=None,
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     db_session.add(call)
@@ -204,85 +148,104 @@ def test_execute_scheduled_call_with_default_system_prompt(
     assert result["success"] is True
 
 
-@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
-def test_execute_scheduled_call_discord_error(
-    mock_send_discord, pending_scheduled_call, db_session
+@patch("memory.workers.tasks.scheduled_calls.send_message")
+def test_execute_scheduled_call_send_failure(
+    mock_send_message, pending_scheduled_call, db_session
 ):
-    """Test execution when Discord sending fails."""
-    mock_send_discord.side_effect = Exception("Discord API error")
+    """Test execution when message sending fails."""
+    mock_send_message.return_value = False
 
     result = scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
 
-    # Should still return success since the "LLM call" succeeded
-    assert result["success"] is True
+    # Should fail since sending failed
+    assert result["success"] is False
 
-    # Verify the call was marked as completed despite Discord error
+    # Verify the call was marked as failed
     db_session.refresh(pending_scheduled_call)
-    assert pending_scheduled_call.status == "completed"
-    assert pending_scheduled_call.data["discord_error"] == "Discord API error"
+    assert pending_scheduled_call.status == "failed"
+    assert pending_scheduled_call.error_message == "Failed to send message"
 
 
-@patch("memory.workers.tasks.scheduled_calls.call_llm_for_scheduled")
-def test_execute_scheduled_call_llm_error(
-    mock_llm_call, db_session, sample_user, sample_discord_user
+@patch("memory.workers.tasks.scheduled_calls.send_message")
+def test_execute_scheduled_call_send_exception(
+    mock_send_message, pending_scheduled_call, db_session
 ):
-    """Test execution when LLM call fails."""
-    # Create a call with a model specified (so it actually calls the LLM function)
+    """Test execution when message sending raises an exception."""
+    mock_send_message.side_effect = Exception("Network error")
+
+    result = scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
+
+    # Should fail since sending raised exception
+    assert result["success"] is False
+
+    # Verify the call was marked as failed with error message
+    db_session.refresh(pending_scheduled_call)
+    assert pending_scheduled_call.status == "failed"
+    assert "Network error" in pending_scheduled_call.error_message
+
+
+@patch("memory.workers.tasks.scheduled_calls.send_message")
+def test_execute_scheduled_call_with_model(
+    mock_send_message, db_session, sample_user
+):
+    """Test execution with a model specified (model is stored but not used for notifications)."""
+    mock_send_message.return_value = True
+
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
-        topic="LLM Call",
+        topic="Model Test",
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
-        model="test-model",  # Specify a model to trigger LLM call
+        model="test-model",  # Model is stored but notifications just send the message
         message="Test message",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     db_session.add(call)
     db_session.commit()
 
-    mock_llm_call.side_effect = Exception("LLM API error")
-
     result = scheduled_calls.execute_scheduled_call(call.id)
 
-    assert result["success"] is False
-    assert "error" in result
-    assert "LLM call failed" in result["error"]
+    assert result["success"] is True
+    assert result["channel_type"] == "discord"
 
 
-@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
-def test_execute_scheduled_call_long_response_truncation(
-    mock_send_discord, db_session, sample_user, sample_discord_user
+@patch("memory.workers.tasks.scheduled_calls.send_message")
+def test_execute_scheduled_call_long_message(
+    mock_send_message, db_session, sample_user
 ):
-    """Test that long responses are truncated in the result."""
+    """Test execution with a long message."""
+    mock_send_message.return_value = True
+
     long_message = "A" * 500  # Long message
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
-        topic="Long Response",
+        topic="Long Message",
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message=long_message,
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     db_session.add(call)
     db_session.commit()
+    call_id = call.id
 
-    result = scheduled_calls.execute_scheduled_call(call.id)
+    result = scheduled_calls.execute_scheduled_call(call_id)
 
-    # Response in result should be truncated
-    assert len(result["response"]) <= 103  # 100 chars + "..."
-    assert result["response"].endswith("...")
+    assert result["success"] is True
+    assert result["channel_type"] == "discord"
 
-    # But full response should be stored in database
-    db_session.refresh(call)
-    assert call.response == long_message
+    # send_message was called
+    mock_send_message.assert_called_once()
 
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_with_due_calls(
-    mock_execute_delay, db_session, sample_user, sample_discord_user
+    mock_execute_delay, db_session, sample_user
 ):
     """Test running scheduled calls with due calls."""
     # Create multiple due calls
@@ -292,7 +255,8 @@ def test_run_scheduled_calls_with_due_calls(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         model=None,
         message="Test 1",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     due_call2 = ScheduledLLMCall(
@@ -301,7 +265,8 @@ def test_run_scheduled_calls_with_due_calls(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message="Test 2",
-        discord_user_id=sample_discord_user.id,
+        channel_type="slack",
+        channel_identifier="U12345678",
         status="pending",
     )
 
@@ -340,7 +305,7 @@ def test_run_scheduled_calls_no_due_calls(
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_mixed_statuses(
-    mock_execute_delay, db_session, sample_user, sample_discord_user
+    mock_execute_delay, db_session, sample_user
 ):
     """Test that only pending calls are processed."""
     # Create calls with different statuses
@@ -350,7 +315,8 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message="Pending",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
     executing_call = ScheduledLLMCall(
@@ -359,7 +325,8 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message="Executing",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="executing",
     )
     completed_call = ScheduledLLMCall(
@@ -368,7 +335,8 @@ def test_run_scheduled_calls_mixed_statuses(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message="Completed",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="completed",
     )
 
@@ -390,7 +358,7 @@ def test_run_scheduled_calls_mixed_statuses(
 
 @patch("memory.workers.tasks.scheduled_calls.execute_scheduled_call")
 def test_run_scheduled_calls_timezone_handling(
-    mock_execute_delay, db_session, sample_user, sample_discord_user
+    mock_execute_delay, db_session, sample_user
 ):
     """Test that timezone handling works correctly."""
     # Create a call that's due (scheduled time in the past)
@@ -401,7 +369,8 @@ def test_run_scheduled_calls_timezone_handling(
         scheduled_time=past_time.replace(tzinfo=None),  # Store as naive datetime
         model=None,
         message="Due call",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
 
@@ -413,7 +382,8 @@ def test_run_scheduled_calls_timezone_handling(
         scheduled_time=future_time.replace(tzinfo=None),  # Store as naive datetime
         model=None,
         message="Future call",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status="pending",
     )
 
@@ -433,22 +403,21 @@ def test_run_scheduled_calls_timezone_handling(
     mock_execute_delay.delay.assert_called_once_with(due_call.id)
 
 
-@patch("memory.workers.tasks.scheduled_calls.send_to_discord")
-def test_status_transition_pending_to_executing_to_completed(
-    mock_send_discord, pending_scheduled_call, db_session
+@patch("memory.workers.tasks.scheduled_calls.send_message")
+def test_status_transition_pending_to_completed(
+    mock_send_message, pending_scheduled_call, db_session
 ):
     """Test that status transitions correctly during execution."""
+    mock_send_message.return_value = True
+
     # Initial status should be pending
     assert pending_scheduled_call.status == "pending"
-    assert pending_scheduled_call.executed_at is None
 
     scheduled_calls.execute_scheduled_call(pending_scheduled_call.id)
 
     # Final status should be completed
     db_session.refresh(pending_scheduled_call)
     assert pending_scheduled_call.status == "completed"
-    assert pending_scheduled_call.executed_at is not None
-    assert pending_scheduled_call.response == "What is the weather like today?"
 
 
 @pytest.mark.parametrize(
@@ -462,10 +431,13 @@ def test_status_transition_pending_to_executing_to_completed(
         ("cancelled", False),
     ],
 )
+@patch("memory.workers.tasks.scheduled_calls.send_message")
 def test_execute_scheduled_call_status_check(
-    status, should_execute, db_session, sample_user, sample_discord_user
+    mock_send_message, status, should_execute, db_session, sample_user
 ):
     """Test that only pending or queued calls are executed."""
+    mock_send_message.return_value = True
+
     call = ScheduledLLMCall(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
@@ -473,7 +445,8 @@ def test_execute_scheduled_call_status_check(
         scheduled_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         model=None,
         message="Test",
-        discord_user_id=sample_discord_user.id,
+        channel_type="discord",
+        channel_identifier="123456789",
         status=status,
     )
     db_session.add(call)
@@ -485,3 +458,117 @@ def test_execute_scheduled_call_status_check(
         assert result["success"] is True
     else:
         assert result == {"error": f"Call is not ready (status: {status})"}
+
+
+def test_send_message_no_channel_type(db_session, sample_user, caplog):
+    """Test send_message returns False when no channel_type is set."""
+    call = ScheduledLLMCall(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        scheduled_time=datetime.now(timezone.utc),
+        model=None,
+        message="Test",
+        channel_type=None,
+        channel_identifier="123456789",
+        status="pending",
+    )
+    db_session.add(call)
+    db_session.commit()
+
+    result = scheduled_calls.send_message(call)
+
+    assert result is False
+    assert "No channel_type" in caplog.text
+
+
+def test_send_message_unknown_channel_type(db_session, sample_user, caplog):
+    """Test send_message returns False for unknown channel_type."""
+    call = ScheduledLLMCall(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        scheduled_time=datetime.now(timezone.utc),
+        model=None,
+        message="Test",
+        channel_type="sms",  # Not supported
+        channel_identifier="123456789",
+        status="pending",
+    )
+    db_session.add(call)
+    db_session.commit()
+
+    result = scheduled_calls.send_message(call)
+
+    assert result is False
+    assert "Unknown channel_type: sms" in caplog.text
+
+
+@patch("memory.workers.tasks.scheduled_calls.send_via_discord")
+def test_send_message_routes_to_discord(mock_send_discord, db_session, sample_user):
+    """Test send_message routes Discord channel_type to send_via_discord."""
+    mock_send_discord.return_value = True
+
+    call = ScheduledLLMCall(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        scheduled_time=datetime.now(timezone.utc),
+        model=None,
+        message="Test",
+        channel_type="discord",
+        channel_identifier="123456789",
+        status="pending",
+    )
+    db_session.add(call)
+    db_session.commit()
+
+    result = scheduled_calls.send_message(call)
+
+    assert result is True
+    mock_send_discord.assert_called_once_with(call)
+
+
+@patch("memory.workers.tasks.scheduled_calls.send_via_slack")
+def test_send_message_routes_to_slack(mock_send_slack, db_session, sample_user):
+    """Test send_message routes Slack channel_type to send_via_slack."""
+    mock_send_slack.return_value = True
+
+    call = ScheduledLLMCall(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        scheduled_time=datetime.now(timezone.utc),
+        model=None,
+        message="Test",
+        channel_type="slack",
+        channel_identifier="U12345678",
+        status="pending",
+    )
+    db_session.add(call)
+    db_session.commit()
+
+    result = scheduled_calls.send_message(call)
+
+    assert result is True
+    mock_send_slack.assert_called_once_with(call)
+
+
+@patch("memory.workers.tasks.scheduled_calls.send_via_email")
+def test_send_message_routes_to_email(mock_send_email, db_session, sample_user):
+    """Test send_message routes email channel_type to send_via_email."""
+    mock_send_email.return_value = True
+
+    call = ScheduledLLMCall(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        scheduled_time=datetime.now(timezone.utc),
+        model=None,
+        message="Test",
+        channel_type="email",
+        channel_identifier="user@example.com",
+        status="pending",
+    )
+    db_session.add(call)
+    db_session.commit()
+
+    result = scheduled_calls.send_message(call)
+
+    assert result is True
+    mock_send_email.assert_called_once_with(call)

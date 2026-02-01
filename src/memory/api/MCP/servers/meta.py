@@ -3,17 +3,20 @@
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Annotated, TypedDict, get_args, get_type_hints
+from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
 from memory.common import qdrant
+from memory.common.celery_app import EXECUTE_SCHEDULED_CALL
+from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
     EmailAccount,
+    ScheduledLLMCall,
     SourceItem,
     UserSession,
 )
@@ -191,3 +194,192 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
                 result["one_time_key"] = _create_one_time_key(session, user_session)
 
         return result
+
+
+# --- Notification tools ---
+
+
+def get_notification_channel(user_info: dict, preferred: str | None) -> tuple[str, str, dict[str, Any]] | None:
+    """
+    Determine which notification channel to use and the identifier for it.
+
+    Priority order (unless overridden): Discord -> Slack -> Email
+
+    Returns (channel_type, channel_identifier) or None if no channel available.
+    """
+    user = user_info.get("user", {})
+
+    # Build available channels
+    channels: list[tuple[str, str, dict[str, Any]]] = []  # (type, identifier, extra_data)
+
+    # Discord
+    discord_accounts = user.get("discord_accounts", {})
+    discord_bots = user.get("discord_bots", [])
+    if discord_accounts and discord_bots:
+        discord_id = next(iter(discord_accounts.keys()), None)
+        if discord_id:
+            channels.append(("discord", discord_id, {"discord_bot_id": discord_bots[0]}))
+
+    # Slack
+    slack_accounts = user.get("slack_accounts", {})
+    if slack_accounts:
+        slack_id = next(iter(slack_accounts.keys()), None)
+        if slack_id:
+            channels.append(("slack", slack_id, {}))
+
+    # Email
+    email_accounts = user.get("email_accounts", [])
+    if email_accounts:
+        email_addr = email_accounts[0].get("email_address")
+        if email_addr:
+            channels.append(("email", email_addr, {"from_address": email_addr}))
+
+    if not channels:
+        return None
+
+    # If preferred channel specified, try to find it
+    if preferred:
+        for ch_type, ch_id, extra in channels:
+            if ch_type == preferred:
+                return (ch_type, ch_id, extra)
+        # Preferred not available
+        return None
+
+    # Return first available (priority order)
+    return channels[0]
+
+
+def create_notification(
+    session,
+    user_id: int,
+    channel_type: str,
+    channel_identifier: str,
+    subject: str,
+    message: str,
+    details_url: str | None,
+    scheduled_time: datetime,
+    extra_data: dict[str, Any] | None = None,
+) -> ScheduledLLMCall:
+    """Create a notification record in the database."""
+    # Format message with subject and details URL
+    full_message = f"**{subject}**\n\n{message}"
+    if details_url:
+        full_message += f"\n\n[View details]({details_url})"
+
+    data = {
+        "notification_type": "notify_user",
+        "subject": subject,
+        "details_url": details_url,
+    }
+    if extra_data:
+        data.update(extra_data)
+
+    scheduled_call = ScheduledLLMCall(
+        user_id=user_id,
+        scheduled_time=scheduled_time,
+        message=full_message,
+        topic=subject,
+        model=None,  # No LLM processing, send as-is
+        channel_type=channel_type,
+        channel_identifier=channel_identifier,
+        data=data,
+    )
+
+    session.add(scheduled_call)
+    return scheduled_call
+
+
+@meta_mcp.tool()
+async def notify_user(
+    subject: str,
+    message: str,
+    details_url: str | None = None,
+    channel: Literal["discord", "slack", "email"] | None = None,
+    scheduled_time: str | None = None,
+) -> dict[str, Any]:
+    """
+    Send a notification to the current user.
+
+    Delivery priority (unless overridden by channel parameter):
+    1. Discord DM (if user has Discord account linked)
+    2. Slack DM (if user has Slack account linked)
+    3. Email (if user has email account configured)
+
+    Args:
+        subject: Notification subject/title (shown as bold header)
+        message: Main message content
+        details_url: Optional URL to full details (e.g., link to a note)
+        channel: Override notification channel. If None, uses priority order above.
+        scheduled_time: ISO datetime string (e.g., "2024-12-20T15:30:00Z").
+                       If None, sends immediately. If set, schedules for later.
+
+    Returns:
+        Dict with success status and delivery details
+    """
+    if not subject:
+        raise ValueError("Subject is required")
+    if not message:
+        raise ValueError("Message is required")
+
+    with make_session() as session:
+        current_user = _get_current_user(session)
+
+        if not current_user.get("authenticated"):
+            raise ValueError("Not authenticated")
+
+        user_id = current_user.get("user", {}).get("user_id")
+        if not user_id:
+            raise ValueError("User not found")
+
+        # Determine channel
+        channel_info = get_notification_channel(current_user, channel)
+        if not channel_info:
+            if channel:
+                raise ValueError(f"{channel.title()} account not configured")
+            raise ValueError("No notification channel available (Discord, Slack, or Email)")
+
+        channel_type, channel_identifier, extra_data = channel_info
+
+        # Parse scheduled time or use now for immediate
+        if scheduled_time:
+            try:
+                scheduled_dt = datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
+                if scheduled_dt.tzinfo is not None:
+                    scheduled_dt = scheduled_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                raise ValueError("Invalid datetime format for scheduled_time")
+
+            current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            if scheduled_dt <= current_time_naive:
+                raise ValueError("Scheduled time must be in the future")
+        else:
+            # Immediate: set scheduled_time to now
+            scheduled_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # Create the notification record
+        notification = create_notification(
+            session=session,
+            user_id=user_id,
+            channel_type=channel_type,
+            channel_identifier=channel_identifier,
+            subject=subject,
+            message=message,
+            details_url=details_url,
+            scheduled_time=scheduled_dt,
+            extra_data=extra_data,
+        )
+        session.commit()
+
+        notification_id = notification.id
+
+    # For immediate notifications, dispatch Celery task now
+    if not scheduled_time:
+        celery_app.send_task(EXECUTE_SCHEDULED_CALL, args=[notification_id])
+
+    return {
+        "success": True,
+        "scheduled": bool(scheduled_time),
+        "notification_id": notification_id,
+        "channel_type": channel_type,
+        "scheduled_time": scheduled_dt.isoformat() if scheduled_time else None,
+    }

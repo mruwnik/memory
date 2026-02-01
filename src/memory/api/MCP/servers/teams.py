@@ -235,7 +235,9 @@ def setup_discord_integration(
                 bot_id,
                 create_if_missing=True,
             )
+            logger.info(f"DEBUG resolve_role returned: role_id={resolved_role_id}, created={role_created}")
             team.discord_role_id = resolved_role_id
+            logger.info(f"DEBUG after assignment: team.discord_role_id={team.discord_role_id}")
             if role_created:
                 sync_info["role_created"] = True
                 sync_info["role_name"] = discord_role if isinstance(discord_role, str) else None
@@ -399,8 +401,12 @@ async def upsert(
         resolved_guild_id, resolved_role_id, role_created, discord_warnings, discord_sync = (
             setup_discord_integration(session, team, guild, discord_role, auto_sync_discord)
         )
+        logger.info(f"DEBUG upsert after setup_discord: team.discord_role_id={team.discord_role_id}, returned_role_id={resolved_role_id}")
         result["warnings"].extend(discord_warnings)
         result["discord_sync"].update(discord_sync)
+
+        # Capture team.id BEFORE any async operations to avoid DetachedInstanceError
+        team_id = team.id
 
         # Configure GitHub integration
         github_warnings, github_sync = await setup_github_integration(
@@ -409,11 +415,13 @@ async def upsert(
         result["warnings"].extend(github_warnings)
         result["github_sync"].update(github_sync)
 
+        # Flush changes before async operations
+        # Note: After flush, accessing team.* might cause DetachedInstanceError with scoped_session
         session.flush()
 
-        # Ensure team is attached and refreshed before async operations
-        team = session.merge(team)
-        session.refresh(team)
+        # DON'T use merge/refresh - they cause the NULL issue
+        # Just ensure we can access team attributes for async operations
+        # by capturing values now
 
         await import_external_members(
             session, team, result,
@@ -428,10 +436,11 @@ async def upsert(
         session.commit()
 
         # Re-query with relationships to avoid lazy-load issues
+        # Use team_id captured earlier to avoid DetachedInstanceError
         team = (
             session.query(Team)
             .options(selectinload(Team.members))
-            .filter(Team.id == team.id)
+            .filter(Team.id == team_id)
             .first()
         )
         result["team"] = team_to_dict(team, include_members=True)
@@ -844,8 +853,8 @@ async def team_update(
     name: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
-    discord_role_id: int | None = None,
-    discord_guild_id: int | None = None,
+    discord_role: int | str | None = None,
+    guild: int | str | None = None,
     auto_sync_discord: bool | None = None,
     github_team_id: int | None = None,
     github_team_slug: str | None = None,
@@ -861,8 +870,8 @@ async def team_update(
         name: New display name
         description: New description
         tags: New tags (replaces existing)
-        discord_role_id: Discord role ID
-        discord_guild_id: Discord guild ID
+        discord_role: Discord role - can be numeric ID or role name (requires guild)
+        guild: Discord guild - can be numeric ID or server name
         auto_sync_discord: Whether to sync to Discord
         github_team_id: GitHub team ID
         github_team_slug: GitHub team slug (e.g., "engineering-core") - required for sync
@@ -896,10 +905,26 @@ async def team_update(
             team_obj.description = description
         if tags is not None:
             team_obj.tags = tags
-        if discord_role_id is not None:
-            team_obj.discord_role_id = discord_role_id
-        if discord_guild_id is not None:
-            team_obj.discord_guild_id = discord_guild_id
+        # Resolve guild first (needed for role name resolution)
+        if guild is not None:
+            team_obj.discord_guild_id = discord_client.resolve_guild(guild, session)
+
+        # Resolve discord_role - can be int ID or string name
+        if discord_role is not None:
+            resolved_guild = team_obj.discord_guild_id
+            if not resolved_guild:
+                return {"error": "Cannot resolve Discord role without guild"}
+            try:
+                bot_id = resolve_bot_id(None)
+                role_id, _ = discord_client.resolve_role(
+                    discord_role, guild_id=resolved_guild, bot_id=bot_id, create_if_missing=False
+                )
+                if role_id:
+                    team_obj.discord_role_id = role_id
+                else:
+                    return {"error": f"Discord role '{discord_role}' not found in guild"}
+            except Exception as e:
+                return {"error": f"Failed to resolve Discord role: {e}"}
         if auto_sync_discord is not None:
             team_obj.auto_sync_discord = auto_sync_discord
         if github_team_id is not None:

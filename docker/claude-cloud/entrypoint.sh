@@ -313,16 +313,19 @@ launch_claude() {
     # Build command array (unquoted $executable allows word splitting for multi-word commands)
     local -a cmd=($executable)
 
+    # Prompt must come before flags
+    [[ -n "${CLAUDE_INITIAL_PROMPT:-}" ]] && cmd+=("$CLAUDE_INITIAL_PROMPT")
+    cmd+=("$@")
+
     if [[ -n "${CLAUDE_ALLOWED_TOOLS:-}" ]]; then
         if [[ "$CLAUDE_ALLOWED_TOOLS" =~ [^a-zA-Z0-9_\ -] ]]; then
             log "ERROR: CLAUDE_ALLOWED_TOOLS contains invalid characters"
             exit 1
         fi
-        cmd+=(--allowedTools "$CLAUDE_ALLOWED_TOOLS")
+        # Convert space-separated tools to comma-separated (what --allowedTools expects)
+        local tools_csv="${CLAUDE_ALLOWED_TOOLS// /,}"
+        cmd+=(--allowedTools "$tools_csv")
     fi
-
-    [[ -n "${CLAUDE_INITIAL_PROMPT:-}" ]] && cmd+=(-p "$CLAUDE_INITIAL_PROMPT")
-    cmd+=("$@")
 
     log "Full command: ${cmd[*]}"
 

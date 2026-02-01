@@ -231,12 +231,6 @@ async def health_check(request: Request):
     return JSONResponse(checks, status_code=status_code)
 
 
-# Inject auth provider into subservers that need it
-if is_server_enabled(MCPServer.SCHEDULE):
-    from memory.api.MCP.servers.schedule import set_auth_provider as set_schedule_auth
-
-    set_schedule_auth(get_current_user)
-
 # Mount only enabled subservers onto the main MCP server
 # Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
 for server in MCPServer:

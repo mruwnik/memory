@@ -53,7 +53,12 @@ _CLAUDE_SESSION_PATTERN = re.compile(r"^/claude/u\d+-[a-fA-F0-9]+", re.IGNORECAS
 # Prefixes that identify a token as an API key (vs a session token)
 API_KEY_PREFIXES = (
     "user_",  # Legacy prefix for migrated user keys
-    "internal_", "discord_", "google_", "github_", "mcp_", "ot_",  # Key type prefixes
+    "internal_",
+    "discord_",
+    "google_",
+    "github_",
+    "mcp_",
+    "ot_",  # Key type prefixes
 )
 
 
@@ -85,9 +90,7 @@ def create_user_session(
     return str(session.id)
 
 
-def get_user_session(
-    request: Request, db: DBSession
-) -> UserSession | None:
+def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     """Get session ID from request"""
     session_id = get_token(request)
 
@@ -339,9 +342,7 @@ def require_key_types(*allowed_types: str):
     """
     allowed_list = list(allowed_types)
 
-    def checker(
-        request: Request, db: DBSession = Depends(get_session)
-    ) -> User:
+    def checker(request: Request, db: DBSession = Depends(get_session)) -> User:
         # Check if middleware already authenticated this request
         if hasattr(request.state, "authenticated_user_id"):
             key_type = getattr(request.state, "authenticated_key_type", None)
@@ -473,6 +474,7 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
         # Dummy password check to prevent timing-based user enumeration
         # This ensures the function takes similar time whether user exists or not
         from memory.common.db.models.users import verify_password
+
         verify_password(password, "$2b$12$dummy.hash.for.timing.attack.prevention")
 
     return None
@@ -545,6 +547,7 @@ async def oauth_callback_discord(request: Request):
             title = "❌ Authorization Failed"
 
     from html import escape
+
     return Response(
         content=f"""
         <html>
