@@ -42,48 +42,35 @@ def test_parse_datetime_invalid_format_raises():
         parse_datetime("not a datetime")
 
 
-@patch("memory.api.MCP.servers.polling.get_access_token")
-@patch("memory.api.MCP.servers.polling.make_session")
-def test_get_current_user_id_valid_session(mock_make_session, mock_get_token):
+@patch("memory.api.MCP.servers.polling.get_mcp_current_user")
+def test_get_current_user_id_valid_session(mock_get_mcp_current_user):
     """Get current user ID from valid session."""
-    mock_token = MagicMock()
-    mock_token.token = "session-123"
-    mock_get_token.return_value = mock_token
-
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_user_session = MagicMock()
-    mock_user_session.user.id = 42
-    mock_session.get.return_value = mock_user_session
+    mock_user = MagicMock()
+    mock_user.id = 42
+    mock_get_mcp_current_user.return_value = mock_user
 
     result = get_current_user_id()
 
     assert result == 42
 
 
-@patch("memory.api.MCP.servers.polling.get_access_token")
-def test_get_current_user_id_no_token_raises(mock_get_token):
+@patch("memory.api.MCP.servers.polling.get_mcp_current_user")
+def test_get_current_user_id_no_token_raises(mock_get_mcp_current_user):
     """Get current user ID without token raises ValueError."""
-    mock_get_token.return_value = None
+    mock_get_mcp_current_user.return_value = None
 
-    with pytest.raises(ValueError, match="Not authenticated - no access token"):
+    with pytest.raises(ValueError, match="Not authenticated"):
         get_current_user_id()
 
 
-@patch("memory.api.MCP.servers.polling.get_access_token")
-@patch("memory.api.MCP.servers.polling.make_session")
-def test_get_current_user_id_invalid_session_raises(mock_make_session, mock_get_token):
+@patch("memory.api.MCP.servers.polling.get_mcp_current_user")
+def test_get_current_user_id_invalid_session_raises(mock_get_mcp_current_user):
     """Get current user ID with invalid session raises ValueError."""
-    mock_token = MagicMock()
-    mock_token.token = "invalid-session"
-    mock_get_token.return_value = mock_token
+    mock_user = MagicMock()
+    mock_user.id = None
+    mock_get_mcp_current_user.return_value = mock_user
 
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_session.get.return_value = None
-
-    with pytest.raises(ValueError, match="Not authenticated - invalid session"):
+    with pytest.raises(ValueError, match="Not authenticated"):
         get_current_user_id()
 
 

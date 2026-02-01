@@ -4,9 +4,12 @@ Database models for the knowledge base system.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from sqlalchemy import (
     ARRAY,
     BigInteger,
@@ -29,9 +32,11 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
+from memory.common import settings
 
 if TYPE_CHECKING:
-    from memory.common.db.models.people import Person
+    from memory.common.db.models.discord import DiscordUser
+    from memory.common.db.models.people import PersonTidbit
     from memory.common.db.models.source_items import BookSection, GithubItem, MailMessage
     from memory.common.db.models.users import User
 
@@ -844,3 +849,166 @@ class CalendarAccount(Base):
         Index("calendar_accounts_type_idx", "calendar_type"),
         Index("calendar_accounts_project_idx", "project_id"),
     )
+
+
+class Person(Base):
+    """A person you know or want to track.
+
+    This is a thin identity record - actual information about the person
+    is stored in PersonTidbit records which extend SourceItem.
+    """
+
+    __tablename__ = "people"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    identifier: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), server_default="{}", nullable=False
+    )
+    contact_info: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default="{}", nullable=False
+    )
+
+    # Optional link to system user account
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    user: Mapped["User | None"] = relationship("User", back_populates="person")
+
+    # Timestamps
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationship to linked Discord accounts
+    discord_accounts: Mapped[list["DiscordUser"]] = relationship(
+        "DiscordUser", back_populates="person"
+    )
+
+    # Relationship to linked GitHub accounts
+    github_accounts: Mapped[list["GithubUser"]] = relationship(
+        "GithubUser", back_populates="person"
+    )
+
+    # Projects this person collaborates on
+    projects: Mapped[list["Project"]] = relationship(
+        "Project", secondary="project_collaborators", back_populates="collaborators"
+    )
+
+    # Tidbits of information about this person
+    tidbits: Mapped[list["PersonTidbit"]] = relationship(
+        "PersonTidbit", back_populates="person", cascade="all, delete-orphan"
+    )
+
+    # Note: Slack user data is stored in contact_info["slack"] as:
+    # {"<workspace_id>": {"user_id": "U123", "username": "...", "display_name": "..."}}
+    # This avoids a separate table since Slack IDs are workspace-specific
+
+    __table_args__ = (
+        Index("person_identifier_idx", "identifier"),
+        Index("person_display_name_idx", "display_name"),
+        Index("person_aliases_idx", "aliases", postgresql_using="gin"),
+        Index("person_user_idx", "user_id"),
+    )
+
+    @property
+    def display_contents(self) -> dict:
+        result = {
+            "identifier": self.identifier,
+            "display_name": self.display_name,
+            "aliases": self.aliases,
+            "contact_info": self.contact_info,
+        }
+        if self.user_id:
+            result["user_id"] = self.user_id
+            if self.user:
+                result["user_email"] = self.user.email
+                result["user_name"] = self.user.name
+        return result
+
+    def to_profile_markdown(
+        self, tidbits: Sequence["PersonTidbit"] | None = None
+    ) -> str:
+        """Serialize Person to markdown with YAML frontmatter.
+
+        Args:
+            tidbits: Pre-filtered list of tidbits to include. If None, uses
+                self.tidbits (all tidbits without access control filtering).
+                For user-facing output, always pass filtered tidbits.
+
+        Returns:
+            Markdown string with YAML frontmatter and tidbit sections.
+        """
+        frontmatter: dict[str, Any] = {
+            "identifier": self.identifier,
+            "display_name": self.display_name,
+        }
+        if self.aliases:
+            frontmatter["aliases"] = list(self.aliases)
+        if self.contact_info:
+            frontmatter["contact_info"] = dict(self.contact_info)
+
+        yaml_str = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True)
+        parts = ["---", yaml_str.strip(), "---"]
+
+        # Use provided tidbits or fall back to all tidbits (for admin/internal use)
+        tidbit_list = tidbits if tidbits is not None else self.tidbits
+
+        # Collect content from tidbits
+        if tidbit_list:
+            for tidbit in tidbit_list:
+                if tidbit.content:
+                    parts.append("")
+                    parts.append(f"## {tidbit.tidbit_type.title()}")
+                    parts.append(tidbit.content)
+
+        return "\n".join(parts)
+
+    @classmethod
+    def from_profile_markdown(cls, content: str) -> dict:
+        """Parse profile markdown with YAML frontmatter into Person fields."""
+        # Match YAML frontmatter between --- delimiters
+        frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n?"
+        match = re.match(frontmatter_pattern, content, re.DOTALL)
+
+        if not match:
+            # No frontmatter, return empty dict
+            return {"notes": content.strip() if content.strip() else None}
+
+        yaml_content = match.group(1)
+        body = content[match.end() :].strip()
+
+        try:
+            data = yaml.safe_load(yaml_content) or {}
+        except yaml.YAMLError:
+            return {"notes": content.strip() if content.strip() else None}
+
+        result = {}
+        if "identifier" in data:
+            result["identifier"] = data["identifier"]
+        if "display_name" in data:
+            result["display_name"] = data["display_name"]
+        if "aliases" in data:
+            result["aliases"] = data["aliases"]
+        if "contact_info" in data:
+            result["contact_info"] = data["contact_info"]
+        if "tags" in data:
+            result["tags"] = data["tags"]
+        if body:
+            result["notes"] = body
+
+        return result
+
+    def get_profile_path(self) -> str:
+        """Get the relative path for this person's profile note."""
+        return f"{settings.PROFILES_FOLDER}/{self.identifier}.md"
+
+    def save_profile_note(self) -> None:
+        """Save this person's data to a profile note file."""
+        path = settings.NOTES_STORAGE_DIR / self.get_profile_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.to_profile_markdown())

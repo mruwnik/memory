@@ -48,7 +48,7 @@ if TYPE_CHECKING:
         DiscordServer,
         DiscordUser,
     )
-    from memory.common.db.models.people import Person
+    from memory.common.db.models.sources import Person
     from memory.common.db.models.slack import (
         SlackChannel,
         SlackWorkspace,

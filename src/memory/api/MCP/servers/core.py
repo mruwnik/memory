@@ -15,7 +15,7 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.access import build_user_access_filter_from_dict
+from memory.api.MCP.access import build_user_access_filter_from_dict, get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import AccessFilter, user_can_access
 from memory.api.search.search import search as search_base
@@ -83,30 +83,6 @@ def get_current_user_access_filter() -> AccessFilter | None:
     # Couldn't identify user - return empty filter (no access)
     logger.warning("get_current_user_access_filter: couldn't identify user from token")
     return AccessFilter(conditions=[])
-
-
-def get_current_user_id() -> int | None:
-    """Get the current user's ID from the access token."""
-    access_token = get_access_token()
-    if access_token is None:
-        return None
-
-    with make_session() as session:
-        from memory.common.db.models import UserSession
-
-        # Try as session token first
-        user_session = session.get(UserSession, access_token.token)
-        if user_session and user_session.user:
-            return user_session.user.id
-
-        # Try as API key
-        from memory.api.auth import lookup_api_key
-
-        api_key_record = lookup_api_key(access_token.token, session)
-        if api_key_record and api_key_record.user:
-            return api_key_record.user.id
-
-    return None
 
 
 # Filter definitions: (name, description, applicable_modalities)
@@ -587,7 +563,7 @@ async def get_item(id: int, include_content: bool = True) -> dict:
 
     Returns: Full item details including metadata, tags, and optionally content.
     """
-    from memory.common.access_control import get_user_project_roles
+    from memory.api.MCP.access import get_project_roles_by_user_id
 
     # Get access filter to check permissions
     access_filter = get_current_user_access_filter()
@@ -608,18 +584,11 @@ async def get_item(id: int, include_content: bool = True) -> dict:
         # access_filter is None for superadmins (they see everything)
         if access_filter is not None:
             # Need to check if user can access this item
-            # Get user from current context for project roles lookup
-            user_id = get_current_user_id()
-            if user_id is None:
+            user = get_mcp_current_user()
+            if user is None or user.id is None:
                 raise ValueError(f"Item {id} not found or access denied")
 
-            from memory.common.db.models import User
-
-            user = session.get(User, user_id)
-            if user is None:
-                raise ValueError(f"Item {id} not found or access denied")
-
-            project_roles = get_user_project_roles(session, user)
+            project_roles = get_project_roles_by_user_id(user.id)
             if not user_can_access(user, item, project_roles):
                 raise ValueError(f"Item {id} not found or access denied")
 

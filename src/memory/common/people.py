@@ -14,8 +14,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session, scoped_session
 
-from memory.common.content_processing import create_content_hash
-from memory.common.db.models.people import Person
+from memory.common.db.models import Person
 
 if TYPE_CHECKING:
     from memory.common.db.models.source_item import SourceItem
@@ -145,6 +144,8 @@ def find_or_create_person(
 ) -> tuple[Person | None, bool]:
     """Find existing person or optionally create new one.
 
+    Note: Person is now a thin identity record - no SourceItem fields needed.
+
     Matching order:
     1. By email (if provided)
     2. By name/alias
@@ -179,17 +180,12 @@ def find_or_create_person(
     if not create_if_missing:
         return None, False
 
-    # Create new person
-    sha256 = create_content_hash(f"person:{identifier}")
+    # Create new person (thin identity record)
     person = Person(
         identifier=identifier,
         display_name=name,
         aliases=[name],
         contact_info={"email": email} if email else {},
-        modality="person",
-        mime_type="text/plain",
-        sha256=sha256,
-        size=0,
     )
     session.add(person)
     session.flush()

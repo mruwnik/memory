@@ -25,7 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from memory.common.db.models.base import Base
 
 if TYPE_CHECKING:
-    from memory.common.db.models.people import Person
+    from memory.common.db.models.sources import Person
     from memory.common.db.models.users import User
 
 

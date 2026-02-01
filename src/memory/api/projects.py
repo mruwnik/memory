@@ -16,8 +16,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
-from memory.common.db.models.people import Person
+from memory.common.db.models import Person, User
 from memory.common.db.models.sources import Project, project_collaborators
 from memory.common.people import find_person
 

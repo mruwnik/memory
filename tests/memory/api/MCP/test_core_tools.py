@@ -889,8 +889,9 @@ def test_filter_source_ids_by_modalities(mock_make_session):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_returns_full_details(mock_make_session):
+async def test_get_item_returns_full_details(mock_make_session, mock_access_filter):
     """Get source item returns full item details with content."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -920,8 +921,9 @@ async def test_get_item_returns_full_details(mock_make_session):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_without_content(mock_make_session):
+async def test_get_item_without_content(mock_make_session, mock_access_filter):
     """Get source item without content when requested."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -947,8 +949,9 @@ async def test_get_item_without_content(mock_make_session):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_not_found(mock_make_session):
+async def test_get_item_not_found(mock_make_session, mock_access_filter):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -959,8 +962,9 @@ async def test_get_item_not_found(mock_make_session):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_handles_null_inserted_at(mock_make_session):
+async def test_get_item_handles_null_inserted_at(mock_make_session, mock_access_filter):
     """Get source item handles None inserted_at."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session

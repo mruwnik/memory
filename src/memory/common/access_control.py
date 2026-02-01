@@ -126,6 +126,7 @@ class AccessFilter:
 
     conditions: list[AccessCondition]
     person_id: int | None = None  # For person override filtering
+    creator_id: int | None = None  # For creator-based access (user sees their own items)
     include_public: bool = True  # Whether to include public items
 
     def is_empty(self) -> bool:
@@ -179,6 +180,13 @@ def user_can_access(
     """
     Determine if user can access a content item.
 
+    Access is granted if ANY of these conditions is true:
+    1. User has admin scope (superadmin)
+    2. User is the creator of the item (creator_id matches user.id)
+    3. User's Person is attached to the item (person override)
+    4. Item has public sensitivity
+    5. Item has a project_id and user has appropriate role in that project
+
     Args:
         user: The user attempting access
         item: The content item being accessed
@@ -189,6 +197,11 @@ def user_can_access(
     """
     # Superadmins see everything
     if has_admin_scope(user):
+        return True
+
+    # Creator always sees their own items
+    creator_id = getattr(item, "creator_id", None)
+    if creator_id is not None and creator_id == user.id:
         return True
 
     # Person override: if user's person is attached to item, grant full access
@@ -205,6 +218,7 @@ def user_can_access(
         return True
 
     # Unclassified content (no project) is NOT visible to regular users
+    # (creator already checked above, so this is for non-creator access)
     # This prevents accidental exposure during migration or classification failures
     if item.project_id is None:
         return False
@@ -285,14 +299,23 @@ def build_access_filter(
     person = getattr(user, "person", None)
     person_id = person.id if person else None
 
+    # Get user ID for creator-based filtering
+    user_id = getattr(user, "id", None)
+
     if project_roles is None:
-        # No roles provided - still allow public items and person override
-        return AccessFilter(conditions=[], person_id=person_id, include_public=True)
+        # No roles provided - still allow public items, person override, and creator access
+        return AccessFilter(
+            conditions=[],
+            person_id=person_id,
+            creator_id=user_id,
+            include_public=True,
+        )
 
     conditions = []
 
     # Per-project access based on role
     # NOTE: No "global content" condition - NULL project_id is superadmin-only
+    # (except for creator access, which is handled separately in search)
     for project_id, role_str in project_roles.items():
         allowed = get_allowed_sensitivities(role_str)
         if allowed is not None:
@@ -303,12 +326,53 @@ def build_access_filter(
                 )
             )
 
-    return AccessFilter(conditions=conditions, person_id=person_id, include_public=True)
+    return AccessFilter(
+        conditions=conditions,
+        person_id=person_id,
+        creator_id=user_id,
+        include_public=True,
+    )
 
 
 def get_allowed_project_ids(project_roles: dict[int, str]) -> set[int]:
     """Get the set of project IDs the user has any access to."""
     return set(project_roles.keys())
+
+
+def user_can_edit(user: UserLike, item: SourceItemLike) -> bool:
+    """
+    Check if user can edit a content item.
+
+    Only the creator or an admin can edit content.
+
+    Args:
+        user: The user attempting to edit
+        item: The content item to edit
+
+    Returns:
+        True if user can edit the item, False otherwise
+    """
+    if has_admin_scope(user):
+        return True
+
+    creator_id = getattr(item, "creator_id", None)
+    return creator_id is not None and creator_id == user.id
+
+
+def user_can_delete(user: UserLike, item: SourceItemLike) -> bool:
+    """
+    Check if user can delete a content item.
+
+    Same permissions as editing - only creator or admin.
+
+    Args:
+        user: The user attempting to delete
+        item: The content item to delete
+
+    Returns:
+        True if user can delete the item, False otherwise
+    """
+    return user_can_edit(user, item)
 
 
 def get_max_sensitivity_for_project(

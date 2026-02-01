@@ -7,6 +7,9 @@ Provides functions to build access filters and log access from MCP tool context.
 import logging
 from typing import Protocol
 
+from fastmcp.server.dependencies import get_access_token
+
+from memory.api.auth import lookup_api_key
 from memory.common.access_control import (
     AccessFilter,
     build_access_filter,
@@ -14,7 +17,7 @@ from memory.common.access_control import (
     has_admin_scope,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import User
+from memory.common.db.models import User, UserSession
 from memory.common.db.models.access import log_access
 
 logger = logging.getLogger(__name__)
@@ -69,6 +72,34 @@ class UserProxy:
     def __init__(self, user_dict: dict):
         self.id = user_dict.get("id")
         self.scopes = user_dict.get("scopes", [])
+
+
+def get_mcp_current_user() -> UserProxy | None:
+    """Get the current MCP user as a UserProxy for access control.
+
+    This is for MCP tool context (uses fastmcp's get_access_token).
+    For REST API endpoints, use memory.api.auth.get_current_user instead.
+
+    Returns a UserProxy with id and scopes, or None if not authenticated.
+    Callers can access user.id for just the ID, or user.scopes for scopes.
+    """
+    access_token = get_access_token()
+    if access_token is None:
+        return None
+
+    with make_session() as session:
+        user_session = session.get(UserSession, access_token.token)
+        if user_session and user_session.user:
+            user = user_session.user
+            return UserProxy({"id": user.id, "scopes": list(user.scopes or [])})
+
+        # Try as API key
+        api_key_record = lookup_api_key(access_token.token, session)
+        if api_key_record and api_key_record.user:
+            user = api_key_record.user
+            return UserProxy({"id": user.id, "scopes": list(user.scopes or [])})
+
+    return None
 
 
 def build_user_access_filter_from_dict(user_dict: dict) -> AccessFilter | None:

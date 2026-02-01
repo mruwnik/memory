@@ -2,7 +2,7 @@
 
 import pytest
 
-from memory.common.db.models.people import Person
+from memory.common.db.models import Person
 from memory.common.db.models.sources import Project, project_collaborators
 
 

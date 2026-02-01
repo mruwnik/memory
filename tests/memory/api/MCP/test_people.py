@@ -40,7 +40,7 @@ _mock_base.mcp = MagicMock()
 _mock_base.mcp.tool = lambda: lambda f: f
 sys.modules["memory.api.MCP.base"] = _mock_base
 
-from memory.common.db.models import Person  # noqa: E402
+from memory.common.db.models import Person, PersonTidbit  # noqa: E402
 from memory.common.db import connection as db_connection  # noqa: E402
 from memory.common.content_processing import create_content_hash  # noqa: E402
 
@@ -63,46 +63,91 @@ def reset_db_cache():
 
 
 @pytest.fixture
-def sample_people(db_session):
-    """Create sample people for testing."""
-    people = [
-        Person(
-            identifier="alice_chen",
-            display_name="Alice Chen",
-            aliases=["@alice_c", "alice.chen@work.com"],
-            contact_info={"email": "alice@example.com", "phone": "555-1234"},
-            tags=["work", "engineering"],
-            content="Tech lead on Platform team. Very thorough in code reviews.",
-            modality="person",
-            sha256=create_content_hash("person:alice_chen"),
-            size=100,
-        ),
-        Person(
-            identifier="bob_smith",
-            display_name="Bob Smith",
-            aliases=["@bobsmith"],
-            contact_info={"email": "bob@example.com"},
-            tags=["work", "design"],
-            content="UX designer. Prefers visual communication.",
-            modality="person",
-            sha256=create_content_hash("person:bob_smith"),
-            size=50,
-        ),
-        Person(
-            identifier="charlie_jones",
-            display_name="Charlie Jones",
-            aliases=[],
-            contact_info={"twitter": "@charlie_j"},
-            tags=["friend", "climbing"],
-            content="Met at climbing gym. Very reliable.",
-            modality="person",
-            sha256=create_content_hash("person:charlie_jones"),
-            size=30,
-        ),
-    ]
+def sample_people(db_session, qdrant):
+    """Create sample people for testing.
 
-    for person in people:
-        db_session.add(person)
+    With the new architecture:
+    - Person is a thin identity record (no tags, content, etc.)
+    - PersonTidbit holds the actual content with access control
+
+    Note: Tidbits are created directly in the session without going through
+    process_content_item, so they won't have embeddings. Tests requiring
+    vector search won't find these tidbits.
+    """
+    people = []
+
+    # Create Alice with tidbits
+    alice = Person(
+        identifier="alice_chen",
+        display_name="Alice Chen",
+        aliases=["@alice_c", "alice.chen@work.com"],
+        contact_info={"email": "alice@example.com", "phone": "555-1234"},
+    )
+    db_session.add(alice)
+    db_session.flush()
+
+    alice_tidbit = PersonTidbit(
+        person_id=alice.id,
+        tidbit_type="note",
+        content="Tech lead on Platform team. Very thorough in code reviews.",
+        tags=["work", "engineering"],
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=create_content_hash("tidbit:alice_chen:note"),
+        size=100,
+        sensitivity="basic",
+    )
+    db_session.add(alice_tidbit)
+    people.append(alice)
+
+    # Create Bob with tidbits
+    bob = Person(
+        identifier="bob_smith",
+        display_name="Bob Smith",
+        aliases=["@bobsmith"],
+        contact_info={"email": "bob@example.com"},
+    )
+    db_session.add(bob)
+    db_session.flush()
+
+    bob_tidbit = PersonTidbit(
+        person_id=bob.id,
+        tidbit_type="note",
+        content="UX designer. Prefers visual communication.",
+        tags=["work", "design"],
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=create_content_hash("tidbit:bob_smith:note"),
+        size=50,
+        sensitivity="basic",
+    )
+    db_session.add(bob_tidbit)
+    people.append(bob)
+
+    # Create Charlie with tidbits
+    charlie = Person(
+        identifier="charlie_jones",
+        display_name="Charlie Jones",
+        aliases=[],
+        contact_info={"twitter": "@charlie_j"},
+    )
+    db_session.add(charlie)
+    db_session.flush()
+
+    charlie_tidbit = PersonTidbit(
+        person_id=charlie.id,
+        tidbit_type="note",
+        content="Met at climbing gym. Very reliable.",
+        tags=["friend", "climbing"],
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=create_content_hash("tidbit:charlie_jones:note"),
+        size=30,
+        sensitivity="basic",
+    )
+    db_session.add(charlie_tidbit)
+    people.append(charlie)
+
     db_session.commit()
 
     for person in people:
@@ -117,8 +162,13 @@ def sample_people(db_session):
 
 
 @pytest.mark.asyncio
-async def test_add_person_success(db_session):
-    """Test adding a new person."""
+async def test_add_person_success(db_session, qdrant):
+    """Test adding a new person.
+
+    With the new synchronous design:
+    - Person is created directly in the database
+    - If content is provided, a tidbit task is queued
+    """
     from memory.api.MCP.servers.people import add
 
     add_fn = get_fn(add)
@@ -133,19 +183,23 @@ async def test_add_person_success(db_session):
                 display_name="New Person",
                 aliases=["@newperson"],
                 contact_info={"email": "new@example.com"},
+                content="A new friend.",
                 tags=["friend"],
-                notes="A new friend.",
             )
 
-    assert result["status"] == "queued"
-    assert result["task_id"] == "task-123"
+    # Person is created synchronously
+    assert result["status"] == "created"
     assert result["identifier"] == "new_person"
+    assert "person_id" in result
 
-    # Verify Celery task was called
+    # Content triggers a tidbit task
+    assert result["tidbit_task_id"] == "task-123"
+
+    # Verify Celery task was called for the tidbit
     mock_celery.send_task.assert_called_once()
     call_kwargs = mock_celery.send_task.call_args[1]
-    assert call_kwargs["kwargs"]["identifier"] == "new_person"
-    assert call_kwargs["kwargs"]["display_name"] == "New Person"
+    assert call_kwargs["kwargs"]["content"] == "A new friend."
+    assert call_kwargs["kwargs"]["tags"] == ["friend"]
 
 
 @pytest.mark.asyncio
@@ -163,24 +217,27 @@ async def test_add_person_already_exists(db_session, sample_people):
 
 
 @pytest.mark.asyncio
-async def test_add_person_minimal(db_session):
-    """Test adding a person with minimal data."""
+async def test_add_person_minimal(db_session, qdrant):
+    """Test adding a person with minimal data (no content, no tidbit)."""
     from memory.api.MCP.servers.people import add
 
     add_fn = get_fn(add)
-    mock_task = Mock()
-    mock_task.id = "task-456"
 
     with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
         with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
-            mock_celery.send_task.return_value = mock_task
             result = await add_fn(
                 identifier="minimal_person",
                 display_name="Minimal Person",
             )
 
-    assert result["status"] == "queued"
+    # Person is created synchronously
+    assert result["status"] == "created"
     assert result["identifier"] == "minimal_person"
+    assert "person_id" in result
+
+    # No content means no tidbit task
+    assert "tidbit_task_id" not in result
+    mock_celery.send_task.assert_not_called()
 
 
 # =============================================================================
@@ -190,25 +247,27 @@ async def test_add_person_minimal(db_session):
 
 @pytest.mark.asyncio
 async def test_update_person_info_success(db_session, sample_people):
-    """Test updating a person's info."""
+    """Test updating a person's identity info.
+
+    With the new synchronous design, update happens directly in the database.
+    """
     from memory.api.MCP.servers.people import update
 
     update_fn = get_fn(update)
-    mock_task = Mock()
-    mock_task.id = "task-789"
 
     with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
-            mock_celery.send_task.return_value = mock_task
-            result = await update_fn(
-                identifier="alice_chen",
-                display_name="Alice M. Chen",
-                notes="Added middle initial",
-            )
+        result = await update_fn(
+            identifier="alice_chen",
+            display_name="Alice M. Chen",
+        )
 
-    assert result["status"] == "queued"
-    assert result["task_id"] == "task-789"
+    assert result["status"] == "updated"
     assert result["identifier"] == "alice_chen"
+    assert "person_id" in result
+
+    # Verify the update was applied
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert alice.display_name == "Alice M. Chen"
 
 
 @pytest.mark.asyncio
@@ -227,31 +286,28 @@ async def test_update_person_info_not_found(db_session, sample_people):
 
 @pytest.mark.asyncio
 async def test_update_person_info_with_merge_params(db_session, sample_people):
-    """Test that update passes all merge parameters."""
+    """Test that update merges aliases and contact_info correctly."""
     from memory.api.MCP.servers.people import update
 
     update_fn = get_fn(update)
-    mock_task = Mock()
-    mock_task.id = "task-merge"
 
     with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
-            mock_celery.send_task.return_value = mock_task
-            await update_fn(
-                identifier="alice_chen",
-                aliases=["@alice_new"],
-                contact_info={"slack": "@alice"},
-                tags=["leadership"],
-                notes="Promoted to senior",
-                replace_notes=False,
-            )
+        result = await update_fn(
+            identifier="alice_chen",
+            aliases=["@alice_new"],
+            contact_info={"slack": "@alice"},
+        )
 
-    call_kwargs = mock_celery.send_task.call_args[1]["kwargs"]
-    assert call_kwargs["aliases"] == ["@alice_new"]
-    assert call_kwargs["contact_info"] == {"slack": "@alice"}
-    assert call_kwargs["tags"] == ["leadership"]
-    assert call_kwargs["notes"] == "Promoted to senior"
-    assert call_kwargs["replace_notes"] is False
+    assert result["status"] == "updated"
+
+    # Verify the merge was applied
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    # Aliases should be merged (union of old and new)
+    assert "@alice_new" in alice.aliases
+    assert "@alice_c" in alice.aliases  # Original alias preserved
+    # Contact info should be deep merged
+    assert alice.contact_info["slack"] == "@alice"
+    assert alice.contact_info["email"] == "alice@example.com"  # Original preserved
 
 
 # =============================================================================
@@ -273,8 +329,9 @@ async def test_get_person_found(db_session, sample_people):
     assert result["display_name"] == "Alice Chen"
     assert result["aliases"] == ["@alice_c", "alice.chen@work.com"]
     assert result["contact_info"] == {"email": "alice@example.com", "phone": "555-1234"}
-    assert result["tags"] == ["work", "engineering"]
-    assert "Tech lead" in result["notes"]
+    # Tidbits are returned separately
+    assert "tidbits" in result
+    assert len(result["tidbits"]) > 0
 
 
 @pytest.mark.asyncio
@@ -311,19 +368,6 @@ async def test_list_people_no_filters(db_session, sample_people):
 
 
 @pytest.mark.asyncio
-async def test_list_people_filter_by_tags(db_session, sample_people):
-    """Test filtering by tags."""
-    from memory.api.MCP.servers.people import list_people
-
-    list_people_fn = get_fn(list_people)
-    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        results = await list_people_fn(tags=["work"])
-
-    assert len(results) == 2
-    assert all("work" in r["tags"] for r in results)
-
-
-@pytest.mark.asyncio
 async def test_list_people_filter_by_search(db_session, sample_people):
     """Test filtering by search term."""
     from memory.api.MCP.servers.people import list_people
@@ -334,19 +378,6 @@ async def test_list_people_filter_by_search(db_session, sample_people):
 
     assert len(results) == 1
     assert results[0]["identifier"] == "alice_chen"
-
-
-@pytest.mark.asyncio
-async def test_list_people_search_in_notes(db_session, sample_people):
-    """Test that search works on notes content."""
-    from memory.api.MCP.servers.people import list_people
-
-    list_people_fn = get_fn(list_people)
-    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        results = await list_people_fn(search="climbing")
-
-    assert len(results) == 1
-    assert results[0]["identifier"] == "charlie_jones"
 
 
 @pytest.mark.asyncio
@@ -376,16 +407,59 @@ async def test_list_people_limit_max_enforced(db_session, sample_people):
 
 
 @pytest.mark.asyncio
-async def test_list_people_combined_filters(db_session, sample_people):
-    """Test combining tag and search filters."""
+async def test_list_people_filter_by_tags(db_session, sample_people):
+    """Test filtering people by tidbit tags."""
     from memory.api.MCP.servers.people import list_people
 
     list_people_fn = get_fn(list_people)
     with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        results = await list_people_fn(tags=["work"], search="chen")
+        # Filter by 'work' tag - should match Alice and Bob
+        results = await list_people_fn(tags=["work"])
+
+    identifiers = {p["identifier"] for p in results}
+    assert identifiers == {"alice_chen", "bob_smith"}
+
+
+@pytest.mark.asyncio
+async def test_list_people_filter_by_multiple_tags(db_session, sample_people):
+    """Test filtering people by multiple tags (OR logic)."""
+    from memory.api.MCP.servers.people import list_people
+
+    list_people_fn = get_fn(list_people)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        # Filter by 'engineering' or 'climbing' - should match Alice and Charlie
+        results = await list_people_fn(tags=["engineering", "climbing"])
+
+    identifiers = {p["identifier"] for p in results}
+    assert identifiers == {"alice_chen", "charlie_jones"}
+
+
+@pytest.mark.asyncio
+async def test_list_people_filter_by_unique_tag(db_session, sample_people):
+    """Test filtering by a tag unique to one person."""
+    from memory.api.MCP.servers.people import list_people
+
+    list_people_fn = get_fn(list_people)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        # Filter by 'design' tag - should only match Bob
+        results = await list_people_fn(tags=["design"])
 
     assert len(results) == 1
-    assert results[0]["identifier"] == "alice_chen"
+    assert results[0]["identifier"] == "bob_smith"
+
+
+@pytest.mark.asyncio
+async def test_list_people_search_tidbit_content(db_session, sample_people):
+    """Test searching in tidbit content."""
+    from memory.api.MCP.servers.people import list_people
+
+    list_people_fn = get_fn(list_people)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        # Search for 'climbing' which is in Charlie's tidbit content
+        results = await list_people_fn(search="climbing")
+
+    assert len(results) == 1
+    assert results[0]["identifier"] == "charlie_jones"
 
 
 # =============================================================================
@@ -395,11 +469,20 @@ async def test_list_people_combined_filters(db_session, sample_people):
 
 @pytest.mark.asyncio
 async def test_delete_person_success(db_session, sample_people):
-    """Test deleting a person."""
+    """Test deleting a person (as admin)."""
     from memory.api.MCP.servers.people import delete
+    from unittest.mock import MagicMock
+
+    # Create admin user mock
+    admin_user = MagicMock()
+    admin_user.id = 1
+    admin_user.scopes = ["admin"]
 
     delete_fn = get_fn(delete)
-    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=admin_user),
+    ):
         result = await delete_fn(identifier="bob_smith")
 
     assert result["deleted"] is True
@@ -412,12 +495,45 @@ async def test_delete_person_success(db_session, sample_people):
 
 
 @pytest.mark.asyncio
+async def test_delete_person_not_admin(db_session, sample_people):
+    """Test that non-admin users cannot delete people."""
+    from memory.api.MCP.servers.people import delete
+    from unittest.mock import MagicMock
+
+    # Create non-admin user mock
+    regular_user = MagicMock()
+    regular_user.id = 1
+    regular_user.scopes = ["people"]
+
+    delete_fn = get_fn(delete)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=regular_user),
+    ):
+        with pytest.raises(PermissionError, match="Only admins can delete people"):
+            await delete_fn(identifier="bob_smith")
+
+    # Verify person was NOT deleted
+    remaining = db_session.query(Person).filter_by(identifier="bob_smith").first()
+    assert remaining is not None
+
+
+@pytest.mark.asyncio
 async def test_delete_person_not_found(db_session, sample_people):
     """Test deleting a person that doesn't exist."""
     from memory.api.MCP.servers.people import delete
+    from unittest.mock import MagicMock
+
+    # Create admin user mock
+    admin_user = MagicMock()
+    admin_user.id = 1
+    admin_user.scopes = ["admin"]
 
     delete_fn = get_fn(delete)
-    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=admin_user),
+    ):
         with pytest.raises(ValueError, match="not found"):
             await delete_fn(identifier="nonexistent_person")
 
@@ -438,12 +554,12 @@ def test_person_to_dict(sample_people):
     assert result["display_name"] == "Alice Chen"
     assert result["aliases"] == ["@alice_c", "alice.chen@work.com"]
     assert result["contact_info"] == {"email": "alice@example.com", "phone": "555-1234"}
-    assert result["tags"] == ["work", "engineering"]
-    assert result["notes"] == "Tech lead on Platform team. Very thorough in code reviews."
     assert result["created_at"] is not None
+    # Note: _person_to_dict does NOT include tidbits (see docstring)
+    assert "tidbits" not in result
 
 
-def test_person_to_dict_empty_fields(db_session):
+def test_person_to_dict_empty_fields(db_session, qdrant):
     """Test _person_to_dict with empty optional fields."""
     from memory.api.MCP.servers.people import _person_to_dict
 
@@ -452,11 +568,6 @@ def test_person_to_dict_empty_fields(db_session):
         display_name="Empty Person",
         aliases=[],
         contact_info={},
-        tags=[],
-        content=None,
-        modality="person",
-        sha256=create_content_hash("person:empty_person"),
-        size=0,
     )
 
     result = _person_to_dict(person)
@@ -464,36 +575,13 @@ def test_person_to_dict_empty_fields(db_session):
     assert result["identifier"] == "empty_person"
     assert result["aliases"] == []
     assert result["contact_info"] == {}
-    assert result["tags"] == []
-    assert result["notes"] is None
+    # Note: _person_to_dict does NOT include tidbits (see docstring)
+    assert "tidbits" not in result
 
 
 # =============================================================================
 # Parametrized tests
 # =============================================================================
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "tag,expected_count",
-    [
-        ("work", 2),
-        ("engineering", 1),
-        ("design", 1),
-        ("friend", 1),
-        ("climbing", 1),
-        ("nonexistent", 0),
-    ],
-)
-async def test_list_people_various_tags(db_session, sample_people, tag, expected_count):
-    """Test filtering by various tags."""
-    from memory.api.MCP.servers.people import list_people
-
-    list_people_fn = get_fn(list_people)
-    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
-        results = await list_people_fn(tags=[tag])
-
-    assert len(results) == expected_count
 
 
 @pytest.mark.asyncio
@@ -505,8 +593,6 @@ async def test_list_people_various_tags(db_session, sample_people, tag, expected
         ("smith", ["bob_smith"]),
         ("chen", ["alice_chen"]),
         ("jones", ["charlie_jones"]),
-        ("example.com", []),  # Not searching in contact_info
-        ("UX", ["bob_smith"]),  # Case insensitive search in notes
         ("@alice_c", ["alice_chen"]),  # Search in aliases
         ("alice.chen@work.com", ["alice_chen"]),  # Search in aliases (email format)
         ("@bobsmith", ["bob_smith"]),  # Search in aliases
@@ -539,3 +625,280 @@ async def test_get_person_by_alias(db_session, sample_people):
     assert result is not None
     assert result["identifier"] == "alice_chen"
     assert result["display_name"] == "Alice Chen"
+
+
+# =============================================================================
+# Tests for new tidbit tools
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_add_tidbit_success(db_session, sample_people):
+    """Test adding a tidbit to an existing person."""
+    from memory.api.MCP.servers.people import add_tidbit
+
+    add_tidbit_fn = get_fn(add_tidbit)
+    mock_task = Mock()
+    mock_task.id = "task-tidbit-123"
+
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
+            mock_celery.send_task.return_value = mock_task
+            result = await add_tidbit_fn(
+                identifier="alice_chen",
+                content="Excellent at mentoring junior engineers",
+                tidbit_type="observation",
+                tags=["leadership", "mentoring"],
+            )
+
+    assert result["status"] == "queued"
+    assert result["task_id"] == "task-tidbit-123"
+    assert result["person_identifier"] == "alice_chen"
+
+
+@pytest.mark.asyncio
+async def test_add_tidbit_person_not_found(db_session, sample_people):
+    """Test adding a tidbit to a non-existent person."""
+    from memory.api.MCP.servers.people import add_tidbit
+
+    add_tidbit_fn = get_fn(add_tidbit)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        with pytest.raises(ValueError, match="not found"):
+            await add_tidbit_fn(
+                identifier="nonexistent_person",
+                content="Some content",
+            )
+
+
+@pytest.mark.asyncio
+async def test_list_tidbits_for_person(db_session, sample_people):
+    """Test listing tidbits for a person."""
+    from memory.api.MCP.servers.people import list_tidbits
+
+    list_tidbits_fn = get_fn(list_tidbits)
+    with patch("memory.api.MCP.servers.people.make_session", return_value=db_session):
+        results = await list_tidbits_fn(identifier="alice_chen")
+
+    assert len(results) > 0
+    assert all(t["person_identifier"] == "alice_chen" for t in results)
+
+
+# =============================================================================
+# Tests for update_tidbit
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_update_tidbit_as_creator(db_session, sample_people):
+    """Test updating a tidbit as the creator."""
+    from memory.api.MCP.servers.people import update_tidbit
+
+    # Get an existing tidbit
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[0].id).first()
+    tidbit.creator_id = 1  # Set a creator_id
+    db_session.commit()
+
+    # Create user mock that matches creator
+    creator_user = MagicMock()
+    creator_user.id = 1
+    creator_user.scopes = ["people"]
+
+    update_tidbit_fn = get_fn(update_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=creator_user),
+    ):
+        result = await update_tidbit_fn(
+            tidbit_id=tidbit.id,
+            content="Updated content by creator",
+            tags=["new_tag"],
+        )
+
+    assert result["id"] == tidbit.id
+    assert result["content"] == "Updated content by creator"
+    assert result["tags"] == ["new_tag"]
+
+    # Verify in DB
+    db_session.refresh(tidbit)
+    assert tidbit.content == "Updated content by creator"
+    assert tidbit.tags == ["new_tag"]
+
+
+@pytest.mark.asyncio
+async def test_update_tidbit_as_admin(db_session, sample_people):
+    """Test updating a tidbit as admin (not the creator)."""
+    from memory.api.MCP.servers.people import update_tidbit
+
+    # Get an existing tidbit with a different creator
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[0].id).first()
+    tidbit.creator_id = 999  # Different creator
+    db_session.commit()
+
+    # Admin user
+    admin_user = MagicMock()
+    admin_user.id = 1
+    admin_user.scopes = ["admin"]
+
+    update_tidbit_fn = get_fn(update_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=admin_user),
+    ):
+        result = await update_tidbit_fn(
+            tidbit_id=tidbit.id,
+            content="Updated by admin",
+        )
+
+    assert result["content"] == "Updated by admin"
+
+
+@pytest.mark.asyncio
+async def test_update_tidbit_permission_denied(db_session, sample_people):
+    """Test that non-creator non-admin cannot update tidbit."""
+    from memory.api.MCP.servers.people import update_tidbit
+
+    # Get an existing tidbit with a different creator
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[0].id).first()
+    tidbit.creator_id = 999  # Different creator
+    db_session.commit()
+
+    # Non-admin user who is not the creator
+    other_user = MagicMock()
+    other_user.id = 1
+    other_user.scopes = ["people"]
+
+    update_tidbit_fn = get_fn(update_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=other_user),
+    ):
+        with pytest.raises(PermissionError, match="You can only edit tidbits you created"):
+            await update_tidbit_fn(
+                tidbit_id=tidbit.id,
+                content="Should fail",
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_tidbit_not_found(db_session, sample_people):
+    """Test updating a non-existent tidbit."""
+    from memory.api.MCP.servers.people import update_tidbit
+
+    user = MagicMock()
+    user.id = 1
+    user.scopes = ["admin"]
+
+    update_tidbit_fn = get_fn(update_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=user),
+    ):
+        with pytest.raises(ValueError, match="not found"):
+            await update_tidbit_fn(
+                tidbit_id=999999,
+                content="Should fail",
+            )
+
+
+# =============================================================================
+# Tests for delete_tidbit
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_delete_tidbit_as_creator(db_session, sample_people):
+    """Test deleting a tidbit as the creator."""
+    from memory.api.MCP.servers.people import delete_tidbit
+
+    # Get an existing tidbit
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[1].id).first()
+    tidbit_id = tidbit.id
+    tidbit.creator_id = 1  # Set a creator_id
+    db_session.commit()
+
+    # Creator user
+    creator_user = MagicMock()
+    creator_user.id = 1
+    creator_user.scopes = ["people"]
+
+    delete_tidbit_fn = get_fn(delete_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=creator_user),
+    ):
+        result = await delete_tidbit_fn(tidbit_id=tidbit_id)
+
+    assert result["deleted"] is True
+    assert result["tidbit_id"] == tidbit_id
+    assert result["person_identifier"] == "bob_smith"
+
+    # Verify deleted
+    assert db_session.get(PersonTidbit, tidbit_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_tidbit_as_admin(db_session, sample_people):
+    """Test deleting a tidbit as admin (not the creator)."""
+    from memory.api.MCP.servers.people import delete_tidbit
+
+    # Get an existing tidbit with a different creator
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[2].id).first()
+    tidbit_id = tidbit.id
+    tidbit.creator_id = 999  # Different creator
+    db_session.commit()
+
+    # Admin user
+    admin_user = MagicMock()
+    admin_user.id = 1
+    admin_user.scopes = ["admin"]
+
+    delete_tidbit_fn = get_fn(delete_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=admin_user),
+    ):
+        result = await delete_tidbit_fn(tidbit_id=tidbit_id)
+
+    assert result["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_tidbit_permission_denied(db_session, sample_people):
+    """Test that non-creator non-admin cannot delete tidbit."""
+    from memory.api.MCP.servers.people import delete_tidbit
+
+    # Get an existing tidbit with a different creator
+    tidbit = db_session.query(PersonTidbit).filter(PersonTidbit.person_id == sample_people[0].id).first()
+    tidbit.creator_id = 999  # Different creator
+    db_session.commit()
+
+    # Non-admin user who is not the creator
+    other_user = MagicMock()
+    other_user.id = 1
+    other_user.scopes = ["people"]
+
+    delete_tidbit_fn = get_fn(delete_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=other_user),
+    ):
+        with pytest.raises(PermissionError, match="You can only delete tidbits you created"):
+            await delete_tidbit_fn(tidbit_id=tidbit.id)
+
+
+@pytest.mark.asyncio
+async def test_delete_tidbit_not_found(db_session, sample_people):
+    """Test deleting a non-existent tidbit."""
+    from memory.api.MCP.servers.people import delete_tidbit
+
+    user = MagicMock()
+    user.id = 1
+    user.scopes = ["admin"]
+
+    delete_tidbit_fn = get_fn(delete_tidbit)
+    with (
+        patch("memory.api.MCP.servers.people.make_session", return_value=db_session),
+        patch("memory.api.MCP.servers.people.get_current_user", return_value=user),
+    ):
+        with pytest.raises(ValueError, match="not found"):
+            await delete_tidbit_fn(tidbit_id=999999)

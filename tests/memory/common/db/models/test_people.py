@@ -1,8 +1,8 @@
-"""Tests for the Person model."""
+"""Tests for the Person and PersonTidbit models."""
 
 import pytest
 
-from memory.common.db.models import Person
+from memory.common.db.models import Person, PersonTidbit
 from memory.common.content_processing import create_content_hash
 
 
@@ -14,10 +14,6 @@ def person_data():
         "display_name": "Alice Chen",
         "aliases": ["@alice_c", "alice.chen@work.com"],
         "contact_info": {"email": "alice@example.com", "phone": "555-1234"},
-        "tags": ["work", "engineering"],
-        "content": "Tech lead on Platform team. Very thorough in code reviews.",
-        "modality": "person",
-        "mime_type": "text/plain",
     }
 
 
@@ -27,54 +23,32 @@ def minimal_person_data():
     return {
         "identifier": "bob_smith",
         "display_name": "Bob Smith",
-        "modality": "person",
     }
 
 
 def test_person_creation(person_data):
     """Test creating a Person with all fields."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
+    person = Person(**person_data)
 
     assert person.identifier == "alice_chen"
     assert person.display_name == "Alice Chen"
     assert person.aliases == ["@alice_c", "alice.chen@work.com"]
     assert person.contact_info == {"email": "alice@example.com", "phone": "555-1234"}
-    assert person.tags == ["work", "engineering"]
-    assert person.content == "Tech lead on Platform team. Very thorough in code reviews."
-    assert person.modality == "person"
 
 
 def test_person_creation_minimal(minimal_person_data):
     """Test creating a Person with minimal fields."""
-    sha256 = create_content_hash(f"person:{minimal_person_data['identifier']}")
-    person = Person(**minimal_person_data, sha256=sha256, size=0)
+    person = Person(**minimal_person_data)
 
     assert person.identifier == "bob_smith"
     assert person.display_name == "Bob Smith"
     assert person.aliases == [] or person.aliases is None
     assert person.contact_info == {} or person.contact_info is None
-    assert person.tags == [] or person.tags is None
-    assert person.content is None
-
-
-def test_person_as_payload(person_data):
-    """Test the as_payload method."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
-
-    payload = person.as_payload()
-
-    assert payload["identifier"] == "alice_chen"
-    assert payload["display_name"] == "Alice Chen"
-    assert payload["aliases"] == ["@alice_c", "alice.chen@work.com"]
-    assert payload["contact_info"] == {"email": "alice@example.com", "phone": "555-1234"}
 
 
 def test_person_display_contents(person_data):
     """Test the display_contents property."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
+    person = Person(**person_data)
 
     contents = person.display_contents
 
@@ -82,85 +56,32 @@ def test_person_display_contents(person_data):
     assert contents["display_name"] == "Alice Chen"
     assert contents["aliases"] == ["@alice_c", "alice.chen@work.com"]
     assert contents["contact_info"] == {"email": "alice@example.com", "phone": "555-1234"}
-    assert contents["notes"] == "Tech lead on Platform team. Very thorough in code reviews."
-    assert contents["tags"] == ["work", "engineering"]
-
-
-def test_person_chunk_contents(person_data):
-    """Test the _chunk_contents method generates searchable chunks."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
-
-    chunks = person._chunk_contents()
-
-    assert len(chunks) > 0
-    chunk_text = str(chunks[0].data[0])
-
-    # Should include display name
-    assert "Alice Chen" in chunk_text
-    # Should include aliases
-    assert "@alice_c" in chunk_text
-    # Should include tags
-    assert "work" in chunk_text
-    # Should include notes/content
-    assert "Tech lead" in chunk_text
-
-
-def test_person_chunk_contents_minimal(minimal_person_data):
-    """Test _chunk_contents with minimal data."""
-    sha256 = create_content_hash(f"person:{minimal_person_data['identifier']}")
-    person = Person(**minimal_person_data, sha256=sha256, size=0)
-
-    chunks = person._chunk_contents()
-
-    assert len(chunks) > 0
-    chunk_text = str(chunks[0].data[0])
-    assert "Bob Smith" in chunk_text
-
-
-def test_person_get_collections():
-    """Test that Person returns correct collections."""
-    collections = Person.get_collections()
-
-    assert collections == ["person"]
-
-
-def test_person_polymorphic_identity():
-    """Test that Person has correct polymorphic identity."""
-    assert Person.__mapper_args__["polymorphic_identity"] == "person"
 
 
 @pytest.mark.parametrize(
-    "identifier,display_name,aliases,tags",
+    "identifier,display_name,aliases",
     [
-        ("john_doe", "John Doe", [], []),
-        ("jane_smith", "Jane Smith", ["@jane"], ["friend"]),
-        ("bob_jones", "Bob Jones", ["@bob", "bobby"], ["work", "climbing", "london"]),
+        ("john_doe", "John Doe", []),
+        ("jane_smith", "Jane Smith", ["@jane"]),
+        ("bob_jones", "Bob Jones", ["@bob", "bobby"]),
         (
             "alice_wong",
             "Alice Wong",
             ["@alice", "alice@work.com", "Alice W."],
-            ["family", "close"],
         ),
     ],
 )
-def test_person_various_configurations(identifier, display_name, aliases, tags):
+def test_person_various_configurations(identifier, display_name, aliases):
     """Test Person creation with various configurations."""
-    sha256 = create_content_hash(f"person:{identifier}")
     person = Person(
         identifier=identifier,
         display_name=display_name,
         aliases=aliases,
-        tags=tags,
-        modality="person",
-        sha256=sha256,
-        size=0,
     )
 
     assert person.identifier == identifier
     assert person.display_name == display_name
     assert person.aliases == aliases
-    assert person.tags == tags
 
 
 def test_person_contact_info_flexible():
@@ -177,14 +98,10 @@ def test_person_contact_info_flexible():
         },
     }
 
-    sha256 = create_content_hash("person:test_user")
     person = Person(
         identifier="test_user",
         display_name="Test User",
         contact_info=contact_info,
-        modality="person",
-        sha256=sha256,
-        size=0,
     )
 
     assert person.contact_info == contact_info
@@ -193,18 +110,11 @@ def test_person_contact_info_flexible():
 
 def test_person_in_db(db_session, qdrant):
     """Test Person persistence in database."""
-    sha256 = create_content_hash("person:db_test_user")
     person = Person(
         identifier="db_test_user",
         display_name="DB Test User",
         aliases=["@dbtest"],
         contact_info={"email": "dbtest@example.com"},
-        tags=["test"],
-        content="Test notes",
-        modality="person",
-        mime_type="text/plain",
-        sha256=sha256,
-        size=10,
     )
 
     db_session.add(person)
@@ -217,20 +127,13 @@ def test_person_in_db(db_session, qdrant):
     assert retrieved.display_name == "DB Test User"
     assert retrieved.aliases == ["@dbtest"]
     assert retrieved.contact_info == {"email": "dbtest@example.com"}
-    assert retrieved.tags == ["test"]
-    assert retrieved.content == "Test notes"
 
 
 def test_person_unique_identifier(db_session, qdrant):
     """Test that identifier must be unique."""
-    sha256 = create_content_hash("person:unique_test")
-
     person1 = Person(
         identifier="unique_test",
         display_name="Person 1",
-        modality="person",
-        sha256=sha256,
-        size=0,
     )
     db_session.add(person1)
     db_session.commit()
@@ -239,49 +142,11 @@ def test_person_unique_identifier(db_session, qdrant):
     person2 = Person(
         identifier="unique_test",
         display_name="Person 2",
-        modality="person",
-        sha256=create_content_hash("person:unique_test_2"),
-        size=0,
     )
     db_session.add(person2)
 
     with pytest.raises(Exception):  # Should raise IntegrityError
         db_session.commit()
-
-
-def test_person_to_profile_markdown(person_data):
-    """Test serializing Person to profile markdown."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
-
-    markdown = person.to_profile_markdown()
-
-    # Should have YAML frontmatter
-    assert markdown.startswith("---")
-    assert "identifier: alice_chen" in markdown
-    assert "display_name: Alice Chen" in markdown
-    assert "aliases:" in markdown
-    assert "- '@alice_c'" in markdown or "- @alice_c" in markdown
-    assert "contact_info:" in markdown
-    assert "email: alice@example.com" in markdown
-    assert "tags:" in markdown
-    assert "- work" in markdown
-    # Should have content after frontmatter
-    assert "Tech lead on Platform team" in markdown
-
-
-def test_person_to_profile_markdown_minimal(minimal_person_data):
-    """Test serializing minimal Person to profile markdown."""
-    sha256 = create_content_hash(f"person:{minimal_person_data['identifier']}")
-    person = Person(**minimal_person_data, sha256=sha256, size=0)
-
-    markdown = person.to_profile_markdown()
-
-    assert markdown.startswith("---")
-    assert "identifier: bob_smith" in markdown
-    assert "display_name: Bob Smith" in markdown
-    # Should not have empty arrays/dicts in output
-    assert "aliases:" not in markdown or "aliases: []" not in markdown
 
 
 def test_person_from_profile_markdown():
@@ -338,31 +203,11 @@ display_name: Jane Smith
     assert "notes" not in data or data.get("notes") is None
 
 
-def test_person_profile_roundtrip(person_data):
-    """Test that Person -> markdown -> dict preserves data."""
-    sha256 = create_content_hash(f"person:{person_data['identifier']}")
-    person = Person(**person_data, sha256=sha256, size=100)
-
-    markdown = person.to_profile_markdown()
-    data = Person.from_profile_markdown(markdown)
-
-    assert data["identifier"] == person.identifier
-    assert data["display_name"] == person.display_name
-    assert set(data["aliases"]) == set(person.aliases)
-    assert data["contact_info"] == person.contact_info
-    assert set(data["tags"]) == set(person.tags)
-    assert data["notes"] == person.content
-
-
 def test_person_get_profile_path():
     """Test getting the profile path for a person."""
-    sha256 = create_content_hash("person:test_user")
     person = Person(
         identifier="test_user",
         display_name="Test User",
-        modality="person",
-        sha256=sha256,
-        size=0,
     )
 
     path = person.get_profile_path()
@@ -377,17 +222,11 @@ def test_person_save_profile_note(tmp_path):
     """Test saving Person data to a profile note file."""
     from unittest.mock import patch
 
-    sha256 = create_content_hash("person:file_test_user")
     person = Person(
         identifier="file_test_user",
         display_name="File Test User",
         aliases=["@filetest"],
         contact_info={"email": "filetest@example.com"},
-        tags=["test"],
-        content="Test notes content.",
-        modality="person",
-        sha256=sha256,
-        size=20,
     )
 
     with patch("memory.common.settings.NOTES_STORAGE_DIR", tmp_path):
@@ -403,20 +242,15 @@ def test_person_save_profile_note(tmp_path):
         assert "display_name: File Test User" in content
         assert "@filetest" in content
         assert "email: filetest@example.com" in content
-        assert "Test notes content." in content
 
 
 def test_person_save_profile_note_creates_directory(tmp_path):
     """Test that save_profile_note creates the profiles directory if needed."""
     from unittest.mock import patch
 
-    sha256 = create_content_hash("person:dir_test_user")
     person = Person(
         identifier="dir_test_user",
         display_name="Dir Test User",
-        modality="person",
-        sha256=sha256,
-        size=0,
     )
 
     # profiles directory doesn't exist yet
@@ -429,3 +263,231 @@ def test_person_save_profile_note_creates_directory(tmp_path):
         # Directory should now exist
         assert profiles_dir.exists()
         assert (profiles_dir / "dir_test_user.md").exists()
+
+
+# ============== PersonTidbit Tests ==============
+
+
+@pytest.fixture
+def tidbit_data():
+    """Standard tidbit test data."""
+    sha256 = create_content_hash("tidbit:test")
+    return {
+        "person_id": 1,  # Will be set in tests
+        "creator_id": 1,
+        "tidbit_type": "note",
+        "content": "Very thorough in code reviews. Prefers morning meetings.",
+        "tags": ["work", "preferences"],
+        "modality": "person_tidbit",
+        "mime_type": "text/plain",
+        "sha256": sha256,
+        "size": 50,
+        "sensitivity": "basic",
+    }
+
+
+def test_tidbit_creation(tidbit_data):
+    """Test creating a PersonTidbit with all fields."""
+    tidbit = PersonTidbit(**tidbit_data)
+
+    assert tidbit.person_id == 1
+    assert tidbit.creator_id == 1
+    assert tidbit.tidbit_type == "note"
+    assert tidbit.content == "Very thorough in code reviews. Prefers morning meetings."
+    assert tidbit.tags == ["work", "preferences"]
+    assert tidbit.sensitivity == "basic"
+
+
+def test_tidbit_polymorphic_identity():
+    """Test that PersonTidbit has correct polymorphic identity."""
+    assert PersonTidbit.__mapper_args__["polymorphic_identity"] == "person_tidbit"
+
+
+def test_tidbit_get_collections():
+    """Test that PersonTidbit returns correct collections."""
+    collections = PersonTidbit.get_collections()
+    assert collections == ["person_tidbit"]
+
+
+def test_tidbit_in_db(db_session, qdrant):
+    """Test PersonTidbit persistence with Person relationship."""
+    # Create person first
+    person = Person(
+        identifier="tidbit_test_user",
+        display_name="Tidbit Test User",
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Create tidbit
+    sha256 = create_content_hash("tidbit:db_test")
+    tidbit = PersonTidbit(
+        person_id=person.id,
+        creator_id=None,
+        tidbit_type="note",
+        content="Test tidbit content",
+        tags=["test"],
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=sha256,
+        size=20,
+        sensitivity="basic",
+    )
+    db_session.add(tidbit)
+    db_session.commit()
+
+    # Query it back
+    retrieved = db_session.query(PersonTidbit).filter_by(person_id=person.id).first()
+
+    assert retrieved is not None
+    assert retrieved.content == "Test tidbit content"
+    assert retrieved.tidbit_type == "note"
+    assert retrieved.person.identifier == "tidbit_test_user"
+
+
+def test_person_tidbits_relationship(db_session, qdrant):
+    """Test Person -> tidbits relationship."""
+    # Create person
+    person = Person(
+        identifier="multi_tidbit_user",
+        display_name="Multi Tidbit User",
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Create multiple tidbits
+    for i, tidbit_type in enumerate(["note", "preference", "fact"]):
+        sha256 = create_content_hash(f"tidbit:multi_{i}")
+        tidbit = PersonTidbit(
+            person_id=person.id,
+            tidbit_type=tidbit_type,
+            content=f"Content for {tidbit_type}",
+            modality="person_tidbit",
+            mime_type="text/plain",
+            sha256=sha256,
+            size=20,
+            sensitivity="basic",
+        )
+        db_session.add(tidbit)
+
+    db_session.commit()
+
+    # Query person with tidbits
+    retrieved = db_session.query(Person).filter_by(identifier="multi_tidbit_user").first()
+
+    assert retrieved is not None
+    assert len(retrieved.tidbits) == 3
+    tidbit_types = {t.tidbit_type for t in retrieved.tidbits}
+    assert tidbit_types == {"note", "preference", "fact"}
+
+
+def test_tidbit_cascade_delete(db_session, qdrant):
+    """Test that deleting a Person cascades to tidbits."""
+    # Create person
+    person = Person(
+        identifier="cascade_test_user",
+        display_name="Cascade Test User",
+    )
+    db_session.add(person)
+    db_session.flush()
+    person_id = person.id
+
+    # Create tidbit
+    sha256 = create_content_hash("tidbit:cascade_test")
+    tidbit = PersonTidbit(
+        person_id=person.id,
+        tidbit_type="note",
+        content="Should be deleted with person",
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=sha256,
+        size=30,
+        sensitivity="basic",
+    )
+    db_session.add(tidbit)
+    db_session.commit()
+    tidbit_id = tidbit.id
+
+    # Delete person
+    db_session.delete(person)
+    db_session.commit()
+
+    # Verify tidbit is also deleted
+    assert db_session.get(Person, person_id) is None
+    assert db_session.get(PersonTidbit, tidbit_id) is None
+
+
+def test_tidbit_chunk_contents(db_session, qdrant):
+    """Test that PersonTidbit generates searchable chunks."""
+    # Create person
+    person = Person(
+        identifier="chunk_test_user",
+        display_name="Chunk Test User",
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Create tidbit
+    sha256 = create_content_hash("tidbit:chunk_test")
+    tidbit = PersonTidbit(
+        person_id=person.id,
+        tidbit_type="preference",
+        content="Prefers morning meetings. Drinks black coffee.",
+        tags=["scheduling", "food"],
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=sha256,
+        size=50,
+        sensitivity="basic",
+    )
+    db_session.add(tidbit)
+    db_session.flush()
+
+    # Attach person relationship
+    tidbit.person = person
+
+    chunks = tidbit._chunk_contents()
+
+    assert len(chunks) > 0
+    chunk_text = str(chunks[0].data[0])
+
+    # Should include person name
+    assert "Chunk Test User" in chunk_text
+    # Should include type
+    assert "preference" in chunk_text
+    # Should include content
+    assert "morning meetings" in chunk_text
+
+
+def test_tidbit_access_control_fields(db_session, qdrant):
+    """Test that PersonTidbit has access control fields."""
+    # Create person
+    person = Person(
+        identifier="access_test_user",
+        display_name="Access Test User",
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Create tidbit with access control
+    sha256 = create_content_hash("tidbit:access_test")
+    tidbit = PersonTidbit(
+        person_id=person.id,
+        creator_id=42,
+        tidbit_type="note",
+        content="Private note",
+        modality="person_tidbit",
+        mime_type="text/plain",
+        sha256=sha256,
+        size=12,
+        project_id=None,  # Creator-only
+        sensitivity="confidential",
+    )
+    db_session.add(tidbit)
+    db_session.commit()
+
+    retrieved = db_session.get(PersonTidbit, tidbit.id)
+
+    assert retrieved.creator_id == 42
+    assert retrieved.project_id is None
+    assert retrieved.sensitivity == "confidential"

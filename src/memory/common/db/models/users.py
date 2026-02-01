@@ -28,7 +28,7 @@ from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot, DiscordUser
-    from memory.common.db.models.people import Person
+    from memory.common.db.models.sources import Person
     from memory.common.db.models.secrets import Secret
     from memory.common.db.models.slack import SlackUserCredentials
 

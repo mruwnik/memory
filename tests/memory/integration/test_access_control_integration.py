@@ -14,8 +14,7 @@ import uuid
 
 import pytest
 
-from memory.common.db.models import Note
-from memory.common.db.models.people import Person
+from memory.common.db.models import Note, Person
 from memory.common.db.models.sources import GithubAccount, GithubRepo, Project
 from memory.common.db.models.users import HumanUser
 
@@ -49,8 +48,6 @@ def person_alice(db_session):
     person = Person(
         identifier=f"alice-test-{uuid.uuid4().hex[:8]}",
         display_name="Alice Test",
-        modality="text",
-        sha256=unique_sha256("alice"),
         contact_info={"email": "alice@example.com"},
     )
     db_session.add(person)
@@ -64,8 +61,6 @@ def person_bob(db_session):
     person = Person(
         identifier=f"bob-test-{uuid.uuid4().hex[:8]}",
         display_name="Bob Test",
-        modality="text",
-        sha256=unique_sha256("bob"),
         contact_info={"email": "bob@example.com"},
     )
     db_session.add(person)
@@ -79,8 +74,6 @@ def person_charlie(db_session):
     person = Person(
         identifier=f"charlie-test-{uuid.uuid4().hex[:8]}",
         display_name="Charlie Test",
-        modality="text",
-        sha256=unique_sha256("charlie"),
         contact_info={"email": "charlie@example.com"},
     )
     db_session.add(person)

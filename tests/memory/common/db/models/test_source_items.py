@@ -16,7 +16,7 @@ from memory.common.db.models.source_items import (
     Note,
     Meeting,
 )
-from memory.common.db.models.people import Person
+from memory.common.db.models import Person
 from tests.data.contents import SAMPLE_MARKDOWN
 
 
@@ -845,9 +845,9 @@ def test_note_data_chunks_long_content():
 
 def test_meeting_as_payload_with_attendees():
     """Test Meeting.as_payload includes 'people' field when attendees exist."""
-    # Create mock people
-    person1 = Person(id=1, identifier="person1", display_name="Alice", sha256=b"p1")
-    person2 = Person(id=2, identifier="person2", display_name="Bob", sha256=b"p2")
+    # Create mock people (Person is now a thin identity record)
+    person1 = Person(id=1, identifier="person1", display_name="Alice")
+    person2 = Person(id=2, identifier="person2", display_name="Bob")
 
     meeting = Meeting(
         sha256=b"test_meeting",
@@ -881,7 +881,7 @@ def test_meeting_as_payload_without_attendees():
 
 def test_meeting_as_payload_single_attendee():
     """Test Meeting.as_payload with single attendee."""
-    person = Person(id=42, identifier="single", display_name="Solo", sha256=b"solo")
+    person = Person(id=42, identifier="single", display_name="Solo")
 
     meeting = Meeting(
         sha256=b"test_meeting_single",

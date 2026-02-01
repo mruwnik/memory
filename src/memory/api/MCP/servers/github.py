@@ -5,8 +5,8 @@ import logging
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_access_token
 
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import UserSession
@@ -61,15 +61,10 @@ async def has_github_account(user_info: dict, session: DBSession | None) -> bool
 
 def _get_current_user_id() -> int:
     """Get the current user ID from the MCP access token."""
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated - no access token")
-
-    with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
-        if not user_session or not user_session.user:
-            raise ValueError("Not authenticated - invalid session")
-        return user_session.user.id
+    user = get_mcp_current_user()
+    if not user or user.id is None:
+        raise ValueError("Not authenticated")
+    return user.id
 
 
 GithubEntityType = Literal["issue", "milestone", "project", "team"]
@@ -273,17 +268,12 @@ async def upsert_issue(
         raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
     owner, repo_name = parts
 
-    # Get user from MCP access token
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated - no access token")
+    user = get_mcp_current_user()
+    if not user or user.id is None:
+        raise ValueError("Not authenticated")
+    user_id = user.id
 
     with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
-        if not user_session or not user_session.user:
-            raise ValueError("Not authenticated - invalid session")
-        user_id = user_session.user.id
-
         client, repo_obj = get_github_client(session, repo, user_id)
 
         # Resolve IDs for labels, assignees, milestone
@@ -405,17 +395,12 @@ async def add_team_member(
         f"github_add_team_member called: org={org}, team={team_slug}, user={username}"
     )
 
-    # Get user from MCP access token
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated - no access token")
+    user = get_mcp_current_user()
+    if not user or user.id is None:
+        raise ValueError("Not authenticated")
+    user_id = user.id
 
     with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
-        if not user_session or not user_session.user:
-            raise ValueError("Not authenticated - invalid session")
-        user_id = user_session.user.id
-
         client = get_github_client_for_org(session, org, user_id)
         if not client:
             raise ValueError(f"No GitHub account configured with access to {org}")
@@ -448,16 +433,12 @@ async def remove_team_member(
         f"github_remove_team_member called: org={org}, team={team_slug}, user={username}"
     )
 
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated - no access token")
+    user = get_mcp_current_user()
+    if not user or user.id is None:
+        raise ValueError("Not authenticated")
+    user_id = user.id
 
     with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
-        if not user_session or not user_session.user:
-            raise ValueError("Not authenticated - invalid session")
-        user_id = user_session.user.id
-
         client = get_github_client_for_org(session, org, user_id)
         if not client:
             raise ValueError(f"No GitHub account configured with access to {org}")
@@ -497,16 +478,12 @@ async def comment_on_issue(
         raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
     owner, repo_name = parts
 
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated - no access token")
+    user = get_mcp_current_user()
+    if not user or user.id is None:
+        raise ValueError("Not authenticated")
+    user_id = user.id
 
     with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
-        if not user_session or not user_session.user:
-            raise ValueError("Not authenticated - invalid session")
-        user_id = user_session.user.id
-
         client, repo_obj = get_github_client(session, repo, user_id)
 
         comment_data = add_issue_comment(client, owner, repo_name, number, body)

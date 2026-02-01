@@ -1,32 +1,27 @@
 """
-Database models for tracking people.
+Database models for tidbits of information about people.
+
+Note: The Person model itself is defined in sources.py to avoid circular imports.
+PersonTidbit extends SourceItem and stores searchable information about people.
 """
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, Annotated, Any, Sequence
-
-import yaml
+from typing import TYPE_CHECKING, Annotated, Sequence
 
 from sqlalchemy import (
-    ARRAY,
     BigInteger,
     ForeignKey,
     Index,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
-    from memory.common.db.models.discord import DiscordUser
-    from memory.common.db.models.sources import Project, GithubUser
+    from memory.common.db.models.sources import Person
     from memory.common.db.models.users import User
 
 import memory.common.extract as extract
-from memory.common import settings
-
 from memory.common.db.models.source_item import (
     SourceItem,
     SourceItemPayload,
@@ -34,6 +29,14 @@ from memory.common.db.models.source_item import (
 
 
 class PersonPayload(SourceItemPayload):
+    """Payload for Person data.
+
+    Note: Person no longer extends SourceItem, but this payload still extends
+    SourceItemPayload for backwards compatibility with code that expects
+    certain fields (tags, project_id, etc.) to be present. These fields
+    are now associated with PersonTidbit instead.
+    """
+
     identifier: Annotated[str, "Unique identifier/slug for the person"]
     display_name: Annotated[str, "Display name of the person"]
     aliases: Annotated[list[str], "Alternative names/handles for the person"]
@@ -41,92 +44,66 @@ class PersonPayload(SourceItemPayload):
     user_id: Annotated[int | None, "Linked system user ID, if any"]
 
 
-class Person(SourceItem):
-    """A person you know or want to track."""
+class PersonTidbitPayload(SourceItemPayload):
+    person_id: Annotated[int, "ID of the associated Person"]
+    person_identifier: Annotated[str, "Identifier of the associated Person"]
+    creator_id: Annotated[int | None, "ID of the user who created this tidbit"]
+    tidbit_type: Annotated[str, "Type of tidbit (note, preference, fact, etc.)"]
 
-    __tablename__ = "people"
+
+class PersonTidbit(SourceItem):
+    """A piece of information about a person.
+
+    Tidbits extend SourceItem, so they:
+    - Have content, tags, project_id, sensitivity (for access control)
+    - Get chunked and embedded for search
+    - Support creator-based access control (via inherited creator_id)
+    """
+
+    __tablename__ = "person_tidbits"
 
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    identifier: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
-    display_name: Mapped[str] = mapped_column(Text, nullable=False)
-    aliases: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), server_default="{}", nullable=False
+    person_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="CASCADE"), nullable=False
     )
-    contact_info: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, server_default="{}", nullable=False
-    )
-
-    # Optional link to system user account
-    user_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    user: Mapped["User | None"] = relationship("User", back_populates="person")
-
-    # Relationship to linked Discord accounts
-    discord_accounts: Mapped[list[DiscordUser]] = relationship(
-        "DiscordUser", back_populates="person"
-    )
-
-    # Relationship to linked GitHub accounts
-    github_accounts: Mapped[list["GithubUser"]] = relationship(
-        "GithubUser", back_populates="person"
-    )
-
-    # Projects this person collaborates on
-    projects: Mapped[list["Project"]] = relationship(
-        "Project", secondary="project_collaborators", back_populates="collaborators"
-    )
-
-    # Note: Slack user data is stored in contact_info["slack"] as:
-    # {"<workspace_id>": {"user_id": "U123", "username": "...", "display_name": "..."}}
-    # This avoids a separate table since Slack IDs are workspace-specific
+    # Note: creator_id is inherited from SourceItem
+    tidbit_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="note")
 
     __mapper_args__ = {
-        "polymorphic_identity": "person",
+        "polymorphic_identity": "person_tidbit",
     }
 
-    __table_args__ = (
-        Index("person_identifier_idx", "identifier"),
-        Index("person_display_name_idx", "display_name"),
-        Index("person_aliases_idx", "aliases", postgresql_using="gin"),
+    # Relationships
+    person: Mapped["Person"] = relationship("Person", back_populates="tidbits")
+    # creator relationship uses inherited creator_id from SourceItem
+    creator: Mapped["User | None"] = relationship(
+        "User", foreign_keys="SourceItem.creator_id"
     )
 
-    def as_payload(self) -> PersonPayload:
-        return PersonPayload(
+    __table_args__ = (
+        Index("person_tidbits_person_idx", "person_id"),
+        Index("person_tidbits_type_idx", "tidbit_type"),
+    )
+
+    def as_payload(self) -> PersonTidbitPayload:
+        return PersonTidbitPayload(
             **super().as_payload(),
-            identifier=self.identifier,
-            display_name=self.display_name,
-            aliases=self.aliases or [],
-            contact_info=self.contact_info or {},
-            user_id=self.user_id,
+            person_id=self.person_id,
+            person_identifier=self.person.identifier if self.person else "",
+            creator_id=self.creator_id,
+            tidbit_type=self.tidbit_type,
         )
 
-    @property
-    def display_contents(self) -> dict:
-        result = {
-            "identifier": self.identifier,
-            "display_name": self.display_name,
-            "aliases": self.aliases,
-            "contact_info": self.contact_info,
-            "notes": self.content,
-            "tags": self.tags,
-        }
-        if self.user_id:
-            result["user_id"] = self.user_id
-            if self.user:
-                result["user_email"] = self.user.email
-                result["user_name"] = self.user.name
-        return result
-
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        """Create searchable chunks from person data."""
-        parts = [f"# {self.display_name}"]
+        """Create searchable chunks from tidbit data."""
+        parts = []
 
-        if self.aliases:
-            aliases_str = ", ".join(self.aliases)
-            parts.append(f"Also known as: {aliases_str}")
+        if self.person:
+            parts.append(f"# About {self.person.display_name}")
+
+        parts.append(f"Type: {self.tidbit_type}")
 
         if self.tags:
             tags_str = ", ".join(self.tags)
@@ -136,75 +113,25 @@ class Person(SourceItem):
             parts.append(f"\n{self.content}")
 
         text = "\n".join(parts)
-        return extract.extract_text(text, modality="person")
+        return extract.extract_text(text, modality="person_tidbit")
 
     @classmethod
     def get_collections(cls) -> list[str]:
-        return ["person"]
+        return ["person_tidbit"]
 
-    def to_profile_markdown(self) -> str:
-        """Serialize Person to markdown with YAML frontmatter."""
-        frontmatter: dict[str, Any] = {
-            "identifier": self.identifier,
-            "display_name": self.display_name,
+    @property
+    def title(self) -> str | None:
+        """Return a display title for this tidbit."""
+        if self.person:
+            return f"{self.person.display_name}: {self.tidbit_type}"
+        return self.tidbit_type
+
+    @property
+    def display_contents(self) -> dict:
+        payload = dict(self.as_payload())
+        payload.pop("source_id", None)
+        return {
+            **payload,
+            "content": self.content,
+            "person_name": self.person.display_name if self.person else None,
         }
-        if self.aliases:
-            frontmatter["aliases"] = list(self.aliases)
-        if self.contact_info:
-            frontmatter["contact_info"] = dict(self.contact_info)
-        if self.tags:
-            frontmatter["tags"] = list(self.tags)
-
-        yaml_str = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True)
-        parts = ["---", yaml_str.strip(), "---"]
-
-        if self.content:
-            parts.append("")
-            parts.append(self.content)
-
-        return "\n".join(parts)
-
-    @classmethod
-    def from_profile_markdown(cls, content: str) -> dict:
-        """Parse profile markdown with YAML frontmatter into Person fields."""
-        # Match YAML frontmatter between --- delimiters
-        frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n?"
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if not match:
-            # No frontmatter, return empty dict
-            return {"notes": content.strip() if content.strip() else None}
-
-        yaml_content = match.group(1)
-        body = content[match.end() :].strip()
-
-        try:
-            data = yaml.safe_load(yaml_content) or {}
-        except yaml.YAMLError:
-            return {"notes": content.strip() if content.strip() else None}
-
-        result = {}
-        if "identifier" in data:
-            result["identifier"] = data["identifier"]
-        if "display_name" in data:
-            result["display_name"] = data["display_name"]
-        if "aliases" in data:
-            result["aliases"] = data["aliases"]
-        if "contact_info" in data:
-            result["contact_info"] = data["contact_info"]
-        if "tags" in data:
-            result["tags"] = data["tags"]
-        if body:
-            result["notes"] = body
-
-        return result
-
-    def get_profile_path(self) -> str:
-        """Get the relative path for this person's profile note."""
-        return f"{settings.PROFILES_FOLDER}/{self.identifier}.md"
-
-    def save_profile_note(self) -> None:
-        """Save this person's data to a profile note file."""
-        path = settings.NOTES_STORAGE_DIR / self.get_profile_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_profile_markdown())

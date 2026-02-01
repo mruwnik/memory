@@ -64,8 +64,9 @@ from memory.common.db.models.observations import (
     ConversationMetrics,
 )
 from memory.common.db.models.people import (
-    Person,
     PersonPayload,
+    PersonTidbit,
+    PersonTidbitPayload,
 )
 from memory.common.db.models.sources import (
     Book,
@@ -80,6 +81,7 @@ from memory.common.db.models.sources import (
     GoogleAccount,
     GoogleFolder,
     CalendarAccount,
+    Person,
 )
 from memory.common.db.models.users import (
     User,
@@ -161,6 +163,7 @@ Payload = (
     | EmailAttachmentPayload
     | MailMessagePayload
     | PersonPayload
+    | PersonTidbitPayload
     | GoogleDocPayload
     | TaskPayload
     | CalendarEventPayload
@@ -204,6 +207,8 @@ __all__ = [
     # People
     "Person",
     "PersonPayload",
+    "PersonTidbit",
+    "PersonTidbitPayload",
     # Calendar
     "CalendarAccount",
     "CalendarEvent",

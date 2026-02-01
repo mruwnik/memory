@@ -43,7 +43,7 @@ from memory.common.db.models.base import Base
 from memory.common.access_control import SensitivityLevelLiteral as SensitivityLevel
 
 if TYPE_CHECKING:
-    from memory.common.db.models.people import Person
+    from memory.common.db.models.sources import Person
 
 
 class MetadataSchema(TypedDict):
@@ -333,6 +333,10 @@ class SourceItem(Base):
     sensitivity: Mapped[str] = mapped_column(
         String(20), nullable=False, default="basic", server_default="basic"
     )
+    # Creator of the content (for creator-based access control)
+    creator_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Class-level defaults for access control inheritance
     # Subclasses can override (e.g., Book, BlogPost default to "public")
@@ -371,6 +375,7 @@ class SourceItem(Base):
         Index("source_verified_at_idx", "type", "last_verified_at"),
         Index("source_project_idx", "project_id"),
         Index("source_sensitivity_idx", "sensitivity"),
+        Index("source_creator_idx", "creator_id"),
     )
 
     @property

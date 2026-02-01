@@ -35,16 +35,15 @@ import argparse
 import sys
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import SourceItem
-from memory.common.db.models.people import Person
-from memory.common.db.models.sources import GithubMilestone, project_collaborators
+from memory.common.db.models import Person, SourceItem
+from memory.common.db.models.sources import Project, project_collaborators
 from memory.common.db.models.users import User
 
 
 def list_projects(args):
     """List all projects (GitHub milestones)."""
     with make_session() as session:
-        projects = session.query(GithubMilestone).order_by(GithubMilestone.id).all()
+        projects = session.query(Project).order_by(Project.id).all()
         if not projects:
             print("No projects found")
             return
@@ -61,7 +60,7 @@ def list_projects(args):
 def list_collaborators(args):
     """List collaborators of a project."""
     with make_session() as session:
-        project = session.query(GithubMilestone).filter(GithubMilestone.id == args.project_id).first()
+        project = session.query(Project).filter(Project.id == args.project_id).first()
         if not project:
             print(f"Error: Project with ID {args.project_id} not found")
             sys.exit(1)
@@ -88,7 +87,7 @@ def list_collaborators(args):
 def add_collaborator(args):
     """Add a person as collaborator to a project."""
     with make_session() as session:
-        project = session.query(GithubMilestone).filter(GithubMilestone.id == args.project_id).first()
+        project = session.query(Project).filter(Project.id == args.project_id).first()
         if not project:
             print(f"Error: Project with ID {args.project_id} not found")
             sys.exit(1)
@@ -137,7 +136,7 @@ def add_collaborator(args):
 def remove_collaborator(args):
     """Remove a person from a project."""
     with make_session() as session:
-        project = session.query(GithubMilestone).filter(GithubMilestone.id == args.project_id).first()
+        project = session.query(Project).filter(Project.id == args.project_id).first()
         if not project:
             print(f"Error: Project with ID {args.project_id} not found")
             sys.exit(1)
@@ -209,7 +208,7 @@ def revoke_admin(args):
 def classify_content(args):
     """Classify existing content to a project."""
     with make_session() as session:
-        project = session.query(GithubMilestone).filter(GithubMilestone.id == args.project_id).first()
+        project = session.query(Project).filter(Project.id == args.project_id).first()
         if not project:
             print(f"Error: Project with ID {args.project_id} not found")
             sys.exit(1)
