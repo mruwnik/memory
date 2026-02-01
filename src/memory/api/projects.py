@@ -13,9 +13,16 @@ from typing import Literal, cast
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from memory.api.auth import get_current_user
+from memory.common.access_control import (
+    filter_projects_query,
+    get_user_team_ids,
+    has_admin_scope,
+    user_can_access_project,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import Project, Team
@@ -51,6 +58,7 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     state: Literal["open", "closed"] = "open"
     parent_id: int | None = None
+    team_id: int  # Required: the team to assign this project to
 
 
 class ProjectUpdate(BaseModel):
@@ -114,7 +122,11 @@ def list_projects(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ProjectResponse]:
-    """List all projects for access control.
+    """List all projects the user can access.
+
+    Access is determined by team membership:
+    - Users see projects that have at least one team they belong to
+    - Admins see all projects
 
     Args:
         state: Filter by state ('open' or 'closed')
@@ -123,6 +135,9 @@ def list_projects(
         include_teams: If true, include team list for each project
     """
     query = db.query(Project)
+
+    # Apply visibility filtering based on team membership
+    query = filter_projects_query(db, user, query)
 
     if include_teams:
         query = query.options(selectinload(Project.teams).selectinload(Team.members))
@@ -165,8 +180,14 @@ def get_project_tree(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ProjectTreeNode]:
-    """Get projects as a nested tree structure."""
+    """Get projects as a nested tree structure.
+
+    Only includes projects the user can access based on team membership.
+    """
     query = db.query(Project)
+
+    # Apply visibility filtering based on team membership
+    query = filter_projects_query(db, user, query)
 
     if state:
         query = query.filter(Project.state == state)
@@ -216,11 +237,17 @@ def get_project(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ProjectResponse:
-    """Get a single project by ID."""
+    """Get a single project by ID.
+
+    Returns 404 if the project doesn't exist or user doesn't have access.
+    """
+    # Build query with optional eager loading
     query = db.query(Project).filter(Project.id == project_id)
     if include_teams:
         query = query.options(selectinload(Project.teams).selectinload(Team.members))
 
+    # Apply access filtering - this combines existence and access check in one query
+    query = filter_projects_query(db, user, query)
     project = query.first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -243,37 +270,70 @@ def create_project(
 ) -> ProjectResponse:
     """Create a new standalone project (not GitHub-backed).
 
-    Use the teams MCP server to assign teams to this project for access control.
+    Requires a team_id to assign the project to. Use the teams MCP server
+    to manage additional team assignments for access control.
     """
+    # Check access to the team BEFORE fetching to avoid leaking team existence via timing.
+    # Non-admins must be a member of the team to create projects for it.
+    if not has_admin_scope(user):
+        user_team_ids = get_user_team_ids(db, user)
+        if data.team_id not in user_team_ids:
+            # Intentionally vague - don't reveal whether team exists
+            raise HTTPException(status_code=400, detail="Invalid team_id")
+
+    # Now safe to fetch the team (user either has access or is admin)
+    team = db.get(Team, data.team_id)
+    if not team:
+        raise HTTPException(status_code=400, detail="Invalid team_id")
+
     # Validate parent exists if specified
     if data.parent_id is not None:
         parent = db.get(Project, data.parent_id)
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
+        # Non-admins must have access to the parent
+        if not has_admin_scope(user) and not user_can_access_project(db, user, data.parent_id):
+            raise HTTPException(status_code=400, detail="Parent project not found")
 
     # Generate a unique ID for standalone projects
     # Use negative IDs to avoid collision with GitHub milestone IDs
-    max_negative_id = (
-        db.query(func.min(Project.id))
-        .filter(Project.id < 0)
-        .scalar()
-    )
-    new_id = (max_negative_id or 0) - 1
+    # Retry on collision to handle concurrent inserts
+    max_retries = 3
+    project = None
+    for attempt in range(max_retries):
+        max_negative_id = (
+            db.query(func.min(Project.id))
+            .filter(Project.id < 0)
+            .scalar()
+        )
+        new_id = (max_negative_id or 0) - 1
 
-    project = Project(
-        id=new_id,
-        repo_id=None,  # Standalone project
-        github_id=None,
-        number=None,
-        title=data.title,
-        description=data.description,
-        state=data.state,
-        parent_id=data.parent_id,
-    )
-    db.add(project)
+        project = Project(
+            id=new_id,
+            repo_id=None,  # Standalone project
+            github_id=None,
+            number=None,
+            title=data.title,
+            description=data.description,
+            state=data.state,
+            parent_id=data.parent_id,
+        )
+
+        try:
+            db.add(project)
+            db.flush()  # Get the ID assigned
+            break  # Success
+        except IntegrityError:
+            db.rollback()
+            if attempt == max_retries - 1:
+                raise HTTPException(status_code=500, detail="Failed to generate unique project ID")
+            # Retry with fresh ID
+            continue
+
+    project.teams.append(team)
     db.commit()
-    db.refresh(project)
 
+    db.refresh(project)
     return project_to_response(project)
 
 
@@ -286,11 +346,15 @@ def update_project(
 ) -> ProjectResponse:
     """Update a project.
 
+    Requires access to the project via team membership.
+
     Note: GitHub-backed projects can only have parent_id updated locally.
     Title, description, and state are synced from GitHub.
     Use the teams MCP server to manage team assignments for access control.
     """
-    project = db.get(Project, project_id)
+    # Fetch project with access check in one query
+    query = filter_projects_query(db, user, db.query(Project).filter(Project.id == project_id))
+    project = query.first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -358,10 +422,14 @@ def delete_project(
 ) -> dict:
     """Delete a standalone project.
 
+    Requires access to the project via team membership.
+
     GitHub-backed projects cannot be deleted (they are synced from GitHub).
     Children of deleted projects will have their parent_id set to NULL.
     """
-    project = db.get(Project, project_id)
+    # Fetch project with access check in one query
+    query = filter_projects_query(db, user, db.query(Project).filter(Project.id == project_id))
+    project = query.first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

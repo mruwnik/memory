@@ -341,7 +341,7 @@ class UserSession(Base):
         Integer, ForeignKey("oauth_states.id"), nullable=True
     )
     user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=False
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()

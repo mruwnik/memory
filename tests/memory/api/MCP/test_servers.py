@@ -29,8 +29,10 @@ def test_all_servers_in_enum():
         "organizer",
         "people",
         "polling",
+        "projects",
         "schedule",
         "slack",
+        "teams",
     }
     actual = {s.value for s in MCPServer}
     assert actual == expected

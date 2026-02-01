@@ -1,16 +1,34 @@
-"""MCP subserver for team management."""
+"""MCP subserver for team management.
+
+Note on error response patterns:
+Each MCP tool returns a specific response schema. When returning errors,
+we include the expected fields with null/empty values to avoid breaking
+clients that expect certain keys. For example:
+- team_get returns {"error": ..., "team": None}
+- team_list returns {"error": ..., "teams": [], "count": 0}
+- team_update returns {"error": ...} (no expected fields in success case)
+"""
 
 import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from sqlalchemy import Text, cast
+from sqlalchemy import Text, cast, select
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.common.access_control import (
+    filter_projects_query,
+    filter_teams_query,
+    get_accessible_project_ids,
+    get_accessible_team_ids,
+    has_admin_scope,
+)
 from memory.common.db.connection import make_session
-from memory.common.db.models import Person, Project, Team, can_access_project
+from memory.common.db.models import Person, Project, Team, User, can_access_project
+from memory.common.db.models.sources import GithubRepo, team_members
 
 logger = logging.getLogger(__name__)
 
@@ -147,10 +165,18 @@ async def team_get(
         include_projects: Whether to include project list (default: false)
 
     Returns:
-        Team data with optional member and project lists
+        Team data with optional member and project lists, or error if not found/accessible
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated", "team": None}
+
         query = session.query(Team).options(selectinload(Team.members))
+
+        # Apply access control filtering
+        query = filter_teams_query(session, user, query)
+
         if include_projects:
             query = query.options(selectinload(Team.projects))
 
@@ -160,7 +186,7 @@ async def team_get(
             team_obj = query.filter(Team.slug == team).first()
 
         if not team_obj:
-            return {"error": f"Team not found: {team}"}
+            return {"error": f"Team not found: {team}", "team": None}
 
         return {"team": _team_to_dict(team_obj, include_members=include_members, include_projects=include_projects)}
 
@@ -170,6 +196,7 @@ async def team_get(
 async def team_list(
     tags: list[str] | None = None,
     include_inactive: bool = False,
+    include_projects: bool = False,
 ) -> dict:
     """
     List all teams, optionally filtered by tags.
@@ -177,12 +204,23 @@ async def team_list(
     Args:
         tags: Filter to teams that have ALL of these tags
         include_inactive: Include archived/inactive teams (default: false)
+        include_projects: Include projects assigned to each team (default: false)
 
     Returns:
-        List of teams
+        List of teams (filtered to teams the user has access to)
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated", "teams": [], "count": 0}
+
         query = session.query(Team).options(selectinload(Team.members))
+
+        # Apply access control filtering (non-admins only see their teams)
+        query = filter_teams_query(session, user, query)
+
+        if include_projects:
+            query = query.options(selectinload(Team.projects))
 
         if not include_inactive:
             query = query.filter(Team.is_active == True)  # noqa: E712
@@ -194,7 +232,7 @@ async def team_list(
         teams = query.order_by(Team.name).all()
 
         return {
-            "teams": [_team_to_dict(t, include_members=False) for t in teams],
+            "teams": [_team_to_dict(t, include_members=False, include_projects=include_projects) for t in teams],
             "count": len(teams),
         }
 
@@ -233,13 +271,20 @@ async def team_update(
         is_active: Active status (set to false to archive)
 
     Returns:
-        Updated team data
+        Updated team data, or error if not found/accessible
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Apply access control filtering
+        query = filter_teams_query(session, user, session.query(Team))
+
         if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = session.query(Team).filter(Team.id == int(team)).first()
+            team_obj = query.filter(Team.id == int(team)).first()
         else:
-            team_obj = session.query(Team).filter(Team.slug == team).first()
+            team_obj = query.filter(Team.slug == team).first()
 
         if not team_obj:
             return {"error": f"Team not found: {team}"}
@@ -267,7 +312,8 @@ async def team_update(
             team_obj.auto_sync_github = auto_sync_github
         if is_active is not None:
             team_obj.is_active = is_active
-            if not is_active:
+            # Only set archived_at when transitioning to inactive for the first time
+            if not is_active and team_obj.archived_at is None:
                 from datetime import datetime, timezone
                 team_obj.archived_at = datetime.now(timezone.utc)
 
@@ -301,7 +347,7 @@ async def team_add_member(
         sync_external: Whether to sync to Discord/GitHub (default: true)
 
     Returns:
-        Result with sync status
+        Result with sync status, or error if team not found/accessible
     """
     logger.info(f"MCP: Adding {person} to team {team}")
 
@@ -309,11 +355,17 @@ async def team_add_member(
         return {"error": f"Invalid role: {role}. Must be 'member', 'lead', or 'admin'"}
 
     with make_session() as session:
-        # Find team
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Find team with access control
+        query = filter_teams_query(session, user, session.query(Team).options(selectinload(Team.members)))
+
         if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.id == int(team)).first()
+            team_obj = query.filter(Team.id == int(team)).first()
         else:
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.slug == team).first()
+            team_obj = query.filter(Team.slug == team).first()
 
         if not team_obj:
             return {"error": f"Team not found: {team}"}
@@ -391,16 +443,22 @@ async def team_remove_member(
         sync_external: Whether to sync to Discord/GitHub (default: true)
 
     Returns:
-        Result with sync status
+        Result with sync status, or error if team not found/accessible
     """
     logger.info(f"MCP: Removing {person} from team {team}")
 
     with make_session() as session:
-        # Find team
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Find team with access control
+        query = filter_teams_query(session, user, session.query(Team).options(selectinload(Team.members)))
+
         if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.id == int(team)).first()
+            team_obj = query.filter(Team.id == int(team)).first()
         else:
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.slug == team).first()
+            team_obj = query.filter(Team.slug == team).first()
 
         if not team_obj:
             return {"error": f"Team not found: {team}"}
@@ -458,21 +516,38 @@ async def team_list_members(
         team: Team slug or ID
 
     Returns:
-        List of team members with their roles
+        List of team members with their roles, or error if team not found/accessible
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Apply access control filtering
+        query = filter_teams_query(session, user, session.query(Team).options(selectinload(Team.members)))
+
         if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.id == int(team)).first()
+            team_obj = query.filter(Team.id == int(team)).first()
         else:
-            team_obj = session.query(Team).options(selectinload(Team.members)).filter(Team.slug == team).first()
+            team_obj = query.filter(Team.slug == team).first()
 
         if not team_obj:
             return {"error": f"Team not found: {team}"}
 
+        # Fetch member roles from junction table
+        role_query = session.execute(
+            select(team_members.c.person_id, team_members.c.role)
+            .where(team_members.c.team_id == team_obj.id)
+        )
+        roles = {row.person_id: row.role for row in role_query}
+
         return {
             "team": team_obj.slug,
             "team_name": team_obj.name,
-            "members": [_person_summary(p) for p in team_obj.members],
+            "members": [
+                {**_person_summary(p), "role": roles.get(p.id, "member")}
+                for p in team_obj.members
+            ],
             "count": len(team_obj.members),
         }
 
@@ -659,10 +734,17 @@ async def teams_by_tag(
         match_all: If true, teams must have ALL tags. If false, ANY tag matches.
 
     Returns:
-        List of matching teams
+        List of matching teams (filtered to teams the user has access to)
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated", "teams": [], "count": 0}
+
         query = session.query(Team).filter(Team.is_active == True)  # noqa: E712
+
+        # Apply access control filtering
+        query = filter_teams_query(session, user, query)
 
         if match_all:
             # Teams must have ALL specified tags (PostgreSQL array contains)
@@ -693,9 +775,13 @@ async def person_teams(
         person: Person identifier or ID
 
     Returns:
-        List of teams the person is a member of
+        List of teams the person is a member of (filtered to teams the user has access to)
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
         if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
             person_obj = session.query(Person).options(selectinload(Person.teams)).filter(Person.id == int(person)).first()
         else:
@@ -704,10 +790,17 @@ async def person_teams(
         if not person_obj:
             return {"error": f"Person not found: {person}"}
 
+        # Filter teams to only those the user can access
+        if has_admin_scope(user):
+            accessible_teams = person_obj.teams
+        else:
+            accessible_ids = get_accessible_team_ids(session, user)
+            accessible_teams = [t for t in person_obj.teams if t.id in accessible_ids]
+
         return {
             "person": person_obj.identifier,
-            "teams": [_team_to_dict(t, include_members=False) for t in person_obj.teams],
-            "count": len(person_obj.teams),
+            "teams": [_team_to_dict(t, include_members=False) for t in accessible_teams],
+            "count": len(accessible_teams),
         }
 
 
@@ -738,18 +831,22 @@ async def project_assign_team(
         team: Team slug or ID
 
     Returns:
-        Assignment result
+        Assignment result, or error if project/team not found/accessible
     """
     logger.info(f"MCP: Assigning team {team} to project {project}")
 
     with make_session() as session:
-        # Find project
-        project_obj = _find_project(session, project)
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Find project with access control
+        project_obj = _find_project_with_access(session, user, project)
         if not project_obj:
             return {"error": f"Project not found: {project}"}
 
-        # Find team
-        team_obj = _find_team(session, team)
+        # Find team with access control
+        team_obj = _find_team_with_access(session, user, team)
         if not team_obj:
             return {"error": f"Team not found: {team}"}
 
@@ -786,18 +883,22 @@ async def project_unassign_team(
         team: Team slug or ID
 
     Returns:
-        Result
+        Result, or error if project/team not found/accessible
     """
     logger.info(f"MCP: Unassigning team {team} from project {project}")
 
     with make_session() as session:
-        # Find project
-        project_obj = _find_project(session, project)
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # Find project with access control
+        project_obj = _find_project_with_access(session, user, project)
         if not project_obj:
             return {"error": f"Project not found: {project}"}
 
-        # Find team
-        team_obj = _find_team(session, team)
+        # Find team with access control
+        team_obj = _find_team_with_access(session, user, team)
         if not team_obj:
             return {"error": f"Team not found: {team}"}
 
@@ -832,10 +933,14 @@ async def project_list_teams(
         project: Project ID or slug
 
     Returns:
-        List of assigned teams
+        List of assigned teams, or error if project not found/accessible
     """
     with make_session() as session:
-        project_obj = _find_project(session, project)
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        project_obj = _find_project_with_access(session, user, project)
         if not project_obj:
             return {"error": f"Project not found: {project}"}
 
@@ -858,10 +963,15 @@ async def project_list_access(
         project: Project ID or slug
 
     Returns:
-        Teams with their members, and aggregate list of all people with access
+        Teams with their members, and aggregate list of all people with access,
+        or error if project not found/accessible
     """
     with make_session() as session:
-        project_obj = _find_project(session, project)
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        project_obj = _find_project_with_access(session, user, project)
         if not project_obj:
             return {"error": f"Project not found: {project}"}
 
@@ -900,9 +1010,13 @@ async def projects_for_person(
         person: Person identifier or ID
 
     Returns:
-        List of accessible projects
+        List of accessible projects (filtered to projects the user can see)
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
         if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
             person_obj = session.query(Person).options(
                 selectinload(Person.teams).selectinload(Team.projects)
@@ -915,16 +1029,23 @@ async def projects_for_person(
         if not person_obj:
             return {"error": f"Person not found: {person}"}
 
-        # Collect all accessible projects
+        # Collect all accessible projects (for the queried person)
         projects: dict[int, Project] = {}
         for team in person_obj.teams:
             for project in team.projects:
                 projects[project.id] = project
 
+        # Filter to only projects the current user can also see
+        if has_admin_scope(user):
+            visible_projects = list(projects.values())
+        else:
+            accessible_ids = get_accessible_project_ids(session, user)
+            visible_projects = [p for p in projects.values() if p.id in accessible_ids]
+
         return {
             "person": person_obj.identifier,
-            "projects": [_project_summary(p) for p in projects.values()],
-            "count": len(projects),
+            "projects": [_project_summary(p) for p in visible_projects],
+            "count": len(visible_projects),
         }
 
 
@@ -942,9 +1063,14 @@ async def check_project_access(
         project: Project ID or slug
 
     Returns:
-        Access status and which teams grant access
+        Access status and which teams grant access,
+        or error if project not found/accessible to current user
     """
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
         # Find person
         if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
             person_obj = session.query(Person).options(
@@ -958,8 +1084,8 @@ async def check_project_access(
         if not person_obj:
             return {"error": f"Person not found: {person}"}
 
-        # Find project
-        project_obj = _find_project(session, project)
+        # Find project with access control
+        project_obj = _find_project_with_access(session, user, project)
         if not project_obj:
             return {"error": f"Project not found: {project}"}
 
@@ -985,9 +1111,12 @@ async def check_project_access(
 # ============== Helper Functions ==============
 
 
-def _find_project(session: Any, project: int | str) -> Project | None:
-    """Find a project by ID or slug."""
+def _find_project_with_access(session: Session, user: User, project: int | str) -> Project | None:
+    """Find a project by ID or slug, with access control filtering."""
     query = session.query(Project).options(selectinload(Project.teams))
+
+    # Apply access control filtering
+    query = filter_projects_query(session, user, query)
 
     if isinstance(project, int):
         return query.filter(Project.id == project).first()
@@ -1000,9 +1129,6 @@ def _find_project(session: Any, project: int | str) -> Project | None:
         parts = project.rsplit(":", 1)
         if len(parts) == 2 and parts[1].isdigit():
             # This is a slug like "owner/repo:123"
-            # We'd need to join with repo to filter properly
-            # For now, search by number and filter
-            from memory.common.db.models.sources import GithubRepo
             repo_path = parts[0]  # "owner/repo"
             number = int(parts[1])
 
@@ -1019,9 +1145,12 @@ def _find_project(session: Any, project: int | str) -> Project | None:
     return query.filter(Project.title == project).first()
 
 
-def _find_team(session: Any, team: str | int) -> Team | None:
-    """Find a team by ID or slug."""
+def _find_team_with_access(session: Session, user: User, team: str | int) -> Team | None:
+    """Find a team by ID or slug, with access control filtering."""
     query = session.query(Team).options(selectinload(Team.members))
+
+    # Apply access control filtering
+    query = filter_teams_query(session, user, query)
 
     if isinstance(team, int):
         return query.filter(Team.id == team).first()

@@ -480,12 +480,13 @@ async def oauth_callback_discord(request: Request):
         else:
             title = "❌ Authorization Failed"
 
+    from html import escape
     return Response(
         content=f"""
         <html>
             <body>
-                <h1>{title}</h1>
-                <p>{message}</p>
+                <h1>{escape(title)}</h1>
+                <p>{escape(message)}</p>
                 <p>{close}</p>
             </body>
         </html>

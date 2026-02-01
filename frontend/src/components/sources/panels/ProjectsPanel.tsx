@@ -28,6 +28,7 @@ export const ProjectsPanel = () => {
 
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
+  const [availableTeams, setAvailableTeams] = useState<Team[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('list')
@@ -42,19 +43,21 @@ export const ProjectsPanel = () => {
     setError(null)
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
-      const [projectsList, treeData] = await Promise.all([
-        listProjects({ state, include_children: true }),
+      const [projectsList, treeData, teamsList] = await Promise.all([
+        listProjects({ state, include_teams: true }),
         getProjectTree({ state }),
+        listTeams(),
       ])
       // Ensure we always have arrays (API might return error objects)
       setProjects(Array.isArray(projectsList) ? projectsList : [])
       setTree(Array.isArray(treeData) ? treeData : [])
+      setAvailableTeams(Array.isArray(teamsList) ? teamsList : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load projects')
     } finally {
       setLoading(false)
     }
-  }, [listProjects, getProjectTree, stateFilter])
+  }, [listProjects, getProjectTree, listTeams, stateFilter])
 
   useEffect(() => {
     loadData()
@@ -80,6 +83,8 @@ export const ProjectsPanel = () => {
 
   // Check if there's any tree hierarchy (any project has children)
   const hasHierarchy = tree.some(node => node.children.length > 0)
+  // Always show toggle if currently in tree mode (so user can switch back)
+  const showViewToggle = hasHierarchy || viewMode === 'tree'
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
@@ -99,13 +104,13 @@ export const ProjectsPanel = () => {
             <option value="open">Open</option>
             <option value="closed">Closed</option>
           </select>
-          {/* View toggle - only show if there's a hierarchy */}
-          {hasHierarchy && (
-            <div className="flex border border-slate-200 rounded-lg overflow-hidden">
+          {/* View toggle - show if there's hierarchy or user is in tree mode */}
+          {showViewToggle && (
+            <div className="inline-flex border border-slate-200 rounded-lg">
               <button
                 type="button"
                 className={cx(
-                  'px-3 py-1.5 text-sm cursor-pointer transition-colors',
+                  'px-3 py-1.5 text-sm cursor-pointer transition-colors rounded-l-lg',
                   viewMode === 'tree'
                     ? 'bg-primary text-white hover:bg-primary-dark'
                     : 'bg-white text-slate-600 hover:bg-slate-50'
@@ -117,7 +122,7 @@ export const ProjectsPanel = () => {
               <button
                 type="button"
                 className={cx(
-                  'px-3 py-1.5 text-sm border-l border-slate-200 cursor-pointer transition-colors',
+                  'px-3 py-1.5 text-sm cursor-pointer transition-colors border-l border-slate-200 rounded-r-lg',
                   viewMode === 'list'
                     ? 'bg-primary text-white hover:bg-primary-dark'
                     : 'bg-white text-slate-600 hover:bg-slate-50'
@@ -170,6 +175,7 @@ export const ProjectsPanel = () => {
           projects={projects}
           onSubmit={handleCreate}
           onClose={() => setShowCreateModal(false)}
+          availableTeams={availableTeams}
         />
       )}
 
@@ -211,7 +217,10 @@ export const ProjectsPanel = () => {
       {managingTeams && (
         <ProjectTeamsModal
           project={managingTeams}
-          onClose={() => setManagingTeams(null)}
+          onClose={() => {
+            setManagingTeams(null)
+            loadData()  // Refresh to show updated team assignments
+          }}
           listTeams={listTeams}
           listProjectTeams={listProjectTeams}
           assignTeam={assignTeamToProject}
@@ -327,6 +336,29 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
               {project.repo_path} #{project.number}
             </p>
           )}
+          {project.teams && project.teams.length > 0 && !compact && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-xs text-slate-500">Teams:</span>
+              {project.teams.slice(0, 3).map(team => (
+                <span
+                  key={team.id}
+                  className="bg-green-50 text-green-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-green-100"
+                  onClick={onManageTeams}
+                >
+                  {team.name}
+                </span>
+              ))}
+              {project.teams.length > 3 && (
+                <span
+                  className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
+                  onClick={onManageTeams}
+                  title={project.teams.slice(3).map(t => t.name).join(', ')}
+                >
+                  +{project.teams.length - 3} more
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className={styles.cardActions}>
           {project.children_count > 0 && (
@@ -360,6 +392,7 @@ interface ProjectFormModalProps {
   projects: Project[]
   onSubmit: (data: ProjectCreate | ProjectUpdate) => Promise<void>
   onClose: () => void
+  availableTeams?: Team[]  // Required for create, used for team selection
 }
 
 const ProjectFormModal = ({
@@ -368,6 +401,7 @@ const ProjectFormModal = ({
   projects,
   onSubmit,
   onClose,
+  availableTeams = [],
 }: ProjectFormModalProps) => {
   const isEditing = !!project
   const isGithubBacked = project?.repo_path !== null
@@ -377,6 +411,7 @@ const ProjectFormModal = ({
     description: project?.description || '',
     state: project?.state || 'open' as 'open' | 'closed',
     parent_id: project?.parent_id || null as number | null,
+    team_ids: [] as number[],  // For new projects
   })
 
   const [submitting, setSubmitting] = useState(false)
@@ -407,6 +442,13 @@ const ProjectFormModal = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // Validate team selection for new projects
+    if (!isEditing && formData.team_ids.length === 0) {
+      setError('Please select at least one team')
+      return
+    }
+
     setSubmitting(true)
     setError(null)
 
@@ -425,6 +467,7 @@ const ProjectFormModal = ({
           }
         : {
             title: formData.title,
+            team_ids: formData.team_ids,
             description: formData.description || null,
             state: formData.state,
             parent_id: formData.parent_id,
@@ -435,6 +478,15 @@ const ProjectFormModal = ({
       setError(e instanceof Error ? e.message : 'Failed to save project')
       setSubmitting(false)
     }
+  }
+
+  const handleTeamToggle = (teamId: number) => {
+    setFormData(prev => ({
+      ...prev,
+      team_ids: prev.team_ids.includes(teamId)
+        ? prev.team_ids.filter(id => id !== teamId)
+        : [...prev.team_ids, teamId],
+    }))
   }
 
   return (
@@ -510,11 +562,60 @@ const ProjectFormModal = ({
           </p>
         </div>
 
+        {/* Team selection - only for new projects */}
+        {!isEditing && (
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Teams <span className="text-red-500">*</span>
+            </label>
+            <p className="text-sm text-slate-500 mb-2">
+              Select which teams will have access to this project.
+            </p>
+            {availableTeams.length === 0 ? (
+              <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
+                No teams available. Create a team first before creating a project.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-2">
+                {availableTeams.map(team => (
+                  <label
+                    key={team.id}
+                    className={cx(
+                      'flex items-center gap-2 p-2 rounded cursor-pointer transition-colors',
+                      formData.team_ids.includes(team.id)
+                        ? 'bg-purple-50 border border-purple-200'
+                        : 'hover:bg-slate-50'
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.team_ids.includes(team.id)}
+                      onChange={() => handleTeamToggle(team.id)}
+                      className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
+                    />
+                    <span className="font-medium text-slate-900">{team.name}</span>
+                    <span className="text-sm text-slate-500">@{team.slug}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {formData.team_ids.length > 0 && (
+              <p className={styles.formHint}>
+                {formData.team_ids.length} team{formData.team_ids.length !== 1 ? 's' : ''} selected
+              </p>
+            )}
+          </div>
+        )}
+
         <div className={styles.formActions}>
           <button type="button" className={styles.btnCancel} onClick={onClose} disabled={submitting}>
             Cancel
           </button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+          <button
+            type="submit"
+            className={styles.btnSubmit}
+            disabled={submitting || (!isEditing && availableTeams.length === 0)}
+          >
             {submitting ? 'Saving...' : isEditing ? 'Update' : 'Create'}
           </button>
         </div>

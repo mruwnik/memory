@@ -40,7 +40,7 @@ export const TeamsPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const teamsList = await listTeams({ include_inactive: showInactive })
+      const teamsList = await listTeams({ include_inactive: showInactive, include_projects: true })
       setTeams(Array.isArray(teamsList) ? teamsList : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load teams')
@@ -242,6 +242,29 @@ const TeamCard = ({
               </span>
             )}
           </div>
+          {team.projects && team.projects.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-xs text-slate-500">Projects:</span>
+              {team.projects.slice(0, 3).map(project => (
+                <span
+                  key={project.id}
+                  className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-blue-100"
+                  onClick={onManageProjects}
+                >
+                  {project.title}
+                </span>
+              ))}
+              {team.projects.length > 3 && (
+                <span
+                  className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
+                  onClick={onManageProjects}
+                  title={team.projects.slice(3).map(p => p.title).join(', ')}
+                >
+                  +{team.projects.length - 3} more
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className={styles.cardActions}>
           <button className={styles.btnEdit} onClick={onManageMembers}>
@@ -362,8 +385,14 @@ const TeamFormModal = ({
 
       // If creating a new team with pending members, add them after creation
       if (!isEditing && pendingMembers.length > 0) {
-        for (const person of pendingMembers) {
-          await addMember(slug, person.identifier)
+        const results = await Promise.allSettled(
+          pendingMembers.map(person => addMember(slug, person.identifier))
+        )
+        const failures = results.filter(
+          (r): r is PromiseRejectedResult => r.status === 'rejected'
+        )
+        if (failures.length > 0) {
+          console.warn('Some members failed to add:', failures.map(f => f.reason))
         }
       }
     } catch (e) {

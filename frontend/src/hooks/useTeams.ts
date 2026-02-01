@@ -68,6 +68,7 @@ export interface TeamUpdate {
 export interface TeamFilters {
   tags?: string[]
   include_inactive?: boolean
+  include_projects?: boolean
 }
 
 export const useTeams = () => {
@@ -77,6 +78,7 @@ export const useTeams = () => {
     const result = await mcpCall<{ teams: Team[]; count: number }[]>('teams_team_list', {
       tags: filters.tags,
       include_inactive: filters.include_inactive ?? false,
+      include_projects: filters.include_projects ?? false,
     })
     return result?.[0]?.teams || []
   }, [mcpCall])

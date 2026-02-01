@@ -20,6 +20,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, FrozenSet, Literal, Protocol, runtime_checkable
 
+from sqlalchemy import literal, select
+from sqlalchemy.orm import Query
+
+from memory.common.db.models.sources import Project, Team, project_teams, team_members
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from sqlalchemy.orm.scoping import scoped_session
@@ -150,10 +155,6 @@ def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User"
     Team-based access: user is in a team -> team is assigned to project.
     The role returned is based on team membership role (member -> contributor, lead -> manager, admin -> admin).
     """
-    from sqlalchemy import select
-
-    from memory.common.db.models.sources import project_teams, team_members
-
     # User must have a linked Person to have project access
     person = getattr(user, "person", None)
     if person is None:
@@ -426,3 +427,151 @@ def get_max_sensitivity_for_project(
         return SensitivityLevel.PUBLIC
 
     return None
+
+
+# ==============================================================================
+# Team and Project Visibility
+# ==============================================================================
+
+
+def get_user_team_ids(db: "Session | scoped_session[Session]", user: "User") -> set[int]:
+    """Get the IDs of all teams the user belongs to via their Person record.
+
+    Returns an empty set if the user has no associated person or no team memberships.
+    """
+    person = getattr(user, "person", None)
+    if person is None:
+        return set()
+
+    result = db.execute(
+        select(team_members.c.team_id).where(team_members.c.person_id == person.id)
+    ).fetchall()
+    return {row[0] for row in result}
+
+
+def get_accessible_project_ids(
+    db: "Session | scoped_session[Session]", user: "User"
+) -> set[int] | None:
+    """Get the IDs of all projects the user can access.
+
+    A user can access a project if they are a member of ANY team
+    assigned to that project.
+
+    Returns:
+        None for admins (meaning no filtering - they see all projects)
+        set[int] for regular users (the specific project IDs they can access)
+    """
+    if has_admin_scope(user):
+        return None  # None means no filtering (admin sees all)
+
+    team_ids = get_user_team_ids(db, user)
+    if not team_ids:
+        return set()
+
+    result = db.execute(
+        select(project_teams.c.project_id).where(project_teams.c.team_id.in_(team_ids))
+    ).fetchall()
+    return {row[0] for row in result}
+
+
+def get_accessible_team_ids(
+    db: "Session | scoped_session[Session]", user: "User"
+) -> set[int] | None:
+    """Get the IDs of all teams the user can see.
+
+    A user can see a team if they are a member of that team.
+
+    Returns:
+        None for admins (meaning no filtering - they see all teams)
+        set[int] for regular users (the specific team IDs they can access)
+    """
+    if has_admin_scope(user):
+        return None  # None means no filtering (admin sees all)
+
+    return get_user_team_ids(db, user)
+
+
+def user_can_access_project(
+    db: "Session | scoped_session[Session]", user: "User", project_id: int
+) -> bool:
+    """Check if a user can access a specific project.
+
+    Admins can access all projects. For regular users, checks team membership
+    directly without loading all accessible project IDs.
+    """
+    if has_admin_scope(user):
+        return True
+
+    team_ids = get_user_team_ids(db, user)
+    if not team_ids:
+        return False
+
+    # Direct query for this specific project - more efficient than loading all IDs
+    result = db.execute(
+        select(project_teams.c.project_id)
+        .where(project_teams.c.project_id == project_id)
+        .where(project_teams.c.team_id.in_(team_ids))
+        .limit(1)
+    ).first()
+    return result is not None
+
+
+def user_can_access_team(
+    db: "Session | scoped_session[Session]", user: "User", team_id: int
+) -> bool:
+    """Check if a user can access a specific team.
+
+    Admins can access all teams. For regular users, checks team membership directly.
+    """
+    if has_admin_scope(user):
+        return True
+    # For regular users, just check if they're a member of this team
+    team_ids = get_user_team_ids(db, user)
+    return team_id in team_ids
+
+
+def filter_projects_query(
+    db: "Session | scoped_session[Session]", user: "User", query: Query[Project]
+) -> Query[Project]:
+    """Filter a project query to only include projects the user can access.
+
+    Admins see all projects. Regular users only see projects they have
+    team membership access to.
+
+    Usage:
+        query = db.query(Project)
+        query = filter_projects_query(db, user, query)
+
+    Returns the filtered query.
+    """
+    accessible_ids = get_accessible_project_ids(db, user)
+    if accessible_ids is None:
+        return query  # Admins see all
+
+    if not accessible_ids:
+        # Return query that matches nothing
+        return query.filter(literal(False))
+    return query.filter(Project.id.in_(accessible_ids))
+
+
+def filter_teams_query(
+    db: "Session | scoped_session[Session]", user: "User", query: Query[Team]
+) -> Query[Team]:
+    """Filter a team query to only include teams the user can access.
+
+    Admins see all teams. Regular users only see teams they are members of.
+
+    Usage:
+        query = db.query(Team)
+        query = filter_teams_query(db, user, query)
+
+    Returns the filtered query.
+    """
+    accessible_ids = get_accessible_team_ids(db, user)
+    if accessible_ids is None:
+        return query  # Admins see all
+
+    if not accessible_ids:
+        # Return query that matches nothing
+        return query.filter(literal(False))
+    return query.filter(Team.id.in_(accessible_ids))

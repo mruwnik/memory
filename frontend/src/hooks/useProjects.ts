@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useAuth } from './useAuth'
+import { useMCP } from './useMCP'
 
 // Types for Projects
 export interface ProjectTeam {
@@ -37,6 +37,7 @@ export interface ProjectTreeNode {
 
 export interface ProjectCreate {
   title: string
+  team_ids: number[]  // Required: list of team IDs to assign this project to
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
@@ -47,82 +48,95 @@ export interface ProjectUpdate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
+  clear_parent?: boolean  // If true, removes the parent
+}
+
+export interface ProjectFilters {
+  state?: 'open' | 'closed'
+  parent_id?: number  // Use 0 for root-level only
+  include_teams?: boolean
 }
 
 export const useProjects = () => {
-  const { apiCall } = useAuth()
+  const { mcpCall } = useMCP()
 
-  const listProjects = useCallback(async (options?: {
-    state?: string
-    parent_id?: number
-    include_children?: boolean
-    include_teams?: boolean
-  }): Promise<Project[]> => {
-    const params = new URLSearchParams()
-    if (options?.state) params.append('state', options.state)
-    if (options?.parent_id !== undefined) params.append('parent_id', String(options.parent_id))
-    if (options?.include_children) params.append('include_children', 'true')
-    if (options?.include_teams) params.append('include_teams', 'true')
-
-    const url = `/projects${params.toString() ? `?${params.toString()}` : ''}`
-    const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch projects')
-    return response.json()
-  }, [apiCall])
+  const listProjects = useCallback(async (options: ProjectFilters = {}): Promise<Project[]> => {
+    const result = await mcpCall<{ projects: Project[]; count: number; error?: string }[]>('projects_list_all', {
+      state: options.state,
+      parent_id: options.parent_id,
+      include_teams: options.include_teams ?? false,
+    })
+    if (result?.[0]?.error) {
+      throw new Error(result[0].error)
+    }
+    return result?.[0]?.projects || []
+  }, [mcpCall])
 
   const getProjectTree = useCallback(async (options?: {
-    state?: string
+    state?: 'open' | 'closed'
   }): Promise<ProjectTreeNode[]> => {
-    const params = new URLSearchParams()
-    if (options?.state) params.append('state', options.state)
-
-    const url = `/projects/tree${params.toString() ? `?${params.toString()}` : ''}`
-    const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch project tree')
-    return response.json()
-  }, [apiCall])
-
-  const getProject = useCallback(async (id: number, includeTeams = false): Promise<Project> => {
-    const params = includeTeams ? '?include_teams=true' : ''
-    const response = await apiCall(`/projects/${id}${params}`)
-    if (!response.ok) throw new Error('Failed to fetch project')
-    return response.json()
-  }, [apiCall])
-
-  const createProject = useCallback(async (data: ProjectCreate): Promise<Project> => {
-    const response = await apiCall('/projects', {
-      method: 'POST',
-      body: JSON.stringify(data),
+    const result = await mcpCall<{ tree: ProjectTreeNode[]; count: number; error?: string }[]>('projects_list_all', {
+      state: options?.state,
+      as_tree: true,
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create project')
+    if (result?.[0]?.error) {
+      throw new Error(result[0].error)
     }
-    return response.json()
-  }, [apiCall])
+    return result?.[0]?.tree || []
+  }, [mcpCall])
 
-  const updateProject = useCallback(async (id: number, data: ProjectUpdate): Promise<Project> => {
-    const response = await apiCall(`/projects/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
+  const getProject = useCallback(async (id: number, includeTeams = false): Promise<Project | null> => {
+    const result = await mcpCall<{ project: Project | null; error?: string }[]>('projects_fetch', {
+      project_id: id,
+      include_teams: includeTeams,
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update project')
+    if (result?.[0]?.error) {
+      return null
     }
-    return response.json()
-  }, [apiCall])
+    return result?.[0]?.project || null
+  }, [mcpCall])
 
-  const deleteProject = useCallback(async (id: number): Promise<{ status: string; id: number }> => {
-    const response = await apiCall(`/projects/${id}`, {
-      method: 'DELETE',
+  const createProject = useCallback(async (data: ProjectCreate): Promise<{ success: boolean; project?: Project; error?: string }> => {
+    const result = await mcpCall<{ success?: boolean; project?: Project; error?: string }[]>('projects_upsert', {
+      title: data.title,
+      team_ids: data.team_ids,
+      description: data.description,
+      state: data.state ?? 'open',
+      parent_id: data.parent_id,
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to delete project')
+    const response = result?.[0]
+    if (response?.error) {
+      return { success: false, error: response.error }
     }
-    return response.json()
-  }, [apiCall])
+    return { success: true, project: response?.project }
+  }, [mcpCall])
+
+  const updateProject = useCallback(async (id: number, data: ProjectUpdate): Promise<{ success: boolean; project?: Project; error?: string }> => {
+    const result = await mcpCall<{ success?: boolean; project?: Project; error?: string }[]>('projects_upsert', {
+      project_id: id,
+      title: data.title,
+      description: data.description,
+      state: data.state,
+      parent_id: data.parent_id,
+      clear_parent: data.clear_parent,
+    })
+    const response = result?.[0]
+    if (response?.error) {
+      return { success: false, error: response.error }
+    }
+    return { success: true, project: response?.project }
+  }, [mcpCall])
+
+  const deleteProject = useCallback(async (id: number): Promise<{ success: boolean; deleted_id?: number; error?: string }> => {
+    const result = await mcpCall<{ success?: boolean; deleted_id?: number; error?: string }[]>('projects_delete', {
+      project_id: id,
+    })
+    const response = result?.[0]
+    if (response?.error) {
+      return { success: false, error: response.error }
+    }
+    return { success: true, deleted_id: response?.deleted_id }
+  }, [mcpCall])
 
   return {
     listProjects,

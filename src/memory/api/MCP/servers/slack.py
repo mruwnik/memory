@@ -137,8 +137,50 @@ def _get_credentials_for_send(
         return credentials.workspace_id, channel_id, access_token
 
 
+# All available channel fields that can be requested
+CHANNEL_FIELDS = {
+    "id",
+    "name",
+    "type",
+    "is_private",
+    "is_archived",
+    "workspace_id",
+    "collect_messages",
+    "effective_collect",
+    "last_message_ts",
+    "project_id",
+    "sensitivity",
+}
+
+# Default fields for list_channels
+DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "is_private"]
+
+
+def _channel_to_dict(channel: SlackChannel, fields: list[str]) -> dict[str, Any]:
+    """Convert a channel to a dict with only the requested fields."""
+    field_map = {
+        "id": lambda ch: ch.id,
+        "name": lambda ch: ch.name,
+        "type": lambda ch: ch.channel_type,
+        "is_private": lambda ch: ch.is_private,
+        "is_archived": lambda ch: ch.is_archived,
+        "workspace_id": lambda ch: ch.workspace_id,
+        "collect_messages": lambda ch: ch.collect_messages,
+        "effective_collect": lambda ch: ch.should_collect,
+        "last_message_ts": lambda ch: ch.last_message_ts,
+        "project_id": lambda ch: ch.project_id,
+        "sensitivity": lambda ch: ch.sensitivity or "basic",
+    }
+    return {f: field_map[f](channel) for f in fields if f in field_map}
+
+
 def _get_channels_data(
-    token: str, workspace_id: str | None, include_private: bool, include_dms: bool
+    token: str,
+    workspace_id: str | None,
+    include_private: bool,
+    include_dms: bool,
+    include_archived: bool,
+    fields: list[str],
 ) -> dict[str, Any]:
     """Get channels list data (runs in thread)."""
     with make_session() as session:
@@ -153,8 +195,10 @@ def _get_channels_data(
 
         query = session.query(SlackChannel).filter(
             SlackChannel.workspace_id == credentials.workspace_id,
-            SlackChannel.is_archived == False,  # noqa: E712
         )
+
+        if not include_archived:
+            query = query.filter(SlackChannel.is_archived == False)  # noqa: E712
 
         if not include_private:
             query = query.filter(SlackChannel.is_private == False)  # noqa: E712
@@ -169,15 +213,7 @@ def _get_channels_data(
         return {
             "workspace_id": credentials.workspace_id,
             "workspace_name": workspace.name,
-            "channels": [
-                {
-                    "id": ch.id,
-                    "name": ch.name,
-                    "type": ch.channel_type,
-                    "is_private": ch.is_private,
-                }
-                for ch in channels
-            ],
+            "channels": [_channel_to_dict(ch, fields) for ch in channels],
             "count": len(channels),
         }
 
@@ -337,6 +373,8 @@ async def list_channels(
     workspace_id: str | None = None,
     include_private: bool = True,
     include_dms: bool = False,
+    include_archived: bool = False,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     List Slack channels the user has access to.
@@ -345,14 +383,35 @@ async def list_channels(
         workspace_id: Optional workspace ID (uses default if not specified)
         include_private: Include private channels (default True)
         include_dms: Include DMs and group DMs (default False)
+        include_archived: Include archived channels (default False)
+        fields: List of fields to include for each channel.
+                Default: ["id", "name", "type", "is_private"]
+                Available fields:
+                - id: Channel ID (e.g., C12345678)
+                - name: Channel name
+                - type: Channel type (public_channel, private_channel, dm, mpim)
+                - is_private: Whether the channel is private
+                - is_archived: Whether the channel is archived
+                - workspace_id: The workspace ID this channel belongs to
+                - collect_messages: Whether message collection is enabled (null = inherit)
+                - effective_collect: Actual collection status after inheritance
+                - last_message_ts: Timestamp of last synced message
+                - project_id: Associated project ID for access control
+                - sensitivity: Sensitivity level (public, basic, internal, confidential)
 
     Returns:
-        Dict with channels list
+        Dict with workspace info and channels list
     """
     # Get access token from FastMCP context
     access_token = get_access_token()
     if not access_token:
         raise ValueError("Not authenticated")
+
+    # Validate and default fields
+    requested_fields = fields or DEFAULT_CHANNEL_FIELDS
+    invalid_fields = set(requested_fields) - CHANNEL_FIELDS
+    if invalid_fields:
+        raise ValueError(f"Invalid fields: {invalid_fields}. Available: {CHANNEL_FIELDS}")
 
     # Run DB operations in thread - this returns all the data we need
     return await asyncio.to_thread(
@@ -361,6 +420,8 @@ async def list_channels(
         workspace_id,
         include_private,
         include_dms,
+        include_archived,
+        requested_fields,
     )
 
 

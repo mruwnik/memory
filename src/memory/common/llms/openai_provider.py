@@ -57,13 +57,13 @@ class OpenAIProvider(BaseLLMProvider):
 
     def _initialize_client(self) -> openai.OpenAI:
         """Initialize the OpenAI client."""
-        return openai.OpenAI(api_key=self.api_key)
+        return openai.OpenAI(api_key=self.api_key, timeout=60.0)
 
     @property
     def async_client(self) -> openai.AsyncOpenAI:
         """Lazy-load the async client."""
         if self._async_client is None:
-            self._async_client = openai.AsyncOpenAI(api_key=self.api_key)
+            self._async_client = openai.AsyncOpenAI(api_key=self.api_key, timeout=60.0)
         return self._async_client
 
     def _convert_text_content(self, content: TextContent) -> dict[str, Any]:

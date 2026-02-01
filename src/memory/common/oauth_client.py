@@ -31,8 +31,16 @@ def sign_state(state: str, user_id: int) -> str:
     """Sign a state string with HMAC using user_id for binding.
 
     Returns: "state.signature" format
+
+    Raises:
+        RuntimeError: If SECRETS_ENCRYPTION_KEY is not configured
     """
-    secret = settings.SECRETS_ENCRYPTION_KEY.encode() if settings.SECRETS_ENCRYPTION_KEY else b"default-secret"
+    if not settings.SECRETS_ENCRYPTION_KEY:
+        raise RuntimeError(
+            "SECRETS_ENCRYPTION_KEY must be set for OAuth state signing. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+    secret = settings.SECRETS_ENCRYPTION_KEY.encode()
     message = f"{state}:{user_id}".encode()
     signature = hmac.new(secret, message, hashlib.sha256).hexdigest()[:16]
     return f"{state}.{signature}"

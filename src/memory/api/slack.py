@@ -281,7 +281,7 @@ async def slack_callback(
 
     logger.info(f"Exchanging code for tokens with redirect_uri={settings.SLACK_REDIRECT_URI}")
     # Exchange code for tokens
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             "https://slack.com/api/oauth.v2.access",
             data={

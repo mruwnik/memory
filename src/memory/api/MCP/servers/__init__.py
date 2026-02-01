@@ -25,6 +25,7 @@ class MCPServer(str, Enum):
     ORGANIZER = "organizer"
     PEOPLE = "people"
     POLLING = "polling"
+    PROJECTS = "projects"
     SCHEDULE = "schedule"
     SLACK = "slack"
     TEAMS = "teams"
@@ -91,6 +92,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.polling import polling_mcp
 
             return polling_mcp
+        case MCPServer.PROJECTS:
+            from memory.api.MCP.servers.projects import projects_mcp
+
+            return projects_mcp
         case MCPServer.SCHEDULE:
             from memory.api.MCP.servers.schedule import schedule_mcp
 
