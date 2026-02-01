@@ -1,10 +1,11 @@
-"""Add teams for access control.
+"""Add teams for access control and drop project_collaborators.
 
 This migration:
 1. Creates teams table
 2. Creates team_members junction table (team <-> person)
 3. Creates project_teams junction table (project <-> team)
 4. Adds contributor_status to people table
+5. Drops project_collaborators table (replaced by team-based access)
 
 Revision ID: 20260201_teams
 Revises: 20260201_person_tidbit
@@ -39,6 +40,7 @@ def upgrade() -> None:
         sa.Column("auto_sync_discord", sa.Boolean(), nullable=False, server_default="true"),
         # GitHub integration
         sa.Column("github_team_id", sa.BigInteger(), nullable=True),
+        sa.Column("github_team_slug", sa.Text(), nullable=True),
         sa.Column("github_org", sa.Text(), nullable=True),
         sa.Column("auto_sync_github", sa.Boolean(), nullable=False, server_default="true"),
         # Lifecycle
@@ -119,8 +121,41 @@ def upgrade() -> None:
         ),
     )
 
+    # Step 5: Drop project_collaborators table (replaced by team-based access)
+    op.drop_index("project_collaborators_person_idx", table_name="project_collaborators")
+    op.drop_index("project_collaborators_project_idx", table_name="project_collaborators")
+    op.drop_table("project_collaborators")
+
 
 def downgrade() -> None:
+    # Recreate project_collaborators table
+    op.create_table(
+        "project_collaborators",
+        sa.Column(
+            "project_id",
+            sa.BigInteger(),
+            sa.ForeignKey("projects.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "person_id",
+            sa.BigInteger(),
+            sa.ForeignKey("people.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("role", sa.String(50), nullable=False, server_default="contributor"),
+        sa.CheckConstraint(
+            "role IN ('contributor', 'manager', 'admin')",
+            name="valid_collaborator_role",
+        ),
+    )
+    op.create_index(
+        "project_collaborators_project_idx", "project_collaborators", ["project_id"]
+    )
+    op.create_index(
+        "project_collaborators_person_idx", "project_collaborators", ["person_id"]
+    )
+
     # Remove contributor_status from people
     op.drop_column("people", "contributor_status")
 

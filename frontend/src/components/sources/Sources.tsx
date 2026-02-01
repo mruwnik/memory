@@ -30,10 +30,11 @@ import { SecretsPanel } from './panels/SecretsPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
 import { ProjectsPanel } from './panels/ProjectsPanel'
+import { TeamsPanel } from './panels/TeamsPanel'
 
-type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'discord' | 'slack' | 'projects' | 'secrets'
+type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'discord' | 'slack' | 'projects' | 'teams' | 'secrets'
 
-const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'discord', 'slack', 'projects', 'secrets']
+const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'discord', 'slack', 'projects', 'teams', 'secrets']
 
 const Sources = () => {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -113,6 +114,9 @@ const Sources = () => {
         <button className={tabClass('projects')} onClick={() => setActiveTab('projects')}>
           Projects
         </button>
+        <button className={tabClass('teams')} onClick={() => setActiveTab('teams')}>
+          Teams
+        </button>
         <button className={tabClass('secrets')} onClick={() => setActiveTab('secrets')}>
           Secrets
         </button>
@@ -131,6 +135,7 @@ const Sources = () => {
         {activeTab === 'discord' && <DiscordPanel />}
         {activeTab === 'slack' && <SlackPanel />}
         {activeTab === 'projects' && <ProjectsPanel />}
+        {activeTab === 'teams' && <TeamsPanel />}
         {activeTab === 'secrets' && <SecretsPanel />}
       </div>
       </div>

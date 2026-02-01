@@ -184,6 +184,20 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
+    # Step 5e: project_collaborators.person_id (will be dropped in teams migration,
+    # but we need to temporarily update FK to allow dropping old people table)
+    op.drop_constraint(
+        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "project_collaborators_person_id_fkey",
+        "project_collaborators",
+        "people_new",
+        ["person_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+
     # Step 6: Drop old people table
     # Index names from complete_schema: ix_people_identifier (unique), person_aliases_idx,
     # person_display_name_idx, person_identifier_idx
@@ -249,6 +263,19 @@ def upgrade() -> None:
     op.create_foreign_key(
         "person_tidbits_person_id_fkey",
         "person_tidbits",
+        "people",
+        ["person_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+
+    # Update project_collaborators FK to point to renamed table
+    op.drop_constraint(
+        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "project_collaborators_person_id_fkey",
+        "project_collaborators",
         "people",
         ["person_id"],
         ["id"],
@@ -368,6 +395,18 @@ def downgrade() -> None:
         ondelete="SET NULL",
     )
 
+    op.drop_constraint(
+        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "project_collaborators_person_id_fkey",
+        "project_collaborators",
+        "people_old",
+        ["person_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+
     # Drop person_tidbits and new people table
     op.drop_table("person_tidbits")
     op.drop_table("people")
@@ -422,6 +461,18 @@ def downgrade() -> None:
         ["person_id"],
         ["id"],
         ondelete="SET NULL",
+    )
+
+    op.drop_constraint(
+        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "project_collaborators_person_id_fkey",
+        "project_collaborators",
+        "people",
+        ["person_id"],
+        ["id"],
+        ondelete="CASCADE",
     )
 
     # Remove creator_id from source_item

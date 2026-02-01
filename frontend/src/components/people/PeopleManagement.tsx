@@ -1,16 +1,22 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { usePeople, type Person, type PersonCreate, type PersonUpdate } from '../../hooks/usePeople'
+import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
 
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson } = usePeople()
+  const { getPersonTeams } = useTeams()
 
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Teams cache per person identifier
+  const [personTeams, setPersonTeams] = useState<Record<string, Team[]>>({})
+  const [teamsLoading, setTeamsLoading] = useState<Record<string, boolean>>({})
 
   // Search/filter state
   const [searchTerm, setSearchTerm] = useState('')
@@ -125,8 +131,23 @@ const PeopleManagement = () => {
     )
   }
 
-  const toggleExpanded = (identifier: string) => {
+  const toggleExpanded = async (identifier: string) => {
+    const isExpanding = expandedIdentifier !== identifier
     setExpandedIdentifier(prev => prev === identifier ? null : identifier)
+
+    // Fetch teams when expanding, if not already loaded
+    if (isExpanding && !personTeams[identifier] && !teamsLoading[identifier]) {
+      setTeamsLoading(prev => ({ ...prev, [identifier]: true }))
+      try {
+        const teams = await getPersonTeams(identifier)
+        setPersonTeams(prev => ({ ...prev, [identifier]: teams }))
+      } catch (e) {
+        console.error('Failed to load teams for person:', e)
+        setPersonTeams(prev => ({ ...prev, [identifier]: [] }))
+      } finally {
+        setTeamsLoading(prev => ({ ...prev, [identifier]: false }))
+      }
+    }
   }
 
   if (loading && people.length === 0) {
@@ -256,6 +277,8 @@ const PeopleManagement = () => {
                 onToggleExpand={() => toggleExpanded(person.identifier)}
                 onEdit={() => setEditingPerson(person)}
                 onDelete={() => setDeletingPerson(person)}
+                teams={personTeams[person.identifier]}
+                teamsLoading={teamsLoading[person.identifier]}
               />
             ))
           )}

@@ -42,11 +42,17 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
     """Create a one-time API key for the user.
 
     Returns the key string (only available at creation time).
+    The key includes OAuth scopes (read, write) plus the user's MCP tool scopes.
     """
+    # Combine OAuth scopes with user's MCP tool scopes
+    user_scopes = list(user_session.user.scopes or [])
+    scopes = list(set(user_scopes) | {"read", "write"})
+
     one_time_key = APIKey.create(
         user_id=user_session.user.id,
         key_type=APIKeyType.ONE_TIME,
         name="MCP Client Operation",
+        scopes=scopes,
     )
     session.add(one_time_key)
     session.commit()

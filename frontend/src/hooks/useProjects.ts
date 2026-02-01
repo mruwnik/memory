@@ -1,21 +1,14 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 
-// Types for Collaborators
-export interface Collaborator {
-  person_id: number
-  person_identifier: string
-  display_name: string
-  role: 'contributor' | 'manager' | 'admin'
-}
-
-export interface CollaboratorInput {
-  person_id?: number
-  person_identifier?: string
-  role?: 'contributor' | 'manager' | 'admin'
-}
-
 // Types for Projects
+export interface ProjectTeam {
+  id: number
+  name: string
+  slug: string
+  member_count: number | null
+}
+
 export interface Project {
   id: number
   title: string
@@ -28,8 +21,8 @@ export interface Project {
   // Hierarchy
   parent_id: number | null
   children_count: number
-  // Collaborators
-  collaborators: Collaborator[]
+  // Teams (optional)
+  teams?: ProjectTeam[]
 }
 
 export interface ProjectTreeNode {
@@ -47,7 +40,6 @@ export interface ProjectCreate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
-  collaborators?: CollaboratorInput[]
 }
 
 export interface ProjectUpdate {
@@ -55,7 +47,6 @@ export interface ProjectUpdate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
-  collaborators?: CollaboratorInput[]
 }
 
 export const useProjects = () => {
@@ -65,11 +56,13 @@ export const useProjects = () => {
     state?: string
     parent_id?: number
     include_children?: boolean
+    include_teams?: boolean
   }): Promise<Project[]> => {
     const params = new URLSearchParams()
     if (options?.state) params.append('state', options.state)
     if (options?.parent_id !== undefined) params.append('parent_id', String(options.parent_id))
     if (options?.include_children) params.append('include_children', 'true')
+    if (options?.include_teams) params.append('include_teams', 'true')
 
     const url = `/projects${params.toString() ? `?${params.toString()}` : ''}`
     const response = await apiCall(url)
@@ -89,8 +82,9 @@ export const useProjects = () => {
     return response.json()
   }, [apiCall])
 
-  const getProject = useCallback(async (id: number): Promise<Project> => {
-    const response = await apiCall(`/projects/${id}`)
+  const getProject = useCallback(async (id: number, includeTeams = false): Promise<Project> => {
+    const params = includeTeams ? '?include_teams=true' : ''
+    const response = await apiCall(`/projects/${id}${params}`)
     if (!response.ok) throw new Error('Failed to fetch project')
     return response.json()
   }, [apiCall])

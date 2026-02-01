@@ -5,7 +5,7 @@ This module provides:
 - AccessLog: Audit log for access control events
 
 Note: Projects are defined in the Project model in sources.py.
-Project collaborators are linked via the project_collaborators junction table.
+Team-based access control is managed via team_members and project_teams junction tables.
 """
 
 from __future__ import annotations

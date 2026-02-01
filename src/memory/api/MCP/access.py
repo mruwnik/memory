@@ -126,7 +126,7 @@ def build_user_access_filter_from_dict(user_dict: dict) -> AccessFilter | None:
         return None
 
     # Fetch project roles directly by user_id
-    # This queries User -> Person -> project_collaborators
+    # This queries User -> Person -> team_members -> project_teams
     project_roles = get_project_roles_by_user_id(user_id)
     return build_access_filter(user_proxy, project_roles)  # type: ignore[arg-type]
 

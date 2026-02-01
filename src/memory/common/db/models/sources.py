@@ -374,8 +374,9 @@ class Project(Base):
     items: Mapped[list[GithubItem]] = relationship(
         "GithubItem", back_populates="milestone_rel", foreign_keys="[GithubItem.milestone_id]"
     )
-    collaborators: Mapped[list["Person"]] = relationship(
-        "Person", secondary="project_collaborators", back_populates="projects"
+    # Teams assigned to this project (for access control)
+    teams: Mapped[list["Team"]] = relationship(
+        "Team", secondary="project_teams", back_populates="projects"
     )
 
     __table_args__ = (
@@ -399,19 +400,6 @@ class Project(Base):
         if self.repo is None:
             return None
         return f"{self.repo.owner}/{self.repo.name}:{self.number}"
-
-
-# Junction table for project collaborators
-project_collaborators = Table(
-    "project_collaborators",
-    Base.metadata,
-    Column("project_id", BigInteger, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
-    Column("person_id", BigInteger, ForeignKey("people.id", ondelete="CASCADE"), primary_key=True),
-    Column("role", String(50), nullable=False, server_default="contributor"),
-    CheckConstraint("role IN ('contributor', 'manager', 'admin')", name="valid_collaborator_role"),
-    Index("project_collaborators_project_idx", "project_id"),
-    Index("project_collaborators_person_idx", "person_id"),
-)
 
 
 class GithubUser(Base):
@@ -894,9 +882,14 @@ class Person(Base):
         "GithubUser", back_populates="person"
     )
 
-    # Projects this person collaborates on
-    projects: Mapped[list["Project"]] = relationship(
-        "Project", secondary="project_collaborators", back_populates="collaborators"
+    # Teams this person belongs to
+    teams: Mapped[list["Team"]] = relationship(
+        "Team", secondary="team_members", back_populates="members"
+    )
+
+    # Contributor status/tier
+    contributor_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, server_default="contractor"
     )
 
     # Tidbits of information about this person
@@ -1012,3 +1005,118 @@ class Person(Base):
         path = settings.NOTES_STORAGE_DIR / self.get_profile_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_profile_markdown())
+
+
+# ============== Team Model ==============
+
+
+# Junction table for team members
+team_members = Table(
+    "team_members",
+    Base.metadata,
+    Column("team_id", BigInteger, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True),
+    Column("person_id", BigInteger, ForeignKey("people.id", ondelete="CASCADE"), primary_key=True),
+    Column("role", String(50), nullable=False, server_default="member"),
+    Column("added_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("role IN ('member', 'lead', 'admin')", name="valid_team_member_role"),
+    Index("team_members_team_idx", "team_id"),
+    Index("team_members_person_idx", "person_id"),
+)
+
+
+# Junction table for project-team assignments
+project_teams = Table(
+    "project_teams",
+    Base.metadata,
+    Column("project_id", BigInteger, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("team_id", BigInteger, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True),
+    Column("assigned_at", DateTime(timezone=True), server_default=func.now()),
+    Index("project_teams_project_idx", "project_id"),
+    Index("project_teams_team_idx", "team_id"),
+)
+
+
+class Team(Base):
+    """A team of people for access control and organization.
+
+    Teams are flat (no hierarchy) and can be optionally linked to:
+    - Discord roles (for notifications and channel access)
+    - GitHub teams (for repository access)
+
+    Access control: A person can access a project if they are in ANY
+    of the project's assigned teams.
+    """
+
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Categorization via tags (for queries like "all engineering teams")
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), server_default="{}", nullable=False
+    )
+
+    # Discord integration
+    discord_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    discord_guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    auto_sync_discord: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+
+    # GitHub integration
+    github_team_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_team_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_org: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_sync_github: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+
+    # Lifecycle
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    members: Mapped[list["Person"]] = relationship(
+        "Person", secondary=team_members, back_populates="teams"
+    )
+    projects: Mapped[list["Project"]] = relationship(
+        "Project", secondary=project_teams, back_populates="teams"
+    )
+
+    __table_args__ = (
+        Index("teams_slug_idx", "slug"),
+        Index("teams_tags_idx", "tags", postgresql_using="gin"),
+        Index("teams_is_active_idx", "is_active"),
+    )
+
+    @property
+    def display_contents(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slug": self.slug,
+            "description": self.description,
+            "tags": self.tags,
+            "member_count": len(self.members) if self.members else 0,
+            "is_active": self.is_active,
+        }
+
+
+def can_access_project(person: "Person", project: "Project") -> bool:
+    """Check if a person can access a project via team membership.
+
+    A person can access a project if they are in ANY of the project's assigned teams.
+    """
+    person_team_ids = {t.id for t in person.teams}
+    project_team_ids = {t.id for t in project.teams}
+    return bool(person_team_ids & project_team_ids)

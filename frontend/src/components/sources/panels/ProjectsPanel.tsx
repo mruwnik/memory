@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, Collaborator, CollaboratorInput } from '@/hooks/useProjects'
-import { usePeople, Person } from '@/hooks/usePeople'
+import { useState, useEffect, useCallback } from 'react'
+import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate } from '@/hooks/useProjects'
+import { useTeams, Team } from '@/hooks/useTeams'
 import {
   Modal,
   EmptyState,
@@ -9,8 +9,6 @@ import {
   ConfirmDialog,
 } from '../shared'
 import { styles, cx } from '../styles'
-
-type CollaboratorRole = 'contributor' | 'manager' | 'admin'
 
 export const ProjectsPanel = () => {
   const {
@@ -21,6 +19,13 @@ export const ProjectsPanel = () => {
     deleteProject,
   } = useProjects()
 
+  const {
+    listTeams,
+    listProjectTeams,
+    assignTeamToProject,
+    unassignTeamFromProject,
+  } = useTeams()
+
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,6 +35,7 @@ export const ProjectsPanel = () => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const [managingTeams, setManagingTeams] = useState<Project | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -140,6 +146,7 @@ export const ProjectsPanel = () => {
             nodes={tree}
             onEdit={setEditingProject}
             onDelete={setDeletingProject}
+            onManageTeams={setManagingTeams}
             projects={projects}
           />
         </div>
@@ -151,6 +158,7 @@ export const ProjectsPanel = () => {
               project={project}
               onEdit={() => setEditingProject(project)}
               onDelete={() => setDeletingProject(project)}
+              onManageTeams={() => setManagingTeams(project)}
             />
           ))}
         </div>
@@ -199,6 +207,17 @@ export const ProjectsPanel = () => {
           />
         )
       )}
+
+      {managingTeams && (
+        <ProjectTeamsModal
+          project={managingTeams}
+          onClose={() => setManagingTeams(null)}
+          listTeams={listTeams}
+          listProjectTeams={listProjectTeams}
+          assignTeam={assignTeamToProject}
+          unassignTeam={unassignTeamFromProject}
+        />
+      )}
     </div>
   )
 }
@@ -208,11 +227,12 @@ interface ProjectTreeProps {
   nodes: ProjectTreeNode[]
   onEdit: (project: Project) => void
   onDelete: (project: Project) => void
+  onManageTeams: (project: Project) => void
   projects: Project[]
   depth?: number
 }
 
-const ProjectTree = ({ nodes, onEdit, onDelete, projects, depth = 0 }: ProjectTreeProps) => {
+const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, depth = 0 }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
   return (
@@ -232,10 +252,10 @@ const ProjectTree = ({ nodes, onEdit, onDelete, projects, depth = 0 }: ProjectTr
                 number: null,
                 parent_id: node.parent_id,
                 children_count: node.children.length,
-                collaborators: [],
               }}
               onEdit={() => project && onEdit(project)}
               onDelete={() => project && onDelete(project)}
+              onManageTeams={() => project && onManageTeams(project)}
               compact
             />
             {node.children.length > 0 && (
@@ -243,6 +263,7 @@ const ProjectTree = ({ nodes, onEdit, onDelete, projects, depth = 0 }: ProjectTr
                 nodes={node.children}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onManageTeams={onManageTeams}
                 projects={projects}
                 depth={depth + 1}
               />
@@ -259,10 +280,11 @@ interface ProjectCardProps {
   project: Project
   onEdit: () => void
   onDelete: () => void
+  onManageTeams: () => void
   compact?: boolean
 }
 
-const ProjectCard = ({ project, onEdit, onDelete, compact }: ProjectCardProps) => {
+const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
 
@@ -305,21 +327,6 @@ const ProjectCard = ({ project, onEdit, onDelete, compact }: ProjectCardProps) =
               {project.repo_path} #{project.number}
             </p>
           )}
-          {project.collaborators && project.collaborators.length > 0 && !compact && (
-            <div className="flex items-center gap-1 mt-1 flex-wrap">
-              <span className="text-xs text-slate-400">Collaborators:</span>
-              {project.collaborators.slice(0, 3).map(c => (
-                <span key={c.person_id} className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
-                  {c.display_name}
-                </span>
-              ))}
-              {project.collaborators.length > 3 && (
-                <span className="text-xs text-slate-400">
-                  +{project.collaborators.length - 3} more
-                </span>
-              )}
-            </div>
-          )}
         </div>
         <div className={styles.cardActions}>
           {project.children_count > 0 && (
@@ -327,6 +334,9 @@ const ProjectCard = ({ project, onEdit, onDelete, compact }: ProjectCardProps) =
               {project.children_count} child{project.children_count !== 1 ? 'ren' : ''}
             </span>
           )}
+          <button className={styles.btnEdit} onClick={onManageTeams}>
+            Teams
+          </button>
           <button className={styles.btnEdit} onClick={onEdit}>
             Edit
           </button>
@@ -361,7 +371,6 @@ const ProjectFormModal = ({
 }: ProjectFormModalProps) => {
   const isEditing = !!project
   const isGithubBacked = project?.repo_path !== null
-  const { listPeople } = usePeople()
 
   const [formData, setFormData] = useState({
     title: project?.title || '',
@@ -370,99 +379,8 @@ const ProjectFormModal = ({
     parent_id: project?.parent_id || null as number | null,
   })
 
-  // Collaborator state
-  const [collaborators, setCollaborators] = useState<Array<{
-    person_id: number
-    display_name: string
-    role: CollaboratorRole
-  }>>(
-    project?.collaborators?.map(c => ({
-      person_id: c.person_id,
-      display_name: c.display_name,
-      role: c.role as CollaboratorRole,
-    })) || []
-  )
-  const [peopleSearch, setPeopleSearch] = useState('')
-  const [peopleResults, setPeopleResults] = useState<Person[]>([])
-  const [showPeopleDropdown, setShowPeopleDropdown] = useState(false)
-  const [searchingPeople, setSearchingPeople] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  // Use ref for listPeople to avoid effect re-running when function reference changes
-  const listPeopleRef = useRef(listPeople)
-  listPeopleRef.current = listPeople
-
-  // Search for people when search term changes
-  useEffect(() => {
-    if (peopleSearch.length < 2) {
-      setPeopleResults([])
-      return
-    }
-
-    setSearchingPeople(true)
-    const controller = new AbortController()
-
-    const searchPeople = async () => {
-      try {
-        const results = await listPeopleRef.current({ search: peopleSearch, limit: 10 })
-        if (controller.signal.aborted) return
-        setPeopleResults(results)
-      } catch {
-        if (!controller.signal.aborted) {
-          setPeopleResults([])
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setSearchingPeople(false)
-        }
-      }
-    }
-
-    const debounce = setTimeout(searchPeople, 300)
-    return () => {
-      clearTimeout(debounce)
-      controller.abort()
-    }
-  }, [peopleSearch])
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowPeopleDropdown(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  const addCollaborator = (person: Person) => {
-    setCollaborators(prev => [...prev, {
-      person_id: person.id,
-      display_name: person.display_name,
-      role: 'contributor' as CollaboratorRole,
-    }])
-    setPeopleSearch('')
-    setShowPeopleDropdown(false)
-  }
-
-  const removeCollaborator = (personId: number) => {
-    setCollaborators(prev => prev.filter(c => c.person_id !== personId))
-  }
-
-  const updateCollaboratorRole = (personId: number, role: CollaboratorRole) => {
-    setCollaborators(prev => prev.map(c =>
-      c.person_id === personId ? { ...c, role } : c
-    ))
-  }
-
-  // Filter out already-selected collaborators from search results
-  const filteredPeopleResults = useMemo(() => {
-    const selectedIds = new Set(collaborators.map(c => c.person_id))
-    return peopleResults.filter(p => !selectedIds.has(p.id))
-  }, [peopleResults, collaborators])
 
   // Get valid parent options (exclude self and descendants)
   const getValidParents = () => {
@@ -493,23 +411,16 @@ const ProjectFormModal = ({
     setError(null)
 
     try {
-      // Convert collaborators to API format
-      const collaboratorInputs: CollaboratorInput[] = collaborators.map(c => ({
-        person_id: c.person_id,
-        role: c.role,
-      }))
-
       const data: ProjectCreate | ProjectUpdate = isEditing
         ? {
-            // For GitHub-backed, only allow parent_id and collaborator changes
+            // For GitHub-backed, only allow parent_id changes
             ...(isGithubBacked
-              ? { parent_id: formData.parent_id, collaborators: collaboratorInputs }
+              ? { parent_id: formData.parent_id }
               : {
                   title: formData.title || undefined,
                   description: formData.description || null,
                   state: formData.state,
                   parent_id: formData.parent_id,
-                  collaborators: collaboratorInputs,
                 }),
           }
         : {
@@ -517,7 +428,6 @@ const ProjectFormModal = ({
             description: formData.description || null,
             state: formData.state,
             parent_id: formData.parent_id,
-            collaborators: collaboratorInputs,
           }
 
       await onSubmit(data)
@@ -534,7 +444,7 @@ const ProjectFormModal = ({
 
         {isEditing && isGithubBacked && (
           <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-sm mb-4">
-            This project is synced from GitHub. Only parent and collaborators can be changed here.
+            This project is synced from GitHub. Only parent can be changed here.
             Edit title/description/state in GitHub.
           </div>
         )}
@@ -600,82 +510,6 @@ const ProjectFormModal = ({
           </p>
         </div>
 
-        {/* Collaborators Section */}
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Collaborators</label>
-
-          {/* Search input */}
-          <div className="relative" ref={dropdownRef}>
-            <input
-              type="text"
-              value={peopleSearch}
-              onChange={e => {
-                setPeopleSearch(e.target.value)
-                setShowPeopleDropdown(true)
-              }}
-              onFocus={() => setShowPeopleDropdown(true)}
-              placeholder="Search people to add..."
-              className={styles.formInput}
-            />
-
-            {/* Search results dropdown */}
-            {showPeopleDropdown && (filteredPeopleResults.length > 0 || searchingPeople) && (
-              <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-auto">
-                {searchingPeople ? (
-                  <div className="px-4 py-2 text-sm text-slate-500">Searching...</div>
-                ) : (
-                  filteredPeopleResults.map(person => (
-                    <button
-                      key={person.id}
-                      type="button"
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center justify-between cursor-pointer"
-                      onClick={() => addCollaborator(person)}
-                    >
-                      <span className="font-medium">{person.display_name}</span>
-                      <span className="text-slate-400 text-xs">{person.identifier}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Selected collaborators */}
-          {collaborators.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {collaborators.map(collab => (
-                <div
-                  key={collab.person_id}
-                  className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg"
-                >
-                  <span className="flex-1 text-sm font-medium">{collab.display_name}</span>
-                  <select
-                    value={collab.role}
-                    onChange={e => updateCollaboratorRole(collab.person_id, e.target.value as CollaboratorRole)}
-                    className="text-xs border border-slate-200 rounded px-2 py-1 bg-white"
-                  >
-                    <option value="contributor">Contributor</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => removeCollaborator(collab.person_id)}
-                    className="text-slate-400 hover:text-red-500 cursor-pointer"
-                    title="Remove collaborator"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <p className={styles.formHint}>
-            Add people who can access this project. Type to search.
-          </p>
-        </div>
-
         <div className={styles.formActions}>
           <button type="button" className={styles.btnCancel} onClick={onClose} disabled={submitting}>
             Cancel
@@ -685,6 +519,163 @@ const ProjectFormModal = ({
           </button>
         </div>
       </form>
+    </Modal>
+  )
+}
+
+// Project Teams Management Modal
+interface ProjectTeamsModalProps {
+  project: Project
+  onClose: () => void
+  listTeams: () => Promise<Team[]>
+  listProjectTeams: (project: number | string) => Promise<Team[]>
+  assignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
+  unassignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
+}
+
+const ProjectTeamsModal = ({
+  project,
+  onClose,
+  listTeams,
+  listProjectTeams,
+  assignTeam,
+  unassignTeam,
+}: ProjectTeamsModalProps) => {
+  const [assignedTeams, setAssignedTeams] = useState<Team[]>([])
+  const [allTeams, setAllTeams] = useState<Team[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // Load teams on mount
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true)
+      try {
+        const [assigned, all] = await Promise.all([
+          listProjectTeams(project.id),
+          listTeams(),
+        ])
+        setAssignedTeams(assigned)
+        setAllTeams(all)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load teams')
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [project.id, listProjectTeams, listTeams])
+
+  const handleAssign = async (team: Team) => {
+    setError(null)
+    const result = await assignTeam(project.id, team.slug)
+    if (result.success) {
+      setAssignedTeams(prev => [...prev, team])
+    } else {
+      setError(result.error || 'Failed to assign team')
+    }
+  }
+
+  const handleUnassign = async (team: Team) => {
+    setError(null)
+    const result = await unassignTeam(project.id, team.slug)
+    if (result.success) {
+      setAssignedTeams(prev => prev.filter(t => t.id !== team.id))
+    } else {
+      setError(result.error || 'Failed to unassign team')
+    }
+  }
+
+  const assignedIds = new Set(assignedTeams.map(t => t.id))
+  const availableTeams = allTeams.filter(t => !assignedIds.has(t.id))
+
+  return (
+    <Modal title={`Teams for ${project.title}`} onClose={onClose}>
+      <div className="space-y-4">
+        {error && <div className={styles.formError}>{error}</div>}
+
+        {loading ? (
+          <p className="text-sm text-slate-500">Loading...</p>
+        ) : (
+          <>
+            {/* Assigned teams */}
+            <div>
+              <h4 className="text-sm font-medium text-slate-700 mb-2">
+                Assigned Teams ({assignedTeams.length})
+              </h4>
+              {assignedTeams.length === 0 ? (
+                <p className="text-sm text-slate-500">No teams assigned</p>
+              ) : (
+                <div className="space-y-2">
+                  {assignedTeams.map(team => (
+                    <div
+                      key={team.id}
+                      className="flex items-center justify-between py-2 px-3 bg-purple-50 rounded-lg"
+                    >
+                      <div>
+                        <span className="font-medium text-purple-900">{team.name}</span>
+                        <span className="text-purple-600 text-sm ml-2">@{team.slug}</span>
+                        {team.member_count !== undefined && (
+                          <span className="text-purple-500 text-xs ml-2">
+                            ({team.member_count} member{team.member_count !== 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="text-red-600 text-sm hover:text-red-700"
+                        onClick={() => handleUnassign(team)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Available teams to add */}
+            {availableTeams.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-slate-700 mb-2">
+                  Available Teams
+                </h4>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {availableTeams.map(team => (
+                    <div
+                      key={team.id}
+                      className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg"
+                    >
+                      <div>
+                        <span className="font-medium">{team.name}</span>
+                        <span className="text-slate-500 text-sm ml-2">@{team.slug}</span>
+                        {team.member_count !== undefined && (
+                          <span className="text-slate-400 text-xs ml-2">
+                            ({team.member_count} member{team.member_count !== 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="text-primary text-sm hover:text-primary/80"
+                        onClick={() => handleAssign(team)}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        <div className={styles.formActions}>
+          <button type="button" className={styles.btnPrimary} onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
     </Modal>
   )
 }

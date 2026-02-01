@@ -30,7 +30,7 @@ from memory.common.db.models.users import (
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
 )
-from memory.api.auth import lookup_api_key
+from memory.api.auth import lookup_api_key, handle_api_key_use
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +193,8 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 # Use API key scopes if set, otherwise fall back to user scopes
                 scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
+                # Handle API key usage (update last_used_at, delete one-time keys)
+                handle_api_key_use(api_key_record, session)
                 return FastMCPAccessToken(
                     token=token,
                     client_id=cast(str, user.name or user.email),
@@ -409,6 +411,8 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 # Use API key scopes if set, otherwise fall back to user scopes
                 scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
+                # Handle API key usage (update last_used_at, delete one-time keys)
+                handle_api_key_use(api_key_record, session)
                 return AccessToken(
                     token=token,
                     client_id=cast(str, user.name or user.email),

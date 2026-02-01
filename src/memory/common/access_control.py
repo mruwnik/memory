@@ -2,12 +2,12 @@
 Access control logic for project-based RBAC.
 
 This module provides role-based access control for content in the knowledge base.
-Users are linked to Persons who are collaborators on projects,
-and content has sensitivity levels (basic, internal, confidential).
+Users are linked to Persons who are members of Teams, which are assigned to Projects.
+Content has sensitivity levels (basic, internal, confidential).
 
 Key design decisions:
-- Projects (originally GitHub milestones) with collaborators (Person entries)
-- User -> Person -> project_collaborators -> Project
+- Projects with Teams assigned (team_projects junction)
+- User -> Person -> team_members -> Team -> project_teams -> Project
 - NULL project_id = superadmin only (prevents accidental exposure)
 - Superadmins (users with admin scope) bypass filters but access is still logged
 - Defense in depth: filter at Qdrant, BM25, AND final merge
@@ -144,25 +144,51 @@ def has_admin_scope(user: UserLike) -> bool:
 
 def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User") -> dict[int, str]:
     """
-    Get the user's roles in each project they collaborate on.
+    Get the user's roles in each project they have access to via team membership.
 
-    Returns a dict mapping project_id (milestone ID) to role string.
+    Returns a dict mapping project_id to role string.
+    Team-based access: user is in a team -> team is assigned to project.
+    The role returned is based on team membership role (member -> contributor, lead -> manager, admin -> admin).
     """
-    from memory.common.db.models.sources import project_collaborators
+    from sqlalchemy import select
+
+    from memory.common.db.models.sources import project_teams, team_members
 
     # User must have a linked Person to have project access
     person = getattr(user, "person", None)
     if person is None:
         return {}
 
-    # Query project_collaborators for this person
-    rows = db.execute(
-        project_collaborators.select().where(
-            project_collaborators.c.person_id == person.id
+    # Query teams the person belongs to and their assigned projects
+    # Join: team_members -> project_teams to find accessible projects
+    stmt = (
+        select(team_members.c.role, project_teams.c.project_id)
+        .select_from(
+            team_members.join(
+                project_teams, team_members.c.team_id == project_teams.c.team_id
+            )
         )
-    ).fetchall()
+        .where(team_members.c.person_id == person.id)
+    )
+    rows = db.execute(stmt).fetchall()
 
-    return {row.project_id: row.role for row in rows}
+    # Map team roles to project roles (best role wins if in multiple teams)
+    # member -> contributor, lead -> manager, admin -> admin
+    role_mapping = {"member": "contributor", "lead": "manager", "admin": "admin"}
+    role_priority = {"contributor": 1, "manager": 2, "admin": 3}
+
+    project_roles: dict[int, str] = {}
+    for row in rows:
+        project_id = row.project_id
+        team_role = row.role
+        project_role = role_mapping.get(team_role, "contributor")
+
+        # Keep the highest-privilege role if multiple teams grant access
+        current = project_roles.get(project_id)
+        if current is None or role_priority.get(project_role, 0) > role_priority.get(current, 0):
+            project_roles[project_id] = project_role
+
+    return project_roles
 
 
 def normalize_sensitivity(sensitivity: SensitivityLevel | str) -> str:

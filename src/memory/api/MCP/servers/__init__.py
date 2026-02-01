@@ -27,6 +27,7 @@ class MCPServer(str, Enum):
     POLLING = "polling"
     SCHEDULE = "schedule"
     SLACK = "slack"
+    TEAMS = "teams"
 
 
 ALL_MCP_SERVERS: frozenset[str] = frozenset(s.value for s in MCPServer)
@@ -98,6 +99,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.slack import slack_mcp
 
             return slack_mcp
+        case MCPServer.TEAMS:
+            from memory.api.MCP.servers.teams import teams_mcp
+
+            return teams_mcp
         case _:
             raise ValueError(f"Unknown server: {server}")
 

@@ -82,6 +82,10 @@ from memory.common.db.models.sources import (
     GoogleFolder,
     CalendarAccount,
     Person,
+    Team,
+    team_members,
+    project_teams,
+    can_access_project,
 )
 from memory.common.db.models.users import (
     User,
@@ -209,6 +213,11 @@ __all__ = [
     "PersonPayload",
     "PersonTidbit",
     "PersonTidbitPayload",
+    # Teams
+    "Team",
+    "team_members",
+    "project_teams",
+    "can_access_project",
     # Calendar
     "CalendarAccount",
     "CalendarEvent",
