@@ -1,6 +1,6 @@
-# Memory - Personal Knowledge Base
+# Memory - Knowledge Base
 
-A personal knowledge base system that ingests, indexes, and provides semantic search over various content types including emails, documents, notes, web pages, and more. Features MCP (Model Context Protocol) integration for AI assistants to access and learn from your personal data.
+A self-hosted knowledge base system that ingests, indexes, and provides semantic search over various content types including emails, documents, notes, web pages, and more. Features MCP (Model Context Protocol) integration for AI assistants, team-based access control, and multi-user support.
 
 ## Features
 
@@ -132,16 +132,7 @@ For Claude Desktop or other MCP clients, add to your configuration:
 
 ## Available MCP Tools
 
-When connected via MCP, AI assistants have access to:
-
-- `search_knowledge_base()` - Search your stored content
-- `search_observations()` - Search recorded observations about you
-- `observe()` - Record new observations about your preferences/behavior
-- `create_note()` - Create and save notes
-- `note_files()` - List existing notes
-- `fetch_file()` - Read file contents
-- `get_all_tags()` - Get all content tags
-- `get_all_subjects()` - Get observation subjects
+When connected via MCP, AI assistants have access to tools organized by domain (core, teams, projects, etc.). Use `tools/list` on the MCP server to see all available tools. Access control is enforced based on the authenticated user's team memberships and roles.
 
 ## Content Ingestion
 
