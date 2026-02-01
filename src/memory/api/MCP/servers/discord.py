@@ -15,7 +15,6 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
-    DiscordServer,
     DiscordUser,
     UserSession,
 )
@@ -94,37 +93,28 @@ def _to_snowflake(value: int | str) -> int:
 
 def _resolve_guild_id(
     session: DBSession,
-    guild_id: int | str | None,
-    guild_name: str | None,
+    guild: int | str | None,
 ) -> int:
     """
-    Resolve a guild ID from either guild_id or guild_name.
+    Resolve a guild ID from either numeric ID or server name.
 
     Args:
         session: Database session
-        guild_id: Discord guild ID (snowflake) as int or string
-        guild_name: Discord server name to look up
+        guild: Discord guild ID (snowflake) or server name
 
     Returns:
         The resolved guild ID as int
 
     Raises:
-        ValueError: If neither is provided or guild_name not found
+        ValueError: If guild is None or name not found
     """
-    if guild_id is not None:
-        return _to_snowflake(guild_id)
+    if guild is None:
+        raise ValueError("Must specify guild")
 
-    if guild_name is None:
-        raise ValueError("Must specify either guild_id or guild_name")
-
-    server = (
-        session.query(DiscordServer)
-        .filter(DiscordServer.name == guild_name)
-        .first()
-    )
-    if not server:
-        raise ValueError(f"Server '{guild_name}' not found")
-    return server.id
+    resolved = discord_client.resolve_guild(guild, session)
+    if resolved is None:
+        raise ValueError(f"Server '{guild}' not found")
+    return resolved
 
 
 @discord_mcp.tool()
@@ -307,16 +297,14 @@ async def channel_history(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def list_channels(
-    server_id: int | str | None = None,
-    server_name: str | None = None,
+    server: int | str | None = None,
     include_dms: bool = False,
 ) -> dict[str, Any]:
     """
     List Discord channels the bot has access to.
 
     Args:
-        server_id: Filter by server ID
-        server_name: Filter by server name
+        server: Filter by server - can be numeric ID or server name
         include_dms: Include DM channels (default False)
 
     Returns:
@@ -324,23 +312,21 @@ async def list_channels(
     """
     with make_session() as session:
         return await asyncio.to_thread(
-            fetch_channels, session, server_id, server_name, include_dms
+            fetch_channels, session, server, include_dms
         )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord"), has_discord_bots)
 async def list_roles(
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     List all roles in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -349,7 +335,7 @@ async def list_roles(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.list_roles,
@@ -363,8 +349,7 @@ async def list_roles(
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def list_role_members(
     role_id: int | str,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -372,8 +357,7 @@ async def list_role_members(
 
     Args:
         role_id: Role ID to list members for (snowflake, can be string or int)
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -383,7 +367,7 @@ async def list_role_members(
     resolved_role_id = _to_snowflake(role_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.list_role_members,
@@ -397,16 +381,14 @@ async def list_role_members(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def list_categories(
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     List all categories in a Discord server.
 
     Args:
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -415,7 +397,7 @@ async def list_categories(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.list_categories,
@@ -490,8 +472,7 @@ async def add_user_to_role(
     role_name: str | None = None,
     user_id: int | str | None = None,
     username: str | None = None,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -502,8 +483,7 @@ async def add_user_to_role(
         role_name: Role name to add user to (alternative to role_id)
         user_id: User ID to add (snowflake, can be string or int)
         username: Username to add (alternative to user_id)
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -517,7 +497,7 @@ async def add_user_to_role(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
         resolved_role_id = _resolve_role_id(role_id, role_name, resolved_guild_id, resolved_bot_id)
         resolved_user_id = _resolve_user_id(session, user_id, username)
 
@@ -538,8 +518,7 @@ async def role_remove(
     role_name: str | None = None,
     user_id: int | str | None = None,
     username: str | None = None,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -550,8 +529,7 @@ async def role_remove(
         role_name: Role name to remove user from (alternative to role_id)
         user_id: User ID to remove (snowflake, can be string or int)
         username: Username to remove (alternative to user_id)
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -565,7 +543,7 @@ async def role_remove(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
         resolved_role_id = _resolve_role_id(role_id, role_name, resolved_guild_id, resolved_bot_id)
         resolved_user_id = _resolve_user_id(session, user_id, username)
 
@@ -795,8 +773,7 @@ async def del_perms(
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def create_channel(
     name: str,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     category_id: int | str | None = None,
     category_name: str | None = None,
     topic: str | None = None,
@@ -808,8 +785,7 @@ async def create_channel(
 
     Args:
         name: Channel name
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         category_id: Optional category to create channel in (snowflake, can be string or int)
         category_name: Optional category name (alternative to category_id)
         topic: Optional channel topic/description
@@ -824,7 +800,7 @@ async def create_channel(
     resolved_copy_from = _to_snowflake(copy_permissions_from) if copy_permissions_from else None
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.create_channel,
@@ -843,8 +819,7 @@ async def create_channel(
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def create_category(
     name: str,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -852,8 +827,7 @@ async def create_category(
 
     Args:
         name: Category name
-        guild_id: Discord server/guild ID (snowflake, can be string or int)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -862,7 +836,7 @@ async def create_category(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+        resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.create_category,
@@ -878,8 +852,7 @@ async def create_category(
 async def delete_channel(
     channel_id: int | str | None = None,
     channel_name: str | None = None,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -888,8 +861,7 @@ async def delete_channel(
     Args:
         channel_id: Discord channel/category ID (snowflake, can be string or int)
         channel_name: Discord channel/category name (alternative to channel_id)
-        guild_id: Discord server/guild ID (required when using channel_name)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name (required when using channel_name)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -898,8 +870,8 @@ async def delete_channel(
     if channel_id is None and channel_name is None:
         raise ValueError("Must specify either channel_id or channel_name")
 
-    if channel_name is not None and guild_id is None and guild_name is None:
-        raise ValueError("guild_id or guild_name is required when using channel_name")
+    if channel_name is not None and guild is None:
+        raise ValueError("guild is required when using channel_name")
 
     resolved_bot_id = resolve_bot_id(bot_id)
     resolved_channel_id = _to_snowflake(channel_id) if channel_id is not None else None
@@ -908,7 +880,7 @@ async def delete_channel(
     resolved_guild_id = None
     if channel_name is not None:
         with make_session() as session:
-            resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+            resolved_guild_id = _resolve_guild_id(session, guild)
 
     identifier = channel_id or channel_name
     return await _call_discord_api(
@@ -926,8 +898,7 @@ async def delete_channel(
 async def delete_category(
     category_id: int | str | None = None,
     category_name: str | None = None,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -936,8 +907,7 @@ async def delete_category(
     Args:
         category_id: Discord category ID (snowflake, can be string or int)
         category_name: Discord category name (alternative to category_id)
-        guild_id: Discord server/guild ID (required when using category_name)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name (required when using category_name)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
@@ -947,8 +917,7 @@ async def delete_category(
     return await delete_channel(
         channel_id=category_id,
         channel_name=category_name,
-        guild_id=guild_id,
-        guild_name=guild_name,
+        guild=guild,
         bot_id=bot_id,
     )
 
@@ -958,8 +927,7 @@ async def delete_category(
 async def edit_channel(
     channel_id: int | str | None = None,
     channel_name: str | None = None,
-    guild_id: int | str | None = None,
-    guild_name: str | None = None,
+    guild: int | str | None = None,
     new_name: str | None = None,
     new_topic: str | None = None,
     category_id: int | str | None = None,
@@ -974,8 +942,7 @@ async def edit_channel(
     Args:
         channel_id: Discord channel ID (snowflake, can be string or int)
         channel_name: Discord channel name (alternative to channel_id)
-        guild_id: Discord server/guild ID (required when using channel_name)
-        guild_name: Discord server name (alternative to guild_id)
+        guild: Discord server - can be numeric ID or server name (required when using channel_name or category_name)
         new_name: New name for the channel
         new_topic: New topic for the channel (empty string to clear)
         category_id: Move to this category ID (empty string or 0 to remove from category)
@@ -996,7 +963,7 @@ async def edit_channel(
     resolved_guild_id = None
     if channel_name is not None or category_name is not None:
         with make_session() as session:
-            resolved_guild_id = _resolve_guild_id(session, guild_id, guild_name)
+            resolved_guild_id = _resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.edit_channel,

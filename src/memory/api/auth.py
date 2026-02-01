@@ -199,6 +199,32 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
     db.commit()
 
 
+def authenticate_request(
+    request: Request, db: DBSession, allowed_key_types: list[str] | None = None
+) -> tuple[User | None, str | None]:
+    """Authenticate a request and return user with auth method info.
+
+    Returns:
+        Tuple of (user, key_type) where:
+        - user: The authenticated User or None
+        - key_type: The API key type if authenticated via API key, None for session tokens
+    """
+    token = get_token(request)
+    if not token:
+        return None, None
+
+    # Check if this looks like an API key (various prefixes)
+    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
+        user, api_key = authenticate_by_api_key(token, db, allowed_key_types)
+        key_type = api_key.key_type if api_key else None
+        return user, key_type
+
+    # Otherwise treat as session token
+    if session := get_user_session(request, db):
+        return session.user, None
+    return None, None
+
+
 def get_session_user(
     request: Request, db: DBSession, allowed_key_types: list[str] | None = None
 ) -> User | None:
@@ -213,23 +239,29 @@ def get_session_user(
         db: Database session.
         allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
     """
-    token = get_token(request)
-    if not token:
-        return None
-
-    # Check if this looks like an API key (various prefixes)
-    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
-        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
-        return user
-
-    # Otherwise treat as session token
-    if session := get_user_session(request, db):
-        return session.user
-    return None
+    user, _ = authenticate_request(request, db, allowed_key_types)
+    return user
 
 
 def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> User:
-    """FastAPI dependency to get current authenticated user"""
+    """FastAPI dependency to get current authenticated user.
+
+    First checks if user was already authenticated by middleware (stored in
+    request.state.authenticated_user_id). This is important for one-time keys,
+    which are deleted after first use - the middleware authenticates and deletes
+    the key, then stores the user_id so endpoints don't try to re-authenticate.
+    """
+    # Check if middleware already authenticated this request
+    if hasattr(request.state, "authenticated_user_id"):
+        user = db.get(User, request.state.authenticated_user_id)
+        if user:
+            return user
+        # User was deleted after middleware authenticated - fall through to re-auth
+        # which will also fail, returning appropriate 401
+
+    # Fall back to normal authentication. This handles:
+    # 1. Whitelisted paths where middleware doesn't run
+    # 2. User deleted after middleware auth (db.get returned None above)
     user = get_session_user(request, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -301,13 +333,31 @@ def require_key_types(*allowed_types: str):
 
     Args:
         allowed_types: Key types to allow (e.g., "discord", "internal", "mcp").
-                      Session tokens (non-API-key auth) are always allowed.
+                      Session tokens (non-API-key auth) are always allowed since
+                      they represent interactive user sessions (logged in via
+                      username/password), which should have full access.
     """
     allowed_list = list(allowed_types)
 
     def checker(
         request: Request, db: DBSession = Depends(get_session)
     ) -> User:
+        # Check if middleware already authenticated this request
+        if hasattr(request.state, "authenticated_user_id"):
+            key_type = getattr(request.state, "authenticated_key_type", None)
+            # Session tokens (key_type=None) always bypass this check - they represent
+            # interactive user sessions with full access, not programmatic API keys
+            if key_type is None or key_type in allowed_list:
+                user = db.get(User, request.state.authenticated_user_id)
+                if user:
+                    return user
+            # Key type not in allowed list
+            raise HTTPException(
+                status_code=401,
+                detail=f"Authentication required with key type: {', '.join(allowed_list)}",
+            )
+
+        # Fall back to normal authentication (for whitelisted paths, etc.)
         user = get_session_user(request, db, allowed_key_types=allowed_list)
         if not user:
             raise HTTPException(
@@ -545,13 +595,18 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Validate session and get user
         with make_session() as session:
-            user = get_session_user(request, session)
+            user, key_type = authenticate_request(request, session)
             if not user:
                 return Response(
                     content="Invalid or expired session",
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+
+            # Store auth info in request state so endpoints don't re-authenticate
+            # (important for one-time keys which are deleted after first use)
+            request.state.authenticated_user_id = user.id
+            request.state.authenticated_key_type = key_type  # None for session tokens
 
             # Log user ID instead of email for privacy
             logger.debug(f"Authenticated request from user_id={user.id} to {path}")

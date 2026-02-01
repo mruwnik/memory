@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import desc
 
+from memory.common import discord as discord_client
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -134,8 +135,7 @@ def fetch_channel_history(
 
 def fetch_channels(
     session: DBSession,
-    server_id: int | str | None,
-    server_name: str | None,
+    server: int | str | None,
     include_dms: bool,
 ) -> dict[str, Any]:
     """
@@ -143,8 +143,7 @@ def fetch_channels(
 
     Args:
         session: Database session
-        server_id: Filter by server ID (accepts string for JavaScript compatibility)
-        server_name: Filter by server name
+        server: Filter by server - can be numeric ID or server name
         include_dms: Include DM channels
 
     Returns:
@@ -152,20 +151,12 @@ def fetch_channels(
     """
     query = session.query(DiscordChannel)
 
-    # Filter by server if specified (convert string to int if needed)
-    if server_id is not None:
-        server_id_int = int(server_id) if isinstance(server_id, str) else server_id
-        query = query.filter(DiscordChannel.server_id == server_id_int)
-    elif server_name is not None:
-        server = (
-            session.query(DiscordServer)
-            .filter(DiscordServer.name == server_name)
-            .first()
-        )
-        if server:
-            query = query.filter(DiscordChannel.server_id == server.id)
-        else:
-            return {"channels": [], "count": 0, "error": f"Server '{server_name}' not found"}
+    # Filter by server if specified
+    if server is not None:
+        resolved_server_id = discord_client.resolve_guild(server, session)
+        if resolved_server_id is None:
+            return {"channels": [], "count": 0, "error": f"Server '{server}' not found"}
+        query = query.filter(DiscordChannel.server_id == resolved_server_id)
 
     # Filter out DMs unless requested
     if not include_dms:

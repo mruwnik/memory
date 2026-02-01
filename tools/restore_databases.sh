@@ -76,13 +76,24 @@ restore_postgres() {
     fi
 
     log "Restoring to PostgreSQL..."
-    if PGPASSWORD="${PGPASSWORD:-}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "${sql_file}"; then
-        log "PostgreSQL restore completed successfully"
-        return 0
-    else
+    if ! PGPASSWORD="${PGPASSWORD:-}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "${sql_file}"; then
         error "PostgreSQL restore failed (some errors may be expected for existing objects)"
         return 1
     fi
+
+    # Post-restore validation
+    log "Validating PostgreSQL restore..."
+    local table_count user_count
+    table_count=$(PGPASSWORD="${PGPASSWORD:-}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null | tr -d ' ')
+    user_count=$(PGPASSWORD="${PGPASSWORD:-}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT count(*) FROM users" 2>/dev/null | tr -d ' ')
+
+    if [ -z "${table_count}" ] || [ "${table_count}" -lt 1 ]; then
+        error "PostgreSQL validation failed: no tables found"
+        return 1
+    fi
+
+    log "PostgreSQL restore validated: ${table_count} tables, ${user_count:-0} users"
+    return 0
 }
 
 # Restore Qdrant
@@ -142,15 +153,47 @@ restore_qdrant() {
     fi
 
     log "Recovering from snapshot: ${snapshot_name}"
-    if curl -sf -X PUT "${QDRANT_URL}/snapshots/recover" \
+    if ! curl -sf -X PUT "${QDRANT_URL}/snapshots/recover" \
          -H "Content-Type: application/json" \
          -d "{\"location\": \"file:///qdrant/snapshots/${snapshot_name}\"}" >/dev/null; then
-        log "Qdrant restore completed successfully"
-        return 0
-    else
         error "Qdrant recovery failed"
         return 1
     fi
+
+    # Post-restore validation - poll until Qdrant is ready or timeout
+    log "Validating Qdrant restore..."
+    local max_wait="${QDRANT_RESTORE_TIMEOUT:-30}"  # seconds
+    local wait_interval=2
+    local waited=0
+    local collections_response=""
+    local collection_count
+
+    while [ "${waited}" -lt "${max_wait}" ]; do
+        collections_response=$(curl -sf "${QDRANT_URL}/collections" 2>/dev/null)
+        if [ -n "${collections_response}" ]; then
+            # Check if we have actual collections (not just an empty response)
+            if command -v jq >/dev/null 2>&1; then
+                collection_count=$(echo "${collections_response}" | jq '.result.collections | length' 2>/dev/null)
+            else
+                collection_count=$(echo "${collections_response}" | grep -o '"name"' | wc -l | tr -d ' ')
+            fi
+
+            if [ -n "${collection_count}" ] && [ "${collection_count}" -ge 1 ]; then
+                break
+            fi
+        fi
+        sleep "${wait_interval}"
+        waited=$((waited + wait_interval))
+        log "Waiting for Qdrant to initialize collections... (${waited}s/${max_wait}s)"
+    done
+
+    if [ -z "${collection_count}" ] || [ "${collection_count}" -lt 1 ]; then
+        error "Qdrant validation failed: no collections found after ${max_wait}s"
+        return 1
+    fi
+
+    log "Qdrant restore validated: ${collection_count} collections"
+    return 0
 }
 
 # Main
