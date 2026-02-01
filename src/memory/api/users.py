@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
@@ -25,26 +25,26 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
-    password: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
     user_type: Literal["human", "bot"] = "human"
     scopes: list[str] = ["read"]
 
 
 class UserUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     email: str | None = None
     scopes: list[str] | None = None
 
 
 class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class PasswordReset(BaseModel):
-    new_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 MIN_PASSWORD_LENGTH = 8

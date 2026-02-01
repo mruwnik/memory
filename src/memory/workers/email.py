@@ -384,39 +384,66 @@ def should_delete_email(_email: MailMessage) -> bool:
     return True
 
 
+def extract_vector_deletion_info(email: MailMessage) -> dict:
+    """Extract info needed for vector deletion before session detachment.
+
+    Call this before commit to capture chunk IDs and modalities while the
+    session is still active.
+    """
+    info = {
+        "email_chunk_ids": [cast(str, c.id) for c in email.chunks] if email.chunks else [],
+        "email_modality": cast(str, email.modality),
+        "attachments": [],
+    }
+    for attachment in email.attachments:
+        if attachment.chunks:
+            info["attachments"].append({
+                "chunk_ids": [cast(str, c.id) for c in attachment.chunks],
+                "modality": cast(str, attachment.modality),
+            })
+    return info
+
+
+def delete_email_vectors_from_info(info: dict) -> None:
+    """Delete vectors using pre-extracted info (safe to call after session commit)."""
+    qdrant_client = qdrant.get_qdrant_client()
+
+    # Delete email chunks
+    if info["email_chunk_ids"]:
+        try:
+            qdrant.delete_points(
+                client=qdrant_client,
+                collection_name=info["email_modality"],
+                ids=info["email_chunk_ids"],
+            )
+        except Exception as e:
+            logger.warning(f"Error deleting email vectors: {e}")
+
+    # Delete attachment chunks
+    for att_info in info["attachments"]:
+        try:
+            qdrant.delete_points(
+                client=qdrant_client,
+                collection_name=att_info["modality"],
+                ids=att_info["chunk_ids"],
+            )
+        except Exception as e:
+            logger.warning(f"Error deleting attachment vectors: {e}")
+
+
 def delete_email_vectors(email: MailMessage) -> None:
     """
     Delete vectors for an email and its attachments from Qdrant.
 
     Args:
         email: The MailMessage whose vectors should be deleted
+
+    Note: This requires the email to still be attached to a session.
+    For post-commit deletion, use extract_vector_deletion_info() before commit
+    and delete_email_vectors_from_info() after.
     """
-    qdrant_client = qdrant.get_qdrant_client()
-
-    # Delete email chunks
-    if email.chunks:
-        chunk_ids = [cast(str, c.id) for c in email.chunks]
-        try:
-            qdrant.delete_points(
-                client=qdrant_client,
-                collection_name=cast(str, email.modality),
-                ids=chunk_ids,
-            )
-        except Exception as e:
-            logger.warning(f"Error deleting email vectors: {e}")
-
-    # Delete attachment chunks
-    for attachment in email.attachments:
-        if attachment.chunks:
-            chunk_ids = [cast(str, c.id) for c in attachment.chunks]
-            try:
-                qdrant.delete_points(
-                    client=qdrant_client,
-                    collection_name=cast(str, attachment.modality),
-                    ids=chunk_ids,
-                )
-            except Exception as e:
-                logger.warning(f"Error deleting attachment vectors: {e}")
+    info = extract_vector_deletion_info(email)
+    delete_email_vectors_from_info(info)
 
 
 def delete_removed_emails(
@@ -726,6 +753,13 @@ def delete_emails(emails: list[MailMessage], db_session: Session | scoped_sessio
     """
     Delete emails and their vectors from the database.
 
+    Deletes from DB first, commits, then deletes vectors. This ensures
+    that if commit fails, we don't have orphaned DB records without vectors.
+
+    Note: This function commits internally to ensure DB deletion completes before
+    vector deletion. Callers should NOT wrap this in their own transaction that
+    expects to control commit timing.
+
     Args:
         emails: List of MailMessage objects to delete
         db_session: Database session
@@ -733,15 +767,27 @@ def delete_emails(emails: list[MailMessage], db_session: Session | scoped_sessio
     Returns:
         Number of emails deleted
     """
-    deleted_count = 0
+    # Collect emails to delete and extract vector info BEFORE commit
+    # (after commit, the ORM objects are detached and relationships inaccessible)
+    deletion_info = []
     for email in emails:
         if should_delete_email(email):
             logger.info(
                 f"Deleting email {email.message_id} "
                 f"(UID {email.imap_uid}) - no longer on server"
             )
-            delete_email_vectors(email)
+            # Extract vector info while session is still active
+            deletion_info.append(extract_vector_deletion_info(email))
             db_session.delete(email)
-            deleted_count += 1
 
-    return deleted_count
+    if not deletion_info:
+        return 0
+
+    # Commit DB deletions first
+    db_session.commit()
+
+    # Now safe to delete vectors using pre-extracted info
+    for info in deletion_info:
+        delete_email_vectors_from_info(info)
+
+    return len(deletion_info)

@@ -6,12 +6,15 @@ from celery.schedules import crontab
 from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
+    CLEANUP_EXPIRED_OAUTH_STATES,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_METRICS,
+    CLEANUP_STUCK_MEETINGS,
     COLLECT_SYSTEM_METRICS,
     PROCESS_RAW_ITEMS,
     REINGEST_MISSING_CHUNKS,
     REFRESH_METRIC_SUMMARIES,
+    SUMMARIZE_STALE_SESSIONS,
     SYNC_ALL_COMICS,
     SYNC_ALL_ARTICLE_FEEDS,
     TRACK_GIT_CHANGES,
@@ -100,6 +103,18 @@ app.conf.beat_schedule.update({
     "process-raw-items": {
         "task": PROCESS_RAW_ITEMS,
         "schedule": crontab(hour="4", minute="0"),  # Daily at 4 AM
+    },
+    "cleanup-expired-oauth-states": {
+        "task": CLEANUP_EXPIRED_OAUTH_STATES,
+        "schedule": crontab(minute="15"),  # Every hour at :15
+    },
+    "cleanup-stuck-meetings": {
+        "task": CLEANUP_STUCK_MEETINGS,
+        "schedule": crontab(minute="45"),  # Every hour at :45
+    },
+    "summarize-stale-sessions": {
+        "task": SUMMARIZE_STALE_SESSIONS,
+        "schedule": crontab(minute="30"),  # Every hour at :30
     },
 })
 

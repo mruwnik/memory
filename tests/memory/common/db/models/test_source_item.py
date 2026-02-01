@@ -520,9 +520,9 @@ def test_subclass_deletion_cascades_from_source_item(db_session: Session):
     mail_message_id = mail_message.id
 
     # Verify both records exist
-    source_item = db_session.query(SourceItem).get(source_item_id)
+    source_item = db_session.get(SourceItem, source_item_id)
     assert source_item
-    assert db_session.query(MailMessage).get(mail_message_id)
+    assert db_session.get(MailMessage, mail_message_id)
 
     # Delete the MailMessage subclass
     db_session.delete(source_item)

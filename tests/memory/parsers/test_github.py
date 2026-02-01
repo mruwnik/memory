@@ -736,6 +736,7 @@ def test_list_repos_pat_auth():
 
     page1 = [
         {
+            "id": 12345,
             "owner": {"login": "testuser"},
             "name": "repo1",
             "full_name": "testuser/repo1",
@@ -756,6 +757,7 @@ def test_list_repos_pat_auth():
     assert len(repos) == 1
     assert repos[0]["name"] == "repo1"
     assert repos[0]["owner"] == "testuser"
+    assert repos[0]["id"] == 12345
 
 
 def test_list_repos_unlimited():
@@ -764,6 +766,7 @@ def test_list_repos_unlimited():
 
     def make_repo(i: int) -> dict:
         return {
+            "id": 12345 + i,
             "owner": {"login": "testuser"},
             "name": f"repo{i}",
             "full_name": f"testuser/repo{i}",
@@ -797,6 +800,7 @@ def test_list_repos_stops_at_max():
 
     def make_repo(i: int) -> dict:
         return {
+            "id": 12345 + i,
             "owner": {"login": "testuser"},
             "name": f"repo{i}",
             "full_name": f"testuser/repo{i}",
@@ -830,6 +834,7 @@ def test_list_repos_app_auth():
     page1 = {
         "repositories": [
             {
+                "id": 99999,
                 "owner": {"login": "org"},
                 "name": "app-repo",
                 "full_name": "org/app-repo",

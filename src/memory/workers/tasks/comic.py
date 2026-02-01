@@ -34,9 +34,16 @@ XKCD_RSS_URL = "https://xkcd.com/atom.xml"
 
 def find_new_urls(base_url: str, rss_url: str) -> set[str]:
     try:
-        feed = feedparser.parse(rss_url)
+        # Pre-fetch RSS content to avoid feedparser making direct requests
+        # This provides better control over timeouts and avoids potential XXE issues
+        response = requests.get(rss_url, timeout=30)
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch {rss_url}: {e}")
+        return set()
     except Exception as e:
-        logger.error(f"Failed to fetch or parse {rss_url}: {e}")
+        logger.error(f"Failed to parse RSS from {rss_url}: {e}")
         return set()
 
     urls = {cast(str, item.get("link") or item.get("id")) for item in feed.entries}
@@ -149,8 +156,9 @@ def trigger_comic_sync():
 
     next_url = "https://www.smbc-comics.com"
     urls = []
+    max_iterations = 10000  # Prevent infinite loop on malformed links
     logger.info(f"syncing {next_url}")
-    while next_url := prev_smbc_comic(next_url):
+    while (next_url := prev_smbc_comic(next_url)) and len(urls) < max_iterations:
         if len(urls) % 10 == 0:
             logger.info(f"got {len(urls)}")
         try:

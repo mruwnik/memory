@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
+from memory.common.access_control import get_user_project_roles, user_can_access
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
 from memory.common.db.models.source_items import Photo
@@ -42,13 +43,29 @@ def list_photos(
     user: User = Depends(get_current_user),
     db: DBSession = Depends(get_session),
 ) -> list[PhotoResponse]:
-    """List all photos in the knowledge base."""
+    """List photos the user has access to.
+
+    Note: Uses overfetch strategy to avoid loading all photos. If user has access
+    to fewer than `limit` photos in the first batch, fewer results are returned.
+    For guaranteed pagination, use cursor-based pagination (not yet implemented).
+    """
+    project_roles = get_user_project_roles(db, user)
+
+    # Overfetch to account for filtering, then filter by access.
+    # This avoids loading ALL photos into memory while still ensuring we get enough
+    # accessible ones. The multiplier accounts for typical access patterns.
+    # Limitation: may return fewer than `limit` results if user has sparse access.
+    overfetch_multiplier = 3
     photos = (
         db.query(Photo)
         .order_by(Photo.exif_taken_at.desc().nulls_last())
-        .limit(limit)
+        .limit(limit * overfetch_multiplier)
         .all()
     )
+
+    accessible_photos = [
+        photo for photo in photos if user_can_access(user, photo, project_roles)
+    ][:limit]
 
     return [
         PhotoResponse(
@@ -63,7 +80,7 @@ def list_photos(
             tags=photo.tags or [],
             mime_type=photo.mime_type,
         )
-        for photo in photos
+        for photo in accessible_photos
     ]
 
 
@@ -80,6 +97,11 @@ def delete_photo(
     """Delete a photo and its associated data."""
     photo = db.get(Photo, photo_id)
     if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    # Check user has access to this photo
+    project_roles = get_user_project_roles(db, user)
+    if not user_can_access(user, photo, project_roles):
         raise HTTPException(status_code=404, detail="Photo not found")
 
     # Delete chunks from Qdrant and PostgreSQL

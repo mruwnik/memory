@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 DBSession = Session | scoped_session[Session]
 
 
+def escape_like(s: str) -> str:
+    """Escape LIKE/ILIKE metacharacters in a string.
+
+    Prevents user input containing % or _ from matching unintended patterns.
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def make_identifier(name: str) -> str:
     """Create a person identifier from a name (e.g. 'John Smith' -> 'john_smith')."""
     identifier = re.sub(r"\s+", "_", name.lower().strip())
@@ -75,7 +83,7 @@ def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
     if "@" in name_lower:
         person = (
             session.query(Person)
-            .filter(Person.contact_info["email"].astext.ilike(f"%{name_lower}%"))
+            .filter(Person.contact_info["email"].astext.ilike(f"%{escape_like(name_lower)}%"))
             .first()
         )
         if person:
@@ -100,7 +108,7 @@ def find_person_by_email(session: DBSession, email: str | None) -> Person | None
     email_lower = email.lower().strip()
     return (
         session.query(Person)
-        .filter(Person.contact_info["email"].astext.ilike(email_lower))
+        .filter(Person.contact_info["email"].astext.ilike(escape_like(email_lower)))
         .first()
     )
 

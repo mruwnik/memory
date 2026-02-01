@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
 
@@ -12,7 +12,7 @@ from memory.common import llms, settings, jobs as job_utils
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Task
 from memory.common.db.models.source_items import Meeting
-from memory.common.celery_app import app, PROCESS_MEETING, REPROCESS_MEETING
+from memory.common.celery_app import app, PROCESS_MEETING, REPROCESS_MEETING, CLEANUP_STUCK_MEETINGS
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
@@ -562,3 +562,48 @@ def reprocess_meeting(
             model,
             job_id,
         )
+
+
+# Timeout for stuck meetings (1 hour - if processing takes longer, something is wrong)
+STUCK_MEETING_TIMEOUT_HOURS = 1
+
+
+@app.task(name=CLEANUP_STUCK_MEETINGS)
+def cleanup_stuck_meetings() -> dict:
+    """
+    Reset meetings stuck in 'processing' status due to worker crashes.
+
+    This task should be run periodically (e.g., every hour) to clean up
+    meetings that got stuck when a worker crashed mid-processing.
+
+    Returns:
+        dict with count of reset meetings
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STUCK_MEETING_TIMEOUT_HOURS)
+
+    with make_session() as session:
+        # Find meetings that have been 'processing' for too long
+        stuck_meetings = (
+            session.query(Meeting)
+            .filter(
+                Meeting.extraction_status == "processing",
+                Meeting.updated_at < cutoff,
+            )
+            .all()
+        )
+
+        count = 0
+        for meeting in stuck_meetings:
+            logger.warning(
+                f"Resetting stuck meeting {meeting.id} "
+                f"(stuck since {meeting.updated_at})"
+            )
+            meeting.extraction_status = "pending"
+            count += 1
+
+        session.commit()
+
+        if count > 0:
+            logger.info(f"Reset {count} stuck meetings")
+
+        return {"reset_count": count}

@@ -178,10 +178,20 @@ class Chunk(Base):
     # Populated by backref from SourceItem.chunks relationship
     source: SourceItem
 
-    vector: list[float] = []
-    item_metadata: dict[str, Any] = {}
-    images: list[Image.Image] = []
-    relevance_score: float = 0.0
+    # Transient attributes (not stored in DB) - initialized per-instance to avoid
+    # shared mutable state across instances
+    vector: list[float]
+    item_metadata: dict[str, Any]
+    images: list[Image.Image]
+    relevance_score: float
+
+    def __init__(self, **kwargs: Any) -> None:
+        # Initialize transient mutable attributes per-instance
+        self.vector = kwargs.pop("vector", [])
+        self.item_metadata = kwargs.pop("item_metadata", {})
+        self.images = kwargs.pop("images", [])
+        self.relevance_score = kwargs.pop("relevance_score", 0.0)
+        super().__init__(**kwargs)
 
     # One of file_path or content must be populated
     __table_args__ = (
@@ -294,6 +304,12 @@ class SourceItem(Base):
     sha256: Mapped[bytes] = mapped_column(BYTEA, nullable=False, unique=True)
     inserted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=func.now(),
+        onupdate=func.now(),
     )
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
     size: Mapped[int | None] = mapped_column(Integer)
@@ -423,8 +439,9 @@ class SourceItem(Base):
         return chunks
 
     def _make_chunk(
-        self, data: extract.DataChunk, metadata: dict[str, Any] = {}
+        self, data: extract.DataChunk, metadata: dict[str, Any] | None = None
     ) -> Chunk:
+        metadata = metadata or {}
         chunk_id = str(uuid.uuid4())
         text = "\n\n".join(c for c in data.data if isinstance(c, str) and c.strip())
         images = [c for c in data.data if isinstance(c, Image.Image)]
@@ -445,7 +462,8 @@ class SourceItem(Base):
         )
         return chunk
 
-    def data_chunks(self, metadata: dict[str, Any] = {}) -> Sequence[Chunk]:
+    def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
+        metadata = metadata or {}
         return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
 
     def as_payload(self) -> SourceItemPayload:

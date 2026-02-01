@@ -83,8 +83,12 @@ def _get_vevent_attr(vevent: Any, attr: str, default: Any = None) -> Any:
 
 
 def _create_event_hash(event_data: EventData) -> bytes:
-    """Create a hash for deduplication based on event content."""
+    """Create a hash for deduplication based on event content.
+
+    Includes external_id to distinguish recurring events with same content.
+    """
     content = (
+        f"{event_data.get('external_id', '')}"
         f"{event_data.get('title', '')}"
         f"{event_data.get('start_time', '')}"
         f"{event_data.get('description', '')}"

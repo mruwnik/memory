@@ -3,6 +3,7 @@ uvicorn[standard]==0.29.0  # [standard] includes websockets support
 python-jose==3.3.0
 python-multipart==0.0.9
 sqladmin==0.20.1
+itsdangerous>=2.0.0  # Required by sqladmin's session middleware
 mcp==1.10.0
 fastmcp>=2.10.0
 slowapi==0.1.9

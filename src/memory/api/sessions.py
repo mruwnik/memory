@@ -7,6 +7,7 @@ Provides endpoints for:
 - Retrieving session transcripts
 """
 
+import fcntl
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -273,32 +274,60 @@ def get_or_create_session(
 
 
 def append_events_to_transcript(session: Session, events: list[SessionEvent]) -> int:
-    """Append an event to the session's JSONL transcript file.
+    """Append events to the session's JSONL transcript file.
 
-    Returns True if event was appended, False if it was a duplicate.
+    Uses file locking to prevent concurrent write races.
+
+    Returns the number of events appended (excluding duplicates).
+
+    Note: Uses fcntl for file locking which is Unix-only. This is intentional
+    as the application runs in Linux Docker containers. If Windows support is
+    needed, consider using the 'filelock' library instead.
     """
     if not session.transcript_path:
-        return False
+        return 0
 
     transcript_file = settings.SESSIONS_STORAGE_DIR / session.transcript_path
     transcript_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check for duplicate UUID
     event_ids = {e.uuid for e in events}
-    existing_uuids = set()
-    if transcript_file.exists() and event_ids:
-        existing_uuids = {i.get("uuid") for i in safe_loads(transcript_file)}
 
-    items = [
-        json.dumps(event.model_dump(), default=str)
-        for event in events
-        if event.uuid not in existing_uuids
-    ]
-    # Append to file
-    with open(transcript_file, "a") as f:
-        f.write("\n".join(items) + "\n")
+    # Use file locking to prevent concurrent writes
+    # Open with 'a+' to create if not exists, then lock
+    with open(transcript_file, "a+") as f:
+        # Acquire exclusive lock (blocks until available)
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            # Read existing UUIDs while holding lock
+            f.seek(0)
+            existing_uuids = set()
+            if event_ids:
+                for line in f:
+                    if line.strip():
+                        try:
+                            data = json.loads(line)
+                            if uuid := data.get("uuid"):
+                                existing_uuids.add(uuid)
+                        except json.JSONDecodeError:
+                            pass
 
-    return len(items)
+            # Filter out duplicates and write new events
+            items = [
+                json.dumps(event.model_dump(), default=str)
+                for event in events
+                if event.uuid not in existing_uuids
+            ]
+
+            if items:
+                # Seek to end and append
+                f.seek(0, 2)  # Seek to end
+                f.write("\n".join(items) + "\n")
+                f.flush()
+
+            return len(items)
+        finally:
+            # Release lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def read_transcript(

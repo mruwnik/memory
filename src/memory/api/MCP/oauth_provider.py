@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import secrets
 import time
@@ -33,6 +34,14 @@ from memory.common.db.models.users import (
 from memory.api.auth import lookup_api_key, handle_api_key_use
 
 logger = logging.getLogger(__name__)
+
+
+def token_id(token: str) -> str:
+    """Create a safe identifier for logging tokens without exposing them.
+
+    Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()[:8]
 
 ALLOWED_SCOPES = ["read", "write", "claudeai"]
 BASE_SCOPES = ["read"]
@@ -89,7 +98,7 @@ def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at < now:
-        logger.error(f"Refresh token expired: {db_refresh_token.token[:20]}...")
+        logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
         db_refresh_token.revoked = True  # type: ignore
         raise ValueError("Refresh token expired")
 
@@ -107,23 +116,24 @@ def create_oauth_token(
     )
 
 
-def make_token(
+def make_token_from_data(
     db: scoped_session,
-    auth_state: TokenBase,
+    oauth_state_id: int | None,
+    user_id: int,
+    client_id: str,
     scopes: list[str],
 ) -> OAuthToken:
-    # Only set oauth_state_id if this is an OAuthState (not a refresh token)
-    oauth_state_id = auth_state.id if isinstance(auth_state, OAuthState) else None
+    """Create OAuth token from extracted data (after auth code deletion)."""
     new_session = UserSession(
-        user_id=auth_state.user_id,
+        user_id=user_id,
         oauth_state_id=oauth_state_id,
         expires_at=create_expiration(ACCESS_TOKEN_LIFETIME),
     )
 
     # Create refresh token
     refresh_token = create_refresh_token_record(
-        cast(str, auth_state.client_id),
-        cast(int, auth_state.user_id),
+        client_id,
+        user_id,
         scopes,
         cast(str, new_session.id),
     )
@@ -136,6 +146,23 @@ def make_token(
         str(new_session.id),
         scopes,
         cast(str, refresh_token.token),
+    )
+
+
+def make_token(
+    db: scoped_session,
+    auth_state: TokenBase,
+    scopes: list[str],
+) -> OAuthToken:
+    """Create OAuth token from auth state object (for refresh token flow)."""
+    # Only set oauth_state_id if this is an OAuthState (not a refresh token)
+    oauth_state_id = auth_state.id if isinstance(auth_state, OAuthState) else None
+    return make_token_from_data(
+        db,
+        oauth_state_id=oauth_state_id,
+        user_id=cast(int, auth_state.user_id),
+        client_id=cast(str, auth_state.client_id),
+        scopes=scopes,
     )
 
 
@@ -158,7 +185,7 @@ class SimpleOAuthProvider(OAuthProvider):
         """Verify an access token and return token info if valid."""
         with make_session() as session:
             # Try as OAuth access token first
-            user_session = session.query(UserSession).get(token)
+            user_session = session.get(UserSession, token)
             if user_session:
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 if user_session.expires_at < now:
@@ -378,15 +405,35 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"No user found for auth code: {authorization_code.code}")
                 raise ValueError("Invalid authorization code")
 
-            token = make_token(session, auth_code, authorization_code.scopes)
-            logger.info(f"Exchanged authorization code for user {auth_code.user_id}")
+            # Extract data needed for token creation BEFORE invalidating auth code
+            auth_code_id = auth_code.id
+            user_id = auth_code.user_id
+            client_id = auth_code.client_id
+            scopes = authorization_code.scopes
+
+            # Invalidate the auth code BEFORE creating token to prevent replay attacks.
+            # If token creation fails after this, user can re-initiate OAuth flow.
+            # This is safer than the reverse (token created but code not invalidated).
+            session.delete(auth_code)
+            session.commit()
+
+            # Create token using extracted data (auth_code object is now detached)
+            token = make_token_from_data(
+                session,
+                oauth_state_id=auth_code_id,
+                user_id=user_id,
+                client_id=client_id,
+                scopes=scopes,
+            )
+            logger.info(f"Exchanged authorization code for user {user_id}")
+
             return token
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
         """Load and validate an access token (or bot API key)."""
         with make_session() as session:
             # Try as OAuth access token first
-            user_session = session.query(UserSession).get(token)
+            user_session = session.get(UserSession, token)
             if user_session:
                 now = datetime.now(timezone.utc).replace(
                     tzinfo=None
@@ -443,7 +490,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             if not db_refresh_token:
                 logger.error(
-                    f"Invalid or expired refresh token: {refresh_token[:20]}..."
+                    f"Invalid or expired refresh token: {token_id(refresh_token)}"
                 )
                 return None
 
@@ -474,7 +521,7 @@ class SimpleOAuthProvider(OAuthProvider):
             )
 
             if not db_refresh_token:
-                logger.error(f"Refresh token not found: {refresh_token.token[:20]}...")
+                logger.error(f"Refresh token not found: {token_id(refresh_token.token)}")
                 raise ValueError("Invalid refresh token")
 
             # Validate refresh token
@@ -505,7 +552,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session:
                     session.delete(user_session)
                     revoked = True
-                    logger.info(f"Revoked access token: {token[:20]}...")
+                    logger.info(f"Revoked access token: id={token_id(token)}")
 
             # Try to revoke as refresh token
             if not revoked and (
@@ -519,12 +566,12 @@ class SimpleOAuthProvider(OAuthProvider):
                 if refresh_token:
                     refresh_token.revoked = True  # type: ignore
                     revoked = True
-                    logger.info(f"Revoked refresh token: {token[:20]}...")
+                    logger.info(f"Revoked refresh token: id={token_id(token)}")
 
             if revoked:
                 session.commit()
             else:
-                logger.warning(f"Token not found for revocation: {token[:20]}...")
+                logger.warning(f"Token not found for revocation: id={token_id(token)}")
 
     def get_protected_resource_metadata(self) -> dict[str, Any]:
         """Return metadata about the protected resource."""

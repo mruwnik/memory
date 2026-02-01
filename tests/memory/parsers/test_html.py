@@ -314,7 +314,8 @@ def test_extract_metadata():
 def test_process_image_success(mock_pil_open, mock_requests_get):
     # Setup mocks
     mock_response = MagicMock()
-    mock_response.content = b"fake image data"
+    mock_response.headers = {"Content-Length": "100"}
+    mock_response.iter_content.return_value = [b"fake image data"]
     mock_requests_get.return_value = mock_response
 
     mock_image = MagicMock(spec=PILImage.Image)
@@ -326,13 +327,12 @@ def test_process_image_success(mock_pil_open, mock_requests_get):
 
         result = process_image(url, image_dir)
 
-        # Verify HTTP request was made
+        # Verify HTTP request was made with streaming
         mock_requests_get.assert_called_once_with(
             url,
             timeout=30,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
-            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            stream=True,
         )
         mock_response.raise_for_status.assert_called_once()
 
@@ -352,9 +352,9 @@ def test_process_image_http_error(mock_requests_get):
         image_dir = pathlib.Path(temp_dir)
         url = "https://example.com/image.jpg"
 
-        # Should raise exception since the function doesn't handle it
-        with pytest.raises(requests.RequestException):
-            process_image(url, image_dir)
+        # Function catches the exception and returns None
+        result = process_image(url, image_dir)
+        assert result is None
 
 
 @patch("memory.parsers.html.requests.get")
@@ -362,7 +362,8 @@ def test_process_image_http_error(mock_requests_get):
 def test_process_image_pil_error(mock_pil_open, mock_requests_get):
     # Setup mocks
     mock_response = MagicMock()
-    mock_response.content = b"fake image data"
+    mock_response.headers = {"Content-Length": "100"}
+    mock_response.iter_content.return_value = [b"fake image data"]
     mock_requests_get.return_value = mock_response
 
     # PIL open raises IOError
@@ -383,9 +384,9 @@ def test_process_image_cached(mock_pil_open, mock_requests_get):
     with tempfile.TemporaryDirectory() as temp_dir:
         image_dir = pathlib.Path(temp_dir)
 
-        # Pre-create the cached file with correct hash
+        # Pre-create the cached file with correct hash (SHA256, truncated to 32 chars)
         url = "https://example.com/image.jpg"
-        url_hash = hashlib.md5(url.encode()).hexdigest()
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:32]
         cached_file = image_dir / f"{url_hash}.jpg"
         cached_file.write_bytes(b"cached image data")
 

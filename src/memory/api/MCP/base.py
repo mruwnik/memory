@@ -26,6 +26,18 @@ from memory.common.qdrant import get_qdrant_client
 logger = logging.getLogger(__name__)
 engine = get_engine()
 
+# OAuth parameters that are safe to pass through to the login form
+ALLOWED_OAUTH_PARAMS = frozenset([
+    "state",
+    "client_id",
+    "redirect_uri",
+    "response_type",
+    "code_challenge",
+    "code_challenge_method",
+    "scope",
+    "nonce",
+])
+
 
 # Setup templates
 template_dir = pathlib.Path(__file__).parent.parent / "templates"
@@ -114,7 +126,11 @@ def login_form(request: Request, form_data: dict, error: str | None = None):
 @mcp.custom_route("/oauth/login", methods=["GET"])
 async def login_page(request: Request):
     """Display the login page."""
-    form_data = dict(request.query_params)
+    # Only pass through whitelisted OAuth parameters to prevent injection
+    form_data = {
+        k: v for k, v in request.query_params.items()
+        if k in ALLOWED_OAUTH_PARAMS
+    }
 
     state = form_data.get("state")
     with make_session() as session:
@@ -132,8 +148,10 @@ async def login_page(request: Request):
 async def handle_login(request: Request):
     """Handle login form submission."""
     form = await request.form()
+    # Only pass through whitelisted OAuth parameters to prevent injection
     oauth_params = {
-        key: value for key, value in form.items() if key not in ["email", "password"]
+        key: value for key, value in form.items()
+        if key in ALLOWED_OAUTH_PARAMS
     }
     with make_session() as session:
         user = (

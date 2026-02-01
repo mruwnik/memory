@@ -3,9 +3,12 @@
 import hashlib
 import io
 import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Generator, TypedDict
+
+import defusedxml.ElementTree as DefusedElementTree
 
 from memory.common import settings
 
@@ -132,6 +135,9 @@ class GoogleDriveClient:
         metadata = self.get_file_metadata(file_id)
         return metadata.get("mimeType") == "application/vnd.google-apps.folder"
 
+    # Maximum folder depth to prevent stack overflow on deep/circular structures
+    MAX_FOLDER_DEPTH = 50
+
     def list_files_in_folder(
         self,
         folder_id: str,
@@ -140,6 +146,7 @@ class GoogleDriveClient:
         page_size: int = 100,
         exclude_folder_ids: set[str] | None = None,
         _current_path: str | None = None,
+        _depth: int = 0,
     ) -> Generator[tuple[dict, str], None, None]:
         """List all supported files in a folder with pagination.
 
@@ -150,10 +157,19 @@ class GoogleDriveClient:
             page_size: Number of files per API page
             exclude_folder_ids: Set of folder IDs to skip during recursive traversal
             _current_path: Internal param tracking the current folder path
+            _depth: Internal param tracking recursion depth
 
         Yields:
             Tuples of (file_metadata, parent_folder_path)
         """
+        # Prevent stack overflow on deep/circular folder structures
+        if _depth >= self.MAX_FOLDER_DEPTH:
+            logger.warning(
+                f"Max folder depth ({self.MAX_FOLDER_DEPTH}) exceeded at {_current_path}, "
+                f"skipping deeper traversal"
+            )
+            return
+
         service = self._get_service()
         exclude_folder_ids = exclude_folder_ids or set()
 
@@ -203,6 +219,7 @@ class GoogleDriveClient:
                             since=since,
                             exclude_folder_ids=exclude_folder_ids,
                             _current_path=subfolder_path,
+                            _depth=_depth + 1,
                         )
                     elif file["id"] in exclude_folder_ids:
                         logger.info(f"Skipping excluded folder: {file['name']} ({file['id']})")
@@ -261,7 +278,7 @@ class GoogleDriveClient:
 
     def fetch_file(
         self, file_metadata: dict, folder_path: str | None = None
-    ) -> GoogleFileData:
+    ) -> GoogleFileData | None:
         """Fetch and parse a single file."""
         file_id = file_metadata["id"]
         mime_type = file_metadata["mimeType"]
@@ -283,7 +300,13 @@ class GoogleDriveClient:
         # For PDFs and Word docs, we need to extract text
         # Check both original and exported MIME types
         if mime_type == "application/pdf" or exported_mime == "application/pdf":
-            content = self._extract_pdf_text(content_bytes)
+            extracted = self._extract_pdf_text(content_bytes)
+            if extracted is None:
+                logger.warning(
+                    f"Failed to extract text from PDF: {file_metadata['name']} ({file_id})"
+                )
+                return None
+            content = extracted
         elif mime_type in (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/msword",
@@ -331,8 +354,11 @@ class GoogleDriveClient:
             word_count=len(content.split()),
         )
 
-    def _extract_pdf_text(self, pdf_bytes: bytes) -> str:
-        """Extract text from PDF using PyMuPDF."""
+    def _extract_pdf_text(self, pdf_bytes: bytes) -> str | None:
+        """Extract text from PDF using PyMuPDF.
+
+        Returns None on failure so callers can distinguish empty PDFs from errors.
+        """
         try:
             import fitz  # PyMuPDF
 
@@ -343,20 +369,20 @@ class GoogleDriveClient:
             doc.close()
             return "\n\n".join(text_parts)
         except Exception as e:
-            logger.warning(f"Failed to extract PDF text: {e}")
-            return ""
+            logger.error(f"Failed to extract PDF text: {e}")
+            return None
 
     def _extract_docx_text(self, docx_bytes: bytes) -> str:
         """Extract text from Word document."""
         try:
-            import zipfile
-            from xml.etree import ElementTree
-
-            # docx is a zip file containing XML
+            # Using defusedxml to prevent XXE attacks from untrusted DOCX files
             with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
                 with zf.open("word/document.xml") as doc_xml:
-                    tree = ElementTree.parse(doc_xml)
+                    tree = DefusedElementTree.parse(doc_xml)
                     root = tree.getroot()
+                    if root is None:
+                        logger.warning("DOCX document.xml has no root element")
+                        return ""
 
                     # Word uses namespaces
                     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}

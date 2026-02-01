@@ -2,7 +2,10 @@ import logging
 import pathlib
 import contextlib
 import subprocess
+import uuid
 from typing import cast
+
+import redis
 
 from memory.common import settings
 from memory.common.db.connection import make_session
@@ -23,6 +26,42 @@ from memory.common.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Lock timeout for git notes operations (5 minutes)
+GIT_NOTES_LOCK_TIMEOUT = 5 * 60
+
+
+@contextlib.contextmanager
+def git_notes_lock(operation: str = "sync"):
+    """Acquire a distributed lock for git notes operations using Redis.
+
+    Prevents concurrent git operations which could cause data loss due to
+    git reset --hard and git clean -fd commands.
+
+    Uses atomic check-and-delete to ensure we only release our own lock,
+    not one acquired by another process if ours expired.
+    """
+    redis_client = redis.from_url(settings.REDIS_URL)
+    lock_key = f"memory:lock:git_notes:{operation}"
+    lock_value = str(uuid.uuid4())
+
+    # Try to acquire lock with NX (only if not exists) and expiry
+    acquired = redis_client.set(lock_key, lock_value, nx=True, ex=GIT_NOTES_LOCK_TIMEOUT)
+    if not acquired:
+        raise RuntimeError(f"Could not acquire git notes lock '{operation}' - another git operation in progress")
+
+    try:
+        yield
+    finally:
+        # Atomically release only if we still own the lock (prevents releasing another process's lock)
+        release_script = """
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+        """
+        redis_client.eval(release_script, 1, lock_key, lock_value)
 
 
 def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
@@ -64,15 +103,52 @@ def check_git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
 
 @contextlib.contextmanager
 def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note"):
-    git_command(repo_root, "fetch")
-    git_command(repo_root, "reset", "--hard", "origin/master")
-    git_command(repo_root, "clean", "-fd")
+    """Context manager for git operations with distributed locking.
 
-    yield
+    Acquires a lock before performing destructive git operations to prevent
+    concurrent tasks from losing uncommitted changes.
 
-    git_command(repo_root, "add", ".")
-    git_command(repo_root, "commit", "-m", commit_message)
-    git_command(repo_root, "push")
+    If uncommitted changes exist, they are stashed before reset and restored
+    after the operation completes (merged with new changes).
+    """
+    with git_notes_lock("tracking"):
+        git_command(repo_root, "fetch")
+
+        # Check for uncommitted changes before destructive reset
+        status_result = git_command(repo_root, "status", "--porcelain")
+        status_output = status_result.stdout if status_result else ""
+        has_uncommitted = bool(status_output and status_output.strip())
+
+        if has_uncommitted:
+            logger.warning(f"Found uncommitted changes, stashing: {status_output[:200]}")
+            git_command(repo_root, "stash", "push", "-m", "auto-stash before sync")
+
+        try:
+            git_command(repo_root, "reset", "--hard", "origin/master")
+            git_command(repo_root, "clean", "-fd")
+
+            yield
+
+            git_command(repo_root, "add", ".")
+            git_command(repo_root, "commit", "-m", commit_message)
+            git_command(repo_root, "push")
+        finally:
+            # Restore stashed changes if we had any
+            if has_uncommitted:
+                result = git_command(repo_root, "stash", "pop")
+                if result and result.returncode != 0:
+                    # Stash pop failed (likely merge conflict) - log prominently
+                    # Changes remain in stash list for manual recovery
+                    logger.error(
+                        f"Failed to restore stashed changes (exit {result.returncode}): "
+                        f"{result.stderr or result.stdout}"
+                    )
+                    logger.error(
+                        "WARNING: Stashed changes remain in stash list. "
+                        "Run 'git stash list' and 'git stash pop' manually to recover."
+                    )
+                else:
+                    logger.info("Restored stashed changes")
 
 
 @app.task(name=SYNC_NOTE)
@@ -82,10 +158,12 @@ def sync_note(
     content: str,
     filename: str | None = None,
     note_type: str | None = None,
-    confidences: dict[str, float] = {},
-    tags: list[str] = [],
+    confidences: dict[str, float] | None = None,
+    tags: list[str] | None = None,
     save_to_file: bool = True,
 ):
+    confidences = confidences or {}
+    tags = tags or []
     logger.info(f"Syncing note {subject}")
     text = Note.as_text(content, subject)
     sha256 = create_content_hash(text)

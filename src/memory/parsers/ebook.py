@@ -168,26 +168,29 @@ def parse_ebook(file_path: str | Path) -> Ebook:
         logger.error(f"Error opening ebook {path}: {e}")
         raise
 
-    metadata = extract_epub_metadata(doc)
+    try:
+        metadata = extract_epub_metadata(doc)
 
-    title = metadata.get("title", path.stem)
-    author = metadata.get("author", "Unknown")
+        title = metadata.get("title", path.stem)
+        author = metadata.get("author", "Unknown")
 
-    sections = extract_sections(doc)
-    full_content = ""
-    if sections:
-        full_content = "\n\n".join(
-            page for section in sections for page in section.pages
+        sections = extract_sections(doc)
+        full_content = ""
+        if sections:
+            full_content = "\n\n".join(
+                page for section in sections for page in section.pages
+            )
+
+        return Ebook(
+            title=title,
+            author=author,
+            metadata=metadata,
+            sections=sections,
+            full_content=full_content,
+            file_path=path,
+            relative_path=path.relative_to(settings.FILE_STORAGE_DIR),
+            file_type=path.suffix.lower()[1:],
+            n_pages=doc.page_count,
         )
-
-    return Ebook(
-        title=title,
-        author=author,
-        metadata=metadata,
-        sections=sections,
-        full_content=full_content,
-        file_path=path,
-        relative_path=path.relative_to(settings.FILE_STORAGE_DIR),
-        file_type=path.suffix.lower()[1:],
-        n_pages=doc.page_count,
-    )
+    finally:
+        doc.close()

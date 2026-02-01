@@ -56,8 +56,8 @@ class AccessLog(Base):
     __tablename__ = "access_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id"), nullable=False
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     query: Mapped[str | None] = mapped_column(Text, nullable=True)

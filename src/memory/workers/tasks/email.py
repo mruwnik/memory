@@ -1,9 +1,13 @@
+import contextlib
 import logging
+import uuid
 from datetime import datetime
 from typing import Generator, cast
 
+import redis
 from sqlalchemy.exc import IntegrityError
 
+from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
@@ -25,6 +29,42 @@ from memory.common.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Lock timeout for email sync (15 minutes - email sync can take a while)
+EMAIL_SYNC_LOCK_TIMEOUT = 900
+
+
+@contextlib.contextmanager
+def email_sync_lock(account_id: int) -> Generator[bool, None, None]:
+    """Distributed lock for email account sync to prevent duplicate processing.
+
+    Yields True if lock acquired, False if another sync is in progress.
+
+    Uses a unique lock value to prevent releasing another process's lock
+    if this lock expires during a long-running operation.
+    """
+    redis_client = redis.from_url(settings.REDIS_URL)
+    lock_key = f"memory:lock:email_sync:{account_id}"
+    lock_value = str(uuid.uuid4())
+
+    acquired = redis_client.set(lock_key, lock_value, nx=True, ex=EMAIL_SYNC_LOCK_TIMEOUT)
+    if not acquired:
+        logger.info(f"Email sync lock already held for account {account_id}, skipping")
+        yield False
+        return
+
+    try:
+        yield True
+    finally:
+        # Only release the lock if we still own it (atomic check-and-delete)
+        release_script = """
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+        """
+        redis_client.eval(release_script, 1, lock_key, lock_value)
 
 
 @app.task(name=PROCESS_EMAIL)
@@ -270,35 +310,40 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
     """
     logger.info(f"Syncing account {account_id} since {since_date}")
 
-    with make_session() as db:
-        account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
-        if not account or not cast(bool, account.active):
-            logger.warning(f"Account {account_id} not found or inactive")
-            return {"status": "error", "error": "Account not found or inactive"}
+    # Use distributed lock to prevent concurrent syncs of the same account
+    with email_sync_lock(account_id) as lock_acquired:
+        if not lock_acquired:
+            return {"status": "skipped", "reason": "sync already in progress"}
 
-        account_type = cast(str, account.account_type) or "imap"
-        cutoff_date = get_cutoff_date(account, since_date)
+        with make_session() as db:
+            account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+            if not account or not cast(bool, account.active):
+                logger.warning(f"Account {account_id} not found or inactive")
+                return {"status": "error", "error": "Account not found or inactive"}
 
-        try:
-            if account_type == "gmail":
-                stats = sync_gmail_messages(account, db, cutoff_date)
-            else:
-                stats = sync_imap_messages(account, db, cutoff_date)
+            account_type = cast(str, account.account_type) or "imap"
+            cutoff_date = get_cutoff_date(account, since_date)
 
-            finalize_sync(account, db)
+            try:
+                if account_type == "gmail":
+                    stats = sync_gmail_messages(account, db, cutoff_date)
+                else:
+                    stats = sync_imap_messages(account, db, cutoff_date)
 
-        except Exception as e:
-            logger.error(f"Error syncing account {account.email_address}: {e}")
-            finalize_sync(account, db, error=e)
-            return {"status": "error", "error": str(e)}
+                finalize_sync(account, db)
 
-        return {
-            "status": "completed",
-            "account_type": account_type,
-            "account": account.email_address,
-            "since_date": cutoff_date.isoformat(),
-            **stats,
-        }
+            except Exception as e:
+                logger.error(f"Error syncing account {account.email_address}: {e}")
+                finalize_sync(account, db, error=e)
+                return {"status": "error", "error": str(e)}
+
+            return {
+                "status": "completed",
+                "account_type": account_type,
+                "account": account.email_address,
+                "since_date": cutoff_date.isoformat(),
+                **stats,
+            }
 
 
 @app.task(name=SYNC_ALL_ACCOUNTS)

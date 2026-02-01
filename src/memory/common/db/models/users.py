@@ -428,7 +428,7 @@ class OAuthToken:
 class OAuthState(Base, OAuthToken):
     __tablename__ = "oauth_states"
 
-    state: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     code: Mapped[str | None] = mapped_column(String, nullable=True)
     redirect_uri: Mapped[str] = mapped_column(String, nullable=False)
     redirect_uri_provided_explicitly: Mapped[bool] = mapped_column(

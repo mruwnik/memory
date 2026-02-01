@@ -48,6 +48,7 @@ class SessionPayload(TypedDict):
     started_at: Annotated[str | None, "ISO timestamp when session started"]
     ended_at: Annotated[str | None, "ISO timestamp when session ended"]
     transcript_path: Annotated[str | None, "Path to JSONL transcript file"]
+    summary: Annotated[str | None, "AI-generated summary of what was done"]
 
 
 class CodingProject(Base):
@@ -163,6 +164,10 @@ class Session(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # AI-generated summary of what was done in this session
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         Index("idx_sessions_user", "user_id"),
         Index("idx_sessions_coding_project", "coding_project_id"),
@@ -183,4 +188,5 @@ class Session(Base):
             started_at=self.started_at.isoformat() if self.started_at else None,
             ended_at=self.ended_at.isoformat() if self.ended_at else None,
             transcript_path=self.transcript_path,
+            summary=self.summary,
         )

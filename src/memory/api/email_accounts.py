@@ -1,8 +1,11 @@
 """API endpoints for Email Account management."""
 
+import logging
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, EmailStr, model_validator
 from sqlalchemy.orm import Session
 
@@ -180,10 +183,10 @@ def create_account(
     if existing:
         raise HTTPException(status_code=400, detail="Email account already exists")
 
-    # For Gmail accounts, verify the Google account exists
+    # For Gmail accounts, verify the Google account exists AND belongs to this user
     if data.account_type == "gmail" and data.google_account_id:
         google_account = db.get(GoogleAccount, data.google_account_id)
-        if not google_account:
+        if not google_account or google_account.user_id != user.id:
             raise HTTPException(status_code=400, detail="Google account not found")
 
     account = EmailAccount(
@@ -250,6 +253,11 @@ def update_account(
     if updates.smtp_port is not None:
         account.smtp_port = updates.smtp_port
     if updates.google_account_id is not None:
+        # Verify Google account belongs to this user
+        if updates.google_account_id:
+            google_account = db.get(GoogleAccount, updates.google_account_id)
+            if not google_account or google_account.user_id != user.id:
+                raise HTTPException(status_code=400, detail="Google account not found")
         account.google_account_id = updates.google_account_id
     if updates.folders is not None:
         account.folders = updates.folders
@@ -331,4 +339,15 @@ def test_connection(
                 "folders": folder_count,
             }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        # Log full error internally but return sanitized message
+        logger.warning(f"IMAP connection test failed for account {account_id}: {type(e).__name__}: {e}")
+        # Return generic error type without potentially sensitive details
+        error_type = type(e).__name__
+        if "authentication" in str(e).lower() or "login" in str(e).lower():
+            return {"status": "error", "message": "Authentication failed - check username/password"}
+        elif "timeout" in str(e).lower() or "timed out" in str(e).lower():
+            return {"status": "error", "message": "Connection timed out - check server address"}
+        elif "refused" in str(e).lower() or "connect" in str(e).lower():
+            return {"status": "error", "message": "Connection refused - check server address and port"}
+        else:
+            return {"status": "error", "message": f"Connection failed ({error_type})"}

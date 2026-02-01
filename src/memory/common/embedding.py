@@ -102,7 +102,7 @@ def embed_chunks(
         return []
 
     logger.debug(f"Embedding {len(chunks)} chunks with model {model}")
-    vo = voyageai.Client()  # type: ignore
+    vo = voyageai.Client(timeout=60.0)  # type: ignore
 
     last_error = None
     for attempt in range(max_retries):

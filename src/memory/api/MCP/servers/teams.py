@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 teams_mcp = FastMCP("memory-teams")
 
 
+def sanitize_error(e: Exception, context: str) -> str:
+    """Sanitize error for external API response.
+
+    Logs the full error internally but returns a generic message to avoid
+    leaking internal details (stack traces, file paths, connection strings).
+    """
+    logger.warning(f"{context}: {type(e).__name__}: {e}")
+    return f"{context}: operation failed"
+
+
 def _team_to_dict(team: Team, include_members: bool = False, include_projects: bool = False) -> dict[str, Any]:
     """Convert a Team model to a dictionary for API responses."""
     result = {
@@ -608,7 +618,7 @@ async def _discord_add_role(team: Team, person: Person) -> dict[str, Any]:
             else:
                 results.append(discord_account.username)
         except Exception as e:
-            errors.append(f"{discord_account.username}: {str(e)}")
+            errors.append(sanitize_error(e, f"Discord add role for {discord_account.username}"))
 
     return {
         "success": len(errors) == 0,
@@ -636,7 +646,7 @@ async def _discord_remove_role(team: Team, person: Person) -> dict[str, Any]:
             else:
                 results.append(discord_account.username)
         except Exception as e:
-            errors.append(f"{discord_account.username}: {str(e)}")
+            errors.append(sanitize_error(e, f"Discord remove role for {discord_account.username}"))
 
     return {
         "success": len(errors) == 0,
@@ -672,7 +682,7 @@ async def _github_add_team_member(team: Team, person: Person) -> dict[str, Any]:
             else:
                 results.append(github_account.username)
         except Exception as e:
-            errors.append(f"{github_account.username}: {str(e)}")
+            errors.append(sanitize_error(e, f"GitHub add team member {github_account.username}"))
 
     return {
         "success": len(errors) == 0,
@@ -708,7 +718,7 @@ async def _github_remove_team_member(team: Team, person: Person) -> dict[str, An
             else:
                 results.append(github_account.username)
         except Exception as e:
-            errors.append(f"{github_account.username}: {str(e)}")
+            errors.append(sanitize_error(e, f"GitHub remove team member {github_account.username}"))
 
     return {
         "success": len(errors) == 0,

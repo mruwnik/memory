@@ -15,6 +15,12 @@ from memory.common.db.models import Book, BookSection, BookSectionPayload
 
 logger = logging.getLogger(__name__)
 
+
+def escape_like(s: str) -> str:
+    """Escape LIKE/ILIKE metacharacters in a string."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 books_mcp = FastMCP("memory-books")
 
 
@@ -51,10 +57,10 @@ async def list_books(
         query = session.query(Book).options(*options)
 
         if title:
-            query = query.filter(Book.title.ilike(f"%{title}%"))
+            query = query.filter(Book.title.ilike(f"%{escape_like(title)}%"))
 
         if author:
-            query = query.filter(Book.author.ilike(f"%{author}%"))
+            query = query.filter(Book.author.ilike(f"%{escape_like(author)}%"))
 
         if tags:
             query = query.filter(Book.tags.op("&&")(sql_cast(tags, ARRAY(Text))))

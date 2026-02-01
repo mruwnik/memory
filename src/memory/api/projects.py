@@ -8,6 +8,7 @@ Projects support hierarchical organization via parent_id.
 Team-based access control is managed via the teams MCP server.
 """
 
+import uuid
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -296,17 +297,14 @@ def create_project(
             raise HTTPException(status_code=400, detail="Parent project not found")
 
     # Generate a unique ID for standalone projects
-    # Use negative IDs to avoid collision with GitHub milestone IDs
-    # Retry on collision to handle concurrent inserts
+    # Use negative IDs based on UUID to avoid collision with GitHub milestone IDs
+    # UUID-based generation virtually eliminates race conditions
     max_retries = 3
     project = None
     for attempt in range(max_retries):
-        max_negative_id = (
-            db.query(func.min(Project.id))
-            .filter(Project.id < 0)
-            .scalar()
-        )
-        new_id = (max_negative_id or 0) - 1
+        # Generate a random negative ID from UUID
+        # Use bits 0-62 of UUID, negate to get negative ID in range [-2^62, -1]
+        new_id = -(uuid.uuid4().int & ((1 << 62) - 1)) - 1
 
         project = Project(
             id=new_id,
@@ -327,9 +325,10 @@ def create_project(
             db.rollback()
             if attempt == max_retries - 1:
                 raise HTTPException(status_code=500, detail="Failed to generate unique project ID")
-            # Retry with fresh ID
+            # Retry with fresh UUID (collision virtually impossible)
             continue
 
+    assert project is not None  # Loop always sets project or raises
     project.teams.append(team)
     db.commit()
 
@@ -375,9 +374,17 @@ def update_project(
         parent = db.get(Project, data.parent_id)
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
-        # Check for circular reference
+        # Check for circular reference and excessive depth
+        MAX_PROJECT_DEPTH = 50
         current = parent
+        depth = 0
         while current.parent_id is not None:
+            depth += 1
+            if depth > MAX_PROJECT_DEPTH:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Project hierarchy exceeds maximum depth ({MAX_PROJECT_DEPTH})"
+                )
             if current.parent_id == project_id:
                 raise HTTPException(status_code=400, detail="Circular parent reference detected")
             current = db.get(Project, current.parent_id)

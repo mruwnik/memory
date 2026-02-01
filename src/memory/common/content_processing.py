@@ -305,6 +305,14 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         status = "skipped" if item.embed_status == "SKIPPED" else "failed"
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
+    # Commit DB changes first to ensure chunks are persisted.
+    # This prevents orphaned vectors if we push to Qdrant but DB commit fails.
+    # Status stays QUEUED to indicate processing is in progress but vectors
+    # haven't been pushed to Qdrant yet. If process crashes here, items remain
+    # QUEUED and can be retried.
+    item.embed_status = "QUEUED"  # type: ignore
+    session.commit()
+
     try:
         push_to_qdrant([item])
         status = "processed"

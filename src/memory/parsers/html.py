@@ -1,7 +1,9 @@
 import hashlib
+import ipaddress
 import logging
 import pathlib
 import re
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
@@ -16,19 +18,98 @@ from memory.common import settings
 
 logger = logging.getLogger(__name__)
 
+# Maximum size for downloaded images (10 MB)
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
-def fetch_html(url: str, as_bytes: bool = False) -> str | bytes:
+# Allowed image extensions (sanitize to prevent path traversal)
+ALLOWED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"})
+
+
+def is_safe_url(url: str) -> bool:
+    """Check if URL is safe to fetch (not pointing to private/internal addresses).
+
+    Note: This has a TOCTOU (time-of-check-time-of-use) limitation - DNS could resolve
+    to a different IP between this check and the actual request. For higher security,
+    consider using a requests adapter that validates the connection IP, or running
+    fetches through a proxy that enforces network policy. This check still blocks
+    the most common SSRF vectors (localhost, obvious private IPs, failed DNS).
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Block localhost and common internal hostnames
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+
+        # Resolve hostname and check IP
+        try:
+            ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(ip)
+
+            # Block private, loopback, link-local, and reserved addresses
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                logger.warning(f"Blocked request to private/internal IP: {url} -> {ip}")
+                return False
+        except socket.gaierror:
+            # DNS resolution failed - could be internal hostname
+            logger.warning(f"DNS resolution failed for {hostname}, blocking")
+            return False
+
+        return True
+    except Exception as e:
+        logger.warning(f"Error validating URL {url}: {e}")
+        return False
+
+
+MAX_HTML_SIZE = 10 * 1024 * 1024  # 10 MB limit for HTML/feed downloads
+
+
+def fetch_html(url: str, as_bytes: bool = False, validate_url: bool = True) -> str | bytes:
+    """Fetch HTML content from a URL.
+
+    Args:
+        url: The URL to fetch
+        as_bytes: If True, return raw bytes instead of decoded string
+        validate_url: If True, check URL against SSRF protection (default True)
+
+    Raises:
+        ValueError: If URL fails SSRF validation
+        requests.RequestException: On network errors
+    """
+    if validate_url and not is_safe_url(url):
+        raise ValueError(f"URL failed SSRF validation: {url}")
+
     response = requests.get(
         url,
         timeout=30,
         headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
         },
+        stream=True,
     )
     response.raise_for_status()
+
+    # Check Content-Length header
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > MAX_HTML_SIZE:
+        raise ValueError(f"Response too large: {content_length} bytes")
+
+    # Stream download with size limit (using list to avoid O(n^2) concatenation)
+    chunks = []
+    size = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        size += len(chunk)
+        if size > MAX_HTML_SIZE:
+            raise ValueError("Response exceeded size limit during download")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
     if as_bytes:
-        return response.content
-    return response.text
+        return content
+    return content.decode("utf-8", errors="replace")
 
 
 @dataclass
@@ -149,15 +230,56 @@ def extract_content_element(
 
 
 def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
-    url_hash = hashlib.md5(url.encode()).hexdigest()
-    ext = pathlib.Path(urlparse(url).path).suffix or ".jpg"
+    # SSRF protection: validate URL before fetching
+    if not is_safe_url(url):
+        logger.warning(f"Blocked potentially unsafe image URL: {url}")
+        return None
+
+    # Use SHA256 instead of MD5 for filename hashing
+    url_hash = hashlib.sha256(url.encode()).hexdigest()[:32]
+
+    # Sanitize extension to prevent path traversal
+    raw_ext = pathlib.Path(urlparse(url).path).suffix.lower()
+    ext = raw_ext if raw_ext in ALLOWED_IMAGE_EXTENSIONS else ".jpg"
+
     filename = f"{url_hash}{ext}"
     local_path = image_dir / filename
     local_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Download if not already cached
     if not local_path.exists():
-        local_path.write_bytes(cast(bytes, fetch_html(url, as_bytes=True)))
+        try:
+            # Check Content-Length before downloading to avoid large files
+            response = requests.get(
+                url,
+                timeout=30,
+                headers={"User-Agent": "Mozilla/5.0"},
+                stream=True,
+            )
+            response.raise_for_status()
+
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > MAX_IMAGE_SIZE:
+                logger.warning(
+                    f"Image too large ({content_length} bytes > {MAX_IMAGE_SIZE}): {url}"
+                )
+                return None
+
+            # Stream download with size limit (using list to avoid O(n^2) concatenation)
+            chunks = []
+            size = 0
+            for chunk in response.iter_content(chunk_size=8192):
+                size += len(chunk)
+                if size > MAX_IMAGE_SIZE:
+                    logger.warning(f"Image exceeded size limit during download: {url}")
+                    return None
+                chunks.append(chunk)
+            content = b"".join(chunks)
+
+            local_path.write_bytes(content)
+        except requests.RequestException as e:
+            logger.warning(f"Failed to download image {url}: {e}")
+            return None
 
     try:
         return PILImage.open(local_path)

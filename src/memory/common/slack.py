@@ -4,13 +4,19 @@ This module provides a shared interface for Slack API calls used across
 workers, API endpoints, and MCP tools.
 """
 
+import asyncio
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Rate limit retry settings
+MAX_RATE_LIMIT_RETRIES = 3
+DEFAULT_RETRY_AFTER = 5  # seconds
 
 
 class SlackAPIError(Exception):
@@ -46,39 +52,69 @@ class SlackClient:
             self._client = None
 
     def call(self, method: str, **kwargs) -> dict:
-        """Make a Slack API call and handle errors."""
+        """Make a Slack API call with rate limit retry handling."""
         if not self._client:
             raise RuntimeError("SlackClient must be used as context manager")
 
-        response = self._client.post(method, data=kwargs if kwargs else None)
-        data = response.json()
+        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            response = self._client.post(method, data=kwargs if kwargs else None)
+            data = response.json()
 
-        if not data.get("ok"):
+            if data.get("ok"):
+                return data
+
             error = data.get("error", "unknown_error")
+
+            # Handle rate limiting with retry
+            if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
+                retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                logger.warning(
+                    f"Slack rate limited on {method}, waiting {retry_after}s "
+                    f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
+                )
+                time.sleep(retry_after)
+                continue
+
             logger.error(f"Slack API error in {method}: {error}")
             raise SlackAPIError(error, data)
 
-        return data
+        # Unreachable, but satisfies type checker
+        raise SlackAPIError("ratelimited", {"error": "ratelimited"})
 
 
 async def async_slack_call(access_token: str, method: str, **params) -> dict:
-    """Make an async Slack API call."""
+    """Make an async Slack API call with rate limit retry handling."""
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"https://slack.com/api/{method}",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-            },
-            data=params if params else None,
-            timeout=30.0,
-        )
-        data = response.json()
+        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            response = await client.post(
+                f"https://slack.com/api/{method}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                },
+                data=params if params else None,
+                timeout=30.0,
+            )
+            data = response.json()
 
-        if not data.get("ok"):
+            if data.get("ok"):
+                return data
+
             error = data.get("error", "unknown_error")
-            raise SlackAPIError(f"Slack API error: {error}")
 
-        return data
+            # Handle rate limiting with retry
+            if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
+                retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                logger.warning(
+                    f"Slack rate limited on {method}, waiting {retry_after}s "
+                    f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
+                )
+                await asyncio.sleep(retry_after)
+                continue
+
+            raise SlackAPIError(error, data)
+
+        # Unreachable, but satisfies type checker
+        raise SlackAPIError("ratelimited", {"error": "ratelimited"})
 
 
 # --- Paginated Iterators ---

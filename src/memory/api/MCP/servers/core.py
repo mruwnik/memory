@@ -309,11 +309,19 @@ async def observe(
         tags: List of categorization tags for organization
 
     Args:
-        observations: List of RawObservation objects
+        observations: List of RawObservation objects (max 50 per call)
         session_id: UUID to group observations from same conversation
         agent_model: AI model making observations (for quality tracking)
     """
-    logger.info("MCP: Observing")
+    MAX_OBSERVATIONS_PER_CALL = 50
+
+    if len(observations) > MAX_OBSERVATIONS_PER_CALL:
+        return {
+            "error": f"Too many observations: {len(observations)} exceeds limit of {MAX_OBSERVATIONS_PER_CALL}",
+            "status": "rejected",
+        }
+
+    logger.info(f"MCP: Observing {len(observations)} observation(s)")
     tasks = [
         (
             obs,

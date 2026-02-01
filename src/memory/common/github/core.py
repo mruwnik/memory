@@ -74,6 +74,20 @@ class GithubClientCore:
                 json=payload,
                 timeout=timeout,
             )
+            # Handle rate limit errors (403) with retry
+            if response.status_code == 403:
+                remaining = response.headers.get(RATE_LIMIT_REMAINING_HEADER)
+                if remaining is not None and int(remaining) == 0:
+                    reset_time = int(response.headers.get(RATE_LIMIT_RESET_HEADER, 0))
+                    sleep_time = max(reset_time - time.time(), 0) + 1
+                    logger.warning(f"GitHub rate limited, sleeping for {sleep_time}s then retrying")
+                    time.sleep(sleep_time)
+                    # Retry once after waiting
+                    response = self.session.post(
+                        GITHUB_GRAPHQL_URL,
+                        json=payload,
+                        timeout=timeout,
+                    )
             response.raise_for_status()
             self._handle_rate_limit(response)
         except requests.RequestException as e:
@@ -131,16 +145,36 @@ class GithubClientCore:
             payload, self.credentials.private_key, algorithm="RS256"
         )
 
-        response = requests.post(
-            f"{GITHUB_API_URL}/app/installations/{self.credentials.installation_id}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {jwt_token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()["token"]
+        # Retry with exponential backoff for transient errors
+        max_retries = 3
+        retry_delay = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{GITHUB_API_URL}/app/installations/{self.credentials.installation_id}/access_tokens",
+                    headers={
+                        "Authorization": f"Bearer {jwt_token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return response.json()["token"]
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"GitHub token fetch attempt {attempt + 1}/{max_retries} failed: {e}. "
+                        f"Retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"GitHub token fetch failed after {max_retries} attempts: {e}")
+                    raise
+
+        # Unreachable - loop always returns or raises, but needed for type checker
+        raise RuntimeError("Failed to fetch GitHub token")
 
     def _handle_rate_limit(self, response: requests.Response) -> None:
         """Check rate limits and sleep if necessary."""

@@ -1,6 +1,8 @@
 import logging
 from typing import cast
 
+from sqlalchemy.exc import IntegrityError
+
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentObservation
 from memory.common.celery_app import app, SYNC_OBSERVATION
@@ -54,4 +56,14 @@ def sync_observation(
             logger.info(f"Observation already exists: {existing_as_obs.subject}")
             return create_task_result(existing_observation, "already_exists")
 
-        return process_content_item(observation, session)
+        try:
+            return process_content_item(observation, session)
+        except IntegrityError as e:
+            # Race condition: another task inserted the same observation
+            logger.debug(f"IntegrityError during observation insert: {e}")
+            session.rollback()
+            existing = check_content_exists(session, AgentObservation, sha256=sha256)
+            if existing:
+                logger.info(f"Observation created by concurrent task: {subject}")
+                return create_task_result(existing, "already_exists")
+            raise  # Re-raise if it's a different integrity error

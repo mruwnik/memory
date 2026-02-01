@@ -6,6 +6,10 @@ SQLAdmin views for the knowledge base database models.
 import logging
 
 from sqladmin import Admin, ModelView
+from sqladmin.authentication import AuthenticationBackend
+from starlette.requests import Request
+
+from memory.common import settings
 
 from memory.common.db.models import (
     AgentObservation,
@@ -498,6 +502,52 @@ class CalendarAccountAdmin(ModelView, model=CalendarAccount):
     ]
     column_searchable_list = ["name", "email", "id"]
     column_sortable_list = ["last_sync_at", "created_at"]
+
+
+class AdminAuth(AuthenticationBackend):
+    """Authentication backend for SQLAdmin requiring admin scope.
+
+    Uses the same session/API key authentication as the main API,
+    but additionally requires admin scope ('*' or 'admin') for access.
+    """
+
+    async def login(self, request: Request) -> bool:
+        """Handle login form submission."""
+        # Admin uses the same auth as the main API - login via /auth endpoints
+        # This is just for the built-in login form which we don't use
+        return False
+
+    async def logout(self, request: Request) -> bool:
+        """Handle logout."""
+        return True
+
+    async def authenticate(self, request: Request) -> bool:
+        """Check if request is authenticated with admin scope."""
+        # Import here to avoid circular imports
+        from memory.api.auth import get_token, get_user_from_token, has_admin_scope
+        from memory.common.db.connection import make_session
+
+        # If auth is disabled for development, allow access
+        if settings.DISABLE_AUTH:
+            return True
+
+        token = get_token(request)
+        if not token:
+            return False
+
+        with make_session() as db:
+            user = get_user_from_token(token, db)
+            if not user:
+                return False
+
+            # Require admin scope for SQLAdmin access
+            if not has_admin_scope(user):
+                logger.warning(
+                    f"User {user.id} attempted to access admin without admin scope"
+                )
+                return False
+
+            return True
 
 
 def setup_admin(admin: Admin):

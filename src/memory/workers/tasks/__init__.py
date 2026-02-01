@@ -21,6 +21,7 @@ from memory.workers.tasks import (
     people,
     photo,
     scheduled_calls,
+    sessions,
     slack,
     verification,
 )  # noqa
@@ -44,6 +45,7 @@ __all__ = [
     "people",
     "photo",
     "scheduled_calls",
+    "sessions",
     "slack",
     "verification",
 ]

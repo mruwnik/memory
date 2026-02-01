@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 
 from memory.common import settings
 from memory.common.celery_app import (
@@ -87,26 +88,27 @@ def download_slack_file(
 ) -> str | None:
     """Download a Slack file and save to disk. Returns relative path."""
     try:
-        response = httpx.get(url, headers=headers, timeout=30, follow_redirects=True)
-        response.raise_for_status()
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
 
-        # Create directory for this message
-        file_dir = (
-            settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
-        )
-        file_dir.mkdir(parents=True, exist_ok=True)
+            # Create directory for this message
+            file_dir = (
+                settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
+            )
+            file_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename from URL hash (SHA256 truncated for shorter filenames)
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        ext = pathlib.Path(url).suffix or ".dat"
-        ext = ext.split("?")[0][:10]  # Limit extension length
-        filename = f"{url_hash}{ext}"
-        local_path = file_dir / filename
+            # Generate filename from URL hash (SHA256 truncated for shorter filenames)
+            url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+            ext = pathlib.Path(url).suffix or ".dat"
+            ext = ext.split("?")[0][:10]  # Limit extension length
+            filename = f"{url_hash}{ext}"
+            local_path = file_dir / filename
 
-        local_path.write_bytes(response.content)
+            local_path.write_bytes(response.content)
 
-        # Return relative path
-        return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
+            # Return relative path
+            return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
 
     except httpx.HTTPStatusError as e:
         logger.error(
@@ -606,5 +608,11 @@ def add_slack_message(
                 if person not in message.people:
                     message.people.append(person)
 
-        result = process_content_item(message, session)
-        return result
+        try:
+            result = process_content_item(message, session)
+            return result
+        except IntegrityError:
+            # Race condition: another task inserted the same message
+            session.rollback()
+            logger.info(f"Message {message_ts} already exists (concurrent insert)")
+            return {"status": "already_exists", "message_ts": message_ts}

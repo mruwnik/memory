@@ -20,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Table,
     Text,
@@ -32,6 +33,7 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common import settings
 
 if TYPE_CHECKING:
@@ -144,8 +146,23 @@ class EmailAccount(Base):
     imap_server: Mapped[str | None] = mapped_column(Text, nullable=True)
     imap_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     username: Mapped[str | None] = mapped_column(Text, nullable=True)
-    password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     use_ssl: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    @property
+    def password(self) -> str | None:
+        """Decrypt and return the IMAP password."""
+        if self.password_encrypted is None:
+            return None
+        return decrypt_value(self.password_encrypted)
+
+    @password.setter
+    def password(self, value: str | None) -> None:
+        """Encrypt and store the IMAP password."""
+        if value is None:
+            self.password_encrypted = None
+        else:
+            self.password_encrypted = encrypt_value(value)
 
     # SMTP fields (optional - inferred from IMAP if not set)
     smtp_server: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -227,13 +244,43 @@ class GithubAccount(Base):
     # Authentication - support both PAT and GitHub App
     auth_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pat' or 'app'
 
-    # For Personal Access Token auth
-    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)  # PAT
+    # For Personal Access Token auth (encrypted at rest)
+    access_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     # For GitHub App auth
     app_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    private_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # PEM key
+    private_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)  # PEM key
+
+    @property
+    def access_token(self) -> str | None:
+        """Decrypt and return the GitHub PAT."""
+        if self.access_token_encrypted is None:
+            return None
+        return decrypt_value(self.access_token_encrypted)
+
+    @access_token.setter
+    def access_token(self, value: str | None) -> None:
+        """Encrypt and store the GitHub PAT."""
+        if value is None:
+            self.access_token_encrypted = None
+        else:
+            self.access_token_encrypted = encrypt_value(value)
+
+    @property
+    def private_key(self) -> str | None:
+        """Decrypt and return the GitHub App private key."""
+        if self.private_key_encrypted is None:
+            return None
+        return decrypt_value(self.private_key_encrypted)
+
+    @private_key.setter
+    def private_key(self, value: str | None) -> None:
+        """Encrypt and store the GitHub App private key."""
+        if value is None:
+            self.private_key_encrypted = None
+        else:
+            self.private_key_encrypted = encrypt_value(value)
 
     # Status
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
@@ -790,7 +837,22 @@ class CalendarAccount(Base):
     # For CalDAV (Radicale, etc.)
     caldav_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # CalDAV server URL
     caldav_username: Mapped[str | None] = mapped_column(Text, nullable=True)
-    caldav_password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    caldav_password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+    @property
+    def caldav_password(self) -> str | None:
+        """Decrypt and return the CalDAV password."""
+        if self.caldav_password_encrypted is None:
+            return None
+        return decrypt_value(self.caldav_password_encrypted)
+
+    @caldav_password.setter
+    def caldav_password(self, value: str | None) -> None:
+        """Encrypt and store the CalDAV password."""
+        if value is None:
+            self.caldav_password_encrypted = None
+        else:
+            self.caldav_password_encrypted = encrypt_value(value)
 
     # For Google Calendar - link to existing GoogleAccount
     google_account_id: Mapped[int | None] = mapped_column(

@@ -28,6 +28,7 @@ from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import SourceItem
 from memory.common.llms import create_provider, LLMSettings, Message
+from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +358,9 @@ async def analyze_query(
 
     except asyncio.TimeoutError:
         logger.warning(f"Query analysis timed out for: {query[:50]}...")
+        record_metric("search", "query_analysis", status="timeout", labels={"query_length": len(query)})
     except Exception as e:
         logger.error(f"Query analysis failed: {e}")
+        record_metric("search", "query_analysis", status="error", labels={"error": type(e).__name__})
 
     return result

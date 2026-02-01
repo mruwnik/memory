@@ -244,11 +244,20 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
     return extract.extract_data_chunks(content_type, await item.read())
 
 
-# SQLAdmin setup with OAuth protection
+# SQLAdmin setup with authentication requiring admin scope
 engine = get_engine()
-admin = Admin(app, engine)
+from memory.api.admin import AdminAuth
+_admin_secret_key = settings.SECRETS_ENCRYPTION_KEY
+if not _admin_secret_key:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "SECRETS_ENCRYPTION_KEY not set - using insecure dev key for admin auth. "
+        "Set SECRETS_ENCRYPTION_KEY in production!"
+    )
+    _admin_secret_key = "dev-secret-key"
+admin = Admin(app, engine, authentication_backend=AdminAuth(secret_key=_admin_secret_key))
 
-# Setup admin with OAuth protection using existing OAuth provider
+# Setup admin views
 setup_admin(admin)
 app.include_router(auth_router)
 app.include_router(google_drive_router)

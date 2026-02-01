@@ -1,5 +1,5 @@
 import logging
-import secrets
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TypeVar, cast
 
@@ -24,11 +24,13 @@ T = TypeVar("T", bound=Base)
 
 logger = logging.getLogger(__name__)
 
+# Flag to log DISABLE_AUTH warning only once (not per-request)
+_auth_disabled_warning_logged = False
 
 # Create router
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Endpoints that don't require authentication
+# Endpoints that don't require authentication (prefix matching)
 WHITELIST = {
     "/health",
     "/register",
@@ -41,11 +43,12 @@ WHITELIST = {
     "/admin/statics/",  # SQLAdmin static resources
     "/google-drive/callback",  # Google OAuth callback
     "/polls/respond",  # Public poll response endpoints
-    # Claude WebSocket log streaming - auth via token query param
-    # NOTE: This pattern depends on session_id format from cloud_claude.make_session_id()
-    # which generates IDs like "u{user_id}-{hex}". If that format changes, update this.
-    "/claude/u",
 }
+
+# Claude WebSocket session path pattern - more specific than prefix matching
+# Session IDs are format "u{user_id}-{hex}" so paths look like /claude/u123-abc...
+# Note: Uses case-insensitive hex match to handle any UUID generation method
+_CLAUDE_SESSION_PATTERN = re.compile(r"^/claude/u\d+-[a-fA-F0-9]+", re.IGNORECASE)
 
 # Prefixes that identify a token as an API key (vs a session token)
 API_KEY_PREFIXES = (
@@ -96,16 +99,29 @@ def get_user_session(
         return None
 
     now = datetime.now(timezone.utc)
-    if session.expires_at.replace(tzinfo=timezone.utc) < now:
+    # Normalize expires_at to UTC for comparison
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        # Assume naive datetimes are UTC (PostgreSQL stores as UTC)
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        # Convert to UTC if it has a different timezone
+        expires_at = expires_at.astimezone(timezone.utc)
+
+    if expires_at < now:
         return None
     return session
 
 
 def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
-    """Look up an API key in the database using constant-time comparison.
+    """Look up an API key in the database using indexed lookup.
 
-    Iterates through ALL keys before returning to prevent timing attacks
-    that could reveal information about key position in the list.
+    Uses direct database query with unique index on APIKey.key for O(1) lookup
+    instead of loading all keys. This prevents memory exhaustion with many keys.
+
+    Note: This has a minor timing side-channel (attacker could learn if
+    a key exists by response time), but the DoS risk from loading all
+    keys is more significant for this use case.
 
     Args:
         api_key: The API key string to look up.
@@ -114,12 +130,7 @@ def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
     Returns:
         The matching APIKey record, or None if not found.
     """
-    all_api_keys = db.query(APIKey).all()
-    matched_key: APIKey | None = None
-    for key_record in all_api_keys:
-        if secrets.compare_digest(key_record.key, api_key):
-            matched_key = key_record
-    return matched_key
+    return db.query(APIKey).filter(APIKey.key == api_key).first()
 
 
 def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
@@ -499,7 +510,15 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     """Middleware to require authentication for all endpoints except whitelisted ones."""
 
     async def dispatch(self, request: Request, call_next):
+        global _auth_disabled_warning_logged
         if settings.DISABLE_AUTH:
+            # Log warning only once to avoid flooding logs during development
+            if not _auth_disabled_warning_logged:
+                logger.warning(
+                    "DISABLE_AUTH is enabled - all endpoints are publicly accessible. "
+                    "This should ONLY be used for local development."
+                )
+                _auth_disabled_warning_logged = True
             return await call_next(request)
 
         path = request.url.path
@@ -508,6 +527,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if (
             any(path.startswith(whitelist_path) for whitelist_path in WHITELIST)
             or path == "/"
+            or _CLAUDE_SESSION_PATTERN.match(path)  # Claude WebSocket sessions
         ):
             return await call_next(request)
 

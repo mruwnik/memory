@@ -102,6 +102,7 @@ SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 # Meeting tasks
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
 REPROCESS_MEETING = f"{MEETINGS_ROOT}.reprocess_meeting"
+CLEANUP_STUCK_MEETINGS = f"{MEETINGS_ROOT}.cleanup_stuck_meetings"
 
 # Metrics tasks
 COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
@@ -114,6 +115,11 @@ VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
+
+# Session tasks
+SESSIONS_ROOT = "memory.workers.tasks.sessions"
+SUMMARIZE_SESSION = f"{SESSIONS_ROOT}.summarize_session"
+SUMMARIZE_STALE_SESSIONS = f"{SESSIONS_ROOT}.summarize_stale_sessions"
 
 
 def get_broker_url() -> str:
@@ -178,6 +184,9 @@ app.conf.update(
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         f"{VERIFICATION_ROOT}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
+        },
+        f"{SESSIONS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
     },
