@@ -7,7 +7,7 @@ import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
 
 const PeopleManagement = () => {
-  const { listPeople, addPerson, updatePerson, deletePerson, getPerson } = usePeople()
+  const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
   const { getPersonTeams, listTeams, listMembers } = useTeams()
 
   const [people, setPeople] = useState<Person[]>([])
@@ -47,6 +47,12 @@ const PeopleManagement = () => {
   // Delete confirmation
   const [deletingPerson, setDeletingPerson] = useState<Person | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+
+  // Merge state
+  const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set())
+  const [showMergeModal, setShowMergeModal] = useState(false)
+  const [mergeLoading, setMergeLoading] = useState(false)
+  const [mergePrimaryId, setMergePrimaryId] = useState<string | null>(null)
 
   // Expanded card state
   const [expandedIdentifier, setExpandedIdentifier] = useState<string | null>(null)
@@ -161,6 +167,46 @@ const PeopleManagement = () => {
     )
   }
 
+  const toggleMergeSelection = (identifier: string) => {
+    setSelectedForMerge(prev => {
+      const next = new Set(prev)
+      if (next.has(identifier)) {
+        next.delete(identifier)
+      } else {
+        next.add(identifier)
+      }
+      return next
+    })
+  }
+
+  const clearMergeSelection = () => {
+    setSelectedForMerge(new Set())
+    setMergePrimaryId(null)
+  }
+
+  const handleMerge = async () => {
+    if (selectedForMerge.size < 2) return
+
+    setMergeLoading(true)
+
+    try {
+      const identifiers = Array.from(selectedForMerge)
+      const result = await mergePeople(identifiers, mergePrimaryId || undefined)
+
+      if (result.success) {
+        setShowMergeModal(false)
+        clearMergeSelection()
+        await loadPeople()
+      } else {
+        setError(result.error || 'Failed to merge people')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to merge people')
+    } finally {
+      setMergeLoading(false)
+    }
+  }
+
   const toggleExpanded = async (identifier: string) => {
     const isExpanding = expandedIdentifier !== identifier
     setExpandedIdentifier(prev => prev === identifier ? null : identifier)
@@ -217,6 +263,36 @@ const PeopleManagement = () => {
             &larr; Back
           </Link>
           <h1 className="text-2xl font-semibold text-slate-800 flex-1">People</h1>
+
+          {/* Merge controls */}
+          {selectedForMerge.size > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-600">
+                {selectedForMerge.size} selected
+              </span>
+              <button
+                onClick={clearMergeSelection}
+                className="text-sm text-slate-500 hover:text-slate-700"
+              >
+                Clear
+              </button>
+              {selectedForMerge.size >= 2 && (
+                <button
+                  onClick={() => {
+                    setMergePrimaryId(Array.from(selectedForMerge)[0])
+                    setShowMergeModal(true)
+                  }}
+                  className="bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  Merge
+                </button>
+              )}
+            </div>
+          )}
+
           <button
             onClick={() => setShowCreateModal(true)}
             className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
@@ -382,18 +458,31 @@ const PeopleManagement = () => {
             </div>
           ) : (
             people.map((person) => (
-              <PersonCard
-                key={person.identifier}
-                person={person}
-                expanded={expandedIdentifier === person.identifier}
-                onToggleExpand={() => toggleExpanded(person.identifier)}
-                onEdit={() => setEditingPerson(person)}
-                onDelete={() => setDeletingPerson(person)}
-                teams={personTeams[person.identifier]}
-                teamsLoading={teamsLoading[person.identifier]}
-                tidbits={personDetails[person.identifier]?.tidbits}
-                tidbitsLoading={detailsLoading[person.identifier]}
-              />
+              <div key={person.identifier} className="flex items-start gap-3">
+                {/* Selection checkbox for merge */}
+                <div className="pt-6">
+                  <input
+                    type="checkbox"
+                    checked={selectedForMerge.has(person.identifier)}
+                    onChange={() => toggleMergeSelection(person.identifier)}
+                    className="w-4 h-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                    title="Select for merge"
+                  />
+                </div>
+                <div className="flex-1">
+                  <PersonCard
+                    person={person}
+                    expanded={expandedIdentifier === person.identifier}
+                    onToggleExpand={() => toggleExpanded(person.identifier)}
+                    onEdit={() => setEditingPerson(person)}
+                    onDelete={() => setDeletingPerson(person)}
+                    teams={personTeams[person.identifier]}
+                    teamsLoading={teamsLoading[person.identifier]}
+                    tidbits={personDetails[person.identifier]?.tidbits}
+                    tidbitsLoading={detailsLoading[person.identifier]}
+                  />
+                </div>
+              </div>
             ))
           )}
         </div>
@@ -462,6 +551,83 @@ const PeopleManagement = () => {
                 className="bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 disabled:bg-slate-400 transition-colors"
               >
                 {deleteLoading ? 'Deleting...' : 'Delete Person'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Modal */}
+      {showMergeModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg m-4">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Merge People</h3>
+
+            <p className="text-sm text-slate-600 mb-4">
+              Merge {selectedForMerge.size} people into one. All tidbits, team memberships, and other
+              associations will be moved to the primary person. The other records will be deleted.
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Select primary person (to keep):
+              </label>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {Array.from(selectedForMerge).map(identifier => {
+                  const person = people.find(p => p.identifier === identifier)
+                  return (
+                    <label
+                      key={identifier}
+                      className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                        mergePrimaryId === identifier
+                          ? 'bg-purple-50 border border-purple-200'
+                          : 'bg-slate-50 hover:bg-slate-100'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="primary"
+                        checked={mergePrimaryId === identifier}
+                        onChange={() => setMergePrimaryId(identifier)}
+                        className="text-purple-600 focus:ring-purple-500"
+                      />
+                      <div>
+                        <div className="font-medium text-slate-800">
+                          {person?.display_name || identifier}
+                        </div>
+                        <div className="text-xs text-slate-500">@{identifier}</div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              <div className="flex items-start gap-2">
+                <svg className="w-5 h-5 text-amber-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <div className="text-sm text-amber-800">
+                  <strong>This action cannot be undone.</strong> The secondary person records will be permanently deleted.
+                  Their identifiers and names will be preserved as aliases on the primary person.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowMergeModal(false)}
+                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleMerge}
+                disabled={mergeLoading || !mergePrimaryId}
+                className="bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:bg-slate-400 transition-colors"
+              >
+                {mergeLoading ? 'Merging...' : 'Merge People'}
               </button>
             </div>
           </div>

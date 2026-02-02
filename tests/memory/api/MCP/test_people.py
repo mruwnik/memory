@@ -776,3 +776,97 @@ async def test_tidbit_delete_not_found(db_session, admin_session, sample_people)
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError, match="not found"):
             await tidbit_delete_fn(tidbit_id=999999)
+
+
+# ============== Merge Tests ==============
+
+
+@pytest.mark.asyncio
+async def test_merge_people(db_session, admin_session, sample_people):
+    """Test merging multiple people into one."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    # Create an additional duplicate person to merge
+    duplicate = Person(
+        identifier="alice_duplicate",
+        display_name="Alice D.",
+        aliases=["alice_dup"],
+        contact_info={"twitter": "@alice_d"},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    # Add a tidbit to the duplicate
+    dup_tidbit = PersonTidbit(
+        person_id=duplicate.id,
+        content="This is from the duplicate.",
+        tidbit_type="note",
+        tags=["duplicate"],
+        creator_id=admin_session.user_id,
+        modality="text",
+        sha256=create_content_hash("This is from the duplicate."),
+    )
+    db_session.add(dup_tidbit)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_duplicate"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["primary"]["identifier"] == "alice_chen"
+    assert "alice_duplicate" in result["primary"]["aliases"]
+    assert "Alice D." in result["primary"]["aliases"]
+    assert result["stats"]["tidbits_moved"] == 1
+
+    # Verify duplicate is deleted
+    db_session.expire_all()
+    deleted = db_session.query(Person).filter(Person.identifier == "alice_duplicate").first()
+    assert deleted is None
+
+    # Verify primary has merged data
+    primary = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert "alice_duplicate" in primary.aliases
+    assert "twitter" in primary.contact_info
+
+
+@pytest.mark.asyncio
+async def test_merge_people_requires_admin(db_session, user_session, sample_people):
+    """Test that only admins can merge people."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(PermissionError, match="Only admins"):
+            await merge_fn(
+                identifiers=["alice_chen", "bob_smith"],
+            )
+
+
+@pytest.mark.asyncio
+async def test_merge_people_minimum_two(db_session, admin_session, sample_people):
+    """Test that at least 2 identifiers are required."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="At least 2"):
+            await merge_fn(identifiers=["alice_chen"])
+
+
+@pytest.mark.asyncio
+async def test_merge_people_not_found(db_session, admin_session, sample_people):
+    """Test merging with non-existent person."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="not found"):
+            await merge_fn(identifiers=["alice_chen", "nonexistent_person"])

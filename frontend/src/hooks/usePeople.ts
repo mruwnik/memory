@@ -75,11 +75,12 @@ export const usePeople = () => {
   }, [mcpCall])
 
   const getPerson = useCallback(async (identifier: string, includeTidbits = true): Promise<Person | null> => {
-    const result = await mcpCall<{ person: Person | null; error?: string }[]>('people_fetch', {
+    // people_fetch returns the person dict directly, not wrapped in { person: ... }
+    const result = await mcpCall<(Person | null)[]>('people_fetch', {
       identifier,
       include_tidbits: includeTidbits,
     })
-    return result?.[0]?.person || null
+    return result?.[0] || null
   }, [mcpCall])
 
   const addPerson = useCallback(async (data: PersonCreate): Promise<{ success: boolean; person?: Person; error?: string }> => {
@@ -120,11 +121,35 @@ export const usePeople = () => {
     return result?.[0]
   }, [mcpCall])
 
+  const mergePeople = useCallback(async (
+    identifiers: string[],
+    primaryIdentifier?: string
+  ): Promise<{
+    success: boolean
+    primary?: { identifier: string; display_name: string; aliases: string[] }
+    merged_from?: string[]
+    stats?: Record<string, number>
+    error?: string
+  }> => {
+    const result = await mcpCall<{
+      success: boolean
+      primary?: { identifier: string; display_name: string; aliases: string[] }
+      merged_from?: string[]
+      stats?: Record<string, number>
+      error?: string
+    }[]>('people_merge', {
+      identifiers,
+      primary_identifier: primaryIdentifier,
+    })
+    return result?.[0] || { success: false, error: 'Unknown error' }
+  }, [mcpCall])
+
   return {
     listPeople,
     getPerson,
     addPerson,
     updatePerson,
     deletePerson,
+    mergePeople,
   }
 }

@@ -26,8 +26,18 @@ from memory.common.access_control import (
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import make_session
-from memory.common.db.models import Person, PersonTidbit, Project, Team, User
+from memory.common.db.models import (
+    Person,
+    PersonTidbit,
+    Project,
+    Team,
+    User,
+    team_members,
+)
 from memory.common.db.models.discord import DiscordUser
+from memory.common.db.models.polls import PollResponse
+from memory.common.db.models.source_item import source_item_people
+from memory.common.db.models.sources import GithubUser
 
 logger = logging.getLogger(__name__)
 
@@ -549,6 +559,268 @@ async def delete(identifier: str) -> dict:
             "deleted": True,
             "identifier": identifier,
             "display_name": display_name,
+        }
+
+
+@people_mcp.tool()
+@visible_when(require_scopes("admin"))
+async def merge(
+    identifiers: list[str],
+    primary_identifier: str | None = None,
+) -> dict:
+    """
+    Merge multiple people into one.
+
+    When duplicate Person records exist (same real person with different entries),
+    this tool combines them into a single canonical record.
+
+    The merge operation:
+    1. Combines aliases from all people (deduped)
+    2. Merges contact_info (primary takes precedence for conflicts)
+    3. Updates all relationships to point to the primary person:
+       - Person tidbits
+       - Team memberships (preserving highest role per team)
+       - Source item associations
+       - Discord/GitHub user links
+       - Poll responses
+    4. Deletes the secondary person records
+
+    Only admins can merge people.
+
+    Args:
+        identifiers: List of person identifiers to merge (minimum 2)
+        primary_identifier: Identifier of the person to keep as primary.
+                          If not specified, uses the first identifier in the list.
+
+    Returns:
+        Summary of the merge operation including counts of updated records.
+
+    Example:
+        merge(
+            identifiers=["john_doe", "jdoe", "john.doe"],
+            primary_identifier="john_doe"
+        )
+    """
+    logger.info(f"MCP: Merging people: {identifiers} -> {primary_identifier or identifiers[0]}")
+
+    # Validate input
+    if len(identifiers) < 2:
+        raise ValueError("At least 2 identifiers are required for merging")
+
+    if primary_identifier and primary_identifier not in identifiers:
+        raise ValueError(f"Primary identifier '{primary_identifier}' must be in the identifiers list")
+
+    primary_id = primary_identifier or identifiers[0]
+    secondary_ids = [i for i in identifiers if i != primary_id]
+
+    # Only admins can merge people
+    user = get_mcp_current_user()
+    if not user or not has_admin_scope(user):
+        raise PermissionError("Only admins can merge people")
+
+    with make_session() as session:
+        # Fetch all people
+        people = session.query(Person).filter(Person.identifier.in_(identifiers)).all()
+        people_by_id = {p.identifier: p for p in people}
+
+        # Validate all people exist
+        missing = [i for i in identifiers if i not in people_by_id]
+        if missing:
+            raise ValueError(f"People not found: {missing}")
+
+        primary = people_by_id[primary_id]
+        secondaries = [people_by_id[i] for i in secondary_ids]
+
+        # Track stats
+        stats = {
+            "tidbits_moved": 0,
+            "team_memberships_moved": 0,
+            "source_items_moved": 0,
+            "discord_users_moved": 0,
+            "github_users_moved": 0,
+            "poll_responses_moved": 0,
+            "users_updated": 0,
+        }
+
+        # 1. Merge aliases
+        all_aliases = set(primary.aliases or [])
+        for sec in secondaries:
+            all_aliases.update(sec.aliases or [])
+            # Add secondary identifiers and display names as aliases
+            all_aliases.add(sec.identifier)
+            if sec.display_name and sec.display_name != primary.display_name:
+                all_aliases.add(sec.display_name)
+        # Remove primary's own identifier from aliases
+        all_aliases.discard(primary.identifier)
+        all_aliases.discard(primary.display_name)
+        primary.aliases = list(all_aliases)
+
+        # 2. Merge contact_info (secondary values fill gaps, primary takes precedence)
+        merged_contact = {}
+        for sec in reversed(secondaries):  # Process in reverse so earlier ones take precedence
+            merged_contact = _deep_merge(merged_contact, dict(sec.contact_info or {}))
+        merged_contact = _deep_merge(merged_contact, dict(primary.contact_info or {}))
+        primary.contact_info = merged_contact
+
+        # 3. Move tidbits
+        for sec in secondaries:
+            count = (
+                session.query(PersonTidbit)
+                .filter(PersonTidbit.person_id == sec.id)
+                .update({PersonTidbit.person_id: primary.id})
+            )
+            stats["tidbits_moved"] += count
+
+        # 4. Move team memberships (handle duplicates - keep highest role)
+        role_priority = {"admin": 3, "lead": 2, "member": 1}
+
+        for sec in secondaries:
+            # Get secondary's team memberships
+            sec_memberships = session.execute(
+                team_members.select().where(team_members.c.person_id == sec.id)
+            ).fetchall()
+
+            for membership in sec_memberships:
+                team_id = membership.team_id
+                sec_role = membership.role
+
+                # Check if primary already has membership in this team
+                existing = session.execute(
+                    team_members.select().where(
+                        team_members.c.team_id == team_id,
+                        team_members.c.person_id == primary.id,
+                    )
+                ).fetchone()
+
+                if existing:
+                    # Keep higher role
+                    if role_priority.get(sec_role, 0) > role_priority.get(existing.role, 0):
+                        session.execute(
+                            team_members.update()
+                            .where(
+                                team_members.c.team_id == team_id,
+                                team_members.c.person_id == primary.id,
+                            )
+                            .values(role=sec_role)
+                        )
+                    # Delete secondary's membership (will be handled by cascade, but be explicit)
+                    session.execute(
+                        team_members.delete().where(
+                            team_members.c.team_id == team_id,
+                            team_members.c.person_id == sec.id,
+                        )
+                    )
+                else:
+                    # Move membership to primary
+                    session.execute(
+                        team_members.update()
+                        .where(
+                            team_members.c.team_id == team_id,
+                            team_members.c.person_id == sec.id,
+                        )
+                        .values(person_id=primary.id)
+                    )
+                stats["team_memberships_moved"] += 1
+
+        # 5. Move source_item associations (handle duplicates)
+        for sec in secondaries:
+            # Get secondary's source item associations
+            sec_items = session.execute(
+                source_item_people.select().where(source_item_people.c.person_id == sec.id)
+            ).fetchall()
+
+            for item in sec_items:
+                source_item_id = item.source_item_id
+
+                # Check if primary already associated with this item
+                existing = session.execute(
+                    source_item_people.select().where(
+                        source_item_people.c.source_item_id == source_item_id,
+                        source_item_people.c.person_id == primary.id,
+                    )
+                ).fetchone()
+
+                if existing:
+                    # Delete duplicate
+                    session.execute(
+                        source_item_people.delete().where(
+                            source_item_people.c.source_item_id == source_item_id,
+                            source_item_people.c.person_id == sec.id,
+                        )
+                    )
+                else:
+                    # Move to primary
+                    session.execute(
+                        source_item_people.update()
+                        .where(
+                            source_item_people.c.source_item_id == source_item_id,
+                            source_item_people.c.person_id == sec.id,
+                        )
+                        .values(person_id=primary.id)
+                    )
+                stats["source_items_moved"] += 1
+
+        # 6. Move Discord users
+        for sec in secondaries:
+            count = (
+                session.query(DiscordUser)
+                .filter(DiscordUser.person_id == sec.id)
+                .update({DiscordUser.person_id: primary.id})
+            )
+            stats["discord_users_moved"] += count
+
+        # 7. Move GitHub users
+        for sec in secondaries:
+            count = (
+                session.query(GithubUser)
+                .filter(GithubUser.person_id == sec.id)
+                .update({GithubUser.person_id: primary.id})
+            )
+            stats["github_users_moved"] += count
+
+        # 8. Move poll responses
+        for sec in secondaries:
+            count = (
+                session.query(PollResponse)
+                .filter(PollResponse.person_id == sec.id)
+                .update({PollResponse.person_id: primary.id})
+            )
+            stats["poll_responses_moved"] += count
+
+        # 9. Handle User links (users.person_id -> people.id)
+        # If secondary has a linked user but primary doesn't, move the link
+        for sec in secondaries:
+            if sec.user_id:
+                if not primary.user_id:
+                    # Move user link to primary
+                    primary.user_id = sec.user_id
+                    stats["users_updated"] += 1
+                else:
+                    # Both have users - just clear secondary's link
+                    # (user will need to be handled manually if needed)
+                    logger.warning(
+                        f"Both {primary.identifier} and {sec.identifier} have linked users. "
+                        f"Keeping primary's user link ({primary.user_id}), clearing secondary's ({sec.user_id})."
+                    )
+                sec.user_id = None
+
+        # 10. Delete secondary people (relationships should be moved by now)
+        deleted_names = []
+        for sec in secondaries:
+            deleted_names.append(sec.display_name)
+            session.delete(sec)
+
+        session.commit()
+
+        return {
+            "success": True,
+            "primary": {
+                "identifier": primary.identifier,
+                "display_name": primary.display_name,
+                "aliases": primary.aliases,
+            },
+            "merged_from": deleted_names,
+            "stats": stats,
         }
 
 
