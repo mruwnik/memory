@@ -946,19 +946,17 @@ async def team_add_member(
     team: str | int,
     person: str | int,
     role: str = "member",
-    sync_external: bool = True,
 ) -> dict:
     """
     Add a person to a team.
 
-    If the team has Discord/GitHub integration enabled and sync_external is true,
+    If the team has Discord/GitHub integration enabled (auto_sync_discord/auto_sync_github),
     this will also add the person to the corresponding Discord role and/or GitHub team.
 
     Args:
         team: Team slug or ID
         person: Person identifier or ID
         role: Team role - "member", "lead", or "admin" (default: "member")
-        sync_external: Whether to sync to Discord/GitHub (default: true)
 
     Returns:
         Result with sync status, or error if team not found/accessible
@@ -1029,17 +1027,16 @@ async def team_add_member(
             "sync": {},
         }
 
-        # Sync to external services
-        if sync_external:
-            # Resolve GitHub client if needed (avoids nested sessions in sync functions)
-            github_client: GithubClient | None = None
-            if team_obj.github_org and team_obj.auto_sync_github:
-                github_client = get_github_client_for_org(
-                    session, team_obj.github_org, user.id
-                )
-            result["sync"] = await sync_membership_add(
-                team_obj, person_obj, github_client=github_client
+        # Sync to external services based on team's auto_sync settings
+        # Resolve GitHub client if needed (avoids nested sessions in sync functions)
+        github_client: GithubClient | None = None
+        if team_obj.github_org and team_obj.auto_sync_github:
+            github_client = get_github_client_for_org(
+                session, team_obj.github_org, user.id
             )
+        result["sync"] = await sync_membership_add(
+            team_obj, person_obj, github_client=github_client
+        )
 
         return result
 
@@ -1049,18 +1046,16 @@ async def team_add_member(
 async def team_remove_member(
     team: str | int,
     person: str | int,
-    sync_external: bool = True,
 ) -> dict:
     """
     Remove a person from a team.
 
-    If the team has Discord/GitHub integration enabled and sync_external is true,
+    If the team has Discord/GitHub integration enabled (auto_sync_discord/auto_sync_github),
     this will also remove the person from the corresponding Discord role and/or GitHub team.
 
     Args:
         team: Team slug or ID
         person: Person identifier or ID
-        sync_external: Whether to sync to Discord/GitHub (default: true)
 
     Returns:
         Result with sync status, or error if team not found/accessible
@@ -1117,17 +1112,16 @@ async def team_remove_member(
             "sync": {},
         }
 
-        # Sync to external services
-        if sync_external:
-            # Resolve GitHub client if needed (avoids nested sessions in sync functions)
-            github_client: GithubClient | None = None
-            if team_obj.github_org and team_obj.auto_sync_github:
-                github_client = get_github_client_for_org(
-                    session, team_obj.github_org, user.id
-                )
-            result["sync"] = await sync_membership_remove(
-                team_obj, person_obj, github_client=github_client
+        # Sync to external services based on team's auto_sync settings
+        # Resolve GitHub client if needed (avoids nested sessions in sync functions)
+        github_client: GithubClient | None = None
+        if team_obj.github_org and team_obj.auto_sync_github:
+            github_client = get_github_client_for_org(
+                session, team_obj.github_org, user.id
             )
+        result["sync"] = await sync_membership_remove(
+            team_obj, person_obj, github_client=github_client
+        )
 
         return result
 
@@ -1360,110 +1354,6 @@ def project_summary(project: Project) -> dict[str, Any]:
         "slug": project.slug,
         "state": project.state,
     }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def project_assign_team(
-    project: int | str,
-    team: str | int,
-) -> dict:
-    """
-    Assign a team to a project, granting all team members access.
-
-    Args:
-        project: Project ID or slug (e.g., "owner/repo:number")
-        team: Team slug or ID
-
-    Returns:
-        Assignment result, or error if project/team not found/accessible
-    """
-    logger.info(f"MCP: Assigning team {team} to project {project}")
-
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        # Find project with access control
-        project_obj = find_project_with_access(session, user, project)
-        if not project_obj:
-            return {"error": f"Project not found: {project}"}
-
-        # Find team with access control
-        team_obj = find_team_with_access(session, user, team)
-        if not team_obj:
-            return {"error": f"Team not found: {team}"}
-
-        # Check if already assigned
-        if team_obj in project_obj.teams:
-            return {
-                "success": True,
-                "message": f"Team {team_obj.slug} is already assigned to project {project_obj.title}",
-                "already_assigned": True,
-            }
-
-        # Assign team
-        project_obj.teams.append(team_obj)
-        session.commit()
-
-        return {
-            "success": True,
-            "project": project_summary(project_obj),
-            "team": {"slug": team_obj.slug, "name": team_obj.name},
-        }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def project_unassign_team(
-    project: int | str,
-    team: str | int,
-) -> dict:
-    """
-    Remove a team's assignment from a project.
-
-    Args:
-        project: Project ID or slug
-        team: Team slug or ID
-
-    Returns:
-        Result, or error if project/team not found/accessible
-    """
-    logger.info(f"MCP: Unassigning team {team} from project {project}")
-
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        # Find project with access control
-        project_obj = find_project_with_access(session, user, project)
-        if not project_obj:
-            return {"error": f"Project not found: {project}"}
-
-        # Find team with access control
-        team_obj = find_team_with_access(session, user, team)
-        if not team_obj:
-            return {"error": f"Team not found: {team}"}
-
-        # Check if assigned
-        if team_obj not in project_obj.teams:
-            return {
-                "success": True,
-                "message": f"Team {team_obj.slug} is not assigned to project {project_obj.title}",
-                "was_not_assigned": True,
-            }
-
-        # Remove assignment
-        project_obj.teams.remove(team_obj)
-        session.commit()
-
-        return {
-            "success": True,
-            "project": project_summary(project_obj),
-            "team": {"slug": team_obj.slug, "name": team_obj.name},
-        }
 
 
 @teams_mcp.tool()

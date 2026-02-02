@@ -318,45 +318,13 @@ async def test_team_add_member_access_control(
 
     session_id = admin_session.id if use_admin else user_session.id
     with mcp_auth_context(session_id):
-        result = await get_fn(team_add_member)(team_slug, "person2", sync_external=False)
+        result = await get_fn(team_add_member)(team_slug, "person2")
 
     if expect_success:
         assert result.get("success") is True or result.get("already_member") is True
     else:
         assert "error" in result
         assert "Team not found" in result["error"]
-
-
-# =============================================================================
-# project_assign_team access control tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "use_admin,project_id,team_slug,expect_error",
-    [
-        pytest.param(False, -1, "team-gamma", "Team not found", id="requires_team_access"),
-        pytest.param(False, -3, "team-alpha", "Project not found", id="requires_project_access"),
-        pytest.param(True, -3, "team-alpha", None, id="admin_can_assign_any"),
-    ],
-)
-async def test_project_assign_team_access_control(
-    db_session, user_session, admin_session, teams_and_projects,
-    use_admin, project_id, team_slug, expect_error
-):
-    """Test that project_assign_team respects access control."""
-    from memory.api.MCP.servers.teams import project_assign_team
-
-    session_id = admin_session.id if use_admin else user_session.id
-    with mcp_auth_context(session_id):
-        result = await get_fn(project_assign_team)(project_id, team_slug)
-
-    if expect_error:
-        assert "error" in result
-        assert expect_error in result["error"]
-    else:
-        assert result.get("success") is True or result.get("already_assigned") is True
 
 
 # =============================================================================
@@ -822,7 +790,7 @@ async def test_upsert_remove_members_with_github(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_discord_create_role_basic(db_session, admin_session, discord_bot):
     """Test Discord create MCP tool for roles."""
-    from memory.api.MCP.servers.discord import create
+    from memory.api.MCP.servers.discord import create_role
     from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=123456789, name="Test Server")
@@ -835,7 +803,7 @@ async def test_discord_create_role_basic(db_session, admin_session, discord_bot)
         mcp_auth_context(admin_session.id),
         patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
     ):
-        result = await get_fn(create)(
+        result = await get_fn(create_role)(
             name="Test Role",
             guild=123456789,
         )
@@ -847,7 +815,7 @@ async def test_discord_create_role_basic(db_session, admin_session, discord_bot)
 @pytest.mark.asyncio
 async def test_discord_create_role_with_options(db_session, admin_session, discord_bot):
     """Test Discord create with color and mentionable options."""
-    from memory.api.MCP.servers.discord import create
+    from memory.api.MCP.servers.discord import create_role
     from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=123456789, name="Test Server")
@@ -863,7 +831,7 @@ async def test_discord_create_role_with_options(db_session, admin_session, disco
         mcp_auth_context(admin_session.id),
         patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
     ):
-        result = await get_fn(create)(
+        result = await get_fn(create_role)(
             name="Colored Role",
             guild="Test Server",
             color=16711680,  # Red
@@ -1065,7 +1033,6 @@ async def test_team_remove_member_success(db_session, admin_session):
         result = await get_fn(team_remove_member)(
             team="remove-member-test",
             person="removable",
-            sync_external=False,
         )
 
     assert result["success"] is True
@@ -1125,7 +1092,6 @@ async def test_team_remove_member_with_discord_sync(db_session, admin_session, d
         result = await get_fn(team_remove_member)(
             team="discord-sync-remove",
             person="discord_user",
-            sync_external=True,
         )
 
     assert result["success"] is True
@@ -1214,50 +1180,6 @@ async def test_fetch_with_include_projects(db_session, admin_session):
     assert len(result["team"]["projects"]) == 2
     titles = {p["title"] for p in result["team"]["projects"]}
     assert titles == {"Fetch Project 1", "Fetch Project 2"}
-
-
-# =============================================================================
-# project_unassign_team tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_project_unassign_team_success(db_session, admin_session):
-    """Test project_unassign_team removes team from project."""
-    from memory.api.MCP.servers.teams import project_unassign_team
-    from memory.common.db.models.sources import project_teams
-
-    team = Team(name="Unassign Test", slug="unassign-test")
-    project = Project(id=-100, title="Unassign Project", state="open")
-    db_session.add_all([team, project])
-    db_session.flush()
-    db_session.execute(
-        project_teams.insert().values(project_id=project.id, team_id=team.id)
-    )
-    db_session.commit()
-
-    with mcp_auth_context(admin_session.id):
-        result = await get_fn(project_unassign_team)(project=-100, team="unassign-test")
-
-    assert result["success"] is True
-    assert result["team"]["slug"] == "unassign-test"
-
-
-@pytest.mark.asyncio
-async def test_project_unassign_team_not_assigned(db_session, admin_session):
-    """Test project_unassign_team handles not-assigned gracefully."""
-    from memory.api.MCP.servers.teams import project_unassign_team
-
-    team = Team(name="Not Assigned", slug="not-assigned")
-    project = Project(id=-101, title="Not Assigned Project", state="open")
-    db_session.add_all([team, project])
-    db_session.commit()
-
-    with mcp_auth_context(admin_session.id):
-        result = await get_fn(project_unassign_team)(project=-101, team="not-assigned")
-
-    assert result["success"] is True
-    assert result.get("was_not_assigned") is True
 
 
 # =============================================================================

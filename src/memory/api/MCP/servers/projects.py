@@ -23,17 +23,188 @@ from memory.common.access_control import (
     user_can_access_project,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import Project, Team
+from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
+from memory.api.MCP.servers.github_helpers import ensure_github_repo, get_github_client
 
 logger = logging.getLogger(__name__)
 
 projects_mcp = FastMCP("memory-projects")
 
 
+# ============== Validation Helpers ==============
+
+
+def validate_teams_for_project(
+    session: Any,
+    user: Any,
+    team_ids: list[int] | None,
+    require_non_empty: bool = True,
+) -> tuple[list[Team] | None, dict | None]:
+    """Validate team_ids for project operations.
+
+    Args:
+        session: Database session
+        user: Current user
+        team_ids: List of team IDs to validate
+        require_non_empty: If True, empty team_ids returns an error
+
+    Returns:
+        Tuple of (teams list or None, error dict or None).
+        If error dict is returned, teams will be None.
+    """
+    if require_non_empty and not team_ids:
+        return None, {"error": "team_ids must be a non-empty list for new projects", "project": None}
+
+    if not team_ids:
+        return [], None
+
+    # Validate all specified teams exist
+    teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
+    found_ids = {t.id for t in teams}
+    missing_ids = set(team_ids) - found_ids
+
+    if missing_ids:
+        return None, {
+            "error": f"Invalid team_ids: teams {missing_ids} do not exist",
+            "project": None,
+        }
+
+    # Non-admins must be a member of at least one specified team
+    if not has_admin_scope(user):
+        user_teams = get_user_team_ids(session, user)
+        accessible_team_ids = set(team_ids) & user_teams
+        if not accessible_team_ids:
+            return None, {
+                "error": "You do not have access to any of the specified teams",
+                "project": None,
+            }
+
+    return teams, None
+
+
+def validate_parent_project(
+    session: Any,
+    user: Any,
+    parent_id: int | None,
+) -> dict | None:
+    """Validate that a parent project exists and user has access.
+
+    Args:
+        session: Database session
+        user: Current user
+        parent_id: Parent project ID to validate (None is valid)
+
+    Returns:
+        Error dict if validation fails, None if valid
+    """
+    if parent_id is None:
+        return None
+
+    parent = session.get(Project, parent_id)
+    if not parent:
+        return {"error": f"Parent project not found: {parent_id}", "project": None}
+
+    if not has_admin_scope(user) and not user_can_access_project(session, user, parent_id):
+        return {"error": f"Parent project not found: {parent_id}", "project": None}
+
+    return None
+
+
+def generate_negative_project_id(session: Any, max_retries: int = 3) -> tuple[int | None, dict | None]:
+    """Generate a unique negative project ID with retry logic.
+
+    Uses negative IDs to avoid collision with GitHub milestone IDs.
+    Retries on collision to handle concurrent inserts.
+
+    Args:
+        session: Database session
+        max_retries: Number of retries on collision
+
+    Returns:
+        Tuple of (generated ID or None, error dict or None)
+    """
+    for attempt in range(max_retries):
+        max_negative_id = (
+            session.query(func.min(Project.id))
+            .filter(Project.id < 0)
+            .scalar()
+        )
+        new_id = (max_negative_id or 0) - 1
+
+        # Test uniqueness via savepoint
+        savepoint = session.begin_nested()
+        try:
+            # Just check if the ID exists - actual insert will be done by caller
+            existing = session.query(Project.id).filter(Project.id == new_id).first()
+            savepoint.rollback()  # We don't want to change anything
+            if not existing:
+                return new_id, None
+        except IntegrityError:
+            savepoint.rollback()
+
+        if attempt == max_retries - 1:
+            return None, {
+                "error": "Failed to generate unique project ID after retries",
+                "project": None,
+            }
+
+    return None, {"error": "Failed to generate unique project ID", "project": None}
+
+
+def create_project_with_retry(
+    session: Any,
+    teams: list[Team],
+    max_retries: int = 3,
+    **project_kwargs: Any,
+) -> tuple[Project | None, dict | None]:
+    """Create a project with negative ID, retrying on collision.
+
+    Args:
+        session: Database session
+        teams: Teams to assign to the project
+        max_retries: Number of retries on ID collision
+        **project_kwargs: Arguments to pass to Project constructor (except id)
+
+    Returns:
+        Tuple of (created Project or None, error dict or None)
+    """
+    for attempt in range(max_retries):
+        max_negative_id = (
+            session.query(func.min(Project.id))
+            .filter(Project.id < 0)
+            .scalar()
+        )
+        new_id = (max_negative_id or 0) - 1
+
+        project = Project(id=new_id, **project_kwargs)
+
+        # Use savepoint to avoid rolling back the entire transaction
+        savepoint = session.begin_nested()
+        try:
+            session.add(project)
+            session.flush()
+
+            # Assign teams
+            for team in teams:
+                project.teams.append(team)
+
+            return project, None
+        except IntegrityError:
+            savepoint.rollback()
+            if attempt == max_retries - 1:
+                return None, {
+                    "error": "Failed to generate unique project ID after retries",
+                    "project": None,
+                }
+            continue
+
+    return None, {"error": "Failed to create project", "project": None}
+
+
 # ============== Response Helpers ==============
 
 
-def _project_to_dict(
+def project_to_dict(
     project: Project,
     include_teams: bool = False,
     children_count: int = 0,
@@ -197,7 +368,7 @@ async def list_all(
 
         return {
             "projects": [
-                _project_to_dict(p, include_teams, children_counts.get(cast(int, p.id), 0))
+                project_to_dict(p, include_teams, children_counts.get(cast(int, p.id), 0))
                 for p in projects
             ],
             "count": len(projects),
@@ -247,7 +418,7 @@ async def fetch(
             .scalar()
         ) or 0
 
-        return {"project": _project_to_dict(project, include_teams, children_count)}
+        return {"project": project_to_dict(project, include_teams, children_count)}
 
 
 @projects_mcp.tool()
@@ -260,43 +431,63 @@ async def upsert(
     state: Literal["open", "closed"] | None = None,
     parent_id: int | None = None,
     clear_parent: bool = False,
+    repo: str | None = None,
+    milestone: str | None = None,
+    create_repo: bool = False,
+    private: bool = True,
 ) -> dict:
     """
-    Create or update a standalone project.
+    Create or update a project at various levels of the hierarchy.
 
-    If project_id is provided, updates the existing project.
-    Otherwise, creates a new project (requires title and team_ids).
+    Project Hierarchy:
+    - **Client level**: Standalone project (no repo) - top-level organizational unit
+    - **Repo level**: Project linked to a GitHub repo - represents a product/codebase
+    - **Milestone level**: Project linked to a specific milestone - represents a feature/sprint
 
-    Projects must be assigned to at least one team for access control.
-    Multiple teams can be assigned at creation for shared access.
+    Usage patterns:
 
-    Note: GitHub-backed projects can only have parent_id updated locally.
-    Title, description, and state are synced from GitHub for those projects.
+    1. **Client project** (standalone): Provide title and team_ids only
+    2. **Repo project**: Provide repo (and optionally title). Creates tracking entry.
+    3. **Milestone project**: Provide repo and milestone. Creates milestone if needed.
+    4. **Update existing**: Provide project_id
 
     Args:
-        title: Project title (required for create, optional for update)
-        team_ids: List of team IDs to assign (required for new projects)
+        title: Project title. Required for standalone projects.
+               For repo projects, defaults to repo name. For milestone projects,
+               defaults to milestone title.
+        team_ids: List of team IDs to assign. Required for new projects.
+                  On update, replaces all existing team assignments.
         project_id: ID of existing project to update (omit for create)
         description: Optional project description
         state: Project state ('open' or 'closed')
         parent_id: Optional parent project ID for hierarchy
         clear_parent: If true, removes the parent (sets to NULL)
+        repo: GitHub repo path (e.g., "owner/name").
+        milestone: GitHub milestone title. Used with repo to create a milestone-level
+                   project. Created on GitHub if it doesn't exist.
+        create_repo: If True and repo doesn't exist on GitHub, creates it (default: False)
+        private: Whether to create repo as private if creating (default: True)
 
     Returns:
         Created/updated project data, or error if validation fails
 
-    Example:
-        # Create new project
-        upsert(
-            title="Q1 2026 Sprint",
-            team_ids=[1, 3],  # Engineering and Design teams
-            description="First quarter development sprint",
-        )
+    Examples:
+        # Create client-level project (standalone)
+        upsert(title="Acme Corp", team_ids=[1])
 
-        # Update existing project (only change state)
+        # Create repo-level project (tracks a GitHub repo)
+        upsert(repo="acme/product-x", team_ids=[1], parent_id=-1)
+
+        # Create milestone-level project (creates milestone if needed)
+        upsert(repo="acme/product-x", milestone="v2.0", team_ids=[1])
+
+        # Create repo AND milestone in one call
         upsert(
-            project_id=-1,
-            state="closed",
+            repo="acme/new-product",
+            milestone="Phase 1",
+            team_ids=[1],
+            create_repo=True,
+            private=True,
         )
     """
     with make_session() as session:
@@ -306,19 +497,34 @@ async def upsert(
 
         # UPDATE path
         if project_id is not None:
-            return await _update_project(
-                session, user, project_id, title, description, state, parent_id, clear_parent
+            return await update_project(
+                session, user, project_id, title, team_ids, description, state, parent_id, clear_parent
             )
 
-        # CREATE path - title is required
+        # Repo-level or milestone-level project path
+        if repo is not None:
+            if milestone is not None:
+                # Milestone-level project
+                return await create_milestone_project(
+                    session, user, repo, milestone, team_ids, description, parent_id, title,
+                    create_repo=create_repo, private=private
+                )
+            else:
+                # Repo-level project (no milestone)
+                return await create_repo_project(
+                    session, user, repo, team_ids, description, state or "open", parent_id, title,
+                    create_repo=create_repo, private=private
+                )
+
+        # Standalone project path - title is required
         if not title:
-            return {"error": "title is required for new projects", "project": None}
-        return await _create_project(
+            return {"error": "title is required for standalone projects (or provide repo)", "project": None}
+        return await create_standalone_project(
             session, user, title, team_ids, description, state or "open", parent_id
         )
 
 
-async def _create_project(
+async def create_standalone_project(
     session: Any,
     user: Any,
     title: str,
@@ -330,80 +536,30 @@ async def _create_project(
     """Create a new standalone project."""
     logger.info(f"MCP: Creating project: {title}")
 
-    # Validate team_ids is non-empty for creation
-    if not team_ids:
-        return {"error": "team_ids must be a non-empty list for new projects", "project": None}
+    # Validate teams
+    teams, error = validate_teams_for_project(session, user, team_ids)
+    if error:
+        return error
 
-    # Validate all specified teams exist
-    teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
-    found_ids = {t.id for t in teams}
-    missing_ids = set(team_ids) - found_ids
+    # Validate parent
+    error = validate_parent_project(session, user, parent_id)
+    if error:
+        return error
 
-    if missing_ids:
-        return {
-            "error": f"Invalid team_ids: teams {missing_ids} do not exist",
-            "project": None,
-        }
-
-    # Non-admins must be a member of at least one specified team
-    if not has_admin_scope(user):
-        user_team_ids = get_user_team_ids(session, user)
-        accessible_team_ids = set(team_ids) & user_team_ids
-        if not accessible_team_ids:
-            return {
-                "error": "You do not have access to any of the specified teams",
-                "project": None,
-            }
-
-    # Validate parent exists if specified
-    if parent_id is not None:
-        parent = session.get(Project, parent_id)
-        if not parent:
-            return {"error": f"Parent project not found: {parent_id}", "project": None}
-        # Non-admins must have access to the parent
-        if not has_admin_scope(user) and not user_can_access_project(session, user, parent_id):
-            return {"error": f"Parent project not found: {parent_id}", "project": None}
-
-    # Generate a unique ID for standalone projects
-    # Use negative IDs to avoid collision with GitHub milestone IDs
-    # Retry on collision to handle concurrent inserts
-    max_retries = 3
-    project = None
-    for attempt in range(max_retries):
-        max_negative_id = (
-            session.query(func.min(Project.id))
-            .filter(Project.id < 0)
-            .scalar()
-        )
-        new_id = (max_negative_id or 0) - 1
-
-        project = Project(
-            id=new_id,
-            repo_id=None,  # Standalone project
-            github_id=None,
-            number=None,
-            title=title,
-            description=description,
-            state=state,
-            parent_id=parent_id,
-        )
-        try:
-            session.add(project)
-            session.flush()  # Get the ID assigned
-            break  # Success
-        except IntegrityError:
-            session.rollback()
-            if attempt == max_retries - 1:
-                return {
-                    "error": "Failed to generate unique project ID after retries",
-                    "project": None,
-                }
-            # Retry with fresh ID
-            continue
-
-    # Assign to all specified teams
-    for team in teams:
-        project.teams.append(team)
+    # Create project with unique negative ID
+    project, error = create_project_with_retry(
+        session,
+        teams,  # type: ignore[arg-type]
+        repo_id=None,
+        github_id=None,
+        number=None,
+        title=title,
+        description=description,
+        state=state,
+        parent_id=parent_id,
+    )
+    if error:
+        return error
 
     session.commit()
     session.refresh(project)
@@ -411,15 +567,244 @@ async def _create_project(
     return {
         "success": True,
         "created": True,
-        "project": _project_to_dict(project, include_teams=True),
+        "project": project_to_dict(project, include_teams=True),
     }
 
 
-async def _update_project(
+async def create_repo_project(
+    session: Any,
+    user: Any,
+    repo_path: str,
+    team_ids: list[int] | None,
+    description: str | None,
+    state: str,
+    parent_id: int | None,
+    title_override: str | None,
+    create_repo: bool = False,
+    private: bool = True,
+) -> dict:
+    """Create a project at the repo level (linked to a GitHub repo, no milestone).
+
+    Optionally creates the repo on GitHub if it doesn't exist.
+    """
+    logger.info(f"MCP: Creating repo-level project: {repo_path}")
+
+    # Parse repo path
+    if "/" not in repo_path:
+        return {"error": f"Invalid repo path '{repo_path}'. Expected format: owner/name", "project": None}
+    owner, repo_name = repo_path.split("/", 1)
+
+    # Validate teams
+    teams, error = validate_teams_for_project(session, user, team_ids)
+    if error:
+        return error
+
+    # Validate parent
+    error = validate_parent_project(session, user, parent_id)
+    if error:
+        return error
+
+    # Get GitHub client
+    client, repo_obj = get_github_client(session, repo_path, user.id)
+    if not client:
+        return {"error": f"No GitHub access configured for '{repo_path}'", "project": None}
+
+    # If repo not tracked, ensure it exists (optionally creating on GitHub)
+    github_repo_created = False
+    tracking_created = False
+    if not repo_obj:
+        # Get user's account for tracking
+        account = (
+            session.query(GithubAccount)
+            .filter(GithubAccount.user_id == user.id, GithubAccount.active == True)  # noqa: E712
+            .first()
+        )
+        if not account:
+            return {"error": "No GitHub account configured", "project": None}
+
+        repo_obj, github_repo_created, tracking_created = ensure_github_repo(
+            session, client, account.id, owner, repo_name,
+            description=description, create_if_missing=create_repo, private=private
+        )
+        if not repo_obj:
+            return {
+                "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
+                "project": None,
+            }
+
+    # Check if project already exists for this repo (without milestone)
+    existing_project = (
+        session.query(Project)
+        .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
+        .first()
+    )
+    if existing_project:
+        # Update teams if provided
+        existing_project.teams = teams  # type: ignore[assignment]
+        if parent_id is not None:
+            existing_project.parent_id = parent_id
+        if description is not None:
+            existing_project.description = description
+        session.commit()
+        session.refresh(existing_project)
+        return {
+            "success": True,
+            "created": False,
+            "github_repo_created": github_repo_created,
+            "tracking_created": tracking_created,
+            "project": project_to_dict(existing_project, include_teams=True),
+        }
+
+    # Create project with unique negative ID (with retry for race conditions)
+    project, error = create_project_with_retry(
+        session,
+        teams,  # type: ignore[arg-type]
+        repo_id=repo_obj.id,
+        github_id=repo_obj.github_id,
+        number=None,
+        title=title_override or repo_name,
+        description=description,
+        state=state,
+        parent_id=parent_id,
+    )
+    if error:
+        return error
+
+    session.commit()
+    session.refresh(project)
+
+    return {
+        "success": True,
+        "created": True,
+        "github_repo_created": github_repo_created,
+        "tracking_created": tracking_created,
+        "project": project_to_dict(project, include_teams=True),
+    }
+
+
+async def create_milestone_project(
+    session: Any,
+    user: Any,
+    repo_path: str,
+    milestone_title: str,
+    team_ids: list[int] | None,
+    description: str | None,
+    parent_id: int | None,
+    title_override: str | None,
+    create_repo: bool = False,
+    private: bool = True,
+) -> dict:
+    """Create a project backed by a GitHub milestone.
+
+    The milestone is created if it doesn't exist.
+    Optionally creates the repo on GitHub if create_repo=True.
+    """
+    logger.info(f"MCP: Creating milestone-level project: {repo_path} / {milestone_title}")
+
+    # Parse repo path
+    if "/" not in repo_path:
+        return {"error": f"Invalid repo path '{repo_path}'. Expected format: owner/name", "project": None}
+    owner, repo_name = repo_path.split("/", 1)
+
+    # Validate teams
+    teams, error = validate_teams_for_project(session, user, team_ids)
+    if error:
+        return error
+
+    # Validate parent
+    error = validate_parent_project(session, user, parent_id)
+    if error:
+        return error
+
+    # Get GitHub client
+    client, repo_obj = get_github_client(session, repo_path, user.id)
+    if not client:
+        return {"error": f"No GitHub access configured for '{repo_path}'", "project": None}
+
+    # If repo not tracked, ensure it exists (optionally creating on GitHub)
+    github_repo_created = False
+    if not repo_obj:
+        # Get user's account for tracking
+        account = (
+            session.query(GithubAccount)
+            .filter(GithubAccount.user_id == user.id, GithubAccount.active == True)  # noqa: E712
+            .first()
+        )
+        if not account:
+            return {"error": "No GitHub account configured", "project": None}
+
+        repo_obj, github_repo_created, _ = ensure_github_repo(
+            session, client, account.id, owner, repo_name,
+            description=description, create_if_missing=create_repo, private=private
+        )
+        if not repo_obj:
+            return {
+                "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
+                "project": None,
+            }
+
+    # Ensure milestone exists (create if needed)
+    milestone_data, was_created = client.ensure_milestone(
+        owner, repo_name, milestone_title, description=description
+    )
+    if not milestone_data:
+        return {"error": f"Failed to find or create milestone '{milestone_title}'", "project": None}
+
+    # Check if project already exists for this milestone
+    existing_project = (
+        session.query(Project)
+        .filter(Project.repo_id == repo_obj.id, Project.number == milestone_data["number"])
+        .first()
+    )
+    if existing_project:
+        # Update teams if provided
+        existing_project.teams = teams  # type: ignore[assignment]
+        if parent_id is not None:
+            existing_project.parent_id = parent_id
+        session.commit()
+        session.refresh(existing_project)
+        return {
+            "success": True,
+            "created": False,
+            "github_repo_created": github_repo_created,
+            "milestone_created": False,
+            "project": project_to_dict(existing_project, include_teams=True),
+        }
+
+    # Create project with unique negative ID (with retry for race conditions)
+    project, error = create_project_with_retry(
+        session,
+        teams,  # type: ignore[arg-type]
+        repo_id=repo_obj.id,
+        github_id=milestone_data["github_id"],
+        number=milestone_data["number"],
+        title=title_override or milestone_data["title"],
+        description=milestone_data.get("description") or description,
+        state=milestone_data.get("state", "open"),
+        due_on=milestone_data.get("due_on"),
+        parent_id=parent_id,
+    )
+    if error:
+        return error
+
+    session.commit()
+    session.refresh(project)
+
+    return {
+        "success": True,
+        "created": True,
+        "github_repo_created": github_repo_created,
+        "milestone_created": was_created,
+        "project": project_to_dict(project, include_teams=True),
+    }
+
+
+async def update_project(
     session: Any,
     user: Any,
     project_id: int,
     title: str | None,
+    team_ids: list[int] | None,
     description: str | None,
     state: str | None,
     parent_id: int | None,
@@ -465,6 +850,27 @@ async def _update_project(
             if not current:
                 break
 
+    # Handle team assignment changes
+    teams = None
+    if team_ids is not None:
+        if not team_ids:
+            return {"error": "team_ids cannot be empty - projects require at least one team", "project": None}
+
+        # Validate all specified teams exist
+        teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
+        found_ids = {t.id for t in teams}
+        missing_ids = set(team_ids) - found_ids
+
+        if missing_ids:
+            return {"error": f"Invalid team_ids: teams {missing_ids} do not exist", "project": None}
+
+        # Non-admins must be a member of at least one specified team
+        if not has_admin_scope(user):
+            user_team_ids = get_user_team_ids(session, user)
+            accessible_team_ids = set(team_ids) & user_team_ids
+            if not accessible_team_ids:
+                return {"error": "You do not have access to any of the specified teams", "project": None}
+
     # Apply updates
     if clear_parent:
         project.parent_id = None
@@ -479,6 +885,12 @@ async def _update_project(
         if state is not None:
             project.state = state
 
+    # Update team assignments (works for both standalone and GitHub-backed)
+    if teams is not None:
+        project.teams.clear()
+        for team in teams:
+            project.teams.append(team)
+
     session.commit()
     session.refresh(project)
 
@@ -492,7 +904,7 @@ async def _update_project(
     return {
         "success": True,
         "created": False,
-        "project": _project_to_dict(project, include_teams=False, children_count=children_count),
+        "project": project_to_dict(project, include_teams=team_ids is not None, children_count=children_count),
     }
 
 

@@ -950,6 +950,51 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 return ms.get("id")
         return None
 
+    def create_milestone(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        description: str | None = None,
+        due_on: str | None = None,
+        state: str = "open",
+    ) -> dict[str, Any] | None:
+        """Create a new milestone via REST API.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            title: Milestone title
+            description: Optional description
+            due_on: Optional due date in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
+            state: "open" or "closed" (default: "open")
+
+        Returns:
+            Milestone data dict with id, number, title, etc., or None on failure
+        """
+        payload: dict[str, Any] = {"title": title, "state": state}
+        if description is not None:
+            payload["description"] = description
+        if due_on is not None:
+            payload["due_on"] = due_on
+
+        try:
+            response = self.session.post(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/milestones",
+                json=payload,
+                timeout=30,
+            )
+            if response.ok:
+                data = response.json()
+                logger.info(f"Created milestone '{title}' in {owner}/{repo} (#{data.get('number')})")
+                return data
+            else:
+                logger.error(f"Failed to create milestone: {response.status_code} {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to create milestone '{title}': {e}")
+            return None
+
     def fetch_issue_graphql(
         self, owner: str, repo: str, number: int
     ) -> GithubIssueData | None:
@@ -1147,3 +1192,203 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         if errors or data is None:
             return None
         return self._extract_nested(data, "addComment", "commentEdge", "node")
+
+    def ensure_milestone(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        description: str | None = None,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Ensure a milestone exists, creating it if needed.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            title: Milestone title
+            description: Optional description (only used if creating)
+
+        Returns:
+            Tuple of (milestone_data, was_created) where milestone_data contains
+            at minimum 'number' and 'title', or (None, False) on failure
+        """
+        # Search through milestones to find one with matching title
+        # This is more efficient than find_milestone_by_title + fetch_milestones
+        # as it only queries milestones once
+        for ms in self.fetch_milestones(owner, repo):
+            if ms["title"] == title:
+                return {
+                    "number": ms["number"],
+                    "title": ms["title"],
+                    "description": ms.get("description"),
+                    "github_id": ms["github_id"],
+                    "state": ms["state"],
+                    "due_on": ms.get("due_on"),
+                }, False
+
+        # Milestone doesn't exist - create it
+        result = self.create_milestone(owner, repo, title, description=description)
+        if result:
+            return {
+                "number": result["number"],
+                "title": result["title"],
+                "description": result.get("description"),
+                "github_id": result["id"],
+                "state": result["state"],
+                "due_on": result.get("due_on"),
+            }, True
+
+        return None, False
+
+    # =========================================================================
+    # Repository Methods
+    # =========================================================================
+
+    def fetch_repository_info(
+        self,
+        owner: str,
+        repo: str,
+    ) -> dict[str, Any] | None:
+        """Fetch repository information from GitHub.
+
+        Returns:
+            Dict with repo info (id, name, owner, description, etc.) or None if not found
+        """
+        query = """
+        query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) {
+            id
+            databaseId
+            name
+            owner { login }
+            description
+            isPrivate
+            isFork
+            isArchived
+            defaultBranchRef { name }
+            createdAt
+            updatedAt
+          }
+        }
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo},
+            operation_name=f"fetch_repository_info({owner}/{repo})",
+        )
+        if errors or data is None:
+            return None
+
+        repo_data = self._extract_nested(data, "repository")
+        if not repo_data:
+            return None
+
+        return {
+            "node_id": repo_data.get("id"),
+            "github_id": repo_data.get("databaseId"),
+            "name": repo_data.get("name"),
+            "owner": self._extract_nested(repo_data, "owner", "login"),
+            "description": repo_data.get("description"),
+            "is_private": repo_data.get("isPrivate"),
+            "is_fork": repo_data.get("isFork"),
+            "is_archived": repo_data.get("isArchived"),
+            "default_branch": self._extract_nested(
+                repo_data, "defaultBranchRef", "name", default="main"
+            ),
+            "created_at": repo_data.get("createdAt"),
+            "updated_at": repo_data.get("updatedAt"),
+        }
+
+    def create_repository(
+        self,
+        name: str,
+        description: str | None = None,
+        private: bool = True,
+        org: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Create a new repository on GitHub via REST API.
+
+        Args:
+            name: Repository name
+            description: Optional description
+            private: Whether the repo should be private (default: True)
+            org: Organization name. If None, creates under authenticated user.
+
+        Returns:
+            Dict with repo info (id, name, owner, etc.) or None on failure
+        """
+        payload: dict[str, Any] = {
+            "name": name,
+            "private": private,
+            "auto_init": True,  # Create with README
+        }
+        if description:
+            payload["description"] = description
+
+        # Different endpoint for org vs user repos
+        if org:
+            url = f"{GITHUB_API_URL}/orgs/{org}/repos"
+        else:
+            url = f"{GITHUB_API_URL}/user/repos"
+
+        try:
+            response = self.session.post(url, json=payload, timeout=30)
+            if response.ok:
+                data = response.json()
+                owner_login = self._extract_nested(data, "owner", "login", default="")
+                logger.info(f"Created repository '{owner_login}/{name}'")
+                return {
+                    "github_id": data.get("id"),
+                    "node_id": data.get("node_id"),
+                    "name": data.get("name"),
+                    "owner": owner_login,
+                    "description": data.get("description"),
+                    "is_private": data.get("private"),
+                    "default_branch": data.get("default_branch", "main"),
+                    "html_url": data.get("html_url"),
+                }
+            else:
+                logger.error(
+                    f"Failed to create repository: {response.status_code} {response.text}"
+                )
+                return None
+        except Exception as e:
+            logger.error(f"Failed to create repository '{name}': {e}")
+            return None
+
+    def ensure_repository(
+        self,
+        owner: str,
+        repo: str,
+        description: str | None = None,
+        private: bool = True,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Ensure a repository exists, creating it if needed.
+
+        Args:
+            owner: Repository owner (user or org)
+            repo: Repository name
+            description: Optional description (only used if creating)
+            private: Whether to create as private (default: True)
+
+        Returns:
+            Tuple of (repo_data, was_created) or (None, False) on failure
+        """
+        # Try to fetch existing repo
+        existing = self.fetch_repository_info(owner, repo)
+        if existing:
+            return existing, False
+
+        # Try to create the repo
+        # Determine if owner is an org or the authenticated user
+        # If owner matches the authenticated user, create under user; else treat as org
+        result = self.create_repository(
+            name=repo,
+            description=description,
+            private=private,
+            org=owner,  # Will create under org; if it's the user, GitHub handles it
+        )
+        if result:
+            return result, True
+
+        return None, False

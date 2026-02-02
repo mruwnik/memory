@@ -18,8 +18,9 @@ from memory.api.MCP.servers.meta import meta_mcp
 from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.polling import polling_mcp
-from memory.api.MCP.servers.schedule import schedule_mcp
+from memory.api.MCP.servers.projects import projects_mcp
 from memory.api.MCP.servers.slack import slack_mcp
+from memory.api.MCP.servers.teams import teams_mcp
 
 
 # Map prefixes to their FastMCP instances
@@ -34,8 +35,9 @@ SUBSERVERS = {
     "organizer": organizer_mcp,
     "people": people_mcp,
     "polling": polling_mcp,
-    "schedule": schedule_mcp,
+    "projects": projects_mcp,
     "slack": slack_mcp,
+    "teams": teams_mcp,
 }
 
 # Claude Code tool name limit

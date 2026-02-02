@@ -3,7 +3,8 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -208,64 +209,54 @@ def run_alembic_migrations(db_name: str) -> None:
         )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def test_db():
     """
-    Create a test database, run migrations, and clean up afterwards.
+    Create a test database ONCE per session, run migrations, clean up at end.
 
-    Returns:
-        The URL to the test database
+    Individual test isolation is achieved via table truncation in db_session.
     """
     from memory.common.db import connection as db_connection
 
-    test_db_name = get_test_db_name()
+    # Use a fixed name for session-scoped DB (with worker suffix for xdist)
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    test_db_name = f"test_memory_session_{worker_id}"
 
     # Create test database
     try:
         test_db_url = create_test_database(test_db_name)
     except OperationalError as e:
         pytest.skip(f"Failed to create test database: {e}")
-        raise  # unreachable, but tells type checker pytest.skip doesn't return
+        raise
 
-    # Reset the connection module's cached globals so it picks up the new DB_URL
-    # This is necessary because make_session() caches the engine globally
-    old_engine = db_connection._engine
-    old_factory = db_connection._session_factory
-    old_scoped = db_connection._scoped_session
+    # Reset the connection module's cached globals
     db_connection._engine = None
     db_connection._session_factory = None
     db_connection._scoped_session = None
 
     try:
         run_alembic_migrations(test_db_name)
-
-        # Return the URL to the test database
         with patch("memory.common.settings.DB_URL", test_db_url):
             yield test_db_url
     finally:
-        # Restore old cached values (or leave as None if they were None)
-        db_connection._engine = old_engine
-        db_connection._session_factory = old_factory
-        db_connection._scoped_session = old_scoped
-
-        # Clean up - drop the test database
+        db_connection._engine = None
+        db_connection._session_factory = None
+        db_connection._scoped_session = None
         drop_test_database(test_db_name)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def db_engine(test_db):
     """
-    Create a SQLAlchemy engine connected to the test database.
-
-    Args:
-        test_db: URL to the test database (from the test_db fixture)
-
-    Returns:
-        SQLAlchemy engine
+    Create a SQLAlchemy engine connected to the test database (session-scoped).
     """
     engine = create_engine(test_db)
     yield engine
     engine.dispose()
+
+
+# Tables to skip during truncation (alembic's migration tracking)
+_SKIP_TRUNCATE = {"alembic_version"}
 
 
 @pytest.fixture
@@ -273,24 +264,157 @@ def db_session(db_engine):
     """
     Create a new database session for a test.
 
-    Args:
-        db_engine: SQLAlchemy engine (from the db_engine fixture)
-
-    Returns:
-        SQLAlchemy session
+    After the test completes, all tables are truncated to ensure isolation.
+    This is much faster than creating a new database for each test.
     """
-    # Create a new sessionmaker
-    SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    from memory.common.db.models import Base
 
-    # Create a new session
+    SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
     session = SessionLocal()
 
     try:
         yield session
     finally:
-        # Close and rollback the session after the test is done
         session.rollback()
         session.close()
+
+        # Truncate only non-empty tables for test isolation
+        # Use a new connection for truncation to avoid session state issues
+        with db_engine.connect() as conn:
+            # Find non-empty tables using pg_stat_user_tables for efficiency
+            # This uses cached statistics instead of N queries
+            # Note: n_live_tup is an estimate; we also check for exact 0 to be safe
+            result = conn.execute(
+                text("""
+                    SELECT relname FROM pg_stat_user_tables
+                    WHERE schemaname = 'public'
+                    AND relname NOT IN ('alembic_version')
+                    AND n_live_tup > 0
+                """)
+            )
+            non_empty_tables = [row[0] for row in result]
+
+            if non_empty_tables:
+                # Disable foreign key checks for faster truncation
+                conn.execute(text("SET session_replication_role = 'replica'"))
+                for table_name in non_empty_tables:
+                    # RESTART IDENTITY resets sequences for more predictable test IDs
+                    conn.execute(text(f'TRUNCATE TABLE "{table_name}" RESTART IDENTITY CASCADE'))
+                conn.execute(text("SET session_replication_role = 'origin'"))
+                conn.commit()
+
+
+# =============================================================================
+# MCP Server Fixtures
+# =============================================================================
+
+
+@pytest.fixture(scope="session")
+def mcp_servers():
+    """Pre-load MCP server modules once per test session.
+
+    This avoids the cost of importing MCP modules for each test.
+    The first import loads FastMCP decorators and sets up the tools.
+    """
+    from memory.api.MCP.servers import people, teams, discord
+
+    return {
+        "people": people,
+        "teams": teams,
+        "discord": discord,
+    }
+
+
+@contextmanager
+def mcp_auth_context(session_token: str):
+    """Set up FastMCP auth context for testing.
+
+    This sets the auth_context_var that FastMCP's get_access_token() reads from,
+    allowing tests to run without mocking internal functions.
+
+    Usage:
+        with mcp_auth_context(admin_session.id):
+            result = await some_mcp_tool(...)
+    """
+    from mcp.server.auth.middleware.auth_context import (
+        AccessToken,
+        AuthenticatedUser,
+        auth_context_var,
+    )
+
+    access_token = AccessToken(
+        token=session_token,
+        client_id="test-client",
+        scopes=[],
+    )
+    auth_user = AuthenticatedUser(access_token)
+    token = auth_context_var.set(auth_user)
+    try:
+        yield
+    finally:
+        auth_context_var.reset(token)
+
+
+@pytest.fixture
+def admin_user(db_session):
+    """Create an admin user with superadmin scope."""
+    from memory.common.db.models import HumanUser
+
+    user = HumanUser(
+        name="Admin User",
+        email="admin@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["*"],  # Admin scope
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def regular_user(db_session):
+    """Create a regular user without admin scope."""
+    from memory.common.db.models import HumanUser
+
+    user = HumanUser(
+        name="Regular User",
+        email="regular@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["teams"],  # Only teams scope, not admin
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def admin_session(db_session, admin_user):
+    """Create a user session for the admin user."""
+    from memory.common.db.models import UserSession
+
+    session = UserSession(
+        id="admin-session-token",
+        user_id=admin_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    return session
+
+
+@pytest.fixture
+def user_session(db_session, regular_user):
+    """Create a user session for the regular user."""
+    from memory.common.db.models import UserSession
+
+    session = UserSession(
+        id="test-session-token",
+        user_id=regular_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    return session
 
 
 @pytest.fixture

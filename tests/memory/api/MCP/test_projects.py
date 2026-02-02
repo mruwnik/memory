@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+import uuid
 
 import pytest
 
@@ -624,3 +625,569 @@ async def test_project_tree_nesting(db_session, user_session, teams_and_projects
     assert project_one is not None, "Project One should be in the tree"
     assert len(project_one["children"]) == 1
     assert project_one["children"][0]["title"] == "Child Project"
+
+
+# =============================================================================
+# Repo-level project tests (new functionality)
+# =============================================================================
+
+
+@pytest.fixture
+def github_user(db_session):
+    """Create a user specifically for GitHub tests to avoid conflicts."""
+    unique_id = uuid.uuid4().hex[:8]
+    user = HumanUser(
+        name="GitHub Test User",
+        email=f"github-test-{unique_id}@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["*"],
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
+def github_user_session(db_session, github_user):
+    """Create a session for the GitHub test user."""
+    unique_id = uuid.uuid4().hex[:8]
+    session = UserSession(
+        id=f"github-test-session-{unique_id}",
+        user_id=github_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    return session
+
+
+@pytest.fixture
+def github_account(db_session, github_user):
+    """Create a GitHub account for testing repo-level projects."""
+    from memory.common.db.models.sources import GithubAccount
+
+    account = GithubAccount(
+        user_id=github_user.id,
+        name="Test GitHub Account",
+        auth_type="pat",
+        access_token_encrypted=b"fake_encrypted_token",
+        active=True,
+    )
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+@pytest.fixture
+def github_repo(db_session, github_account):
+    """Create a GithubRepo for testing."""
+    from memory.common.db.models.sources import GithubRepo
+
+    repo = GithubRepo(
+        account_id=github_account.id,
+        github_id=12345,
+        owner="testorg",
+        name="testrepo",
+        track_issues=True,
+        track_prs=True,
+        active=True,
+    )
+    db_session.add(repo)
+    db_session.commit()
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_repo_project_create_with_existing_repo(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Creating a repo-level project with an existing tracked repo."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_client = MagicMock()
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            repo="testorg/testrepo",
+            team_ids=[team_alpha_id],
+            description="Repo-level project",
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["created"] is True
+    assert result["project"]["title"] == "testrepo"  # Defaults to repo name
+    assert result["project"]["repo_path"] == "testorg/testrepo"
+    assert result["project"]["number"] is None  # No milestone
+
+
+@pytest.mark.asyncio
+async def test_repo_project_create_with_title_override(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Creating a repo-level project with a custom title."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_client = MagicMock()
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            title="Custom Product Name",
+            repo="testorg/testrepo",
+            team_ids=[team_alpha_id],
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["project"]["title"] == "Custom Product Name"
+
+
+@pytest.mark.asyncio
+async def test_repo_project_requires_create_repo_flag_for_untracked(
+    db_session, github_user_session, teams_and_projects, github_account
+):
+    """Repo must exist or create_repo=True must be set."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_client = MagicMock()
+    # Repo doesn't exist on GitHub either
+    mock_client.fetch_repository_info.return_value = None
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, None)  # No tracked repo in DB
+
+        result = await get_fn(upsert)(
+            repo="neworg/newrepo",
+            team_ids=[team_alpha_id],
+            create_repo=False,  # Don't create
+        )
+
+    assert "error" in result
+    assert "not found" in result["error"].lower()
+    assert "create_repo=True" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_repo_project_with_create_repo_flag(
+    db_session, github_user_session, teams_and_projects, github_account
+):
+    """Creating a repo-level project with create_repo=True creates the repo on GitHub."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import GithubRepo
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_client = MagicMock()
+    # Repo doesn't exist initially, then gets created via ensure_repository
+    mock_client.fetch_repository_info.return_value = None
+    mock_client.ensure_repository.return_value = (
+        {"github_id": 99999, "owner": "neworg", "name": "newrepo"},
+        True,  # was_created
+    )
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, None)  # No tracked repo initially
+
+        result = await get_fn(upsert)(
+            repo="neworg/newrepo",
+            team_ids=[team_alpha_id],
+            create_repo=True,
+            private=True,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["github_repo_created"] is True
+    assert result["tracking_created"] is True
+
+    # Verify the repo was actually created in the database
+    created_repo = db_session.query(GithubRepo).filter_by(owner="neworg", name="newrepo").first()
+    assert created_repo is not None
+    assert created_repo.github_id == 99999
+
+
+@pytest.mark.asyncio
+async def test_repo_project_idempotent_update(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Calling upsert on existing repo-level project updates it."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project, project_teams
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+    team_beta_id = teams_and_projects["team_beta"].id
+
+    # Create an existing repo-level project
+    existing_project = Project(
+        id=-100,
+        repo_id=github_repo.id,
+        github_id=github_repo.github_id,
+        number=None,  # Repo-level, no milestone
+        title="testrepo",
+        state="open",
+    )
+    db_session.add(existing_project)
+    db_session.flush()  # Ensure project exists before adding team relationship
+    db_session.execute(project_teams.insert().values(project_id=-100, team_id=team_alpha_id))
+    db_session.commit()
+
+    mock_client = MagicMock()
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        # Upsert should find existing and update teams
+        result = await get_fn(upsert)(
+            repo="testorg/testrepo",
+            team_ids=[team_alpha_id, team_beta_id],
+            description="Updated description",
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["created"] is False  # Found existing
+    assert result["project"]["id"] == -100
+    assert len(result["project"]["teams"]) == 2
+
+
+# =============================================================================
+# Milestone project with create_repo tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_milestone_project_with_create_repo(
+    db_session, github_user_session, teams_and_projects, github_account
+):
+    """Creating milestone project with create_repo=True creates repo first."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import GithubRepo
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_client = MagicMock()
+    # Repo doesn't exist initially, then gets created via ensure_repository
+    mock_client.fetch_repository_info.return_value = None
+    mock_client.ensure_repository.return_value = (
+        {"github_id": 88888, "owner": "neworg", "name": "newrepo"},
+        True,  # was_created
+    )
+    mock_client.ensure_milestone.return_value = (
+        {
+            "number": 1,
+            "title": "v1.0",
+            "description": None,
+            "github_id": 111111,
+            "state": "open",
+            "due_on": None,
+        },
+        True,  # was_created
+    )
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, None)  # No tracked repo
+
+        result = await get_fn(upsert)(
+            repo="neworg/newrepo",
+            milestone="v1.0",
+            team_ids=[team_alpha_id],
+            create_repo=True,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["github_repo_created"] is True
+    assert result["milestone_created"] is True
+    assert result["project"]["title"] == "v1.0"
+
+    # Verify repo was created in database
+    created_repo = db_session.query(GithubRepo).filter_by(owner="neworg", name="newrepo").first()
+    assert created_repo is not None
+    assert created_repo.github_id == 88888
+
+
+# =============================================================================
+# ensure_github_repo helper tests
+# =============================================================================
+
+
+def test_ensure_github_repo_finds_existing(db_session, github_account, github_repo):
+    """ensure_github_repo returns existing tracking entry."""
+    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+
+    mock_client = MagicMock()
+
+    repo_obj, github_created, tracking_created = ensure_github_repo(
+        db_session,
+        mock_client,
+        github_account.id,
+        "testorg",
+        "testrepo",
+    )
+
+    assert repo_obj is not None
+    assert repo_obj.id == github_repo.id
+    assert github_created is False
+    assert tracking_created is False
+    # Client should not have been called
+    mock_client.fetch_repository_info.assert_not_called()
+
+
+def test_ensure_github_repo_creates_tracking_for_existing_github_repo(
+    db_session, github_account
+):
+    """ensure_github_repo creates tracking entry for repo that exists on GitHub."""
+    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+
+    mock_client = MagicMock()
+    mock_client.fetch_repository_info.return_value = {
+        "github_id": 77777,
+        "name": "existingrepo",
+        "owner": "testorg",
+        "description": "Existing repo",
+    }
+
+    repo_obj, github_created, tracking_created = ensure_github_repo(
+        db_session,
+        mock_client,
+        github_account.id,
+        "testorg",
+        "existingrepo",
+    )
+
+    assert repo_obj is not None
+    assert repo_obj.owner == "testorg"
+    assert repo_obj.name == "existingrepo"
+    assert github_created is False  # Already existed on GitHub
+    assert tracking_created is True  # New tracking entry
+
+
+def test_ensure_github_repo_returns_none_when_not_found_and_no_create(
+    db_session, github_account
+):
+    """ensure_github_repo returns None if repo doesn't exist and create_if_missing=False."""
+    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+
+    mock_client = MagicMock()
+    mock_client.fetch_repository_info.return_value = None  # Not found
+
+    repo_obj, github_created, tracking_created = ensure_github_repo(
+        db_session,
+        mock_client,
+        github_account.id,
+        "testorg",
+        "nonexistent",
+        create_if_missing=False,
+    )
+
+    assert repo_obj is None
+    assert github_created is False
+    assert tracking_created is False
+
+
+def test_ensure_github_repo_creates_repo_when_missing(db_session, github_account):
+    """ensure_github_repo creates repo on GitHub when create_if_missing=True."""
+    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+
+    mock_client = MagicMock()
+    mock_client.fetch_repository_info.return_value = None  # Not found initially
+    mock_client.ensure_repository.return_value = (
+        {
+            "github_id": 55555,
+            "name": "newrepo",
+            "owner": "testorg",
+            "description": "New repo",
+        },
+        True,  # was_created
+    )
+
+    repo_obj, github_created, tracking_created = ensure_github_repo(
+        db_session,
+        mock_client,
+        github_account.id,
+        "testorg",
+        "newrepo",
+        description="New repo",
+        create_if_missing=True,
+        private=True,
+    )
+
+    assert repo_obj is not None
+    assert repo_obj.owner == "testorg"
+    assert repo_obj.name == "newrepo"
+    assert github_created is True
+    assert tracking_created is True
+    mock_client.ensure_repository.assert_called_once_with(
+        "testorg", "newrepo", description="New repo", private=True
+    )
+
+
+# =============================================================================
+# GithubClient repository methods tests
+# =============================================================================
+
+
+def test_github_client_fetch_repository_info():
+    """Test GithubClient.fetch_repository_info."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    mock_response = {
+        "repository": {
+            "id": "R_123",
+            "databaseId": 12345,
+            "name": "testrepo",
+            "owner": {"login": "testorg"},
+            "description": "Test repo",
+            "isPrivate": True,
+            "isFork": False,
+            "isArchived": False,
+            "defaultBranchRef": {"name": "main"},
+            "createdAt": "2024-01-01T00:00:00Z",
+            "updatedAt": "2024-01-02T00:00:00Z",
+        }
+    }
+
+    with patch.object(GithubClient, "_graphql", return_value=(mock_response, None)):
+        credentials = GithubCredentials(auth_type="pat", access_token="fake")
+        client = GithubClient(credentials)
+        result = client.fetch_repository_info("testorg", "testrepo")
+
+    assert result is not None
+    assert result["github_id"] == 12345
+    assert result["name"] == "testrepo"
+    assert result["owner"] == "testorg"
+    assert result["is_private"] is True
+
+
+def test_github_client_fetch_repository_info_not_found():
+    """Test GithubClient.fetch_repository_info when repo doesn't exist."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    with patch.object(GithubClient, "_graphql", return_value=({"repository": None}, None)):
+        credentials = GithubCredentials(auth_type="pat", access_token="fake")
+        client = GithubClient(credentials)
+        result = client.fetch_repository_info("testorg", "nonexistent")
+
+    assert result is None
+
+
+def test_github_client_create_repository():
+    """Test GithubClient.create_repository."""
+    from memory.common.github import GithubClient, GithubCredentials
+    from unittest.mock import Mock
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {
+        "id": 12345,
+        "node_id": "R_123",
+        "name": "newrepo",
+        "owner": {"login": "testorg"},
+        "description": "New repo",
+        "private": True,
+        "default_branch": "main",
+        "html_url": "https://github.com/testorg/newrepo",
+    }
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    with patch.object(client.session, "post", return_value=mock_response):
+        result = client.create_repository(
+            name="newrepo",
+            description="New repo",
+            private=True,
+            org="testorg",
+        )
+
+    assert result is not None
+    assert result["github_id"] == 12345
+    assert result["name"] == "newrepo"
+    assert result["owner"] == "testorg"
+    assert result["is_private"] is True
+
+
+def test_github_client_ensure_repository_finds_existing():
+    """Test GithubClient.ensure_repository when repo exists."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    mock_repo_info = {
+        "github_id": 12345,
+        "name": "testrepo",
+        "owner": "testorg",
+    }
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    with patch.object(client, "fetch_repository_info", return_value=mock_repo_info):
+        result, was_created = client.ensure_repository("testorg", "testrepo")
+
+    assert result == mock_repo_info
+    assert was_created is False
+
+
+def test_github_client_ensure_repository_creates_when_missing():
+    """Test GithubClient.ensure_repository creates repo when missing."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    mock_created_repo = {
+        "github_id": 99999,
+        "name": "newrepo",
+        "owner": "testorg",
+    }
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    with (
+        patch.object(client, "fetch_repository_info", return_value=None),
+        patch.object(client, "create_repository", return_value=mock_created_repo),
+    ):
+        result, was_created = client.ensure_repository(
+            "testorg", "newrepo", description="New", private=True
+        )
+
+    assert result == mock_created_repo
+    assert was_created is True

@@ -167,28 +167,72 @@ export const useTeams = () => {
   }, [mcpCall])
 
   // Project-Team associations
-  const listProjectTeams = useCallback(async (project: number | string): Promise<Team[]> => {
-    const result = await mcpCall<{ teams: Team[]; count: number; error?: string }[]>('teams_project_list_teams', {
-      project,
+  const listProjectTeams = useCallback(async (project: number): Promise<Team[]> => {
+    const result = await mcpCall<{ project: { teams?: Team[] }; error?: string }[]>('projects_fetch', {
+      project_id: project,
+      include_teams: true,
     })
-    return result?.[0]?.teams || []
+    return result?.[0]?.project?.teams || []
   }, [mcpCall])
 
-  const assignTeamToProject = useCallback(async (project: number | string, team: string | number): Promise<{ success: boolean; error?: string }> => {
-    const result = await mcpCall<{ success: boolean; error?: string }[]>('teams_project_assign_team', {
-      project,
-      team,
-    })
-    return result?.[0] || { success: false, error: 'Unknown error' }
-  }, [mcpCall])
+  const assignTeamToProject = useCallback(async (project: number, teamId: number): Promise<{ success: boolean; error?: string }> => {
+    // Note: This is a read-modify-write pattern that can have race conditions
+    // if multiple callers modify simultaneously. For production use, consider
+    // implementing a dedicated atomic assign endpoint on the backend.
+    // Retry once on any failure to handle simple concurrent modification cases.
+    const attempt = async (): Promise<{ success: boolean; error?: string }> => {
+      const currentTeams = await listProjectTeams(project)
+      const currentTeamIds = currentTeams.map(t => t.id)
+      if (currentTeamIds.includes(teamId)) {
+        return { success: true } // Already assigned
+      }
+      const newTeamIds = [...currentTeamIds, teamId]
+      const result = await mcpCall<{ success: boolean; error?: string }[]>('projects_upsert', {
+        project_id: project,
+        team_ids: newTeamIds,
+      })
+      return result?.[0] || { success: false, error: 'Unknown error' }
+    }
 
-  const unassignTeamFromProject = useCallback(async (project: number | string, team: string | number): Promise<{ success: boolean; error?: string }> => {
-    const result = await mcpCall<{ success: boolean; error?: string }[]>('teams_project_unassign_team', {
-      project,
-      team,
-    })
-    return result?.[0] || { success: false, error: 'Unknown error' }
-  }, [mcpCall])
+    const firstResult = await attempt()
+    if (!firstResult.success) {
+      // Retry once on failure - may be due to concurrent modification
+      return attempt()
+    }
+    return firstResult
+  }, [mcpCall, listProjectTeams])
+
+  const unassignTeamFromProject = useCallback(async (project: number, teamId: number): Promise<{ success: boolean; error?: string }> => {
+    // Note: This is a read-modify-write pattern that can have race conditions.
+    // Retry once on failure to handle simple concurrent modification cases.
+    const attempt = async (): Promise<{ success: boolean; error?: string }> => {
+      const currentTeams = await listProjectTeams(project)
+      const currentTeamIds = currentTeams.map(t => t.id)
+      if (!currentTeamIds.includes(teamId)) {
+        return { success: true } // Already not assigned
+      }
+      const newTeamIds = currentTeamIds.filter(id => id !== teamId)
+      if (newTeamIds.length === 0) {
+        return { success: false, error: 'Cannot remove the last team - projects require at least one team' }
+      }
+      const result = await mcpCall<{ success: boolean; error?: string }[]>('projects_upsert', {
+        project_id: project,
+        team_ids: newTeamIds,
+      })
+      return result?.[0] || { success: false, error: 'Unknown error' }
+    }
+
+    const firstResult = await attempt()
+    if (!firstResult.success) {
+      // Don't retry validation errors - they won't resolve on retry
+      if (firstResult.error?.includes('last team')) {
+        return firstResult
+      }
+      // Retry once for transient failures (e.g., concurrent modification)
+      return attempt()
+    }
+    return firstResult
+  }, [mcpCall, listProjectTeams])
 
   return {
     listTeams,

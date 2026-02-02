@@ -629,9 +629,9 @@ interface ProjectTeamsModalProps {
   project: Project
   onClose: () => void
   listTeams: () => Promise<Team[]>
-  listProjectTeams: (project: number | string) => Promise<Team[]>
-  assignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
-  unassignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
+  listProjectTeams: (project: number) => Promise<Team[]>
+  assignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
+  unassignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
 }
 
 const ProjectTeamsModal = ({
@@ -669,7 +669,7 @@ const ProjectTeamsModal = ({
 
   const handleAssign = async (team: Team) => {
     setError(null)
-    const result = await assignTeam(project.id, team.slug)
+    const result = await assignTeam(project.id, team.id)
     if (result.success) {
       setAssignedTeams(prev => [...prev, team])
     } else {
@@ -679,7 +679,7 @@ const ProjectTeamsModal = ({
 
   const handleUnassign = async (team: Team) => {
     setError(null)
-    const result = await unassignTeam(project.id, team.slug)
+    const result = await unassignTeam(project.id, team.id)
     if (result.success) {
       setAssignedTeams(prev => prev.filter(t => t.id !== team.id))
     } else {

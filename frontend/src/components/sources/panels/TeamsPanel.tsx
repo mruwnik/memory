@@ -776,8 +776,8 @@ const TeamProjectsModal = ({
   onClose: () => void
   getTeam: (team: string | number, includeMembers?: boolean, includeProjects?: boolean) => Promise<Team | null>
   listProjects: (options?: { state?: string; include_children?: boolean }) => Promise<Project[]>
-  assignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
-  unassignTeam: (project: number | string, team: string | number) => Promise<{ success: boolean; error?: string }>
+  assignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
+  unassignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
 }) => {
   const [assignedProjects, setAssignedProjects] = useState<TeamProject[]>([])
   const [allProjects, setAllProjects] = useState<Project[]>([])
@@ -806,7 +806,7 @@ const TeamProjectsModal = ({
 
   const handleAssign = async (project: Project) => {
     setError(null)
-    const result = await assignTeam(project.id, team.slug)
+    const result = await assignTeam(project.id, team.id)
     if (result.success) {
       setAssignedProjects(prev => [...prev, {
         id: project.id,
@@ -821,7 +821,7 @@ const TeamProjectsModal = ({
 
   const handleUnassign = async (project: TeamProject) => {
     setError(null)
-    const result = await unassignTeam(project.id, team.slug)
+    const result = await unassignTeam(project.id, team.id)
     if (result.success) {
       setAssignedProjects(prev => prev.filter(p => p.id !== project.id))
     } else {

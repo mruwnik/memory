@@ -713,6 +713,86 @@ def get_github_client_for_org(
     return GithubClient(credentials)
 
 
+def ensure_github_repo(
+    session: Any,
+    client: GithubClient,
+    account_id: int,
+    owner: str,
+    repo_name: str,
+    description: str | None = None,
+    create_if_missing: bool = False,
+    private: bool = True,
+) -> tuple[GithubRepo | None, bool, bool]:
+    """Ensure a GithubRepo tracking entry exists in the database.
+
+    Optionally creates the repo on GitHub if it doesn't exist.
+
+    Args:
+        session: Database session
+        client: Authenticated GitHub client
+        account_id: ID of the GithubAccount to associate with
+        owner: Repository owner (user or org)
+        repo_name: Repository name
+        description: Optional description (used if creating on GitHub)
+        create_if_missing: If True, creates the repo on GitHub if it doesn't exist
+        private: Whether to create as private (default: True)
+
+    Returns:
+        Tuple of (GithubRepo, repo_was_created_on_github, tracking_entry_was_created)
+        Returns (None, False, False) if the repo doesn't exist and create_if_missing=False
+    """
+    # Check if we already have a tracking entry
+    existing_repo = (
+        session.query(GithubRepo)
+        .filter(
+            GithubRepo.account_id == account_id,
+            GithubRepo.owner.ilike(owner),
+            GithubRepo.name.ilike(repo_name),
+        )
+        .first()
+    )
+    if existing_repo:
+        return existing_repo, False, False
+
+    # Check if repo exists on GitHub
+    github_repo_data = client.fetch_repository_info(owner, repo_name)
+    github_repo_created = False
+
+    if not github_repo_data:
+        if not create_if_missing:
+            return None, False, False
+
+        # Create the repo on GitHub
+        github_repo_data, github_repo_created = client.ensure_repository(
+            owner, repo_name, description=description, private=private
+        )
+        if not github_repo_data:
+            logger.error(f"Failed to create repository '{owner}/{repo_name}' on GitHub")
+            return None, False, False
+
+    # Create tracking entry in our database
+    new_repo = GithubRepo(
+        account_id=account_id,
+        github_id=github_repo_data.get("github_id"),
+        owner=github_repo_data.get("owner", owner),
+        name=github_repo_data.get("name", repo_name),
+        track_issues=True,
+        track_prs=True,
+        track_comments=True,
+        track_project_fields=False,
+        active=True,
+    )
+    session.add(new_repo)
+    session.flush()
+
+    logger.info(
+        f"Created GithubRepo tracking entry for {owner}/{repo_name} "
+        f"(github_created={github_repo_created})"
+    )
+
+    return new_repo, github_repo_created, True
+
+
 # =============================================================================
 # Issue Operation Helpers
 # =============================================================================

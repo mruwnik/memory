@@ -468,6 +468,225 @@ def edit_channel(
         return None
 
 
+def find_channel_in_guild(
+    bot_id: int,
+    guild_id: int,
+    channel_name: str,
+) -> dict[str, Any] | None:
+    """Find a channel by name in a guild.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Discord guild ID
+        channel_name: Channel name to find
+
+    Returns:
+        Channel dict with id, name, category etc., or None if not found
+    """
+    categories_result = list_categories(bot_id, guild_id)
+    if not categories_result:
+        return None
+
+    # Search through all categories and their channels
+    for category in categories_result.get("categories", []):
+        for channel in category.get("channels", []):
+            if channel.get("name", "").lower() == channel_name.lower():
+                return {
+                    "id": int(channel["id"]),
+                    "name": channel["name"],
+                    "category_id": int(category["id"]),
+                    "category_name": category["name"],
+                }
+
+    return None
+
+
+def upsert_channel(
+    bot_id: int,
+    guild_id: int,
+    name: str,
+    category_id: int | None = None,
+    topic: str | None = None,
+) -> dict[str, Any]:
+    """Create or update a channel.
+
+    If a channel with the given name exists in the guild, updates it.
+    Otherwise creates a new channel.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Discord guild ID
+        name: Channel name
+        category_id: Optional category ID to place channel in
+        topic: Optional channel topic
+
+    Returns:
+        Dict with success status, channel info, and whether it was created or updated
+    """
+    # Check if channel exists
+    existing = find_channel_in_guild(bot_id, guild_id, name)
+
+    if existing:
+        # Update existing channel
+        result = edit_channel(
+            bot_id,
+            channel_id=existing["id"],
+            new_topic=topic,
+            category_id=category_id,
+        )
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "action": "updated",
+                "channel": result.get("channel", existing),
+            }
+        return {
+            "success": False,
+            "action": "update_failed",
+            "error": result.get("error") if result else "Unknown error",
+        }
+
+    # Create new channel
+    result = create_channel(
+        bot_id,
+        guild_id,
+        name,
+        category_id=category_id,
+        topic=topic,
+    )
+    if result and result.get("success"):
+        return {
+            "success": True,
+            "action": "created",
+            "channel": result.get("channel"),
+        }
+    return {
+        "success": False,
+        "action": "create_failed",
+        "error": result.get("error") if result else "Unknown error",
+    }
+
+
+def find_category_in_guild(
+    bot_id: int,
+    guild_id: int,
+    category_name: str,
+) -> dict[str, Any] | None:
+    """Find a category by name in a guild.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Discord guild ID
+        category_name: Category name to find
+
+    Returns:
+        Category dict with id, name, position, etc., or None if not found
+    """
+    categories_result = list_categories(bot_id, guild_id)
+    if not categories_result:
+        return None
+
+    for category in categories_result.get("categories", []):
+        if category.get("name", "").lower() == category_name.lower():
+            return {
+                "id": int(category["id"]),
+                "name": category["name"],
+                "position": category.get("position"),
+            }
+
+    return None
+
+
+def upsert_category(
+    bot_id: int,
+    guild_id: int,
+    name: str,
+) -> dict[str, Any]:
+    """Create or find a category.
+
+    If a category with the given name exists in the guild, returns it.
+    Otherwise creates a new category.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Discord guild ID
+        name: Category name
+
+    Returns:
+        Dict with success status, category info, and whether it was created or found
+    """
+    # Check if category exists
+    existing = find_category_in_guild(bot_id, guild_id, name)
+
+    if existing:
+        return {
+            "success": True,
+            "action": "found",
+            "category": existing,
+        }
+
+    # Create new category
+    result = create_category(bot_id, guild_id, name)
+    if result and result.get("success"):
+        return {
+            "success": True,
+            "action": "created",
+            "category": result.get("category"),
+        }
+    return {
+        "success": False,
+        "action": "create_failed",
+        "error": result.get("error") if result else "Unknown error",
+    }
+
+
+def make_channel_private(
+    bot_id: int,
+    guild_id: int,
+    channel_id: int,
+) -> dict[str, Any] | None:
+    """Make a channel private by denying @everyone view access.
+
+    Args:
+        bot_id: Discord bot ID
+        guild_id: Discord guild ID (used as @everyone role ID)
+        channel_id: Channel to make private
+
+    Returns:
+        Result dict or None on failure
+    """
+    # In Discord, guild_id == @everyone role ID
+    return set_channel_permission(
+        bot_id,
+        channel_id,
+        role_id=guild_id,  # @everyone role
+        deny=["view_channel"],
+    )
+
+
+def grant_role_channel_access(
+    bot_id: int,
+    channel_id: int,
+    role_id: int,
+) -> dict[str, Any] | None:
+    """Grant a role access to view and use a channel.
+
+    Args:
+        bot_id: Discord bot ID
+        channel_id: Channel to grant access to
+        role_id: Role to grant access
+
+    Returns:
+        Result dict or None on failure
+    """
+    return set_channel_permission(
+        bot_id,
+        channel_id,
+        role_id=role_id,
+        allow=["view_channel", "send_messages", "read_message_history"],
+    )
+
+
 # =============================================================================
 # Resolution Helpers
 # =============================================================================
@@ -505,6 +724,45 @@ def resolve_guild(guild: int | str | None, session: "Session | None" = None) -> 
     if not server:
         raise ValueError(f"Discord server '{guild}' not found")
     return server.id
+
+
+def resolve_category(
+    category: int | str | None,
+    guild_id: int,
+    bot_id: int,
+) -> int | None:
+    """Resolve category ID from either numeric ID or category name.
+
+    Args:
+        category: Numeric category ID or category name string, or None
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+
+    Returns:
+        Category ID as int, or None if category is None
+
+    Raises:
+        ValueError: If category name not found
+    """
+    if category is None:
+        return None
+
+    # Try as numeric first
+    if isinstance(category, int):
+        return category
+    try:
+        return int(category)
+    except ValueError:
+        pass
+
+    # It's a name - look up via Discord API
+    categories_result = list_categories(bot_id, guild_id)
+    if categories_result:
+        for c in categories_result.get("categories", []):
+            if c["name"].lower() == category.lower():
+                return int(c["id"])
+
+    raise ValueError(f"Discord category '{category}' not found in guild")
 
 
 def resolve_role(

@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -16,8 +18,10 @@ from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
     DiscordUser,
+    Team,
     UserSession,
 )
+from sqlalchemy.orm import selectinload
 from memory.common.discord_data import (
     fetch_channel_history,
     fetch_channels,
@@ -320,9 +324,7 @@ async def list_channels(
         Dict with channels list
     """
     with make_session() as session:
-        return await asyncio.to_thread(
-            fetch_channels, session, server, include_dms
-        )
+        return await asyncio.to_thread(fetch_channels, session, server, include_dms)
 
 
 @discord_mcp.tool()
@@ -502,7 +504,7 @@ def resolve_user(
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def add_user_to_role(
+async def role_add_user(
     role: int | str,
     user: int | str,
     guild: int | str | None = None,
@@ -539,7 +541,7 @@ async def add_user_to_role(
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def role_remove(
+async def role_remove_user(
     role: int | str,
     user: int | str,
     guild: int | str | None = None,
@@ -576,7 +578,7 @@ async def role_remove(
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def create(
+async def create_role(
     name: str,
     guild: int | str | None = None,
     color: int | None = None,
@@ -615,8 +617,6 @@ async def create(
         mentionable=mentionable,
         hoist=hoist,
     )
-
-
 
 
 # =============================================================================
@@ -739,7 +739,9 @@ async def set_perms(
                 # Try to parse as snowflake directly
                 resolved_role_id = _to_snowflake(role)
             else:
-                resolved_role_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+                resolved_role_id = resolve_role(
+                    role, resolved_guild_id, resolved_bot_id
+                )
         if user:
             resolved_user_id = resolve_user(session, user)
 
@@ -792,7 +794,9 @@ async def del_perms(
             if resolved_guild_id is None:
                 resolved_target_id = _to_snowflake(role)
             else:
-                resolved_target_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+                resolved_target_id = resolve_role(
+                    role, resolved_guild_id, resolved_bot_id
+                )
             target_type = "role"
         else:
             # user is guaranteed non-None here due to earlier validation
@@ -811,86 +815,387 @@ async def del_perms(
 
 
 # =============================================================================
+# Team-Discord Role Helpers
+# =============================================================================
+
+
+def ensure_team_has_discord_role(
+    session: DBSession,
+    team: Team,
+    guild_id: int,
+    bot_id: int,
+) -> tuple[int, bool]:
+    """Ensure a team has a Discord role, creating one if needed.
+
+    Args:
+        session: Database session
+        team: Team model instance
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+
+    Returns:
+        Tuple of (role_id, was_created)
+
+    Raises:
+        ValueError: If role creation fails
+    """
+    # If team already has a role, validate guild ID matches
+    if team.discord_role_id:
+        if team.discord_guild_id and team.discord_guild_id != guild_id:
+            raise ValueError(
+                f"Team '{team.slug}' is linked to a different Discord guild "
+                f"(existing: {team.discord_guild_id}, requested: {guild_id})"
+            )
+        return team.discord_role_id, False
+
+    # Create a new role for this team
+    role_id, created = discord_client.resolve_role(
+        team.slug,  # Use team slug as role name
+        guild_id,
+        bot_id,
+        create_if_missing=True,
+    )
+    if role_id is None:
+        raise ValueError(f"Failed to create Discord role for team '{team.slug}'")
+
+    # Update team with the new role
+    team.discord_role_id = role_id
+    team.discord_guild_id = guild_id
+    team.auto_sync_discord = True
+    session.flush()
+
+    return role_id, created
+
+
+def resolve_team_or_role(
+    session: DBSession,
+    identifier: int | str,
+    guild_id: int,
+    bot_id: int,
+) -> tuple[Team | None, int, bool, bool]:
+    """Resolve an identifier to a team and Discord role.
+
+    The identifier can be:
+    - An internal team slug/ID (will ensure it has a Discord role)
+    - A Discord role name/ID (will create an internal team for it)
+
+    Args:
+        session: Database session
+        identifier: Team slug/ID or Discord role name/ID
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+
+    Returns:
+        Tuple of (team_or_none, role_id, team_was_created, role_was_created)
+    """
+    team_created = False
+
+    # Try to find as internal team first
+    team = None
+    if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
+        team = session.query(Team).filter(Team.id == int(identifier)).first()
+    else:
+        team = session.query(Team).filter(Team.slug == identifier).first()
+
+    if team:
+        # Found internal team - ensure it has a Discord role
+        role_id, role_created = ensure_team_has_discord_role(session, team, guild_id, bot_id)
+        return team, role_id, False, role_created
+
+    # Not an internal team - try as Discord role
+    try:
+        role_id, role_created = discord_client.resolve_role(
+            identifier,
+            guild_id,
+            bot_id,
+            create_if_missing=True,
+        )
+    except ValueError:
+        raise ValueError(f"Could not resolve '{identifier}' as team or Discord role")
+
+    if role_id is None:
+        raise ValueError(f"Failed to resolve or create role for '{identifier}'")
+
+    # Create an internal team for this Discord role
+    slug = identifier if isinstance(identifier, str) else f"discord-role-{identifier}"
+    # Normalize slug
+    slug = re.sub(r"\s+", "-", slug.lower().strip())
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+
+    # Handle empty slug (e.g., non-ASCII role names)
+    if not slug:
+        slug = f"discord-role-{role_id}"
+
+    # Ensure slug uniqueness with retry for concurrent inserts
+    base_slug = slug
+    max_retries = 3
+    for attempt in range(max_retries):
+        suffix = 1
+        while session.query(Team).filter(Team.slug == slug).first() is not None:
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
+
+        team = Team(
+            name=identifier if isinstance(identifier, str) else f"Discord Role {identifier}",
+            slug=slug,
+            discord_role_id=role_id,
+            discord_guild_id=guild_id,
+            auto_sync_discord=True,
+        )
+        # Use savepoint to avoid rolling back the entire transaction
+        savepoint = session.begin_nested()
+        try:
+            session.add(team)
+            session.flush()
+            team_created = True
+            break  # Success
+        except IntegrityError:
+            savepoint.rollback()
+            team = None  # Clear detached object reference
+            if attempt == max_retries - 1:
+                raise ValueError(f"Failed to create unique slug for team after {max_retries} attempts")
+            # Reset slug for retry
+            slug = base_slug
+            continue
+
+    return team, role_id, team_created, role_created
+
+
+# =============================================================================
 # Channel/Category Management Tools
 # =============================================================================
 
 
+async def attach_teams_to_channel(
+    session: DBSession,
+    channel_id: int,
+    teams: list[int | str],
+    guild_id: int,
+    bot_id: int,
+) -> dict[str, Any]:
+    """Attach teams to a channel by making it private and granting team roles access.
+
+    Args:
+        session: Database session
+        channel_id: Discord channel ID (can be a category or text channel)
+        teams: List of team slugs/IDs or Discord role names/IDs
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+
+    Returns:
+        Dict with teams_synced, teams_created, roles_created, and warnings lists
+    """
+    result: dict[str, Any] = {
+        "teams_synced": [],
+        "teams_created": [],
+        "roles_created": [],
+        "warnings": [],
+    }
+
+    # Make channel private first (deny @everyone)
+    private_result = await asyncio.to_thread(
+        discord_client.make_channel_private,
+        bot_id,
+        guild_id,
+        channel_id,
+    )
+    if not private_result:
+        result["warnings"].append("Failed to make channel private")
+
+    # Grant access to each team
+    for team_identifier in teams:
+        try:
+            team, role_id, team_created, role_created = resolve_team_or_role(
+                session, team_identifier, guild_id, bot_id
+            )
+
+            if team_created:
+                result["teams_created"].append(team.slug if team else str(team_identifier))
+            if role_created:
+                result["roles_created"].append(str(role_id))
+
+            # Grant role access to channel
+            access_result = await asyncio.to_thread(
+                discord_client.grant_role_channel_access,
+                bot_id,
+                channel_id,
+                role_id,
+            )
+            if access_result:
+                result["teams_synced"].append(team.slug if team else str(team_identifier))
+            else:
+                result["warnings"].append(f"Failed to grant access for {team_identifier}")
+
+        except ValueError as e:
+            # Expected errors (validation, not found, etc.)
+            result["warnings"].append(f"Error processing team {team_identifier}: {e}")
+        except Exception as e:
+            # Unexpected errors - log at error level to distinguish from expected failures
+            logger.error(f"Unexpected error processing team {team_identifier}: {e}", exc_info=True)
+            result["warnings"].append(f"Unexpected error processing team {team_identifier}: {e}")
+
+    return result
+
+
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def create_channel(
+async def upsert_channel(
     name: str,
     guild: int | str | None = None,
-    category_id: int | str | None = None,
-    category_name: str | None = None,
+    category: int | str | None = None,
     topic: str | None = None,
-    copy_permissions_from: int | str | None = None,
+    teams: list[int | str] | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
-    Create a new text channel in a Discord server.
+    Create or update a Discord text channel.
+
+    If a channel with the given name exists, updates it. Otherwise creates it.
+
+    If teams are specified, the channel is made private and those teams get access.
+    Teams can be internal team slugs/IDs or Discord role names/IDs:
+    - Internal teams will have Discord roles created if needed
+    - Discord roles not linked to teams will have teams created for them
 
     Args:
         name: Channel name
         guild: Discord server - can be numeric ID or server name
-        category_id: Optional category to create channel in (snowflake, can be string or int)
-        category_name: Optional category name (alternative to category_id)
+        category: Category to place channel in - can be ID or name
         topic: Optional channel topic/description
-        copy_permissions_from: Optional channel ID to copy permissions from (snowflake, can be string or int)
+        teams: List of team slugs/IDs or Discord role names/IDs for access control.
+               If provided, channel becomes private with only these teams having access.
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
-        Dict with success status and new channel info
+        Dict with success status, channel info, and sync details
     """
     resolved_bot_id = resolve_bot_id(bot_id)
-    resolved_category_id = _to_snowflake(category_id) if category_id else None
-    resolved_copy_from = _to_snowflake(copy_permissions_from) if copy_permissions_from else None
+
+    result: dict[str, Any] = {
+        "success": False,
+        "channel": None,
+        "teams_synced": [],
+        "teams_created": [],
+        "roles_created": [],
+        "warnings": [],
+    }
 
     with make_session() as session:
         resolved_guild_id = resolve_guild_id(session, guild)
 
-    return await _call_discord_api(
-        discord_client.create_channel,
-        resolved_bot_id,
-        resolved_guild_id,
-        name,
-        resolved_category_id,
-        category_name,
-        topic,
-        resolved_copy_from,
-        error_msg=f"Failed to create channel {name}",
-    )
+        # Resolve category
+        resolved_category_id = None
+        if category is not None:
+            resolved_category_id = discord_client.resolve_category(
+                category, resolved_guild_id, resolved_bot_id
+            )
+
+        # Create or update the channel
+        channel_result = await asyncio.to_thread(
+            discord_client.upsert_channel,
+            resolved_bot_id,
+            resolved_guild_id,
+            name,
+            category_id=resolved_category_id,
+            topic=topic,
+        )
+
+        if not channel_result or not channel_result.get("success"):
+            result["error"] = channel_result.get("error") if channel_result else "Unknown error"
+            return result
+
+        result["channel"] = channel_result.get("channel")
+        result["action"] = channel_result.get("action")
+        channel_id = int(channel_result["channel"]["id"])
+
+        # Handle teams/permissions
+        if teams:
+            teams_result = await attach_teams_to_channel(
+                session, channel_id, teams, resolved_guild_id, resolved_bot_id
+            )
+            result["teams_synced"] = teams_result["teams_synced"]
+            result["teams_created"] = teams_result["teams_created"]
+            result["roles_created"] = teams_result["roles_created"]
+            result["warnings"] = teams_result["warnings"]
+
+        session.commit()
+        result["success"] = True
+
+    return result
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def create_category(
+async def upsert_category(
     name: str,
     guild: int | str | None = None,
+    teams: list[int | str] | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
-    Create a new category in a Discord server.
+    Create or find a Discord category.
+
+    If a category with the given name exists, returns it. Otherwise creates it.
+
+    If teams are specified, the category is made private and those teams get access.
+    Teams can be internal team slugs/IDs or Discord role names/IDs:
+    - Internal teams will have Discord roles created if needed
+    - Discord roles not linked to teams will have teams created for them
 
     Args:
         name: Category name
         guild: Discord server - can be numeric ID or server name
+        teams: List of team slugs/IDs or Discord role names/IDs for access control.
+               If provided, category becomes private with only these teams having access.
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
-        Dict with success status and new category info
+        Dict with success status, category info, and sync details
     """
     resolved_bot_id = resolve_bot_id(bot_id)
+
+    result: dict[str, Any] = {
+        "success": False,
+        "category": None,
+        "teams_synced": [],
+        "teams_created": [],
+        "roles_created": [],
+        "warnings": [],
+    }
 
     with make_session() as session:
         resolved_guild_id = resolve_guild_id(session, guild)
 
-    return await _call_discord_api(
-        discord_client.create_category,
-        resolved_bot_id,
-        resolved_guild_id,
-        name,
-        error_msg=f"Failed to create category {name}",
-    )
+        # Create or find the category
+        category_result = await asyncio.to_thread(
+            discord_client.upsert_category,
+            resolved_bot_id,
+            resolved_guild_id,
+            name,
+        )
+
+        if not category_result or not category_result.get("success"):
+            result["error"] = category_result.get("error") if category_result else "Unknown error"
+            return result
+
+        result["category"] = category_result.get("category")
+        result["action"] = category_result.get("action")
+        category_id = int(category_result["category"]["id"])
+
+        # Handle teams/permissions
+        if teams:
+            teams_result = await attach_teams_to_channel(
+                session, category_id, teams, resolved_guild_id, resolved_bot_id
+            )
+            result["teams_synced"] = teams_result["teams_synced"]
+            result["teams_created"] = teams_result["teams_created"]
+            result["roles_created"] = teams_result["roles_created"]
+            result["warnings"] = teams_result["warnings"]
+
+        session.commit()
+        result["success"] = True
+
+    return result
 
 
 @discord_mcp.tool()
@@ -959,67 +1264,29 @@ async def delete_category(
     Returns:
         Dict with success status and deleted category info
     """
-    # Categories are just a type of channel in Discord, so reuse delete_channel
-    return await delete_channel(
-        channel_id=category_id,
-        channel_name=category_name,
-        guild=guild,
-        bot_id=bot_id,
-    )
+    # Categories are just a type of channel in Discord
+    if category_id is None and category_name is None:
+        raise ValueError("Must specify either category_id or category_name")
 
-
-@discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
-async def edit_channel(
-    channel_id: int | str | None = None,
-    channel_name: str | None = None,
-    guild: int | str | None = None,
-    new_name: str | None = None,
-    new_topic: str | None = None,
-    category_id: int | str | None = None,
-    category_name: str | None = None,
-    bot_id: int | None = None,
-) -> dict[str, Any]:
-    """
-    Edit a Discord channel's properties (name, topic, or category).
-
-    Use this to rename channels, update topics, or move channels between categories.
-
-    Args:
-        channel_id: Discord channel ID (snowflake, can be string or int)
-        channel_name: Discord channel name (alternative to channel_id)
-        guild: Discord server - can be numeric ID or server name (required when using channel_name or category_name)
-        new_name: New name for the channel
-        new_topic: New topic for the channel (empty string to clear)
-        category_id: Move to this category ID (empty string or 0 to remove from category)
-        category_name: Move to this category name (empty string to remove from category)
-        bot_id: Optional specific bot ID to use (defaults to user's first bot)
-
-    Returns:
-        Dict with success status and updated channel info
-    """
-    if channel_id is None and channel_name is None:
-        raise ValueError("Must specify either channel_id or channel_name")
+    if category_name is not None and guild is None:
+        raise ValueError("guild is required when using category_name")
 
     resolved_bot_id = resolve_bot_id(bot_id)
-    resolved_channel_id = _to_snowflake(channel_id) if channel_id else None
-    resolved_category_id = _to_snowflake(category_id) if category_id and category_id != "" else category_id
+    resolved_category_id = _to_snowflake(category_id) if category_id is not None else None
 
-    # Resolve guild_id if channel_name is used
     resolved_guild_id = None
-    if channel_name is not None or category_name is not None:
+    if category_name is not None:
         with make_session() as session:
             resolved_guild_id = resolve_guild_id(session, guild)
 
+    identifier = category_id or category_name
     return await _call_discord_api(
-        discord_client.edit_channel,
+        discord_client.delete_channel,
         resolved_bot_id,
-        error_msg=f"Failed to edit channel {channel_id or channel_name}",
-        channel_id=resolved_channel_id,
-        channel_name=channel_name if resolved_channel_id is None else None,
+        error_msg=f"Failed to delete category {identifier}",
+        channel_id=resolved_category_id,
+        channel_name=category_name if resolved_category_id is None else None,
         guild_id=resolved_guild_id,
-        new_name=new_name,
-        new_topic=new_topic,
-        category_id=resolved_category_id,
-        category_name=category_name,
     )
+
+

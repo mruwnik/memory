@@ -162,7 +162,7 @@ def get_guild_or_404(collector, guild_id: int | str) -> discord.Guild:
             # It's a name, search by name (exact match first, then case-insensitive)
             guild = None
             case_insensitive_match = None
-            for g in collector.client.guilds:
+            for g in collector.guilds:
                 if g.name == guild_id:
                     guild = g
                     break
@@ -727,7 +727,7 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
 
     if request.channel_id is not None:
         # Find by ID across all guilds
-        for guild in collector.client.guilds:
+        for guild in collector.guilds:
             channel = guild.get_channel(request.channel_id)
             if channel:
                 break
@@ -792,10 +792,10 @@ async def edit_channel(request: EditChannelRequest) -> dict[str, Any]:
     channel = None
     if request.channel_id is not None:
         chan_id = int(request.channel_id) if isinstance(request.channel_id, str) else request.channel_id
-        channel = collector.client.get_channel(chan_id)
+        channel = collector.get_channel(chan_id)
         if channel is None:
             try:
-                channel = await collector.client.fetch_channel(chan_id)
+                channel = await collector.fetch_channel(chan_id)
             except discord.NotFound:
                 pass
     elif request.channel_name is not None:
