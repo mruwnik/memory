@@ -405,19 +405,20 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"No user found for auth code: {authorization_code.code}")
                 raise ValueError("Invalid authorization code")
 
-            # Extract data needed for token creation BEFORE invalidating auth code
+            # Extract data needed for token creation
             auth_code_id = auth_code.id
             user_id = auth_code.user_id
             client_id = auth_code.client_id
             scopes = authorization_code.scopes
 
-            # Invalidate the auth code BEFORE creating token to prevent replay attacks.
-            # If token creation fails after this, user can re-initiate OAuth flow.
-            # This is safer than the reverse (token created but code not invalidated).
-            session.delete(auth_code)
+            # Invalidate the auth code by clearing the code field.
+            # We keep the OAuthState record because UserSession references it
+            # for client_id and scopes lookup in load_access_token().
+            # This prevents replay attacks while preserving needed state.
+            auth_code.code = None
             session.commit()
 
-            # Create token using extracted data (auth_code object is now detached)
+            # Create token linked to the (now code-less) OAuthState
             token = make_token_from_data(
                 session,
                 oauth_state_id=auth_code_id,
