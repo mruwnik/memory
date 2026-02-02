@@ -32,11 +32,24 @@ export const ProjectsPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('list')
-  const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('all')
+  const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('open')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [managingTeams, setManagingTeams] = useState<Project | null>(null)
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(new Set())
+
+  const toggleCollapse = useCallback((nodeId: number) => {
+    setCollapsedNodes(prev => {
+      const next = new Set(prev)
+      if (next.has(nodeId)) {
+        next.delete(nodeId)
+      } else {
+        next.add(nodeId)
+      }
+      return next
+    })
+  }, [])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -153,6 +166,8 @@ export const ProjectsPanel = () => {
             onDelete={setDeletingProject}
             onManageTeams={setManagingTeams}
             projects={projects}
+            collapsedNodes={collapsedNodes}
+            onToggleCollapse={toggleCollapse}
           />
         </div>
       ) : (
@@ -217,9 +232,11 @@ export const ProjectsPanel = () => {
       {managingTeams && (
         <ProjectTeamsModal
           project={managingTeams}
-          onClose={() => {
+          onClose={(hasChanges) => {
             setManagingTeams(null)
-            loadData()  // Refresh to show updated team assignments
+            if (hasChanges) {
+              loadData()  // Refresh only if team assignments changed
+            }
           }}
           listTeams={listTeams}
           listProjectTeams={listProjectTeams}
@@ -238,42 +255,73 @@ interface ProjectTreeProps {
   onDelete: (project: Project) => void
   onManageTeams: (project: Project) => void
   projects: Project[]
+  collapsedNodes: Set<number>
+  onToggleCollapse: (nodeId: number) => void
   depth?: number
 }
 
-const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, depth = 0 }: ProjectTreeProps) => {
+const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collapsedNodes, onToggleCollapse, depth = 0 }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
   return (
     <div className={depth > 0 ? 'ml-6 border-l border-slate-200 pl-4' : ''}>
       {nodes.map(node => {
         const project = projects.find(p => p.id === node.id)
+        const hasChildren = node.children.length > 0
+        const isCollapsed = collapsedNodes.has(node.id)
+
         return (
           <div key={node.id} className="mb-2">
-            <ProjectCard
-              project={project || {
-                id: node.id,
-                title: node.title,
-                description: node.description,
-                state: node.state as 'open' | 'closed',
-                repo_path: node.repo_path,
-                github_id: null,
-                number: null,
-                parent_id: node.parent_id,
-                children_count: node.children.length,
-              }}
-              onEdit={() => project && onEdit(project)}
-              onDelete={() => project && onDelete(project)}
-              onManageTeams={() => project && onManageTeams(project)}
-              compact
-            />
-            {node.children.length > 0 && (
+            <div className="flex items-start gap-1">
+              {/* Collapse/expand toggle */}
+              {hasChildren ? (
+                <button
+                  type="button"
+                  onClick={() => onToggleCollapse(node.id)}
+                  className="mt-3 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors flex-shrink-0"
+                  title={isCollapsed ? 'Expand' : 'Collapse'}
+                >
+                  <svg
+                    className={cx('w-4 h-4 transition-transform', isCollapsed ? '' : 'rotate-90')}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              ) : (
+                <div className="w-5 flex-shrink-0" /> // Spacer for alignment
+              )}
+              <div className="flex-1">
+                <ProjectCard
+                  project={project || {
+                    id: node.id,
+                    title: node.title,
+                    description: node.description,
+                    state: node.state as 'open' | 'closed',
+                    repo_path: node.repo_path,
+                    github_id: null,
+                    number: null,
+                    parent_id: node.parent_id,
+                    children_count: node.children.length,
+                  }}
+                  onEdit={() => project && onEdit(project)}
+                  onDelete={() => project && onDelete(project)}
+                  onManageTeams={() => project && onManageTeams(project)}
+                  compact
+                />
+              </div>
+            </div>
+            {hasChildren && !isCollapsed && (
               <ProjectTree
                 nodes={node.children}
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onManageTeams={onManageTeams}
                 projects={projects}
+                collapsedNodes={collapsedNodes}
+                onToggleCollapse={onToggleCollapse}
                 depth={depth + 1}
               />
             )}
@@ -332,8 +380,30 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
             </p>
           )}
           {isGithubBacked && (
-            <p className="text-xs text-slate-400 mt-1">
-              {project.repo_path} #{project.number}
+            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+              <a
+                href={`https://github.com/${project.repo_path}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-purple-600 hover:text-purple-700 hover:underline"
+                onClick={e => e.stopPropagation()}
+              >
+                {project.repo_path}
+              </a>
+              {project.number && (
+                <>
+                  <span className="text-slate-300">·</span>
+                  <a
+                    href={`https://github.com/${project.repo_path}/milestone/${project.number}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-purple-600 hover:text-purple-700 hover:underline"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    Milestone #{project.number}
+                  </a>
+                </>
+              )}
             </p>
           )}
           {project.teams && project.teams.length > 0 && !compact && (
@@ -627,7 +697,7 @@ const ProjectFormModal = ({
 // Project Teams Management Modal
 interface ProjectTeamsModalProps {
   project: Project
-  onClose: () => void
+  onClose: (hasChanges: boolean) => void
   listTeams: () => Promise<Team[]>
   listProjectTeams: (project: number) => Promise<Team[]>
   assignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
@@ -646,6 +716,7 @@ const ProjectTeamsModal = ({
   const [allTeams, setAllTeams] = useState<Team[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasChanges, setHasChanges] = useState(false)
 
   // Load teams on mount
   useEffect(() => {
@@ -672,6 +743,7 @@ const ProjectTeamsModal = ({
     const result = await assignTeam(project.id, team.id)
     if (result.success) {
       setAssignedTeams(prev => [...prev, team])
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to assign team')
     }
@@ -682,6 +754,7 @@ const ProjectTeamsModal = ({
     const result = await unassignTeam(project.id, team.id)
     if (result.success) {
       setAssignedTeams(prev => prev.filter(t => t.id !== team.id))
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to unassign team')
     }
@@ -690,8 +763,10 @@ const ProjectTeamsModal = ({
   const assignedIds = new Set(assignedTeams.map(t => t.id))
   const availableTeams = allTeams.filter(t => !assignedIds.has(t.id))
 
+  const handleClose = () => onClose(hasChanges)
+
   return (
-    <Modal title={`Teams for ${project.title}`} onClose={onClose}>
+    <Modal title={`Teams for ${project.title}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && <div className={styles.formError}>{error}</div>}
 
@@ -772,7 +847,7 @@ const ProjectTeamsModal = ({
         )}
 
         <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={onClose}>
+          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
             Done
           </button>
         </div>

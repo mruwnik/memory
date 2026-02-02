@@ -293,6 +293,7 @@ def _build_tree(projects: list[Project]) -> list[dict[str, Any]]:
 async def list_all(
     state: Literal["open", "closed"] | None = None,
     parent_id: int | None = None,
+    search: str | None = None,
     include_teams: bool = False,
     as_tree: bool = False,
     limit: int = 100,
@@ -308,6 +309,7 @@ async def list_all(
     Args:
         state: Filter by state ('open' or 'closed')
         parent_id: Filter by parent (use 0 for root-level only)
+        search: Filter by title (case-insensitive substring match)
         include_teams: If true, include team list for each project
         as_tree: If true, return projects as a nested tree structure
         limit: Maximum number of projects to return (default: 100)
@@ -331,6 +333,9 @@ async def list_all(
 
         if state:
             query = query.filter(Project.state == state)
+
+        if search:
+            query = query.filter(Project.title.ilike(f"%{search}%"))
 
         if parent_id is not None:
             if parent_id == 0:

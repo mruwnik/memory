@@ -7,6 +7,8 @@ import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, 
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
+import Projects from '@/components/projects/Projects'
+import Teams from '@/components/teams/Teams'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
 const Metrics = lazy(() => import('@/components/metrics/Metrics'))
@@ -169,6 +171,22 @@ const AuthWrapper = () => {
           <PeopleManagement />
         ) : isAuthenticated ? (
           <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/projects" element={
+        isAuthenticated ? (
+          <Projects />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/teams" element={
+        isAuthenticated ? (
+          <Teams />
         ) : (
           <Navigate to="/ui/login" replace />
         )

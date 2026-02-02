@@ -870,3 +870,511 @@ async def test_merge_people_not_found(db_session, admin_session, sample_people):
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError, match="not found"):
             await merge_fn(identifiers=["alice_chen", "nonexistent_person"])
+
+
+@pytest.mark.asyncio
+async def test_merge_people_primary_not_in_list(db_session, admin_session, sample_people):
+    """Test that primary_identifier must be in identifiers list."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="must be in the identifiers list"):
+            await merge_fn(
+                identifiers=["alice_chen", "bob_smith"],
+                primary_identifier="carol_jones",
+            )
+
+
+@pytest.mark.asyncio
+async def test_merge_people_default_primary(db_session, admin_session, sample_people):
+    """Test that first identifier is used as primary when not specified."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    # Create a duplicate to merge
+    duplicate = Person(
+        identifier="alice_dup",
+        display_name="Alice Dup",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_dup"],
+            # No primary_identifier specified - should use first one
+        )
+
+    assert result["success"] is True
+    assert result["primary"]["identifier"] == "alice_chen"
+
+
+@pytest.mark.asyncio
+async def test_merge_people_contact_info_priority(db_session, admin_session, sample_people):
+    """Test that primary's contact_info takes precedence in conflicts."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    # Alice already has email and phone in contact_info
+    # Create duplicate with overlapping and new contact info
+    duplicate = Person(
+        identifier="alice_dup2",
+        display_name="Alice Dup 2",
+        aliases=[],
+        contact_info={
+            "email": "different@example.com",  # Should NOT override primary
+            "twitter": "@alice_twitter",  # New field, should be added
+        },
+    )
+    db_session.add(duplicate)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_dup2"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+
+    # Check merged contact_info
+    db_session.expire_all()
+    primary = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+
+    # Primary's email should be preserved
+    assert primary.contact_info["email"] == "alice@example.com"
+    # Primary's phone should be preserved
+    assert primary.contact_info["phone"] == "555-1234"
+    # Secondary's twitter should be added
+    assert primary.contact_info["twitter"] == "@alice_twitter"
+
+
+@pytest.mark.asyncio
+async def test_merge_people_alias_deduplication(db_session, admin_session, sample_people):
+    """Test that aliases are deduplicated after merge."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    # Create duplicate with some overlapping aliases
+    duplicate = Person(
+        identifier="alice_dup3",
+        display_name="Alice Dup 3",
+        aliases=["@alice_c", "@alice_new"],  # @alice_c is duplicate
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_dup3"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+
+    # Check aliases are deduplicated
+    db_session.expire_all()
+    primary = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+
+    # Should have unique aliases (no duplicates)
+    assert len(primary.aliases) == len(set(primary.aliases))
+    # @alice_c should appear only once
+    assert primary.aliases.count("@alice_c") == 1
+    # Secondary's identifier should be added as alias
+    assert "alice_dup3" in primary.aliases
+    # Secondary's new alias should be added
+    assert "@alice_new" in primary.aliases
+
+
+@pytest.mark.asyncio
+async def test_merge_people_team_membership_role_priority(
+    db_session, admin_session, sample_people
+):
+    """Test that higher team role is preserved when merging."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models import Team, team_members
+
+    merge_fn = get_fn(merge)
+
+    # Create a team
+    team = Team(slug="test-merge-team", name="Test Merge Team")
+    db_session.add(team)
+    db_session.flush()
+
+    # Add alice to team as member
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=alice.id, role="member"
+        )
+    )
+
+    # Create duplicate with admin role in same team
+    duplicate = Person(
+        identifier="alice_admin",
+        display_name="Alice Admin",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=duplicate.id, role="admin"
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_admin"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["team_memberships_moved"] >= 1
+
+    # Verify primary now has admin role (higher priority)
+    db_session.expire_all()
+    membership = db_session.execute(
+        team_members.select().where(
+            team_members.c.team_id == team.id,
+            team_members.c.person_id == alice.id,
+        )
+    ).fetchone()
+    assert membership is not None
+    assert membership.role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_merge_people_team_membership_new_team(db_session, admin_session, sample_people):
+    """Test that team membership is moved when primary doesn't have it."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models import Team, team_members
+
+    merge_fn = get_fn(merge)
+
+    # Create a team
+    team = Team(slug="secondary-only-team", name="Secondary Only Team")
+    db_session.add(team)
+    db_session.flush()
+
+    # Create duplicate with team membership
+    duplicate = Person(
+        identifier="alice_team_only",
+        display_name="Alice Team Only",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=duplicate.id, role="lead"
+        )
+    )
+    db_session.commit()
+
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    alice_id = alice.id
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_team_only"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+
+    # Verify primary now has the membership
+    db_session.expire_all()
+    membership = db_session.execute(
+        team_members.select().where(
+            team_members.c.team_id == team.id,
+            team_members.c.person_id == alice_id,
+        )
+    ).fetchone()
+    assert membership is not None
+    assert membership.role == "lead"
+
+
+@pytest.mark.asyncio
+async def test_merge_people_discord_users(db_session, admin_session, sample_people):
+    """Test that Discord users are moved to primary."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models.discord import DiscordUser
+
+    merge_fn = get_fn(merge)
+
+    # Create duplicate with Discord user
+    duplicate = Person(
+        identifier="alice_discord",
+        display_name="Alice Discord",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    discord_user = DiscordUser(
+        id=123456789,  # Discord snowflake ID is the primary key
+        username="alice_discord_user",
+        person_id=duplicate.id,
+    )
+    db_session.add(discord_user)
+    db_session.commit()
+
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    alice_id = alice.id
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_discord"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["discord_users_moved"] == 1
+
+    # Verify Discord user is now linked to primary
+    db_session.expire_all()
+    discord_user = db_session.query(DiscordUser).filter(
+        DiscordUser.id == 123456789
+    ).first()
+    assert discord_user.person_id == alice_id
+
+
+@pytest.mark.asyncio
+async def test_merge_people_github_users(db_session, admin_session, sample_people):
+    """Test that GitHub users are moved to primary."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models.sources import GithubUser
+
+    merge_fn = get_fn(merge)
+
+    # Create duplicate with GitHub user
+    duplicate = Person(
+        identifier="alice_github",
+        display_name="Alice GitHub",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    github_user = GithubUser(
+        id=987654321,  # GitHub user ID is the primary key
+        username="alice_gh",
+        person_id=duplicate.id,
+    )
+    db_session.add(github_user)
+    db_session.commit()
+
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    alice_id = alice.id
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_github"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["github_users_moved"] == 1
+
+    # Verify GitHub user is now linked to primary
+    db_session.expire_all()
+    github_user = db_session.query(GithubUser).filter(
+        GithubUser.id == 987654321
+    ).first()
+    assert github_user.person_id == alice_id
+
+
+@pytest.mark.asyncio
+async def test_merge_people_poll_responses(db_session, admin_session, sample_people):
+    """Test that poll responses are moved to primary."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models.polls import AvailabilityPoll, PollResponse
+
+    merge_fn = get_fn(merge)
+
+    # Create a poll
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    poll = AvailabilityPoll(
+        title="Test Poll",
+        description="A test poll",
+        user_id=admin_session.user_id,
+        datetime_start=now,
+        datetime_end=now + timedelta(days=7),
+    )
+    db_session.add(poll)
+    db_session.flush()
+
+    # Create duplicate with poll response
+    duplicate = Person(
+        identifier="alice_poll",
+        display_name="Alice Poll",
+        aliases=[],
+        contact_info={},
+    )
+    db_session.add(duplicate)
+    db_session.flush()
+
+    response = PollResponse(
+        poll_id=poll.id,
+        person_id=duplicate.id,
+        respondent_name="Alice Poll",
+    )
+    db_session.add(response)
+    db_session.commit()
+
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    alice_id = alice.id
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_poll"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["poll_responses_moved"] == 1
+
+    # Verify response is now linked to primary
+    db_session.expire_all()
+    response = db_session.query(PollResponse).filter(
+        PollResponse.poll_id == poll.id
+    ).first()
+    assert response.person_id == alice_id
+
+
+@pytest.mark.asyncio
+async def test_merge_people_user_link_moved(db_session, admin_session, sample_people):
+    """Test that user link is moved from secondary to primary when primary has none."""
+    from memory.api.MCP.servers.people import merge
+    from memory.common.db.models import HumanUser
+
+    merge_fn = get_fn(merge)
+
+    # Create a user to link
+    linked_user = HumanUser(
+        name="Linked User",
+        email="linked@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(linked_user)
+    db_session.flush()
+
+    # Create duplicate with user link
+    duplicate = Person(
+        identifier="alice_with_user",
+        display_name="Alice With User",
+        aliases=[],
+        contact_info={},
+        user_id=linked_user.id,
+    )
+    db_session.add(duplicate)
+    db_session.commit()
+
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    # Ensure alice has no user link
+    assert alice.user_id is None
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_with_user"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["users_updated"] == 1
+
+    # Verify primary now has the user link
+    db_session.expire_all()
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert alice.user_id == linked_user.id
+
+
+@pytest.mark.asyncio
+async def test_merge_three_people(db_session, admin_session, sample_people):
+    """Test merging more than 2 people at once."""
+    from memory.api.MCP.servers.people import merge
+
+    merge_fn = get_fn(merge)
+
+    # Create two duplicates
+    dup1 = Person(
+        identifier="alice_dup_one",
+        display_name="Alice One",
+        aliases=["@alice1"],
+        contact_info={"field1": "value1"},
+    )
+    dup2 = Person(
+        identifier="alice_dup_two",
+        display_name="Alice Two",
+        aliases=["@alice2"],
+        contact_info={"field2": "value2"},
+    )
+    db_session.add(dup1)
+    db_session.add(dup2)
+    db_session.flush()
+
+    # Add tidbits to each
+    tidbit1 = PersonTidbit(
+        person_id=dup1.id,
+        content="From dup one",
+        tidbit_type="note",
+        tags=["dup1"],
+        creator_id=admin_session.user_id,
+        modality="text",
+        sha256=create_content_hash("From dup one"),
+    )
+    tidbit2 = PersonTidbit(
+        person_id=dup2.id,
+        content="From dup two",
+        tidbit_type="note",
+        tags=["dup2"],
+        creator_id=admin_session.user_id,
+        modality="text",
+        sha256=create_content_hash("From dup two"),
+    )
+    db_session.add(tidbit1)
+    db_session.add(tidbit2)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await merge_fn(
+            identifiers=["alice_chen", "alice_dup_one", "alice_dup_two"],
+            primary_identifier="alice_chen",
+        )
+
+    assert result["success"] is True
+    assert result["stats"]["tidbits_moved"] == 2  # One from each duplicate
+    assert len(result["merged_from"]) == 2
+
+    # Verify both duplicates are deleted
+    db_session.expire_all()
+    assert db_session.query(Person).filter(Person.identifier == "alice_dup_one").first() is None
+    assert db_session.query(Person).filter(Person.identifier == "alice_dup_two").first() is None
+
+    # Verify primary has all aliases
+    primary = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert "alice_dup_one" in primary.aliases
+    assert "alice_dup_two" in primary.aliases
+    assert "@alice1" in primary.aliases
+    assert "@alice2" in primary.aliases
+
+    # Verify primary has contact info from all
+    assert "field1" in primary.contact_info
+    assert "field2" in primary.contact_info

@@ -1047,6 +1047,8 @@ async def upsert_channel(
     category: int | str | None = None,
     topic: str | None = None,
     teams: list[int | str] | None = None,
+    project_id: int | None = None,
+    sensitivity: str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -1066,13 +1068,13 @@ async def upsert_channel(
         topic: Optional channel topic/description
         teams: List of team slugs/IDs or Discord role names/IDs for access control.
                If provided, channel becomes private with only these teams having access.
+        project_id: Optional project ID to link the channel to for access control.
+        sensitivity: Optional sensitivity level ('public', 'basic', 'internal', 'confidential').
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status, channel info, and sync details
     """
-    resolved_bot_id = resolve_bot_id(bot_id)
-
     result: dict[str, Any] = {
         "success": False,
         "channel": None,
@@ -1084,15 +1086,41 @@ async def upsert_channel(
 
     with make_session() as session:
         resolved_guild_id = resolve_guild_id(session, guild)
+        needs_discord_api = category is not None or topic is not None or teams is not None
 
-        # Resolve category
+        # Local-only update: just set project_id/sensitivity on existing channel
+        if not needs_discord_api:
+            channel_record = (
+                session.query(DiscordChannel)
+                .filter(DiscordChannel.server_id == resolved_guild_id, DiscordChannel.name == name)
+                .first()
+            )
+            if not channel_record:
+                result["error"] = f"Channel '{name}' not found in server {resolved_guild_id}"
+                return result
+
+            if project_id is not None:
+                channel_record.project_id = project_id
+                result["project_id"] = project_id
+            if sensitivity is not None:
+                channel_record.sensitivity = sensitivity
+                result["sensitivity"] = sensitivity
+
+            result["channel"] = {"id": str(channel_record.id), "name": name}
+            result["action"] = "updated_local"
+            session.commit()
+            result["success"] = True
+            return result
+
+        # Discord API upsert for category/topic/teams changes
+        resolved_bot_id = resolve_bot_id(bot_id)
+
         resolved_category_id = None
         if category is not None:
             resolved_category_id = discord_client.resolve_category(
                 category, resolved_guild_id, resolved_bot_id
             )
 
-        # Create or update the channel
         channel_result = await asyncio.to_thread(
             discord_client.upsert_channel,
             resolved_bot_id,
@@ -1119,6 +1147,17 @@ async def upsert_channel(
             result["teams_created"] = teams_result["teams_created"]
             result["roles_created"] = teams_result["roles_created"]
             result["warnings"] = teams_result["warnings"]
+
+        # Set project_id/sensitivity after Discord API creates/updates the channel
+        if project_id is not None or sensitivity is not None:
+            channel_record = session.get(DiscordChannel, channel_id)
+            if channel_record:
+                if project_id is not None:
+                    channel_record.project_id = project_id
+                    result["project_id"] = project_id
+                if sensitivity is not None:
+                    channel_record.sensitivity = sensitivity
+                    result["sensitivity"] = sensitivity
 
         session.commit()
         result["success"] = True
