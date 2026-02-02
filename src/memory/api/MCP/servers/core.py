@@ -15,9 +15,13 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from memory.api.MCP.access import build_user_access_filter_from_dict, get_mcp_current_user
+from memory.api.MCP.access import (
+    build_user_access_filter_from_dict,
+    get_mcp_current_user,
+)
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import AccessFilter, user_can_access
+from memory.api.auth import lookup_api_key
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
@@ -32,8 +36,10 @@ from memory.common.db.models import (
     GoogleDoc,
     MailMessage,
     SourceItem,
+    UserSession,
 )
 from memory.common.formatters import observation
+
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +67,6 @@ def get_current_user_access_filter() -> AccessFilter | None:
     # for access control. API key scopes control which tools are available,
     # but USER scopes determine admin status and data access.
     with make_session() as session:
-        from memory.common.db.models import UserSession
-
         # Try as session token first
         user_session = session.get(UserSession, access_token.token)
         if user_session and user_session.user:
@@ -74,8 +78,6 @@ def get_current_user_access_filter() -> AccessFilter | None:
             return build_user_access_filter_from_dict(user_dict)
 
         # Try as API key
-        from memory.api.auth import lookup_api_key
-
         api_key_record = lookup_api_key(access_token.token, session)
         if api_key_record and api_key_record.user:
             user = api_key_record.user
@@ -154,7 +156,8 @@ def _build_search_description() -> str:
     modalities = _get_available_modalities()
     modalities_str = ", ".join(modalities) if modalities else "(none available)"
 
-    return textwrap.dedent("""
+    return textwrap.dedent(
+        """
         Search user's stored content including emails, documents, articles, books.
         Use to find specific information the user has saved or received.
         Combine with search_observations for complete user context.
@@ -171,9 +174,8 @@ def _build_search_description() -> str:
             {filters_section}
 
         Returns: List of search results with id, score, chunks, content, filename
-        Higher scores (>0.7) indicate strong matches.""").format(
-        filters_section=_build_filters_section(), modalities_str=modalities_str
-    )
+        Higher scores (>0.7) indicate strong matches."""
+    ).format(filters_section=_build_filters_section(), modalities_str=modalities_str)
 
 
 core_mcp = FastMCP("memory-core")
@@ -663,9 +665,8 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
     # Project-based access
     for condition in access_filter.conditions:
         # Item must be in project AND have allowed sensitivity
-        project_condition = (
-            (SourceItem.project_id == condition.project_id)
-            & (SourceItem.sensitivity.in_(list(condition.sensitivities)))
+        project_condition = (SourceItem.project_id == condition.project_id) & (
+            SourceItem.sensitivity.in_(list(condition.sensitivities))
         )
         or_conditions.append(project_condition)
 

@@ -26,6 +26,53 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def get_fk_constraint_name(table_name: str, column_name: str) -> str | None:
+    """Find the actual FK constraint name for a given table and column."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text("""
+            SELECT tc.constraint_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+                AND tc.table_schema = kcu.table_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+                AND tc.table_name = :table_name
+                AND kcu.column_name = :column_name
+        """),
+        {"table_name": table_name, "column_name": column_name},
+    )
+    row = result.fetchone()
+    return row[0] if row else None
+
+
+def drop_fk_if_exists(table_name: str, column_name: str, fallback_name: str) -> None:
+    """Drop FK constraint by looking up actual name, with fallback."""
+    constraint_name = get_fk_constraint_name(table_name, column_name)
+    if constraint_name:
+        op.drop_constraint(constraint_name, table_name, type_="foreignkey")
+    else:
+        # Try fallback name in case lookup failed
+        try:
+            op.drop_constraint(fallback_name, table_name, type_="foreignkey")
+        except Exception:
+            pass  # Constraint doesn't exist, which is fine
+
+
+def drop_index_if_exists(index_name: str, table_name: str) -> None:
+    """Drop index only if it exists."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text("""
+            SELECT 1 FROM pg_indexes
+            WHERE indexname = :index_name AND tablename = :table_name
+        """),
+        {"index_name": index_name, "table_name": table_name},
+    )
+    if result.fetchone():
+        op.drop_index(index_name, table_name=table_name)
+
+
 def upgrade() -> None:
     # Step 1: Add creator_id to source_item
     op.add_column(
@@ -139,7 +186,7 @@ def upgrade() -> None:
 
     # Step 5: Update FK references to point to people_new
     # 5a: discord_users.person_id
-    op.drop_constraint("discord_users_person_id_fkey", "discord_users", type_="foreignkey")
+    drop_fk_if_exists("discord_users", "person_id", "discord_users_person_id_fkey")
     op.create_foreign_key(
         "discord_users_person_id_fkey",
         "discord_users",
@@ -150,7 +197,7 @@ def upgrade() -> None:
     )
 
     # 5b: github_users.person_id
-    op.drop_constraint("github_users_person_id_fkey", "github_users", type_="foreignkey")
+    drop_fk_if_exists("github_users", "person_id", "github_users_person_id_fkey")
     op.create_foreign_key(
         "github_users_person_id_fkey",
         "github_users",
@@ -161,9 +208,7 @@ def upgrade() -> None:
     )
 
     # 5c: source_item_people.person_id
-    op.drop_constraint(
-        "source_item_people_person_id_fkey", "source_item_people", type_="foreignkey"
-    )
+    drop_fk_if_exists("source_item_people", "person_id", "source_item_people_person_id_fkey")
     op.create_foreign_key(
         "source_item_people_person_id_fkey",
         "source_item_people",
@@ -174,7 +219,7 @@ def upgrade() -> None:
     )
 
     # 5d: poll_responses.person_id
-    op.drop_constraint("poll_responses_person_id_fkey", "poll_responses", type_="foreignkey")
+    drop_fk_if_exists("poll_responses", "person_id", "poll_responses_person_id_fkey")
     op.create_foreign_key(
         "poll_responses_person_id_fkey",
         "poll_responses",
@@ -186,9 +231,7 @@ def upgrade() -> None:
 
     # Step 5e: project_collaborators.person_id (will be dropped in teams migration,
     # but we need to temporarily update FK to allow dropping old people table)
-    op.drop_constraint(
-        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
-    )
+    drop_fk_if_exists("project_collaborators", "person_id", "project_collaborators_person_id_fkey")
     op.create_foreign_key(
         "project_collaborators_person_id_fkey",
         "project_collaborators",
@@ -201,10 +244,11 @@ def upgrade() -> None:
     # Step 6: Drop old people table
     # Index names from complete_schema: ix_people_identifier (unique), person_aliases_idx,
     # person_display_name_idx, person_identifier_idx
-    op.drop_index("person_aliases_idx", table_name="people")
-    op.drop_index("person_display_name_idx", table_name="people")
-    op.drop_index("person_identifier_idx", table_name="people")
-    op.drop_index("ix_people_identifier", table_name="people")
+    # Use safe drops since index names may vary between environments
+    drop_index_if_exists("person_aliases_idx", "people")
+    drop_index_if_exists("person_display_name_idx", "people")
+    drop_index_if_exists("person_identifier_idx", "people")
+    drop_index_if_exists("ix_people_identifier", "people")
     op.drop_table("people")
 
     # Step 7: Rename people_new to people
@@ -216,7 +260,7 @@ def upgrade() -> None:
 
     # Step 8: Update FK references to point to renamed table
     # Need to recreate FKs with correct table name after rename
-    op.drop_constraint("discord_users_person_id_fkey", "discord_users", type_="foreignkey")
+    drop_fk_if_exists("discord_users", "person_id", "discord_users_person_id_fkey")
     op.create_foreign_key(
         "discord_users_person_id_fkey",
         "discord_users",
@@ -226,7 +270,7 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
-    op.drop_constraint("github_users_person_id_fkey", "github_users", type_="foreignkey")
+    drop_fk_if_exists("github_users", "person_id", "github_users_person_id_fkey")
     op.create_foreign_key(
         "github_users_person_id_fkey",
         "github_users",
@@ -236,9 +280,7 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
-    op.drop_constraint(
-        "source_item_people_person_id_fkey", "source_item_people", type_="foreignkey"
-    )
+    drop_fk_if_exists("source_item_people", "person_id", "source_item_people_person_id_fkey")
     op.create_foreign_key(
         "source_item_people_person_id_fkey",
         "source_item_people",
@@ -248,7 +290,7 @@ def upgrade() -> None:
         ondelete="CASCADE",
     )
 
-    op.drop_constraint("poll_responses_person_id_fkey", "poll_responses", type_="foreignkey")
+    drop_fk_if_exists("poll_responses", "person_id", "poll_responses_person_id_fkey")
     op.create_foreign_key(
         "poll_responses_person_id_fkey",
         "poll_responses",
@@ -259,7 +301,7 @@ def upgrade() -> None:
     )
 
     # Update person_tidbits FK to point to renamed table
-    op.drop_constraint("person_tidbits_person_id_fkey", "person_tidbits", type_="foreignkey")
+    drop_fk_if_exists("person_tidbits", "person_id", "person_tidbits_person_id_fkey")
     op.create_foreign_key(
         "person_tidbits_person_id_fkey",
         "person_tidbits",
@@ -270,9 +312,7 @@ def upgrade() -> None:
     )
 
     # Update project_collaborators FK to point to renamed table
-    op.drop_constraint(
-        "project_collaborators_person_id_fkey", "project_collaborators", type_="foreignkey"
-    )
+    drop_fk_if_exists("project_collaborators", "person_id", "project_collaborators_person_id_fkey")
     op.create_foreign_key(
         "project_collaborators_person_id_fkey",
         "project_collaborators",

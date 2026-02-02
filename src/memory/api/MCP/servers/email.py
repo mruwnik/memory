@@ -29,19 +29,21 @@ email_mcp = FastMCP("memory-email")
 async def has_send_accounts(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show email tools if user has send-enabled accounts."""
     token = user_info.get("token")
-    if not token or session is None:
+    if not token:
         return False
 
-    def _check(session: DBSession) -> bool:
-        user_session = session.get(UserSession, token)
-        if not user_session or not user_session.user:
-            return False
-        accounts = get_user_email_accounts(
-            session, user_session.user.id, send_enabled_only=True
-        )
-        return len(accounts) > 0
+    def _check() -> bool:
+        # Create our own session to avoid threading issues with passed session
+        with make_session() as local_session:
+            user_session = local_session.get(UserSession, token)
+            if not user_session or not user_session.user:
+                return False
+            accounts = get_user_email_accounts(
+                local_session, user_session.user.id, send_enabled_only=True
+            )
+            return len(accounts) > 0
 
-    return await asyncio.to_thread(_check, session)
+    return await asyncio.to_thread(_check)
 
 
 def _get_user_id(session: DBSession) -> int:

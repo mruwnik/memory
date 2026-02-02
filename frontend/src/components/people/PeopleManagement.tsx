@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { usePeople, type Person, type PersonCreate, type PersonUpdate } from '../../hooks/usePeople'
+import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit } from '../../hooks/usePeople'
 import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
 
 const PeopleManagement = () => {
-  const { listPeople, addPerson, updatePerson, deletePerson } = usePeople()
-  const { getPersonTeams } = useTeams()
+  const { listPeople, addPerson, updatePerson, deletePerson, getPerson } = usePeople()
+  const { getPersonTeams, listTeams, listMembers } = useTeams()
 
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
@@ -21,6 +21,15 @@ const PeopleManagement = () => {
   // Search/filter state
   const [searchTerm, setSearchTerm] = useState('')
   const [tagFilter, setTagFilter] = useState<string[]>([])
+  const [teamFilter, setTeamFilter] = useState<number | null>(null)
+
+  // All teams for filter dropdown
+  const [allTeams, setAllTeams] = useState<Team[]>([])
+  const [showTeamFilter, setShowTeamFilter] = useState(false)
+
+  // Person details with tidbits (keyed by identifier)
+  const [personDetails, setPersonDetails] = useState<Record<string, Person>>({})
+  const [detailsLoading, setDetailsLoading] = useState<Record<string, boolean>>({})
 
   // Debounce search term to avoid excessive API calls on every keystroke
   const debouncedSearchTerm = useDebounce(searchTerm, 300)
@@ -51,11 +60,19 @@ const PeopleManagement = () => {
   const loadPeople = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await listPeople({
+      let data = await listPeople({
         search: debouncedSearchTerm || undefined,
         tags: tagFilter.length > 0 ? tagFilter : undefined,
         limit: 200,
       })
+
+      // If team filter is active, filter to only people in that team
+      if (teamFilter !== null) {
+        const teamMembers = await listMembers(teamFilter)
+        const memberIdentifiers = new Set(teamMembers.map(m => m.identifier))
+        data = data.filter(p => memberIdentifiers.has(p.identifier))
+      }
+
       setPeople(data)
       setError(null)
     } catch (e) {
@@ -63,11 +80,24 @@ const PeopleManagement = () => {
     } finally {
       setLoading(false)
     }
-  }, [listPeople, debouncedSearchTerm, tagFilter])
+  }, [listPeople, listMembers, debouncedSearchTerm, tagFilter, teamFilter])
 
   useEffect(() => {
     loadPeople()
   }, [loadPeople])
+
+  // Load teams for filter dropdown
+  useEffect(() => {
+    const loadAllTeams = async () => {
+      try {
+        const teams = await listTeams({ include_inactive: false })
+        setAllTeams(teams)
+      } catch {
+        // Silently fail - team filter just won't appear
+      }
+    }
+    loadAllTeams()
+  }, [listTeams])
 
   const handleCreate = async (data: PersonCreate) => {
     setCreateLoading(true)
@@ -135,8 +165,10 @@ const PeopleManagement = () => {
     const isExpanding = expandedIdentifier !== identifier
     setExpandedIdentifier(prev => prev === identifier ? null : identifier)
 
+    if (!isExpanding) return
+
     // Fetch teams when expanding, if not already loaded
-    if (isExpanding && !personTeams[identifier] && !teamsLoading[identifier]) {
+    if (!personTeams[identifier] && !teamsLoading[identifier]) {
       setTeamsLoading(prev => ({ ...prev, [identifier]: true }))
       try {
         const teams = await getPersonTeams(identifier)
@@ -146,6 +178,21 @@ const PeopleManagement = () => {
         setPersonTeams(prev => ({ ...prev, [identifier]: [] }))
       } finally {
         setTeamsLoading(prev => ({ ...prev, [identifier]: false }))
+      }
+    }
+
+    // Fetch person details with tidbits when expanding, if not already loaded
+    if (!personDetails[identifier] && !detailsLoading[identifier]) {
+      setDetailsLoading(prev => ({ ...prev, [identifier]: true }))
+      try {
+        const details = await getPerson(identifier, true)
+        if (details) {
+          setPersonDetails(prev => ({ ...prev, [identifier]: details }))
+        }
+      } catch (e) {
+        console.error('Failed to load person details:', e)
+      } finally {
+        setDetailsLoading(prev => ({ ...prev, [identifier]: false }))
       }
     }
   }
@@ -203,6 +250,71 @@ const PeopleManagement = () => {
                 className="w-full py-2 px-4 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
+
+            {/* Team Filter Dropdown */}
+            {allTeams.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowTeamFilter(!showTeamFilter)}
+                  className={`px-4 py-2 bg-white border rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50 transition-colors ${
+                    teamFilter !== null ? 'border-primary text-primary' : 'border-slate-200 text-slate-700'
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span>
+                    {teamFilter !== null
+                      ? allTeams.find(t => t.id === teamFilter)?.name || 'Team'
+                      : 'All Teams'}
+                  </span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showTeamFilter && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setShowTeamFilter(false)}
+                    />
+                    <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64 max-h-80 overflow-auto">
+                      <button
+                        onClick={() => {
+                          setTeamFilter(null)
+                          setShowTeamFilter(false)
+                        }}
+                        className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 ${
+                          teamFilter === null ? 'bg-primary/10 text-primary' : 'text-slate-700'
+                        }`}
+                      >
+                        All Teams
+                      </button>
+                      <div className="border-t border-slate-100">
+                        {allTeams.map(team => (
+                          <button
+                            key={team.id}
+                            onClick={() => {
+                              setTeamFilter(team.id)
+                              setShowTeamFilter(false)
+                            }}
+                            className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center justify-between ${
+                              teamFilter === team.id ? 'bg-primary/10 text-primary' : 'text-slate-700'
+                            }`}
+                          >
+                            <span>{team.name}</span>
+                            {team.member_count !== undefined && (
+                              <span className="text-xs text-slate-400">{team.member_count}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <button
               onClick={loadPeople}
               disabled={loading}
@@ -279,6 +391,8 @@ const PeopleManagement = () => {
                 onDelete={() => setDeletingPerson(person)}
                 teams={personTeams[person.identifier]}
                 teamsLoading={teamsLoading[person.identifier]}
+                tidbits={personDetails[person.identifier]?.tidbits}
+                tidbitsLoading={detailsLoading[person.identifier]}
               />
             ))
           )}

@@ -468,6 +468,166 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
             logger.warning(f"Failed to remove {username} from {org}/{team_slug}: {e}")
             return False
 
+    def get_repo_teams(
+        self,
+        owner: str,
+        repo: str,
+    ) -> list[dict[str, Any]]:
+        """Get teams with access to a repository.
+
+        Uses REST API: GET /repos/{owner}/{repo}/teams
+
+        Args:
+            owner: Repository owner (user or org)
+            repo: Repository name
+
+        Returns:
+            List of team dicts with keys: slug, name, permission, etc.
+            Empty list if repo not found or no teams have access.
+        """
+        teams: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+
+        while True:
+            try:
+                response = self.session.get(
+                    f"{GITHUB_API_URL}/repos/{owner}/{repo}/teams",
+                    params={"page": page, "per_page": per_page},
+                    timeout=30,
+                )
+                if response.status_code == 404:
+                    logger.warning(f"Repository {owner}/{repo} not found")
+                    return []
+                response.raise_for_status()
+                self._handle_rate_limit(response)
+
+                page_teams = response.json()
+                if not page_teams:
+                    break
+
+                for team in page_teams:
+                    teams.append({
+                        "id": team.get("id"),
+                        "node_id": team.get("node_id"),
+                        "slug": team.get("slug"),
+                        "name": team.get("name"),
+                        "description": team.get("description"),
+                        "permission": team.get("permission"),
+                        "privacy": team.get("privacy"),
+                    })
+
+                if len(page_teams) < per_page:
+                    break
+                page += 1
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get teams for {owner}/{repo} (page {page}): "
+                    f"{type(e).__name__}: {e}"
+                )
+                # Return partial results on pagination failure. Callers should be aware
+                # that on multi-page results, partial data may be returned if pagination
+                # fails mid-way. Check logs for pagination failure warnings if results
+                # seem incomplete.
+                return teams
+
+        return teams
+
+    def add_team_to_repo(
+        self,
+        org: str,
+        team_slug: str,
+        owner: str,
+        repo: str,
+        permission: str = "push",
+    ) -> bool:
+        """Grant a team access to a repository.
+
+        Uses REST API: PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
+
+        Args:
+            org: Organization login name (must match team's org)
+            team_slug: Team slug (URL-safe name)
+            owner: Repository owner
+            repo: Repository name
+            permission: Access level - "pull", "triage", "push", "maintain", "admin"
+
+        Returns:
+            True if access was granted, False on failure
+        """
+        try:
+            response = self.session.put(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}",
+                json={"permission": permission},
+                timeout=30,
+            )
+            # Track rate limits before checking status to ensure we always update
+            self._handle_rate_limit(response)
+            if response.status_code == 204:
+                logger.info(f"Granted {team_slug} {permission} access to {owner}/{repo}")
+                return True
+            if response.status_code == 404:
+                logger.warning(
+                    f"Team {org}/{team_slug} or repo {owner}/{repo} not found "
+                    f"(or insufficient permissions to grant access)"
+                )
+                return False
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Failed to grant {team_slug} access to {owner}/{repo}: {e}"
+            )
+            return False
+
+    def remove_team_from_repo(
+        self,
+        org: str,
+        team_slug: str,
+        owner: str,
+        repo: str,
+    ) -> bool:
+        """Revoke a team's access to a repository.
+
+        Uses REST API: DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}
+
+        Note: This method is provided for completeness but is not currently used
+        by the project sync logic. It will be used when implementing team removal
+        from projects (i.e., when teams are removed from a project, their GitHub
+        repo access should also be revoked).
+
+        Args:
+            org: Organization login name
+            team_slug: Team slug
+            owner: Repository owner
+            repo: Repository name
+
+        Returns:
+            True if access was revoked (or team didn't have access), False on error
+        """
+        try:
+            response = self.session.delete(
+                f"{GITHUB_API_URL}/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}",
+                timeout=30,
+            )
+            # Track rate limits before checking status to ensure we always update
+            self._handle_rate_limit(response)
+            if response.status_code == 204:
+                logger.info(f"Revoked {team_slug} access to {owner}/{repo}")
+                return True
+            if response.status_code == 404:
+                # Team or repo not found, or team didn't have access - still a success
+                logger.info(f"{team_slug} did not have access to {owner}/{repo}")
+                return True
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Failed to revoke {team_slug} access to {owner}/{repo}: {e}"
+            )
+            return False
+
     def create_team(
         self,
         org: str,

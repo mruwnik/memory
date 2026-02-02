@@ -28,17 +28,19 @@ slack_mcp = FastMCP("memory-slack")
 async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show Slack tools if user has connected workspaces."""
     token = user_info.get("token")
-    if not token or session is None:
+    if not token:
         return False
 
-    def _check(session: DBSession) -> bool:
-        user_session = session.get(UserSession, token)
-        if not user_session or not user_session.user:
-            return False
-        # Check if user has any Slack credentials
-        return len(user_session.user.slack_credentials) > 0
+    def _check() -> bool:
+        # Create our own session to avoid threading issues with passed session
+        with make_session() as local_session:
+            user_session = local_session.get(UserSession, token)
+            if not user_session or not user_session.user:
+                return False
+            # Check if user has any Slack credentials
+            return len(user_session.user.slack_credentials) > 0
 
-    return await asyncio.to_thread(_check, session)
+    return await asyncio.to_thread(_check)
 
 
 # --- Sync DB Helpers (run in thread) ---

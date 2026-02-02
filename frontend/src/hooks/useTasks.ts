@@ -97,17 +97,21 @@ export const useTasks = () => {
   }, [mcpCall])
 
   const completeTask = useCallback(async (taskId: number): Promise<TodoTask> => {
-    const result = await mcpCall<TodoTask[]>('organizer_complete_task_by_id', {
+    // Use update_task with status='done' instead of complete_task_by_id
+    const result = await mcpCall<TodoTask[]>('organizer_update_task', {
       task_id: taskId,
+      status: 'done',
     })
     return result?.[0]
   }, [mcpCall])
 
   const deleteTask = useCallback(async (taskId: number): Promise<{ deleted: boolean }> => {
-    const result = await mcpCall<{ deleted: boolean }[]>('organizer_delete_task', {
+    // No delete endpoint exists - cancel the task instead
+    await mcpCall<TodoTask[]>('organizer_update_task', {
       task_id: taskId,
+      status: 'cancelled',
     })
-    return result?.[0]
+    return { deleted: true }
   }, [mcpCall])
 
   return {

@@ -1191,3 +1191,492 @@ def test_github_client_ensure_repository_creates_when_missing():
 
     assert result == mock_created_repo
     assert was_created is True
+
+
+# =============================================================================
+# TeamsMixin team-repo methods tests
+# =============================================================================
+
+
+def test_github_client_get_repo_teams():
+    """Test GithubClient.get_repo_teams fetches teams with repo access."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    teams_data = [
+        {
+            "id": 1001,
+            "node_id": "T_1001",
+            "slug": "engineering",
+            "name": "Engineering",
+            "description": "The eng team",
+            "permission": "push",
+            "privacy": "closed",
+        },
+        {
+            "id": 1002,
+            "node_id": "T_1002",
+            "slug": "devops",
+            "name": "DevOps",
+            "description": "Infrastructure team",
+            "permission": "admin",
+            "privacy": "secret",
+        },
+    ]
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = teams_data
+    mock_response.headers = {"X-RateLimit-Remaining": "100"}
+
+    with patch.object(client.session, "get", return_value=mock_response) as mock_get:
+        result = client.get_repo_teams("testorg", "testrepo")
+
+    mock_get.assert_called_once()
+    call_args = mock_get.call_args
+    assert "repos/testorg/testrepo/teams" in call_args[0][0]
+    assert len(result) == 2
+    assert result[0]["slug"] == "engineering"
+    assert result[0]["permission"] == "push"
+    assert result[1]["slug"] == "devops"
+    assert result[1]["permission"] == "admin"
+
+
+def test_github_client_add_team_to_repo():
+    """Test GithubClient.add_team_to_repo grants team access."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 204  # Success response for PUT
+    mock_response.headers = {"X-RateLimit-Remaining": "100"}
+
+    with patch.object(client.session, "put", return_value=mock_response) as mock_put:
+        result = client.add_team_to_repo(
+            org="testorg",
+            team_slug="engineering",
+            owner="testorg",
+            repo="testrepo",
+            permission="push",
+        )
+
+    assert result is True
+    mock_put.assert_called_once()
+    call_args = mock_put.call_args
+    assert "orgs/testorg/teams/engineering/repos/testorg/testrepo" in call_args[0][0]
+    assert call_args[1]["json"] == {"permission": "push"}
+
+
+def test_github_client_remove_team_from_repo():
+    """Test GithubClient.remove_team_from_repo revokes team access."""
+    from memory.common.github import GithubClient, GithubCredentials
+
+    credentials = GithubCredentials(auth_type="pat", access_token="fake")
+    client = GithubClient(credentials)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 204  # Success response for DELETE
+    mock_response.headers = {"X-RateLimit-Remaining": "100"}
+
+    with patch.object(client.session, "delete", return_value=mock_response) as mock_delete:
+        result = client.remove_team_from_repo(
+            org="testorg",
+            team_slug="engineering",
+            owner="testorg",
+            repo="testrepo",
+        )
+
+    assert result is True
+    mock_delete.assert_called_once()
+    call_args = mock_delete.call_args
+    assert "orgs/testorg/teams/engineering/repos/testorg/testrepo" in call_args[0][0]
+
+
+# =============================================================================
+# sync_repo_teams_outbound tests
+# =============================================================================
+
+
+def test_sync_repo_teams_outbound_grants_access(db_session):
+    """Test sync_repo_teams_outbound grants repo access to teams with GitHub integration."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+
+    # Create teams with GitHub integration
+    team_with_github = Team(
+        name="Engineering",
+        slug="engineering-sync-test",
+        github_team_id=1001,
+        github_team_slug="engineering",
+        github_org="testorg",
+    )
+    team_without_github = Team(
+        name="Marketing",
+        slug="marketing-sync-test",
+        # No GitHub integration
+    )
+    db_session.add_all([team_with_github, team_without_github])
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = True
+
+    result = sync_repo_teams_outbound(
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+        teams=[team_with_github, team_without_github],
+        permission="push",
+    )
+
+    assert "engineering" in result["synced"]
+    assert "Marketing" in result["skipped"]  # No GitHub integration
+    assert result["failed"] == []
+
+    mock_client.add_team_to_repo.assert_called_once_with(
+        org="testorg",
+        team_slug="engineering",
+        owner="testorg",
+        repo="testrepo",
+        permission="push",
+    )
+
+
+def test_sync_repo_teams_outbound_skips_different_org(db_session):
+    """Test sync_repo_teams_outbound skips teams from different org."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+
+    team_different_org = Team(
+        name="Other Org Team",
+        slug="other-team-sync-test",
+        github_team_id=2001,
+        github_team_slug="other-team",
+        github_org="differentorg",  # Different from repo owner
+    )
+    db_session.add(team_different_org)
+    db_session.commit()
+
+    mock_client = MagicMock()
+
+    result = sync_repo_teams_outbound(
+        client=mock_client,
+        repo_owner="testorg",  # Different org
+        repo_name="testrepo",
+        teams=[team_different_org],
+    )
+
+    assert "Other Org Team" in result["skipped"]
+    assert result["synced"] == []
+    mock_client.add_team_to_repo.assert_not_called()
+
+
+def test_sync_repo_teams_outbound_handles_failures(db_session):
+    """Test sync_repo_teams_outbound tracks failed syncs."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+
+    team = Team(
+        name="Engineering",
+        slug="engineering-fail-test",
+        github_team_id=1001,
+        github_team_slug="engineering",
+        github_org="testorg",
+    )
+    db_session.add(team)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = False  # Simulate failure
+
+    result = sync_repo_teams_outbound(
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+        teams=[team],
+    )
+
+    assert result["synced"] == []
+    assert "engineering" in result["failed"]
+
+
+# =============================================================================
+# sync_repo_teams_inbound tests
+# =============================================================================
+
+
+def test_sync_repo_teams_inbound_finds_matching_teams(db_session):
+    """Test sync_repo_teams_inbound returns teams matching GitHub teams with repo access."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+
+    # Use a unique github_team_id to avoid collisions with other tests
+    unique_github_id = 90001
+
+    # Create a team with matching github_team_id
+    team = Team(
+        name="Engineering Inbound",
+        slug="engineering-inbound-test",
+        github_team_id=unique_github_id,
+        github_team_slug="engineering",
+        github_org="testorg",
+    )
+    db_session.add(team)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo_teams.return_value = [
+        {"id": unique_github_id, "slug": "engineering", "permission": "push"},
+        {"id": 99999, "slug": "untracked-team", "permission": "admin"},  # No matching Team
+    ]
+
+    result = sync_repo_teams_inbound(
+        session=db_session,
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+    )
+
+    assert len(result) == 1
+    assert result[0].slug == "engineering-inbound-test"
+    assert result[0].github_team_id == unique_github_id
+
+
+def test_sync_repo_teams_inbound_returns_empty_for_no_teams(db_session):
+    """Test sync_repo_teams_inbound returns empty list when repo has no teams."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+
+    mock_client = MagicMock()
+    mock_client.get_repo_teams.return_value = []
+
+    result = sync_repo_teams_inbound(
+        session=db_session,
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+    )
+
+    assert result == []
+
+
+def test_sync_repo_teams_inbound_returns_empty_for_no_matches(db_session):
+    """Test sync_repo_teams_inbound returns empty when no Team records match."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+
+    mock_client = MagicMock()
+    mock_client.get_repo_teams.return_value = [
+        {"id": 9999, "slug": "untracked-team", "permission": "push"},
+    ]
+
+    result = sync_repo_teams_inbound(
+        session=db_session,
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+    )
+
+    assert result == []
+
+
+def test_sync_repo_teams_inbound_handles_exception(db_session):
+    """Test sync_repo_teams_inbound handles GitHub API exceptions gracefully."""
+    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+
+    mock_client = MagicMock()
+    mock_client.get_repo_teams.side_effect = Exception("API error")
+
+    result = sync_repo_teams_inbound(
+        session=db_session,
+        client=mock_client,
+        repo_owner="testorg",
+        repo_name="testrepo",
+    )
+
+    assert result == []
+    mock_client.get_repo_teams.assert_called_once_with("testorg", "testrepo")
+
+
+# =============================================================================
+# Project upsert with team sync integration tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_repo_project_outbound_sync_on_create(
+    db_session, github_user_session, github_repo
+):
+    """Test that creating a repo project syncs teams to GitHub."""
+    from memory.api.MCP.servers.projects import upsert
+
+    # Create a team with GitHub integration
+    team = Team(
+        name="Engineering",
+        slug="engineering-outbound-create",
+        github_team_id=1001,
+        github_team_slug="engineering",
+        github_org="testorg",
+    )
+    db_session.add(team)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = True
+    mock_client.get_repo_teams.return_value = []  # No existing teams on repo
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            repo="testorg/testrepo",
+            team_ids=[team.id],
+        )
+
+    assert result.get("success") is True
+    assert "github_team_sync" in result
+    assert "engineering" in result["github_team_sync"]["synced"]
+
+    mock_client.add_team_to_repo.assert_called_once_with(
+        org="testorg",
+        team_slug="engineering",
+        owner="testorg",
+        repo="testrepo",
+        permission="push",
+    )
+
+
+@pytest.mark.asyncio
+async def test_repo_project_inbound_sync_on_create(
+    db_session, github_user_session, github_repo
+):
+    """Test that creating a repo project for existing repo adds GitHub teams to project."""
+    from memory.api.MCP.servers.projects import upsert
+
+    # Create a team that exists in our DB and has repo access on GitHub
+    existing_team = Team(
+        name="DevOps",
+        slug="devops-inbound-create",
+        github_team_id=2001,
+        github_team_slug="devops",
+        github_org="testorg",
+    )
+    # Create another team to add via team_ids
+    new_team = Team(
+        name="Engineering",
+        slug="engineering-inbound-create",
+    )
+    db_session.add_all([existing_team, new_team])
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = True
+    # Simulate that DevOps team already has access on GitHub
+    mock_client.get_repo_teams.return_value = [
+        {"id": 2001, "slug": "devops", "permission": "admin"},
+    ]
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            repo="testorg/testrepo",
+            team_ids=[new_team.id],  # Only specify new_team
+        )
+
+    assert result.get("success") is True
+    # DevOps should be added via inbound sync
+    assert "teams_from_github" in result
+    assert "DevOps" in result["teams_from_github"]
+
+    # Project should have both teams
+    project_team_ids = [t["id"] for t in result["project"]["teams"]]
+    assert existing_team.id in project_team_ids
+    assert new_team.id in project_team_ids
+
+    # Verify get_repo_teams was called with correct parameters
+    mock_client.get_repo_teams.assert_called_once_with("testorg", "testrepo")
+
+
+@pytest.mark.asyncio
+async def test_update_project_outbound_sync_for_new_teams(
+    db_session, github_user_session, github_repo
+):
+    """Test that updating project teams syncs newly added teams to GitHub."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import project_teams
+
+    # Create teams
+    team_alpha = Team(
+        name="Alpha",
+        slug="alpha-update-sync",
+        github_team_id=1001,
+        github_team_slug="alpha",
+        github_org="testorg",
+    )
+    team_beta = Team(
+        name="Beta",
+        slug="beta-update-sync",
+        github_team_id=1002,
+        github_team_slug="beta",
+        github_org="testorg",
+    )
+    db_session.add_all([team_alpha, team_beta])
+    db_session.flush()
+
+    # Create existing project with only team_alpha
+    existing_project = Project(
+        id=-200,
+        repo_id=github_repo.id,
+        github_id=github_repo.github_id,
+        number=None,
+        title="testrepo",
+        state="open",
+    )
+    db_session.add(existing_project)
+    db_session.flush()
+    db_session.execute(project_teams.insert().values(project_id=-200, team_id=team_alpha.id))
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = True
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+
+        # Update to add team_beta
+        result = await get_fn(upsert)(
+            project_id=-200,
+            team_ids=[team_alpha.id, team_beta.id],
+        )
+
+    assert result.get("success") is True
+    # Only team_beta should be synced (team_alpha was already there)
+    assert "github_team_sync" in result
+    assert "beta" in result["github_team_sync"]["synced"]
+    assert "alpha" not in result["github_team_sync"]["synced"]
+
+    # Verify only one call was made (for team_beta)
+    mock_client.add_team_to_repo.assert_called_once_with(
+        org="testorg",
+        team_slug="beta",
+        owner="testorg",
+        repo="testrepo",
+        permission="push",
+    )

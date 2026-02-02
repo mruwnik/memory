@@ -12,7 +12,9 @@ from typing import Any, Literal, cast
 from fastmcp import FastMCP
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
+
+from memory.common.github import GithubClient
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -24,7 +26,13 @@ from memory.common.access_control import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
-from memory.api.MCP.servers.github_helpers import ensure_github_repo, get_github_client
+from memory.api.MCP.servers.github_helpers import (
+    SyncResult,
+    ensure_github_repo,
+    get_github_client,
+    sync_repo_teams_inbound,
+    sync_repo_teams_outbound,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +579,70 @@ async def create_standalone_project(
     }
 
 
+def get_inbound_teams(
+    session: Session,
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    existing_teams: list[Team],
+    github_repo_created: bool,
+) -> tuple[list[Team], list[Team]]:
+    """Fetch teams from GitHub repo that should be added to a project.
+
+    For existing repos (not newly created), fetches teams that have access
+    on GitHub and returns any matching local teams that aren't already assigned.
+
+    Args:
+        session: Database session
+        client: GitHub client
+        owner: Repo owner
+        repo_name: Repo name
+        existing_teams: Teams already assigned to the project (not modified)
+        github_repo_created: Whether the repo was just created (skip sync if so)
+
+    Returns:
+        Tuple of (teams_to_add, all_inbound_teams):
+        - teams_to_add: Teams from GitHub not in existing_teams (to be added)
+        - all_inbound_teams: All matching teams from GitHub (for reporting)
+    """
+    if github_repo_created:
+        return [], []
+
+    inbound_teams = sync_repo_teams_inbound(session, client, owner, repo_name)
+    existing_team_ids = {t.id for t in existing_teams}
+    teams_to_add = [t for t in inbound_teams if t.id not in existing_team_ids]
+    return teams_to_add, inbound_teams
+
+
+def perform_outbound_sync(
+    client: GithubClient,
+    owner: str,
+    repo_name: str,
+    teams: list[Team],
+) -> SyncResult | None:
+    """Grant teams access to repo on GitHub.
+
+    Args:
+        client: Authenticated GitHub client
+        owner: Repository owner
+        repo_name: Repository name
+        teams: List of teams to sync
+
+    Returns:
+        SyncResult with synced/skipped/failed lists, or None if no teams provided.
+        Logs warnings for any failed syncs.
+    """
+    if not teams:
+        return None
+    sync_result = sync_repo_teams_outbound(client, owner, repo_name, teams)
+    if sync_result and sync_result.get("failed"):
+        logger.warning(
+            f"Some teams failed to sync to GitHub for {owner}/{repo_name}: "
+            f"{sync_result['failed']}"
+        )
+    return sync_result
+
+
 async def create_repo_project(
     session: Any,
     user: Any,
@@ -655,10 +727,16 @@ async def create_repo_project(
             "project": project_to_dict(existing_project, include_teams=True),
         }
 
+    # Inbound sync: add existing repo teams to project (for existing repos)
+    teams_to_add, inbound_teams = get_inbound_teams(
+        session, client, owner, repo_name, teams, github_repo_created  # type: ignore[arg-type]
+    )
+    all_teams = list(teams) + teams_to_add  # type: ignore[arg-type]
+
     # Create project with unique negative ID (with retry for race conditions)
     project, error = create_project_with_retry(
         session,
-        teams,  # type: ignore[arg-type]
+        all_teams,
         repo_id=repo_obj.id,
         github_id=repo_obj.github_id,
         number=None,
@@ -673,13 +751,21 @@ async def create_repo_project(
     session.commit()
     session.refresh(project)
 
-    return {
+    # Outbound sync: grant teams access to repo on GitHub (after commit)
+    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
+
+    result: dict[str, Any] = {
         "success": True,
         "created": True,
         "github_repo_created": github_repo_created,
         "tracking_created": tracking_created,
         "project": project_to_dict(project, include_teams=True),
     }
+    if sync_result:
+        result["github_team_sync"] = sync_result
+    if inbound_teams:
+        result["teams_from_github"] = [t.name for t in inbound_teams]
+    return result
 
 
 async def create_milestone_project(
@@ -750,6 +836,16 @@ async def create_milestone_project(
     if not milestone_data:
         return {"error": f"Failed to find or create milestone '{milestone_title}'", "project": None}
 
+    # Auto-parent to repo project if no parent specified
+    if parent_id is None:
+        repo_project = (
+            session.query(Project)
+            .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
+            .first()
+        )
+        if repo_project:
+            parent_id = repo_project.id
+
     # Check if project already exists for this milestone
     existing_project = (
         session.query(Project)
@@ -771,10 +867,16 @@ async def create_milestone_project(
             "project": project_to_dict(existing_project, include_teams=True),
         }
 
+    # Inbound sync: add existing repo teams to project (for existing repos)
+    teams_to_add, inbound_teams = get_inbound_teams(
+        session, client, owner, repo_name, teams, github_repo_created  # type: ignore[arg-type]
+    )
+    all_teams = list(teams) + teams_to_add  # type: ignore[arg-type]
+
     # Create project with unique negative ID (with retry for race conditions)
     project, error = create_project_with_retry(
         session,
-        teams,  # type: ignore[arg-type]
+        all_teams,
         repo_id=repo_obj.id,
         github_id=milestone_data["github_id"],
         number=milestone_data["number"],
@@ -790,13 +892,21 @@ async def create_milestone_project(
     session.commit()
     session.refresh(project)
 
-    return {
+    # Outbound sync: grant teams access to repo on GitHub (after commit)
+    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
+
+    result: dict[str, Any] = {
         "success": True,
         "created": True,
         "github_repo_created": github_repo_created,
         "milestone_created": was_created,
         "project": project_to_dict(project, include_teams=True),
     }
+    if sync_result:
+        result["github_team_sync"] = sync_result
+    if inbound_teams:
+        result["teams_from_github"] = [t.name for t in inbound_teams]
+    return result
 
 
 async def update_project(
@@ -852,9 +962,13 @@ async def update_project(
 
     # Handle team assignment changes
     teams = None
+    old_team_ids: set[int] = set()
     if team_ids is not None:
         if not team_ids:
             return {"error": "team_ids cannot be empty - projects require at least one team", "project": None}
+
+        # Capture old teams before changes (for outbound sync)
+        old_team_ids = {t.id for t in project.teams}
 
         # Validate all specified teams exist
         teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
@@ -886,6 +1000,9 @@ async def update_project(
             project.state = state
 
     # Update team assignments (works for both standalone and GitHub-backed)
+    # NOTE: When teams are removed from a project, their GitHub repo access is NOT
+    # automatically revoked. This is intentional for now - see GithubClient.remove_team_from_repo
+    # for the capability. Revoking access should be implemented as a follow-up if needed.
     if teams is not None:
         project.teams.clear()
         for team in teams:
@@ -894,6 +1011,23 @@ async def update_project(
     session.commit()
     session.refresh(project)
 
+    # Outbound sync: grant newly added teams access to repo on GitHub (after commit)
+    sync_result = None
+    if teams is not None and project.repo:
+        new_team_ids = {t.id for t in teams}
+        added_team_ids = new_team_ids - old_team_ids
+        if added_team_ids:
+            added_teams = [t for t in teams if t.id in added_team_ids]
+            try:
+                client, _ = get_github_client(session, f"{project.repo.owner}/{project.repo.name}", user.id)
+                if client:
+                    sync_result = perform_outbound_sync(
+                        client, project.repo.owner, project.repo.name, added_teams
+                    )
+            except ValueError as e:
+                # GitHub client unavailable or not configured
+                logger.warning(f"Could not sync teams to GitHub: {type(e).__name__}: {e}")
+
     # Count children
     children_count = (
         session.query(func.count(Project.id))
@@ -901,11 +1035,14 @@ async def update_project(
         .scalar()
     ) or 0
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "created": False,
         "project": project_to_dict(project, include_teams=team_ids is not None, children_count=children_count),
     }
+    if sync_result:
+        result["github_team_sync"] = sync_result
+    return result
 
 
 @projects_mcp.tool()

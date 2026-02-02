@@ -37,7 +37,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
-from memory.common.db.connection import DBSession
+from memory.common.db.connection import DBSession, make_session
 
 logger = logging.getLogger(__name__)
 
@@ -155,16 +155,15 @@ def has_items(model_class: type) -> VisibilityCheckerFunc:
         async def all_books(...): ...
     """
 
-    def _sync_check(session: DBSession) -> bool:
+    def _sync_check() -> bool:
         """Synchronous query - runs in thread pool to avoid blocking event loop."""
-        return session.query(model_class).limit(1).count() > 0
+        # Create our own session to avoid threading issues with passed session
+        with make_session() as local_session:
+            return local_session.query(model_class).limit(1).count() > 0
 
     async def checker(user_info: dict, session: DBSession | None) -> bool:
-        if session is None:
-            # Can't check without session, default to visible
-            return True
-        # Run sync query in thread pool to avoid blocking event loop
-        return await asyncio.to_thread(_sync_check, session)
+        # Run sync query in thread pool with its own session
+        return await asyncio.to_thread(_sync_check)
 
     checker.__name__ = f"has_items({model_class.__name__})"
     return checker

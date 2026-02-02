@@ -143,24 +143,26 @@ export const useMCP = () => {
     })
   }, [mcpCall])
 
+  // These meta endpoints no longer exist - return empty results
+  // TODO: Find alternative source for tags/subjects/observation types if needed
   const getTags = useCallback(async () => {
-    return await mcpCall('meta_get_all_tags')
-  }, [mcpCall])
+    return [[]]  // Return empty array wrapped to match expected format
+  }, [])
 
   const getSubjects = useCallback(async () => {
-    return await mcpCall('meta_get_all_subjects')
-  }, [mcpCall])
+    return [[]]
+  }, [])
 
   const getObservationTypes = useCallback(async () => {
-    return await mcpCall('meta_get_all_observation_types')
-  }, [mcpCall])
+    return [[]]
+  }, [])
 
   const getMetadataSchemas = useCallback(async () => {
     return (await mcpCall('meta_get_metadata_schemas'))[0]
   }, [mcpCall])
 
   const searchKnowledgeBase = useCallback(async (query: string, modalities: string[] = [], filters: Record<string, any> = {}, config: Record<string, any> = {}) => {
-    return await mcpCall('core_search_knowledge_base', {
+    return await mcpCall('core_search', {
       query,
       filters,
       modalities,

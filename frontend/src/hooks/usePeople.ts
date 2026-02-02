@@ -1,6 +1,19 @@
 import { useCallback } from 'react'
 import { useMCP } from './useMCP'
 
+export interface Tidbit {
+  id: number
+  person_id: number
+  content: string
+  tidbit_type: string | null
+  source: string | null
+  sensitivity: string | null
+  project_id: number | null
+  tags: string[]
+  created_by: number | null
+  inserted_at: string | null
+}
+
 export interface Person {
   id: number
   identifier: string
@@ -10,6 +23,7 @@ export interface Person {
   tags: string[]
   notes: string | null
   created_at: string | null
+  tidbits?: Tidbit[]
 }
 
 export interface PersonCreate {
@@ -17,19 +31,23 @@ export interface PersonCreate {
   display_name: string
   aliases?: string[]
   contact_info?: Record<string, string>
+  content?: string  // Initial tidbit content
+  tidbit_type?: string
   tags?: string[]
-  notes?: string
+  project_id?: number
+  sensitivity?: string
 }
 
 export interface PersonUpdate {
   display_name?: string
   aliases?: string[]
   contact_info?: Record<string, string>
-  tags?: string[]
-  notes?: string
-  replace_notes?: boolean
-  replace_tags?: boolean
   replace_aliases?: boolean
+  content?: string  // Add a tidbit
+  tidbit_type?: string
+  tags?: string[]
+  project_id?: number
+  sensitivity?: string
 }
 
 export interface PersonFilters {
@@ -39,62 +57,60 @@ export interface PersonFilters {
   offset?: number
 }
 
-export interface TaskResult {
-  task_id: string
-  status: string
-  identifier: string
-}
-
 export const usePeople = () => {
   const { mcpCall } = useMCP()
 
   // Note: mcpCall returns results wrapped in an array from the SSE response parsing.
   // The result?.[0] pattern unwraps the first (and only) response element.
-  // The double-array typing (e.g., Person[][]) reflects: outer array from mcpCall,
-  // inner array from the actual API response.
 
   const listPeople = useCallback(async (filters: PersonFilters = {}): Promise<Person[]> => {
-    const result = await mcpCall<Person[][]>('people_list_people', {
+    const result = await mcpCall<{ people: Person[]; error?: string }[]>('people_list_all', {
       tags: filters.tags,
       search: filters.search,
       limit: filters.limit ?? 50,
       offset: filters.offset ?? 0,
     })
-    return result?.[0] || []
+    // list_all returns a list directly, not wrapped in { people: ... }
+    return (result?.[0] as unknown as Person[]) || []
   }, [mcpCall])
 
-  const getPerson = useCallback(async (identifier: string): Promise<Person | null> => {
-    const result = await mcpCall<(Person | null)[]>('people_get_person', {
+  const getPerson = useCallback(async (identifier: string, includeTidbits = true): Promise<Person | null> => {
+    const result = await mcpCall<{ person: Person | null; error?: string }[]>('people_fetch', {
       identifier,
+      include_tidbits: includeTidbits,
     })
-    return result?.[0] || null
+    return result?.[0]?.person || null
   }, [mcpCall])
 
-  const addPerson = useCallback(async (data: PersonCreate): Promise<TaskResult> => {
-    const result = await mcpCall<TaskResult[]>('people_add', {
+  const addPerson = useCallback(async (data: PersonCreate): Promise<{ success: boolean; person?: Person; error?: string }> => {
+    const result = await mcpCall<{ success: boolean; person?: Person; error?: string }[]>('people_upsert', {
       identifier: data.identifier,
       display_name: data.display_name,
       aliases: data.aliases,
       contact_info: data.contact_info,
+      content: data.content,
+      tidbit_type: data.tidbit_type,
       tags: data.tags,
-      notes: data.notes,
+      project_id: data.project_id,
+      sensitivity: data.sensitivity,
     })
-    return result?.[0]
+    return result?.[0] || { success: false, error: 'Unknown error' }
   }, [mcpCall])
 
-  const updatePerson = useCallback(async (identifier: string, data: PersonUpdate): Promise<TaskResult> => {
-    const result = await mcpCall<TaskResult[]>('people_update', {
+  const updatePerson = useCallback(async (identifier: string, data: PersonUpdate): Promise<{ success: boolean; person?: Person; error?: string }> => {
+    const result = await mcpCall<{ success: boolean; person?: Person; error?: string }[]>('people_upsert', {
       identifier,
       display_name: data.display_name,
       aliases: data.aliases,
       contact_info: data.contact_info,
-      tags: data.tags,
-      notes: data.notes,
-      replace_notes: data.replace_notes,
-      replace_tags: data.replace_tags,
       replace_aliases: data.replace_aliases,
+      content: data.content,
+      tidbit_type: data.tidbit_type,
+      tags: data.tags,
+      project_id: data.project_id,
+      sensitivity: data.sensitivity,
     })
-    return result?.[0]
+    return result?.[0] || { success: false, error: 'Unknown error' }
   }, [mcpCall])
 
   const deletePerson = useCallback(async (identifier: string): Promise<{ deleted: boolean; identifier: string; display_name: string }> => {

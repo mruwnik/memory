@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject } from '@/hooks/useTeams'
-import { usePeople, Person } from '@/hooks/usePeople'
+import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
 import {
   Modal,
@@ -23,7 +23,7 @@ export const TeamsPanel = () => {
     unassignTeamFromProject,
   } = useTeams()
 
-  const { listPeople } = usePeople()
+  const { listPeople, getPerson } = usePeople()
   const { listProjects } = useProjects()
 
   const [teams, setTeams] = useState<Team[]>([])
@@ -156,6 +156,7 @@ export const TeamsPanel = () => {
           removeMember={removeMember}
           listPeople={listPeople}
           getTeam={getTeam}
+          getPerson={getPerson}
         />
       )}
 
@@ -606,6 +607,7 @@ const MembersModal = ({
   removeMember,
   listPeople,
   getTeam,
+  getPerson,
 }: {
   team: Team
   onClose: () => void
@@ -613,12 +615,14 @@ const MembersModal = ({
   removeMember: (team: string, person: string) => Promise<{ success: boolean; error?: string }>
   listPeople: (filters?: { search?: string; limit?: number }) => Promise<Person[]>
   getTeam: (team: string, includeMembers?: boolean) => Promise<Team | null>
+  getPerson: (identifier: string, includeTidbits?: boolean) => Promise<Person | null>
 }) => {
   const [members, setMembers] = useState<TeamMember[]>(team.members || [])
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResults, setSearchResults] = useState<Person[]>([])
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedMember, setSelectedMember] = useState<{ identifier: string; person: Person | null; loading: boolean } | null>(null)
 
   // Load members
   useEffect(() => {
@@ -681,6 +685,16 @@ const MembersModal = ({
     }
   }
 
+  const handleMemberClick = async (member: TeamMember) => {
+    setSelectedMember({ identifier: member.identifier, person: null, loading: true })
+    try {
+      const person = await getPerson(member.identifier, true)
+      setSelectedMember({ identifier: member.identifier, person, loading: false })
+    } catch {
+      setSelectedMember({ identifier: member.identifier, person: null, loading: false })
+    }
+  }
+
   return (
     <Modal title={`Members of ${team.name}`} onClose={onClose}>
       <div className="space-y-4">
@@ -729,7 +743,8 @@ const MembersModal = ({
               {members.map(member => (
                 <div
                   key={member.id}
-                  className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg"
+                  className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer transition-colors"
+                  onClick={() => handleMemberClick(member)}
                 >
                   <div>
                     <span className="font-medium">{member.display_name}</span>
@@ -739,11 +754,19 @@ const MembersModal = ({
                         {member.contributor_status}
                       </span>
                     )}
+                    {member.role && (
+                      <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
+                        {member.role}
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"
                     className="text-red-600 text-sm hover:text-red-700"
-                    onClick={() => handleRemoveMember(member)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleRemoveMember(member)
+                    }}
                   >
                     Remove
                   </button>
@@ -759,6 +782,131 @@ const MembersModal = ({
           </button>
         </div>
       </div>
+
+      {/* Person Details Popup */}
+      {selectedMember && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
+          onClick={() => setSelectedMember(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between p-4 border-b border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-800">
+                {selectedMember.person?.display_name || selectedMember.identifier}
+              </h3>
+              <button
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                onClick={() => setSelectedMember(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="p-4">
+              {selectedMember.loading ? (
+                <div className="text-center py-4 text-slate-500">Loading...</div>
+              ) : selectedMember.person ? (
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-lg font-medium text-slate-800">{selectedMember.person.display_name}</div>
+                    <div className="text-xs text-slate-400">@{selectedMember.person.identifier}</div>
+                  </div>
+
+                  {selectedMember.person.aliases && selectedMember.person.aliases.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Also known as</div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedMember.person.aliases.map((alias, i) => (
+                          <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                            {alias}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedMember.person.contact_info && Object.keys(selectedMember.person.contact_info).length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Contact</div>
+                      <div className="space-y-1">
+                        {Object.entries(selectedMember.person.contact_info).map(([key, value]) => {
+                          if (typeof value !== 'string') return null
+                          return (
+                            <div key={key} className="text-sm">
+                              <span className="text-slate-500 capitalize">{key}: </span>
+                              <span className="text-slate-800">{value}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedMember.person.tags && selectedMember.person.tags.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Tags</div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedMember.person.tags.map((tag, i) => (
+                          <span key={i} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedMember.person.notes && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Notes</div>
+                      <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedMember.person.notes}</div>
+                    </div>
+                  )}
+
+                  {/* Tidbits */}
+                  {selectedMember.person.tidbits && selectedMember.person.tidbits.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-2">Tidbits ({selectedMember.person.tidbits.length})</div>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {selectedMember.person.tidbits.map((tidbit: Tidbit) => (
+                          <div key={tidbit.id} className="bg-slate-50 rounded-lg p-3 text-sm">
+                            <div className="text-slate-700 whitespace-pre-wrap">{tidbit.content}</div>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
+                              {tidbit.tidbit_type && (
+                                <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
+                                  {tidbit.tidbit_type}
+                                </span>
+                              )}
+                              {tidbit.source && <span>{tidbit.source}</span>}
+                              {tidbit.inserted_at && (
+                                <span>{new Date(tidbit.inserted_at).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                            {tidbit.tags && tidbit.tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {tidbit.tags.map((tag, i) => (
+                                  <span key={i} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <div className="text-slate-500 mb-2">Could not load person details</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>
   )
 }

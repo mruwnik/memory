@@ -73,23 +73,34 @@ class FakeModel:
 async def test_has_items_with_results(mock_session):
     """has_items returns True when items exist."""
     mock_session.query.return_value.limit.return_value.count.return_value = 1
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
     checker = has_items(FakeModel)
-    assert await checker({}, mock_session) is True
+    with patch("memory.api.MCP.visibility.make_session", return_value=mock_session):
+        assert await checker({}, None) is True
 
 
 @pytest.mark.asyncio
 async def test_has_items_empty(mock_session):
     """has_items returns False when no items exist."""
     mock_session.query.return_value.limit.return_value.count.return_value = 0
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
     checker = has_items(FakeModel)
-    assert await checker({}, mock_session) is False
+    with patch("memory.api.MCP.visibility.make_session", return_value=mock_session):
+        assert await checker({}, None) is False
 
 
 @pytest.mark.asyncio
-async def test_has_items_no_session():
-    """has_items returns True when session is None (graceful degradation)."""
+async def test_has_items_creates_own_session(mock_session):
+    """has_items creates its own session (doesn't use passed session)."""
+    mock_session.query.return_value.limit.return_value.count.return_value = 1
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
     checker = has_items(FakeModel)
-    assert await checker({}, None) is True
+    # Even with session=None passed, it should work by creating its own session
+    with patch("memory.api.MCP.visibility.make_session", return_value=mock_session):
+        assert await checker({}, None) is True
 
 
 def test_has_items_checker_name():

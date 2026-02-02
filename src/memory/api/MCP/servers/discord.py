@@ -35,17 +35,19 @@ discord_mcp = FastMCP("memory-discord")
 async def has_discord_bots(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show Discord tools if user has authorized bots."""
     token = user_info.get("token")
-    if not token or session is None:
+    if not token:
         return False
 
-    def _check(session: DBSession) -> bool:
-        user_session = session.get(UserSession, token)
-        if not user_session or not user_session.user:
-            return False
-        # Check if user has any authorized Discord bots
-        return len(user_session.user.discord_bots) > 0
+    def _check() -> bool:
+        # Create our own session to avoid threading issues with passed session
+        with make_session() as local_session:
+            user_session = local_session.get(UserSession, token)
+            if not user_session or not user_session.user:
+                return False
+            # Check if user has any authorized Discord bots
+            return len(user_session.user.discord_bots) > 0
 
-    return await asyncio.to_thread(_check, session)
+    return await asyncio.to_thread(_check)
 
 
 def _get_user_and_bots(session: DBSession) -> tuple[int, list[DiscordBot]]:

@@ -30,7 +30,6 @@ def test_all_servers_in_enum():
         "people",
         "polling",
         "projects",
-        "schedule",
         "slack",
         "teams",
     }

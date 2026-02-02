@@ -76,6 +76,13 @@ class VisibilityMiddleware(Middleware):
         try:
             return await checker(user_info, session)
         except Exception as e:
+            # Rollback to clear the failed transaction state so subsequent
+            # checks can proceed (prevents cascading InFailedSqlTransaction errors)
+            if session is not None:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass  # Rollback failed, nothing more we can do
             logger.error(
                 f"Visibility checker failed for tool {tool.name}: {e}",
                 exc_info=True,

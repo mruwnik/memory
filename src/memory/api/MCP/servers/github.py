@@ -39,24 +39,26 @@ github_mcp = FastMCP("memory-github")
 async def has_github_account(user_info: dict, session: DBSession | None) -> bool:
     """Visibility checker: only show GitHub write tools if user has an active account."""
     token = user_info.get("token")
-    if not token or session is None:
+    if not token:
         return False
 
-    def _check(session: DBSession) -> bool:
-        user_session = session.get(UserSession, token)
-        if not user_session or not user_session.user:
-            return False
-        return (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user_session.user.id,
-                GithubAccount.active == True,  # noqa: E712
+    def _check() -> bool:
+        # Create our own session to avoid threading issues with passed session
+        with make_session() as local_session:
+            user_session = local_session.get(UserSession, token)
+            if not user_session or not user_session.user:
+                return False
+            return (
+                local_session.query(GithubAccount)
+                .filter(
+                    GithubAccount.user_id == user_session.user.id,
+                    GithubAccount.active == True,  # noqa: E712
+                )
+                .first()
+                is not None
             )
-            .first()
-            is not None
-        )
 
-    return await asyncio.to_thread(_check, session)
+    return await asyncio.to_thread(_check)
 
 
 def _get_current_user_id() -> int:
