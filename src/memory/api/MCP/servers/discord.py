@@ -65,12 +65,21 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
-def resolve_bot_id(bot_id: int | None) -> int:
-    """Resolve bot_id, using default bot if None."""
+def resolve_bot_id(bot_id: int | None, session: DBSession | None = None) -> int:
+    """Resolve bot_id, using default bot if None.
+
+    Args:
+        bot_id: Explicit bot ID, or None to use default bot
+        session: Optional session to use. If not provided, creates a new session.
+                 Pass an existing session to avoid nested make_session() calls
+                 which can cause DetachedInstanceError.
+    """
     if bot_id is not None:
         return bot_id
-    with make_session() as session:
+    if session is not None:
         return _get_default_bot(session).id
+    with make_session() as new_session:
+        return _get_default_bot(new_session).id
 
 
 async def _call_discord_api(func, *args, error_msg: str, **kwargs) -> dict[str, Any]:
@@ -91,7 +100,7 @@ def _to_snowflake(value: int | str) -> int:
         raise ValueError(f"Invalid snowflake ID: '{value}' is not a valid integer")
 
 
-def _resolve_guild_id(
+def resolve_guild_id(
     session: DBSession,
     guild: int | str | None,
 ) -> int:
@@ -335,7 +344,7 @@ async def list_roles(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
+        resolved_guild_id = resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.list_roles,
@@ -348,7 +357,7 @@ async def list_roles(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def list_role_members(
-    role_id: int | str,
+    role: int | str,
     guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
@@ -356,7 +365,7 @@ async def list_role_members(
     List all members who have a specific role.
 
     Args:
-        role_id: Role ID to list members for (snowflake, can be string or int)
+        role: Role ID (snowflake) or role name
         guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
@@ -364,17 +373,18 @@ async def list_role_members(
         Dict with role name and list of members (id, username, display_name)
     """
     resolved_bot_id = resolve_bot_id(bot_id)
-    resolved_role_id = _to_snowflake(role_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
+        resolved_guild_id = resolve_guild_id(session, guild)
+
+    resolved_role_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
 
     return await _call_discord_api(
         discord_client.list_role_members,
         resolved_bot_id,
         resolved_guild_id,
         resolved_role_id,
-        error_msg=f"Failed to list members for role {resolved_role_id}",
+        error_msg=f"Failed to list members for role {role}",
     )
 
 
@@ -397,7 +407,7 @@ async def list_categories(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
+        resolved_guild_id = resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.list_categories,
@@ -412,66 +422,89 @@ async def list_categories(
 # =============================================================================
 
 
-def _resolve_role_id(
-    role_id: int | str | None,
-    role_name: str | None,
+def resolve_role(
+    role: int | str,
     guild_id: int,
     bot_id: int,
 ) -> int:
-    """Resolve a role ID from either role_id or role_name."""
-    if role_id is not None:
-        return _to_snowflake(role_id)
+    """Resolve a role from either numeric ID or role name.
 
-    if role_name is None:
-        raise ValueError("Must specify either role_id or role_name")
+    Args:
+        role: Role ID (snowflake as int or str) or role name
+        guild_id: Discord guild ID
+        bot_id: Discord bot ID
+
+    Returns:
+        The resolved role ID as int
+
+    Raises:
+        ValueError: If role name not found
+    """
+    # Try to parse as snowflake ID first
+    if isinstance(role, int):
+        return role
+    try:
+        return int(role)
+    except ValueError:
+        pass
 
     # Look up role by name via Discord API
     roles_result = discord_client.list_roles(bot_id, guild_id)
     if not roles_result:
         raise ValueError(f"Failed to fetch roles for guild {guild_id}")
 
-    for role in roles_result.get("roles", []):
-        if role["name"].lower() == role_name.lower():
-            return int(role["id"])
+    for r in roles_result.get("roles", []):
+        if r["name"].lower() == role.lower():
+            return int(r["id"])
 
-    raise ValueError(f"Role '{role_name}' not found in guild")
+    raise ValueError(f"Role '{role}' not found in guild")
 
 
-def _resolve_user_id(
+def resolve_user(
     session: DBSession,
-    user_id: int | str | None,
-    username: str | None,
+    user: int | str,
 ) -> int:
-    """Resolve a user ID from either user_id or username."""
-    if user_id is not None:
-        return _to_snowflake(user_id)
+    """Resolve a user ID from either numeric ID or username.
 
-    if username is None:
-        raise ValueError("Must specify either user_id or username")
+    Args:
+        session: Database session
+        user: User ID (snowflake as int or str) or username
+
+    Returns:
+        The resolved user ID as int
+
+    Raises:
+        ValueError: If username not found
+    """
+    # Try to parse as snowflake ID first
+    if isinstance(user, int):
+        return user
+    try:
+        return int(user)
+    except ValueError:
+        pass
 
     # Look up user by username in database
     discord_user = (
         session.query(DiscordUser)
         .filter(
             or_(
-                DiscordUser.username == username,
-                DiscordUser.display_name == username,
+                DiscordUser.username == user,
+                DiscordUser.display_name == user,
             )
         )
         .first()
     )
     if not discord_user:
-        raise ValueError(f"User '{username}' not found")
+        raise ValueError(f"User '{user}' not found")
     return discord_user.id
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def add_user_to_role(
-    role_id: int | str | None = None,
-    role_name: str | None = None,
-    user_id: int | str | None = None,
-    username: str | None = None,
+    role: int | str,
+    user: int | str,
     guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
@@ -479,27 +512,20 @@ async def add_user_to_role(
     Add a user to a Discord role.
 
     Args:
-        role_id: Role ID to add user to (snowflake, can be string or int)
-        role_name: Role name to add user to (alternative to role_id)
-        user_id: User ID to add (snowflake, can be string or int)
-        username: Username to add (alternative to user_id)
+        role: Role ID (snowflake) or role name
+        user: User ID (snowflake) or username
         guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status, user name, and role name
     """
-    if role_id is None and role_name is None:
-        raise ValueError("Must specify either role_id or role_name")
-    if user_id is None and username is None:
-        raise ValueError("Must specify either user_id or username")
-
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
-        resolved_role_id = _resolve_role_id(role_id, role_name, resolved_guild_id, resolved_bot_id)
-        resolved_user_id = _resolve_user_id(session, user_id, username)
+        resolved_guild_id = resolve_guild_id(session, guild)
+        resolved_role_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+        resolved_user_id = resolve_user(session, user)
 
     return await _call_discord_api(
         discord_client.add_role_member,
@@ -507,17 +533,15 @@ async def add_user_to_role(
         resolved_guild_id,
         resolved_role_id,
         resolved_user_id,
-        error_msg=f"Failed to add user {resolved_user_id} to role {resolved_role_id}",
+        error_msg=f"Failed to add user {user} to role {role}",
     )
 
 
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def role_remove(
-    role_id: int | str | None = None,
-    role_name: str | None = None,
-    user_id: int | str | None = None,
-    username: str | None = None,
+    role: int | str,
+    user: int | str,
     guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
@@ -525,27 +549,20 @@ async def role_remove(
     Remove a user from a Discord role.
 
     Args:
-        role_id: Role ID to remove user from (snowflake, can be string or int)
-        role_name: Role name to remove user from (alternative to role_id)
-        user_id: User ID to remove (snowflake, can be string or int)
-        username: Username to remove (alternative to user_id)
+        role: Role ID (snowflake) or role name
+        user: User ID (snowflake) or username
         guild: Discord server - can be numeric ID or server name
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status, user name, and role name
     """
-    if role_id is None and role_name is None:
-        raise ValueError("Must specify either role_id or role_name")
-    if user_id is None and username is None:
-        raise ValueError("Must specify either user_id or username")
-
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
-        resolved_role_id = _resolve_role_id(role_id, role_name, resolved_guild_id, resolved_bot_id)
-        resolved_user_id = _resolve_user_id(session, user_id, username)
+        resolved_guild_id = resolve_guild_id(session, guild)
+        resolved_role_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+        resolved_user_id = resolve_user(session, user)
 
     return await _call_discord_api(
         discord_client.remove_role_member,
@@ -553,7 +570,7 @@ async def role_remove(
         resolved_guild_id,
         resolved_role_id,
         resolved_user_id,
-        error_msg=f"Failed to remove user {resolved_user_id} from role {resolved_role_id}",
+        error_msg=f"Failed to remove user {user} from role {role}",
     )
 
 
@@ -607,7 +624,7 @@ async def create(
 # =============================================================================
 
 
-def _resolve_channel_id(
+def resolve_channel_id(
     session: DBSession,
     channel_id: int | str | None,
     channel_name: str | None,
@@ -665,7 +682,7 @@ async def perms(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
+        resolved_channel_id = resolve_channel_id(session, channel_id, channel_name)
 
     return await _call_discord_api(
         discord_client.get_channel_permissions,
@@ -678,12 +695,12 @@ async def perms(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def set_perms(
-    channel_id: int | str | None = None,
-    channel_name: str | None = None,
-    role_id: int | str | None = None,
-    user_id: int | str | None = None,
+    channel: int | str | None = None,
+    role: int | str | None = None,
+    user: int | str | None = None,
     allow: list[str] | None = None,
     deny: list[str] | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
@@ -693,26 +710,38 @@ async def set_perms(
     manage_messages, manage_channels, add_reactions, attach_files, embed_links
 
     Args:
-        channel_id: Discord channel ID (snowflake, can be string or int)
-        channel_name: Discord channel name (alternative to channel_id)
-        role_id: Role ID to set permissions for (mutually exclusive with user_id)
-        user_id: User ID to set permissions for (mutually exclusive with role_id)
+        channel: Discord channel ID (snowflake) or channel name
+        role: Role ID (snowflake) or role name to set permissions for (mutually exclusive with user)
+        user: User ID (snowflake) or username to set permissions for (mutually exclusive with role)
         allow: List of permission names to allow
         deny: List of permission names to deny
+        guild: Discord server - can be numeric ID or server name (required for name resolution)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status
     """
-    if not role_id and not user_id:
-        raise ValueError("Must specify either role_id or user_id")
+    if not role and not user:
+        raise ValueError("Must specify either role or user")
+    if not channel:
+        raise ValueError("Must specify channel")
 
     resolved_bot_id = resolve_bot_id(bot_id)
-    resolved_role_id = _to_snowflake(role_id) if role_id else None
-    resolved_user_id = _to_snowflake(user_id) if user_id else None
 
     with make_session() as session:
-        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
+        resolved_guild_id = resolve_guild_id(session, guild) if guild else None
+        resolved_channel_id = resolve_channel_id(session, channel, None)
+
+        resolved_role_id = None
+        resolved_user_id = None
+        if role:
+            if resolved_guild_id is None:
+                # Try to parse as snowflake directly
+                resolved_role_id = _to_snowflake(role)
+            else:
+                resolved_role_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+        if user:
+            resolved_user_id = resolve_user(session, user)
 
     return await _call_discord_api(
         discord_client.set_channel_permission,
@@ -729,30 +758,47 @@ async def set_perms(
 @discord_mcp.tool()
 @visible_when(require_scopes("discord-admin"), has_discord_bots)
 async def del_perms(
-    target_id: int | str,
-    channel_id: int | str | None = None,
-    channel_name: str | None = None,
-    target_type: str = "role",
+    channel: int | str,
+    role: int | str | None = None,
+    user: int | str | None = None,
+    guild: int | str | None = None,
     bot_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Remove permission overwrite for a role or user from a channel.
 
     Args:
-        target_id: Role or user ID to remove permissions for (snowflake, can be string or int)
-        channel_id: Discord channel ID (snowflake, can be string or int)
-        channel_name: Discord channel name (alternative to channel_id)
-        target_type: "role" or "user" (default: "role")
+        channel: Discord channel ID (snowflake) or channel name
+        role: Role ID (snowflake) or role name to remove permissions for (mutually exclusive with user)
+        user: User ID (snowflake) or username to remove permissions for (mutually exclusive with role)
+        guild: Discord server - can be numeric ID or server name (required for name resolution)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
     Returns:
         Dict with success status
     """
+    if not role and not user:
+        raise ValueError("Must specify either role or user")
+    if role and user:
+        raise ValueError("Cannot specify both role and user")
+
     resolved_bot_id = resolve_bot_id(bot_id)
-    resolved_target_id = _to_snowflake(target_id)
 
     with make_session() as session:
-        resolved_channel_id = _resolve_channel_id(session, channel_id, channel_name)
+        resolved_guild_id = resolve_guild_id(session, guild) if guild else None
+        resolved_channel_id = resolve_channel_id(session, channel, None)
+
+        if role:
+            if resolved_guild_id is None:
+                resolved_target_id = _to_snowflake(role)
+            else:
+                resolved_target_id = resolve_role(role, resolved_guild_id, resolved_bot_id)
+            target_type = "role"
+        else:
+            # user is guaranteed non-None here due to earlier validation
+            assert user is not None
+            resolved_target_id = resolve_user(session, user)
+            target_type = "user"
 
     return await _call_discord_api(
         discord_client.remove_channel_permission,
@@ -800,7 +846,7 @@ async def create_channel(
     resolved_copy_from = _to_snowflake(copy_permissions_from) if copy_permissions_from else None
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
+        resolved_guild_id = resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.create_channel,
@@ -836,7 +882,7 @@ async def create_category(
     resolved_bot_id = resolve_bot_id(bot_id)
 
     with make_session() as session:
-        resolved_guild_id = _resolve_guild_id(session, guild)
+        resolved_guild_id = resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.create_category,
@@ -880,7 +926,7 @@ async def delete_channel(
     resolved_guild_id = None
     if channel_name is not None:
         with make_session() as session:
-            resolved_guild_id = _resolve_guild_id(session, guild)
+            resolved_guild_id = resolve_guild_id(session, guild)
 
     identifier = channel_id or channel_name
     return await _call_discord_api(
@@ -963,7 +1009,7 @@ async def edit_channel(
     resolved_guild_id = None
     if channel_name is not None or category_name is not None:
         with make_session() as session:
-            resolved_guild_id = _resolve_guild_id(session, guild)
+            resolved_guild_id = resolve_guild_id(session, guild)
 
     return await _call_discord_api(
         discord_client.edit_channel,

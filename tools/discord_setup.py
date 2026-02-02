@@ -6,7 +6,27 @@ import requests
 
 def make_invite(client_id: str | int) -> str:
     """Generate a Discord bot invite URL with required permissions."""
-    permissions = 2048 + 16 + 1024  # = 3088 (send messages, read history, read messages)
+    # Discord permission bits - see https://discord.com/developers/docs/topics/permissions
+    VIEW_CHANNEL = 1 << 10  # 1024
+    SEND_MESSAGES = 1 << 11  # 2048
+    EMBED_LINKS = 1 << 14  # 16384
+    ATTACH_FILES = 1 << 15  # 32768
+    READ_MESSAGE_HISTORY = 1 << 16  # 65536
+    ADD_REACTIONS = 1 << 6  # 64
+    MANAGE_CHANNELS = 1 << 4  # 16
+    MANAGE_ROLES = 1 << 28  # 268435456
+
+    permissions = (
+        VIEW_CHANNEL
+        | SEND_MESSAGES
+        | EMBED_LINKS
+        | ATTACH_FILES
+        | READ_MESSAGE_HISTORY
+        | ADD_REACTIONS
+        | MANAGE_CHANNELS
+        | MANAGE_ROLES
+    )  # = 268553296
+
     invite_url = f"https://discord.com/oauth2/authorize?client_id={str(client_id)}&scope=bot&permissions={permissions}"
     return invite_url
 

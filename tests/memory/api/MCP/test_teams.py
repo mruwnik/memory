@@ -1,11 +1,18 @@
 """Tests for Teams MCP tools with access control."""
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
+from mcp.server.auth.middleware.auth_context import (
+    auth_context_var,
+    AuthenticatedUser,
+    AccessToken,
+)
 
 from memory.common.db.models import Person, Team, HumanUser, UserSession
+from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.sources import Project, team_members, project_teams
 from memory.common.db import connection as db_connection
 
@@ -20,6 +27,37 @@ def reset_db_cache():
     db_connection._engine = None
     db_connection._session_factory = None
     db_connection._scoped_session = None
+
+
+@contextmanager
+def mcp_auth_context(session_token: str):
+    """Set up FastMCP auth context for testing.
+
+    This sets the auth_context_var that FastMCP's get_access_token() reads from,
+    allowing tests to run without mocking.
+    """
+    access_token = AccessToken(
+        token=session_token,
+        client_id="test-client",
+        scopes=[],
+    )
+    auth_user = AuthenticatedUser(access_token)
+    token = auth_context_var.set(auth_user)
+    try:
+        yield
+    finally:
+        auth_context_var.reset(token)
+
+
+@pytest.fixture
+def discord_bot(db_session, admin_user):
+    """Create a Discord bot linked to admin_user for tests that need one."""
+    bot = DiscordBot(id=1, name="Test Bot", is_active=True)
+    db_session.add(bot)
+    # Link bot to admin user via many-to-many relationship
+    admin_user.discord_bots.append(bot)
+    db_session.commit()
+    return bot
 
 
 @pytest.fixture
@@ -77,7 +115,7 @@ def admin_session(db_session, admin_user):
 
 
 @pytest.fixture
-def teams_and_projects(db_session, regular_user, qdrant):
+def teams_and_projects(db_session, regular_user):
     """Create sample teams, projects, and memberships for testing access control."""
     # Create persons
     person1 = Person(identifier="person1", display_name="Person One")
@@ -152,22 +190,13 @@ def teams_and_projects(db_session, regular_user, qdrant):
     }
 
 
-def make_mock_access_token(session_id: str | None):
-    """Create a mock access token object."""
-    if session_id is None:
-        return None
-    mock_token = MagicMock()
-    mock_token.token = session_id
-    return mock_token
-
-
 def get_fn(tool):
     """Extract underlying function from FunctionTool if wrapped, else return as-is."""
     return getattr(tool, "fn", tool)
 
 
 # =============================================================================
-# team_list access control tests
+# list_all access control tests
 # =============================================================================
 
 
@@ -179,22 +208,17 @@ def get_fn(tool):
         pytest.param(True, 3, {"team-alpha", "team-beta", "team-gamma"}, id="admin_sees_all_teams"),
     ],
 )
-async def test_team_list_access_control(
+async def test_list_all_access_control(
     db_session, user_session, admin_session, teams_and_projects,
     use_admin, expected_team_count, expected_slugs
 ):
-    """Test that team_list respects access control."""
-    from memory.api.MCP.servers.teams import team_list
+    """Test that list_all respects access control."""
+    from memory.api.MCP.servers.teams import list_all
 
     session_id = admin_session.id if use_admin else user_session.id
-    mock_token = make_mock_access_token(session_id)
 
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_list)()
+    with mcp_auth_context(session_id):
+        result = await get_fn(list_all)()
 
     assert "teams" in result, f"Expected 'teams' in result, got: {result}"
     team_slugs = {t["slug"] for t in result["teams"]}
@@ -204,23 +228,19 @@ async def test_team_list_access_control(
 
 
 @pytest.mark.asyncio
-async def test_team_list_unauthenticated_returns_error(db_session):
+async def test_list_all_unauthenticated_returns_error(db_session):
     """Unauthenticated requests should return an error."""
-    from memory.api.MCP.servers.teams import team_list
+    from memory.api.MCP.servers.teams import list_all
 
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=None),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_list)()
+    # No auth context set - simulates unauthenticated request
+    result = await get_fn(list_all)()
 
     assert "error" in result
     assert "Not authenticated" in result["error"]
 
 
 # =============================================================================
-# team_get access control tests
+# fetch access control tests
 # =============================================================================
 
 
@@ -233,22 +253,16 @@ async def test_team_list_unauthenticated_returns_error(db_session):
         pytest.param(True, "team-gamma", True, id="admin_can_access_any_team"),
     ],
 )
-async def test_team_get_access_control(
+async def test_fetch_access_control(
     db_session, user_session, admin_session, teams_and_projects,
     use_admin, team_slug, expect_success
 ):
-    """Test that team_get respects access control."""
-    from memory.api.MCP.servers.teams import team_get
+    """Test that fetch respects access control."""
+    from memory.api.MCP.servers.teams import fetch
 
     session_id = admin_session.id if use_admin else user_session.id
-    mock_token = make_mock_access_token(session_id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_get)(team_slug)
+    with mcp_auth_context(session_id):
+        result = await get_fn(fetch)(team_slug)
 
     if expect_success:
         assert "team" in result, f"Expected team in result, got: {result}"
@@ -259,63 +273,19 @@ async def test_team_get_access_control(
 
 
 # =============================================================================
-# project_list_teams access control tests
+# list_all with include_projects tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "use_admin,project_id,expect_success",
-    [
-        pytest.param(False, -1, True, id="regular_user_can_access_accessible_project"),
-        pytest.param(False, -3, False, id="regular_user_cannot_access_inaccessible_project"),
-        pytest.param(True, -3, True, id="admin_can_access_any_project"),
-    ],
-)
-async def test_project_list_teams_access_control(
-    db_session, user_session, admin_session, teams_and_projects,
-    use_admin, project_id, expect_success
-):
-    """Test that project_list_teams respects access control."""
-    from memory.api.MCP.servers.teams import project_list_teams
-
-    session_id = admin_session.id if use_admin else user_session.id
-    mock_token = make_mock_access_token(session_id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(project_list_teams)(project_id)
-
-    if expect_success:
-        assert "teams" in result, f"Expected teams in result, got: {result}"
-    else:
-        assert "error" in result
-        assert "Project not found" in result["error"]
-
-
-# =============================================================================
-# team_list with include_projects tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_team_list_includes_projects_when_requested(
+async def test_list_all_includes_projects_when_requested(
     db_session, user_session, teams_and_projects
 ):
-    """team_list should include projects when include_projects=True."""
-    from memory.api.MCP.servers.teams import team_list
+    """list_all should include projects when include_projects=True."""
+    from memory.api.MCP.servers.teams import list_all
 
-    mock_token = make_mock_access_token(user_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_list)(include_projects=True)
+    with mcp_auth_context(user_session.id):
+        result = await get_fn(list_all)(include_projects=True)
 
     assert "teams" in result
     team_alpha = next((t for t in result["teams"] if t["slug"] == "team-alpha"), None)
@@ -347,13 +317,7 @@ async def test_team_add_member_access_control(
     from memory.api.MCP.servers.teams import team_add_member
 
     session_id = admin_session.id if use_admin else user_session.id
-    mock_token = make_mock_access_token(session_id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(session_id):
         result = await get_fn(team_add_member)(team_slug, "person2", sync_external=False)
 
     if expect_success:
@@ -385,13 +349,7 @@ async def test_project_assign_team_access_control(
     from memory.api.MCP.servers.teams import project_assign_team
 
     session_id = admin_session.id if use_admin else user_session.id
-    mock_token = make_mock_access_token(session_id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(session_id):
         result = await get_fn(project_assign_team)(project_id, team_slug)
 
     if expect_error:
@@ -513,17 +471,11 @@ def test_find_or_create_person_normalizes_identifier(db_session):
 
 
 @pytest.mark.asyncio
-async def test_upsert_creates_new_team(db_session, admin_session, qdrant):
+async def test_upsert_creates_new_team(db_session, admin_session):
     """Test upsert creates a new team."""
     from memory.api.MCP.servers.teams import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="New Test Team",
             slug="new-test-team",
@@ -540,7 +492,7 @@ async def test_upsert_creates_new_team(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_updates_existing_team(db_session, admin_session, qdrant):
+async def test_upsert_updates_existing_team(db_session, admin_session):
     """Test upsert updates an existing team."""
     from memory.api.MCP.servers.teams import upsert
 
@@ -549,13 +501,7 @@ async def test_upsert_updates_existing_team(db_session, admin_session, qdrant):
     db_session.add(team)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="Updated Name",
             slug="update-me",
@@ -569,17 +515,11 @@ async def test_upsert_updates_existing_team(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_auto_generates_slug(db_session, admin_session, qdrant):
+async def test_upsert_auto_generates_slug(db_session, admin_session):
     """Test upsert generates slug from name if not provided."""
     from memory.api.MCP.servers.teams import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(name="Auto Slug Team")
 
     assert result["success"] is True
@@ -587,7 +527,7 @@ async def test_upsert_auto_generates_slug(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_with_members_list(db_session, admin_session, qdrant):
+async def test_upsert_with_members_list(db_session, admin_session):
     """Test upsert with explicit members list."""
     from memory.api.MCP.servers.teams import upsert
 
@@ -597,14 +537,7 @@ async def test_upsert_with_members_list(db_session, admin_session, qdrant):
     db_session.add_all([person1, person2])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.sync_membership_add", return_value={}),
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="Members Test Team",
             members=["member_one", "member_two"],
@@ -617,18 +550,11 @@ async def test_upsert_with_members_list(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_creates_missing_person(db_session, admin_session, qdrant):
+async def test_upsert_creates_missing_person(db_session, admin_session):
     """Test upsert creates Person for unknown member identifier."""
     from memory.api.MCP.servers.teams import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.sync_membership_add", return_value={}),
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="Create Person Team",
             members=["new_person"],
@@ -640,7 +566,7 @@ async def test_upsert_creates_missing_person(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_clears_members_with_empty_list(db_session, admin_session, qdrant):
+async def test_upsert_clears_members_with_empty_list(db_session, admin_session):
     """Test upsert removes all members when passed empty list."""
     from memory.api.MCP.servers.teams import upsert
 
@@ -652,14 +578,7 @@ async def test_upsert_clears_members_with_empty_list(db_session, admin_session, 
     team.members.append(person)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.sync_membership_remove", return_value={}),
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="Clear Me",
             slug="clear-me",
@@ -673,17 +592,11 @@ async def test_upsert_clears_members_with_empty_list(db_session, admin_session, 
 
 
 @pytest.mark.asyncio
-async def test_upsert_with_discord_guild_by_id(db_session, admin_session, qdrant):
+async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
     """Test upsert with Discord guild specified by ID."""
     from memory.api.MCP.servers.teams import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="Discord Team",
             guild=123456789,
@@ -696,29 +609,28 @@ async def test_upsert_with_discord_guild_by_id(db_session, admin_session, qdrant
 
 
 @pytest.mark.asyncio
-async def test_upsert_with_discord_role_creates_role(db_session, admin_session, qdrant):
-    """Test upsert creates Discord role when it doesn't exist."""
+async def test_upsert_with_discord_role_creates_role(db_session, admin_session, discord_bot):
+    """Test upsert creates Discord role when it doesn't exist.
+
+    This test uses the real make_session() to test actual session behavior.
+    Only external Discord/GitHub API calls are mocked.
+    """
     from memory.api.MCP.servers.teams import upsert
     from memory.common.db.models import DiscordServer
 
-    # Create Discord server
+    # Create Discord server - use the test database
     server = DiscordServer(id=111222333, name="Test Guild")
     db_session.add(server)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    # Mock Discord API calls
+    # Mock only external Discord API calls
     mock_role_result = {"success": True, "role": {"id": "999888777", "name": "New Role"}}
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_roles", return_value={"roles": []}),
         patch("memory.common.discord.create_role", return_value=mock_role_result),
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(upsert)(
             name="Role Test Team",
             guild=111222333,
@@ -729,9 +641,15 @@ async def test_upsert_with_discord_role_creates_role(db_session, admin_session, 
     assert result["discord_sync"].get("role_created") is True
     assert result["team"]["discord_role_id"] == 999888777
 
+    # Verify the value is actually persisted in the database
+    db_session.expire_all()  # Force reload from DB
+    team = db_session.query(Team).filter(Team.slug == "role-test-team").first()
+    assert team is not None
+    assert team.discord_role_id == 999888777
+
 
 @pytest.mark.asyncio
-async def test_upsert_with_existing_discord_role(db_session, admin_session, qdrant):
+async def test_upsert_with_existing_discord_role(db_session, admin_session, discord_bot):
     """Test upsert links to existing Discord role."""
     from memory.api.MCP.servers.teams import upsert
     from memory.common.db.models import DiscordServer
@@ -740,18 +658,13 @@ async def test_upsert_with_existing_discord_role(db_session, admin_session, qdra
     db_session.add(server)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
     # Mock Discord API - role exists
     mock_roles = {"roles": [{"id": "555666777", "name": "Existing Role"}]}
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_roles", return_value=mock_roles),
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(upsert)(
             name="Existing Role Team",
             guild=111222333,
@@ -764,7 +677,7 @@ async def test_upsert_with_existing_discord_role(db_session, admin_session, qdra
 
 
 @pytest.mark.asyncio
-async def test_team_create_alias_removed(db_session, admin_session, qdrant):
+async def test_team_create_alias_removed(db_session, admin_session):
     """Test that team_create alias was removed - upsert is the canonical name."""
     import importlib.util
 
@@ -776,17 +689,11 @@ async def test_team_create_alias_removed(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_with_github_org(db_session, admin_session, qdrant):
+async def test_upsert_with_github_org(db_session, admin_session):
     """Test upsert with GitHub organization."""
     from memory.api.MCP.servers.teams import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
             name="GitHub Team",
             github_org="myorg",
@@ -800,13 +707,120 @@ async def test_upsert_with_github_org(db_session, admin_session, qdrant):
     assert result["team"]["auto_sync_github"] is True
 
 
+@pytest.mark.asyncio
+async def test_upsert_with_github_and_members(db_session, admin_session):
+    """Test upsert with GitHub org AND members doesn't cause DetachedInstanceError.
+
+    This is a regression test for the bug where calling upsert with both
+    github_org/github_team_slug and members would fail with:
+    'Parent instance <Team at ...> is not bound to a Session; lazy load
+    operation of attribute 'members' cannot proceed'
+
+    The issue was that after the async ensure_github_team() call, the Team
+    object would become detached from the session.
+    """
+    from memory.api.MCP.servers.teams import upsert
+
+    # Create a person to add as a member
+    person = Person(identifier="gh_test_person", display_name="GH Test Person")
+    db_session.add(person)
+    db_session.commit()
+
+    # Mock the GitHub client to return a new team (triggering async path)
+    mock_client = MagicMock()
+    mock_client.fetch_team.return_value = None  # Team doesn't exist
+    mock_client.create_team.return_value = {"id": 12345, "slug": "myteam"}
+
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
+    ):
+        result = await get_fn(upsert)(
+            name="GitHub Team With Members",
+            github_org="myorg",
+            github_team_slug="myteam",
+            members=["gh_test_person"],
+        )
+
+    # Should succeed without DetachedInstanceError
+    assert result["success"] is True
+    assert result["team"]["github_org"] == "myorg"
+    assert result["team"]["github_team_slug"] == "myteam"
+    assert result["github_sync"].get("team_created") is True
+
+    # Member should be added
+    assert "gh_test_person" in result["membership_changes"].get("added", [])
+    assert len(result["team"]["members"]) == 1
+    assert result["team"]["members"][0]["identifier"] == "gh_test_person"
+
+
+@pytest.mark.asyncio
+async def test_upsert_remove_members_with_github(db_session, admin_session):
+    """Test upsert removing members from team with GitHub integration.
+
+    This is a regression test for DetachedInstanceError when removing members
+    from a team that has GitHub sync enabled. The bug occurred because
+    _github_remove_member opened its own make_session() context, causing
+    nested sessions and object detachment.
+    """
+    from memory.api.MCP.servers.teams import upsert
+
+    # Create a person to add then remove
+    person = Person(
+        identifier="gh_remove_test",
+        display_name="GH Remove Test",
+        contact_info={"github": "ghremoveuser"},
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    # Mock GitHub client
+    mock_client = MagicMock()
+    mock_client.fetch_team.return_value = None
+    mock_client.create_team.return_value = {"id": 99999, "slug": "remove-test"}
+    mock_client.add_team_member.return_value = {"success": True, "action": "added"}
+    mock_client.remove_team_member.return_value = True
+
+    # First create team with member
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
+    ):
+        result = await get_fn(upsert)(
+            name="GitHub Remove Test",
+            github_org="testorg",
+            github_team_slug="remove-test",
+            members=["gh_remove_test"],
+        )
+
+    assert result["success"] is True
+    assert len(result["team"]["members"]) == 1
+
+    # Now remove all members - this should not cause DetachedInstanceError
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
+    ):
+        result = await get_fn(upsert)(
+            name="GitHub Remove Test",
+            github_org="testorg",
+            github_team_slug="remove-test",
+            members=[],
+        )
+
+    # Should succeed without DetachedInstanceError
+    assert result["success"] is True
+    assert len(result["team"]["members"]) == 0
+    assert "gh_remove_test" in result["membership_changes"].get("removed", [])
+
+
 # =============================================================================
 # Discord create_role tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_discord_create_role_basic(db_session, admin_session):
+async def test_discord_create_role_basic(db_session, admin_session, discord_bot):
     """Test Discord create MCP tool for roles."""
     from memory.api.MCP.servers.discord import create
     from memory.common.db.models import DiscordServer
@@ -816,15 +830,11 @@ async def test_discord_create_role_basic(db_session, admin_session):
     db_session.commit()
 
     mock_result = {"success": True, "role": {"id": "111", "name": "Test Role", "color": 0}}
-    mock_token = make_mock_access_token(admin_session.id)
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.discord.resolve_bot_id", return_value=1),
-        patch("memory.api.MCP.servers.discord.make_session") as mock_make_session,
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(create)(
             name="Test Role",
             guild=123456789,
@@ -835,7 +845,7 @@ async def test_discord_create_role_basic(db_session, admin_session):
 
 
 @pytest.mark.asyncio
-async def test_discord_create_role_with_options(db_session, admin_session):
+async def test_discord_create_role_with_options(db_session, admin_session, discord_bot):
     """Test Discord create with color and mentionable options."""
     from memory.api.MCP.servers.discord import create
     from memory.common.db.models import DiscordServer
@@ -848,15 +858,11 @@ async def test_discord_create_role_with_options(db_session, admin_session):
         "success": True,
         "role": {"id": "222", "name": "Colored Role", "color": 16711680},
     }
-    mock_token = make_mock_access_token(admin_session.id)
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.discord.resolve_bot_id", return_value=1),
-        patch("memory.api.MCP.servers.discord.make_session") as mock_make_session,
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(create)(
             name="Colored Role",
             guild="Test Server",
@@ -867,7 +873,7 @@ async def test_discord_create_role_with_options(db_session, admin_session):
 
     assert result["success"] is True
     mock_create.assert_called_once_with(
-        1, 123456789, "Colored Role",
+        discord_bot.id, 123456789, "Colored Role",
         color=16711680,
         mentionable=True,
         hoist=True,
@@ -978,176 +984,23 @@ def test_github_create_team_already_exists():
 
 
 # =============================================================================
-# team_update tests
+# upsert with is_active tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_team_update_basic(db_session, admin_session, qdrant):
-    """Test team_update modifies team fields."""
-    from memory.api.MCP.servers.teams import team_update
+async def test_upsert_archive_team(db_session, admin_session):
+    """Test upsert can archive a team via is_active=False."""
+    from memory.api.MCP.servers.teams import upsert
 
-    team = Team(name="Original", slug="update-test", description="Original desc")
+    team = Team(name="Archive Me", slug="upsert-archive-test", is_active=True)
     db_session.add(team)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="update-test",
-            name="Updated Name",
-            description="Updated desc",
-            tags=["new-tag"],
-        )
-
-    assert result["success"] is True
-    assert result["team"]["name"] == "Updated Name"
-    assert result["team"]["description"] == "Updated desc"
-    assert result["team"]["tags"] == ["new-tag"]
-
-
-@pytest.mark.asyncio
-async def test_team_update_discord_settings_by_id(db_session, admin_session, qdrant):
-    """Test team_update modifies Discord integration settings with guild and role IDs."""
-    from memory.api.MCP.servers.teams import team_update
-
-    team = Team(name="Discord Team", slug="discord-update-test")
-    db_session.add(team)
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="discord-update-test",
-            discord_role=123456789,  # Using unified discord_role parameter with ID
-            guild=987654321,  # Using unified guild parameter with ID
-            auto_sync_discord=True,
-        )
-
-    assert result["success"] is True
-    assert result["team"]["discord_role_id"] == 123456789
-    assert result["team"]["discord_guild_id"] == 987654321
-    assert result["team"]["auto_sync_discord"] is True
-
-
-@pytest.mark.asyncio
-async def test_team_update_discord_settings_by_name(db_session, admin_session, qdrant):
-    """Test team_update accepts guild and role by name."""
-    from memory.api.MCP.servers.teams import team_update
-    from memory.common.db.models import DiscordServer
-
-    team = Team(name="Discord Team 2", slug="discord-update-test-2")
-    server = DiscordServer(id=555666777, name="My Test Server")
-    db_session.add_all([team, server])
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-    mock_roles = {"roles": [{"id": "888999000", "name": "Developer Role"}]}
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
-        patch("memory.common.discord.list_roles", return_value=mock_roles),
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="discord-update-test-2",
-            guild="My Test Server",  # Using server name instead of ID
-            discord_role="Developer Role",  # Using role name instead of ID
-            auto_sync_discord=True,
-        )
-
-    assert result["success"] is True
-    assert result["team"]["discord_guild_id"] == 555666777  # Resolved from name
-    assert result["team"]["discord_role_id"] == 888999000  # Resolved from name
-    assert result["team"]["auto_sync_discord"] is True
-
-
-@pytest.mark.asyncio
-async def test_team_update_discord_role_without_guild_fails(db_session, admin_session, qdrant):
-    """Test team_update fails when resolving role by name without guild."""
-    from memory.api.MCP.servers.teams import team_update
-
-    team = Team(name="Discord Team 3", slug="discord-update-test-3")
-    db_session.add(team)
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="discord-update-test-3",
-            discord_role="Some Role",  # Role name without guild should fail
-        )
-
-    assert "error" in result
-    assert "without guild" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_team_update_github_settings(db_session, admin_session, qdrant):
-    """Test team_update modifies GitHub integration settings."""
-    from memory.api.MCP.servers.teams import team_update
-
-    team = Team(name="GitHub Team", slug="github-update-test")
-    db_session.add(team)
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="github-update-test",
-            github_org="myorg",
-            github_team_slug="myteam",
-            github_team_id=12345,
-            auto_sync_github=True,
-        )
-
-    assert result["success"] is True
-    assert result["team"]["github_org"] == "myorg"
-    assert result["team"]["github_team_slug"] == "myteam"
-    assert result["team"]["github_team_id"] == 12345
-    assert result["team"]["auto_sync_github"] is True
-
-
-@pytest.mark.asyncio
-async def test_team_update_archive(db_session, admin_session, qdrant):
-    """Test team_update can archive a team."""
-    from memory.api.MCP.servers.teams import team_update
-
-    team = Team(name="Archive Me", slug="archive-test", is_active=True)
-    db_session.add(team)
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(
-            team="archive-test",
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Archive Me",
+            slug="upsert-archive-test",
             is_active=False,
         )
 
@@ -1157,21 +1010,35 @@ async def test_team_update_archive(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_team_update_not_found(db_session, admin_session, qdrant):
-    """Test team_update returns error for non-existent team."""
-    from memory.api.MCP.servers.teams import team_update
+async def test_upsert_reactivate_team(db_session, admin_session):
+    """Test upsert can reactivate an archived team.
 
-    mock_token = make_mock_access_token(admin_session.id)
+    Note: The current implementation sets is_active=True but preserves
+    archived_at for audit trail purposes.
+    """
+    from memory.api.MCP.servers.teams import upsert
+    from datetime import datetime, timezone
 
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_update)(team="nonexistent")
+    team = Team(
+        name="Reactivate Me",
+        slug="upsert-reactivate-test",
+        is_active=False,
+        archived_at=datetime.now(timezone.utc),
+    )
+    db_session.add(team)
+    db_session.commit()
 
-    assert "error" in result
-    assert "Team not found" in result["error"]
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Reactivate Me",
+            slug="upsert-reactivate-test",
+            is_active=True,
+        )
+
+    assert result["success"] is True
+    assert result["team"]["is_active"] is True
+    # archived_at is preserved for audit trail (not cleared on reactivation)
+    assert result["team"]["archived_at"] is not None
 
 
 # =============================================================================
@@ -1180,7 +1047,7 @@ async def test_team_update_not_found(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_team_remove_member_success(db_session, admin_session, qdrant):
+async def test_team_remove_member_success(db_session, admin_session):
     """Test team_remove_member removes a person from a team."""
     from memory.api.MCP.servers.teams import team_remove_member
     from memory.common.db.models.sources import team_members
@@ -1194,14 +1061,7 @@ async def test_team_remove_member_success(db_session, admin_session, qdrant):
     )
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.sync_membership_remove", return_value={}),
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(team_remove_member)(
             team="remove-member-test",
             person="removable",
@@ -1213,7 +1073,7 @@ async def test_team_remove_member_success(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_team_remove_member_not_a_member(db_session, admin_session, qdrant):
+async def test_team_remove_member_not_a_member(db_session, admin_session):
     """Test team_remove_member handles non-member gracefully."""
     from memory.api.MCP.servers.teams import team_remove_member
 
@@ -1222,13 +1082,7 @@ async def test_team_remove_member_not_a_member(db_session, admin_session, qdrant
     db_session.add_all([team, person])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(team_remove_member)(
             team="remove-test-2",
             person="not_member",
@@ -1239,7 +1093,7 @@ async def test_team_remove_member_not_a_member(db_session, admin_session, qdrant
 
 
 @pytest.mark.asyncio
-async def test_team_remove_member_with_discord_sync(db_session, admin_session, qdrant):
+async def test_team_remove_member_with_discord_sync(db_session, admin_session, discord_bot):
     """Test team_remove_member syncs to Discord when enabled."""
     from memory.api.MCP.servers.teams import team_remove_member
     from memory.common.db.models.sources import team_members
@@ -1264,15 +1118,10 @@ async def test_team_remove_member_with_discord_sync(db_session, admin_session, q
     )
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.remove_role_member", return_value={"success": True}),
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(team_remove_member)(
             team="discord-sync-remove",
             person="discord_user",
@@ -1284,19 +1133,19 @@ async def test_team_remove_member_with_discord_sync(db_session, admin_session, q
 
 
 # =============================================================================
-# team_list_members tests
+# fetch with include_members tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_team_list_members_success(db_session, admin_session, qdrant):
-    """Test team_list_members returns all members with roles."""
-    from memory.api.MCP.servers.teams import team_list_members
+async def test_fetch_with_include_members(db_session, admin_session):
+    """Test fetch returns members with roles when include_members=True."""
+    from memory.api.MCP.servers.teams import fetch
     from memory.common.db.models.sources import team_members
 
-    team = Team(name="List Members Test", slug="list-members-test")
-    person1 = Person(identifier="member1", display_name="Member One")
-    person2 = Person(identifier="member2", display_name="Member Two")
+    team = Team(name="Fetch Members Test", slug="fetch-members-test")
+    person1 = Person(identifier="fetch_member1", display_name="Member One")
+    person2 = Person(identifier="fetch_member2", display_name="Member Two")
     db_session.add_all([team, person1, person2])
     db_session.flush()
     db_session.execute(
@@ -1307,42 +1156,64 @@ async def test_team_list_members_success(db_session, admin_session, qdrant):
     )
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(fetch)("fetch-members-test", include_members=True)
 
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_list_members)(team="list-members-test")
-
-    assert result["team"] == "list-members-test"
-    assert result["count"] == 2
-    members_by_id = {m["identifier"]: m for m in result["members"]}
-    assert members_by_id["member1"]["role"] == "admin"
-    assert members_by_id["member2"]["role"] == "member"
+    assert "team" in result
+    assert "members" in result["team"]
+    assert len(result["team"]["members"]) == 2
+    members_by_id = {m["identifier"]: m for m in result["team"]["members"]}
+    assert members_by_id["fetch_member1"]["role"] == "admin"
+    assert members_by_id["fetch_member2"]["role"] == "member"
 
 
 @pytest.mark.asyncio
-async def test_team_list_members_empty(db_session, admin_session, qdrant):
-    """Test team_list_members returns empty list for team with no members."""
-    from memory.api.MCP.servers.teams import team_list_members
+async def test_fetch_without_include_members(db_session, admin_session):
+    """Test fetch does not include member details when include_members=False."""
+    from memory.api.MCP.servers.teams import fetch
+    from memory.common.db.models.sources import team_members
 
-    team = Team(name="Empty Team", slug="empty-team")
-    db_session.add(team)
+    team = Team(name="Fetch No Members Test", slug="fetch-no-members-test")
+    person = Person(identifier="fetch_no_member", display_name="No Member")
+    db_session.add_all([team, person])
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=person.id, role="member")
+    )
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
+    with mcp_auth_context(admin_session.id):
+        # Explicitly set include_members=False (default is True)
+        result = await get_fn(fetch)("fetch-no-members-test", include_members=False)
 
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(team_list_members)(team="empty-team")
+    assert "team" in result
+    # When include_members=False, members key is empty list
+    assert result["team"].get("members", []) == []
 
-    assert result["count"] == 0
-    assert result["members"] == []
+
+@pytest.mark.asyncio
+async def test_fetch_with_include_projects(db_session, admin_session):
+    """Test fetch returns projects when include_projects=True."""
+    from memory.api.MCP.servers.teams import fetch
+    from memory.common.db.models.sources import project_teams
+
+    team = Team(name="Fetch Projects Test", slug="fetch-projects-test")
+    project1 = Project(id=-200, title="Fetch Project 1", state="open")
+    project2 = Project(id=-201, title="Fetch Project 2", state="open")
+    db_session.add_all([team, project1, project2])
+    db_session.flush()
+    db_session.execute(project_teams.insert().values(project_id=-200, team_id=team.id))
+    db_session.execute(project_teams.insert().values(project_id=-201, team_id=team.id))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(fetch)("fetch-projects-test", include_projects=True)
+
+    assert "team" in result
+    assert "projects" in result["team"]
+    assert len(result["team"]["projects"]) == 2
+    titles = {p["title"] for p in result["team"]["projects"]}
+    assert titles == {"Fetch Project 1", "Fetch Project 2"}
 
 
 # =============================================================================
@@ -1351,7 +1222,7 @@ async def test_team_list_members_empty(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_project_unassign_team_success(db_session, admin_session, qdrant):
+async def test_project_unassign_team_success(db_session, admin_session):
     """Test project_unassign_team removes team from project."""
     from memory.api.MCP.servers.teams import project_unassign_team
     from memory.common.db.models.sources import project_teams
@@ -1365,13 +1236,7 @@ async def test_project_unassign_team_success(db_session, admin_session, qdrant):
     )
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(project_unassign_team)(project=-100, team="unassign-test")
 
     assert result["success"] is True
@@ -1379,7 +1244,7 @@ async def test_project_unassign_team_success(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_project_unassign_team_not_assigned(db_session, admin_session, qdrant):
+async def test_project_unassign_team_not_assigned(db_session, admin_session):
     """Test project_unassign_team handles not-assigned gracefully."""
     from memory.api.MCP.servers.teams import project_unassign_team
 
@@ -1388,13 +1253,7 @@ async def test_project_unassign_team_not_assigned(db_session, admin_session, qdr
     db_session.add_all([team, project])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(project_unassign_team)(project=-101, team="not-assigned")
 
     assert result["success"] is True
@@ -1407,7 +1266,7 @@ async def test_project_unassign_team_not_assigned(db_session, admin_session, qdr
 
 
 @pytest.mark.asyncio
-async def test_project_list_access_success(db_session, admin_session, qdrant):
+async def test_project_list_access_success(db_session, admin_session):
     """Test project_list_access returns all people with access."""
     from memory.api.MCP.servers.teams import project_list_access
     from memory.common.db.models.sources import team_members, project_teams
@@ -1430,13 +1289,7 @@ async def test_project_list_access_success(db_session, admin_session, qdrant):
     db_session.execute(project_teams.insert().values(project_id=project.id, team_id=team2.id))
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(project_list_access)(project=-102)
 
     assert result["total_people_count"] == 3
@@ -1446,232 +1299,48 @@ async def test_project_list_access_success(db_session, admin_session, qdrant):
 
 
 # =============================================================================
-# projects_for_person tests
+# list_all with tags filter tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_projects_for_person_success(db_session, admin_session, qdrant):
-    """Test projects_for_person returns all accessible projects."""
-    from memory.api.MCP.servers.teams import projects_for_person
-    from memory.common.db.models.sources import team_members, project_teams
+async def test_list_all_filter_by_tags_match_all(db_session, admin_session):
+    """Test list_all filters by tags with match_any_tag=False (default, requires all)."""
+    from memory.api.MCP.servers.teams import list_all
 
-    team = Team(name="Person Projects Team", slug="person-projects-team")
-    person = Person(identifier="project_accessor", display_name="Project Accessor")
-    project1 = Project(id=-103, title="Project 1", state="open")
-    project2 = Project(id=-104, title="Project 2", state="open")
-    db_session.add_all([team, person, project1, project2])
-    db_session.flush()
-
-    db_session.execute(team_members.insert().values(team_id=team.id, person_id=person.id))
-    db_session.execute(project_teams.insert().values(project_id=project1.id, team_id=team.id))
-    db_session.execute(project_teams.insert().values(project_id=project2.id, team_id=team.id))
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(projects_for_person)(person="project_accessor")
-
-    assert result["person"] == "project_accessor"
-    assert result["count"] == 2
-    titles = {p["title"] for p in result["projects"]}
-    assert titles == {"Project 1", "Project 2"}
-
-
-@pytest.mark.asyncio
-async def test_projects_for_person_no_projects(db_session, admin_session, qdrant):
-    """Test projects_for_person returns empty for person with no projects."""
-    from memory.api.MCP.servers.teams import projects_for_person
-
-    person = Person(identifier="no_projects", display_name="No Projects")
-    db_session.add(person)
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(projects_for_person)(person="no_projects")
-
-    assert result["count"] == 0
-    assert result["projects"] == []
-
-
-# =============================================================================
-# check_project_access tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_check_project_access_has_access(db_session, admin_session, qdrant):
-    """Test check_project_access returns true when person has access."""
-    from memory.api.MCP.servers.teams import check_project_access
-    from memory.common.db.models.sources import team_members, project_teams
-
-    team = Team(name="Check Access Team", slug="check-access-team")
-    person = Person(identifier="has_access", display_name="Has Access")
-    project = Project(id=-105, title="Check Access Project", state="open")
-    db_session.add_all([team, person, project])
-    db_session.flush()
-
-    db_session.execute(team_members.insert().values(team_id=team.id, person_id=person.id))
-    db_session.execute(project_teams.insert().values(project_id=project.id, team_id=team.id))
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(check_project_access)(person="has_access", project=-105)
-
-    assert result["has_access"] is True
-    assert len(result["granting_teams"]) == 1
-    assert result["granting_teams"][0]["slug"] == "check-access-team"
-
-
-@pytest.mark.asyncio
-async def test_check_project_access_no_access(db_session, admin_session, qdrant):
-    """Test check_project_access returns false when person lacks access."""
-    from memory.api.MCP.servers.teams import check_project_access
-
-    person = Person(identifier="no_access", display_name="No Access")
-    project = Project(id=-106, title="No Access Project", state="open")
-    db_session.add_all([person, project])
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(check_project_access)(person="no_access", project=-106)
-
-    assert result["has_access"] is False
-    assert result["granting_teams"] == []
-
-
-# =============================================================================
-# teams_by_tag tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_teams_by_tag_match_all(db_session, admin_session, qdrant):
-    """Test teams_by_tag with match_all=True requires all tags."""
-    from memory.api.MCP.servers.teams import teams_by_tag
-
-    team1 = Team(name="Tag Team 1", slug="tag-team-1", tags=["engineering", "frontend"])
-    team2 = Team(name="Tag Team 2", slug="tag-team-2", tags=["engineering", "backend"])
-    team3 = Team(name="Tag Team 3", slug="tag-team-3", tags=["engineering", "frontend", "core"])
+    team1 = Team(name="Tags Test 1", slug="tags-test-1", tags=["engineering", "frontend"])
+    team2 = Team(name="Tags Test 2", slug="tags-test-2", tags=["engineering", "backend"])
+    team3 = Team(name="Tags Test 3", slug="tags-test-3", tags=["engineering", "frontend", "core"])
     db_session.add_all([team1, team2, team3])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(teams_by_tag)(tags=["engineering", "frontend"], match_all=True)
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(list_all)(tags=["engineering", "frontend"], match_any_tag=False)
 
     slugs = {t["slug"] for t in result["teams"]}
-    assert "tag-team-1" in slugs
-    assert "tag-team-3" in slugs
-    assert "tag-team-2" not in slugs  # doesn't have frontend
+    assert "tags-test-1" in slugs
+    assert "tags-test-3" in slugs
+    assert "tags-test-2" not in slugs  # doesn't have frontend
 
 
 @pytest.mark.asyncio
-async def test_teams_by_tag_match_any(db_session, admin_session, qdrant):
-    """Test teams_by_tag with match_all=False matches any tag."""
-    from memory.api.MCP.servers.teams import teams_by_tag
+async def test_list_all_filter_by_tags_match_any(db_session, admin_session):
+    """Test list_all filters by tags with match_any_tag=True (matches any)."""
+    from memory.api.MCP.servers.teams import list_all
 
-    team1 = Team(name="Any Tag 1", slug="any-tag-1", tags=["design"])
-    team2 = Team(name="Any Tag 2", slug="any-tag-2", tags=["marketing"])
-    team3 = Team(name="Any Tag 3", slug="any-tag-3", tags=["sales"])
+    team1 = Team(name="Any Tags 1", slug="any-tags-1", tags=["design"])
+    team2 = Team(name="Any Tags 2", slug="any-tags-2", tags=["marketing"])
+    team3 = Team(name="Any Tags 3", slug="any-tags-3", tags=["sales"])
     db_session.add_all([team1, team2, team3])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(teams_by_tag)(tags=["design", "marketing"], match_all=False)
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(list_all)(tags=["design", "marketing"], match_any_tag=True)
 
     slugs = {t["slug"] for t in result["teams"]}
-    assert "any-tag-1" in slugs
-    assert "any-tag-2" in slugs
-    assert "any-tag-3" not in slugs  # has neither design nor marketing
-
-
-# =============================================================================
-# person_teams tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_person_teams_success(db_session, admin_session, qdrant):
-    """Test person_teams returns all teams for a person."""
-    from memory.api.MCP.servers.teams import person_teams
-    from memory.common.db.models.sources import team_members
-
-    person = Person(identifier="multi_team", display_name="Multi Team Person")
-    team1 = Team(name="Person Team 1", slug="person-team-1")
-    team2 = Team(name="Person Team 2", slug="person-team-2")
-    db_session.add_all([person, team1, team2])
-    db_session.flush()
-
-    db_session.execute(team_members.insert().values(team_id=team1.id, person_id=person.id))
-    db_session.execute(team_members.insert().values(team_id=team2.id, person_id=person.id))
-    db_session.commit()
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(person_teams)(person="multi_team")
-
-    assert result["person"] == "multi_team"
-    assert result["count"] == 2
-    slugs = {t["slug"] for t in result["teams"]}
-    assert slugs == {"person-team-1", "person-team-2"}
-
-
-@pytest.mark.asyncio
-async def test_person_teams_not_found(db_session, admin_session, qdrant):
-    """Test person_teams returns error for non-existent person."""
-    from memory.api.MCP.servers.teams import person_teams
-
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(person_teams)(person="nonexistent_person")
-
-    assert "error" in result
-    assert "Person not found" in result["error"]
+    assert "any-tags-1" in slugs
+    assert "any-tags-2" in slugs
+    assert "any-tags-3" not in slugs  # has neither design nor marketing
 
 
 # =============================================================================
@@ -1680,7 +1349,7 @@ async def test_person_teams_not_found(db_session, admin_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_imports_members(db_session, admin_session, qdrant):
+async def test_sync_from_discord_imports_members(db_session, admin_session, discord_bot):
     """Test sync_from_discord imports Discord role members to team."""
     from memory.api.MCP.servers.teams import sync_from_discord
 
@@ -1696,7 +1365,7 @@ async def test_sync_from_discord_imports_members(db_session, admin_session, qdra
     }
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_role_members", return_value=mock_members),
     ):
         result = await sync_from_discord(
@@ -1708,7 +1377,7 @@ async def test_sync_from_discord_imports_members(db_session, admin_session, qdra
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_links_existing_discord_user(db_session, admin_session, qdrant):
+async def test_sync_from_discord_links_existing_discord_user(db_session, admin_session, discord_bot):
     """Test sync_from_discord links existing DiscordUser to team."""
     from memory.api.MCP.servers.teams import sync_from_discord
     from memory.common.db.models import DiscordUser
@@ -1729,7 +1398,7 @@ async def test_sync_from_discord_links_existing_discord_user(db_session, admin_s
     }
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_role_members", return_value=mock_members),
     ):
         result = await sync_from_discord(
@@ -1741,7 +1410,7 @@ async def test_sync_from_discord_links_existing_discord_user(db_session, admin_s
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_handles_failure(db_session, admin_session, qdrant):
+async def test_sync_from_discord_handles_failure(db_session, admin_session, discord_bot):
     """Test sync_from_discord handles API failure gracefully."""
     from memory.api.MCP.servers.teams import sync_from_discord
 
@@ -1750,7 +1419,7 @@ async def test_sync_from_discord_handles_failure(db_session, admin_session, qdra
     db_session.commit()
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_role_members", side_effect=Exception("API Error")),
     ):
         result = await sync_from_discord(
@@ -1767,7 +1436,7 @@ async def test_sync_from_discord_handles_failure(db_session, admin_session, qdra
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_imports_members(db_session, admin_session, qdrant):
+async def test_sync_from_github_imports_members(db_session, admin_session):
     """Test sync_from_github imports GitHub team members."""
     from memory.api.MCP.servers.teams import sync_from_github
 
@@ -1781,10 +1450,9 @@ async def test_sync_from_github_imports_members(db_session, admin_session, qdran
     ]
     mock_client = MagicMock()
     mock_client.get_team_members.return_value = mock_members
-    mock_token = make_mock_access_token(admin_session.id)
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
     ):
         result = await sync_from_github(
@@ -1796,7 +1464,7 @@ async def test_sync_from_github_imports_members(db_session, admin_session, qdran
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_no_client(db_session, admin_session, qdrant):
+async def test_sync_from_github_no_client(db_session, admin_session):
     """Test sync_from_github returns empty when no GitHub client available."""
     from memory.api.MCP.servers.teams import sync_from_github
 
@@ -1804,10 +1472,8 @@ async def test_sync_from_github_no_client(db_session, admin_session, qdrant):
     db_session.add(team)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=None),
     ):
         result = await sync_from_github(
@@ -1818,12 +1484,93 @@ async def test_sync_from_github_no_client(db_session, admin_session, qdrant):
 
 
 # =============================================================================
+# PersonSyncInfo tests
+# =============================================================================
+
+
+def test_person_sync_info_github_from_accounts(db_session):
+    """Test PersonSyncInfo gets github usernames from linked accounts."""
+    from memory.api.MCP.servers.teams import PersonSyncInfo
+    from memory.common.db.models.sources import GithubUser
+
+    person = Person(identifier="with_github_account", display_name="Has GitHub")
+    db_session.add(person)
+    db_session.flush()
+
+    github_user = GithubUser(id=12345, username="ghuser", person_id=person.id)
+    db_session.add(github_user)
+    db_session.commit()
+
+    # Refresh to load relationships
+    db_session.refresh(person)
+
+    info = PersonSyncInfo.from_person(person)
+    assert info.github_usernames == ("ghuser",)
+
+
+def test_person_sync_info_github_from_contact_info(db_session):
+    """Test PersonSyncInfo falls back to contact_info for github username."""
+    from memory.api.MCP.servers.teams import PersonSyncInfo
+
+    person = Person(
+        identifier="contact_info_github",
+        display_name="Contact Info GitHub",
+        contact_info={"github": "contactuser"},
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    info = PersonSyncInfo.from_person(person)
+    assert info.github_usernames == ("contactuser",)
+
+
+def test_person_sync_info_github_from_contact_info_list(db_session):
+    """Test PersonSyncInfo handles list of github usernames in contact_info."""
+    from memory.api.MCP.servers.teams import PersonSyncInfo
+
+    person = Person(
+        identifier="contact_info_github_list",
+        display_name="Contact Info GitHub List",
+        contact_info={"github": ["user1", "user2"]},
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    info = PersonSyncInfo.from_person(person)
+    assert set(info.github_usernames) == {"user1", "user2"}
+
+
+def test_person_sync_info_prefers_accounts_over_contact_info(db_session):
+    """Test PersonSyncInfo prefers linked accounts over contact_info."""
+    from memory.api.MCP.servers.teams import PersonSyncInfo
+    from memory.common.db.models.sources import GithubUser
+
+    person = Person(
+        identifier="both_sources",
+        display_name="Both Sources",
+        contact_info={"github": "contactuser"},
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    github_user = GithubUser(id=99999, username="linkeduser", person_id=person.id)
+    db_session.add(github_user)
+    db_session.commit()
+
+    db_session.refresh(person)
+
+    info = PersonSyncInfo.from_person(person)
+    # Should use linked account, not contact_info
+    assert info.github_usernames == ("linkeduser",)
+
+
+# =============================================================================
 # Discord role sync tests (_discord_add_role, _discord_remove_role)
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_discord_add_role_success(db_session, qdrant):
+async def test_discord_add_role_success(db_session, admin_session, discord_bot):
     """Test _discord_add_role adds role to Discord accounts."""
     from memory.api.MCP.servers.teams import _discord_add_role, TeamSyncInfo, PersonSyncInfo
 
@@ -1844,7 +1591,7 @@ async def test_discord_add_role_success(db_session, qdrant):
     )
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.add_role_member", return_value={"success": True}),
     ):
         result = await _discord_add_role(team_info, person_info)
@@ -1854,7 +1601,7 @@ async def test_discord_add_role_success(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_discord_add_role_failure(db_session, qdrant):
+async def test_discord_add_role_failure(db_session, admin_session, discord_bot):
     """Test _discord_add_role handles failure gracefully."""
     from memory.api.MCP.servers.teams import _discord_add_role, TeamSyncInfo, PersonSyncInfo
 
@@ -1875,7 +1622,7 @@ async def test_discord_add_role_failure(db_session, qdrant):
     )
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.add_role_member", return_value={"error": "Permission denied"}),
     ):
         result = await _discord_add_role(team_info, person_info)
@@ -1885,7 +1632,7 @@ async def test_discord_add_role_failure(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_discord_remove_role_success(db_session, qdrant):
+async def test_discord_remove_role_success(db_session, admin_session, discord_bot):
     """Test _discord_remove_role removes role from Discord accounts."""
     from memory.api.MCP.servers.teams import _discord_remove_role, TeamSyncInfo, PersonSyncInfo
 
@@ -1906,7 +1653,7 @@ async def test_discord_remove_role_success(db_session, qdrant):
     )
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.remove_role_member", return_value={"success": True}),
     ):
         result = await _discord_remove_role(team_info, person_info)
@@ -1916,7 +1663,7 @@ async def test_discord_remove_role_success(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_discord_remove_role_failure(db_session, qdrant):
+async def test_discord_remove_role_failure(db_session, admin_session, discord_bot):
     """Test _discord_remove_role handles failure gracefully."""
     from memory.api.MCP.servers.teams import _discord_remove_role, TeamSyncInfo, PersonSyncInfo
 
@@ -1937,7 +1684,7 @@ async def test_discord_remove_role_failure(db_session, qdrant):
     )
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.remove_role_member", return_value={"error": "Permission denied"}),
     ):
         result = await _discord_remove_role(team_info, person_info)
@@ -1952,7 +1699,7 @@ async def test_discord_remove_role_failure(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_github_add_member_success(db_session, admin_session, qdrant):
+async def test_github_add_member_success(db_session, admin_session):
     """Test _github_add_member adds user to GitHub team."""
     from memory.api.MCP.servers.teams import _github_add_member, TeamSyncInfo, PersonSyncInfo
 
@@ -1972,16 +1719,19 @@ async def test_github_add_member_success(db_session, admin_session, qdrant):
         github_usernames=("ghuser",),
     )
 
-    mock_add = AsyncMock(return_value={"success": True})
-    with patch("memory.api.MCP.servers.teams.add_team_member", mock_add):
-        result = await _github_add_member(team_info, person_info)
+    # Mock GitHub client that returns success
+    mock_client = MagicMock()
+    mock_client.add_team_member.return_value = {"success": True}
+
+    result = await _github_add_member(mock_client, team_info, person_info)
 
     assert result["success"] is True
     assert "ghuser" in result["users_added"]
+    mock_client.add_team_member.assert_called_once_with("myorg", "myteam", "ghuser")
 
 
 @pytest.mark.asyncio
-async def test_github_add_member_missing_team_slug(db_session, qdrant):
+async def test_github_add_member_missing_team_slug(db_session):
     """Test _github_add_member returns error when team_slug is missing."""
     from memory.api.MCP.servers.teams import _github_add_member, TeamSyncInfo, PersonSyncInfo
 
@@ -2001,14 +1751,17 @@ async def test_github_add_member_missing_team_slug(db_session, qdrant):
         github_usernames=("ghuser",),
     )
 
-    result = await _github_add_member(team_info, person_info)
+    # Client won't be used since we early-return, but signature requires it
+    mock_client = MagicMock()
+    result = await _github_add_member(mock_client, team_info, person_info)
 
     assert result["success"] is False
     assert "missing github_org or github_team_slug" in result["errors"][0]
+    mock_client.add_team_member.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_github_remove_member_success(db_session, admin_session, qdrant):
+async def test_github_remove_member_success(db_session, admin_session):
     """Test _github_remove_member removes user from GitHub team."""
     from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
@@ -2028,16 +1781,19 @@ async def test_github_remove_member_success(db_session, admin_session, qdrant):
         github_usernames=("ghuser",),
     )
 
-    mock_remove = AsyncMock(return_value={"success": True})
-    with patch("memory.api.MCP.servers.teams.remove_team_member", mock_remove):
-        result = await _github_remove_member(team_info, person_info)
+    # Mock GitHub client that returns success (True)
+    mock_client = MagicMock()
+    mock_client.remove_team_member.return_value = True
+
+    result = await _github_remove_member(mock_client, team_info, person_info)
 
     assert result["success"] is True
     assert "ghuser" in result["users_removed"]
+    mock_client.remove_team_member.assert_called_once_with("myorg", "myteam", "ghuser")
 
 
 @pytest.mark.asyncio
-async def test_github_remove_member_failure(db_session, qdrant):
+async def test_github_remove_member_failure(db_session):
     """Test _github_remove_member handles API failure gracefully."""
     from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
@@ -2057,9 +1813,11 @@ async def test_github_remove_member_failure(db_session, qdrant):
         github_usernames=("ghuser",),
     )
 
-    mock_remove = AsyncMock(return_value={"error": "Not a team member"})
-    with patch("memory.api.MCP.servers.teams.remove_team_member", mock_remove):
-        result = await _github_remove_member(team_info, person_info)
+    # Mock GitHub client that returns failure (False)
+    mock_client = MagicMock()
+    mock_client.remove_team_member.return_value = False
+
+    result = await _github_remove_member(mock_client, team_info, person_info)
 
     assert result["success"] is False
     assert len(result["errors"]) == 1
@@ -2067,7 +1825,7 @@ async def test_github_remove_member_failure(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_github_remove_member_missing_team_slug(db_session, qdrant):
+async def test_github_remove_member_missing_team_slug(db_session):
     """Test _github_remove_member returns error when team_slug is missing."""
     from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
@@ -2087,10 +1845,13 @@ async def test_github_remove_member_missing_team_slug(db_session, qdrant):
         github_usernames=("ghuser",),
     )
 
-    result = await _github_remove_member(team_info, person_info)
+    # Client won't be used since we early-return, but signature requires it
+    mock_client = MagicMock()
+    result = await _github_remove_member(mock_client, team_info, person_info)
 
     assert result["success"] is False
     assert "missing github_org or github_team_slug" in result["errors"][0]
+    mock_client.remove_team_member.assert_not_called()
 
 
 # =============================================================================
@@ -2099,7 +1860,7 @@ async def test_github_remove_member_missing_team_slug(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_upsert_discord_role_resolution_failure(db_session, admin_session, qdrant):
+async def test_upsert_discord_role_resolution_failure(db_session, admin_session, discord_bot):
     """Test upsert handles Discord role resolution failure gracefully."""
     from memory.api.MCP.servers.teams import upsert
     from memory.common.db.models import DiscordServer
@@ -2108,15 +1869,10 @@ async def test_upsert_discord_role_resolution_failure(db_session, admin_session,
     db_session.add(server)
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_roles", side_effect=Exception("Discord API Error")),
     ):
-        mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(upsert)(
             name="Error Team",
             guild=999,
@@ -2128,7 +1884,7 @@ async def test_upsert_discord_role_resolution_failure(db_session, admin_session,
 
 
 @pytest.mark.asyncio
-async def test_team_add_member_invalid_role(db_session, admin_session, qdrant):
+async def test_team_add_member_invalid_role(db_session, admin_session):
     """Test team_add_member rejects invalid roles."""
     from memory.api.MCP.servers.teams import team_add_member
 
@@ -2137,13 +1893,7 @@ async def test_team_add_member_invalid_role(db_session, admin_session, qdrant):
     db_session.add_all([team, person])
     db_session.commit()
 
-    mock_token = make_mock_access_token(admin_session.id)
-
-    with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.teams.make_session") as mock_make_session,
-    ):
-        mock_make_session.return_value.__enter__.return_value = db_session
+    with mcp_auth_context(admin_session.id):
         result = await get_fn(team_add_member)(
             team="role-test",
             person="role_person",
@@ -2234,7 +1984,7 @@ def test_team_sync_info_should_sync_github():
     assert info2.should_sync_github is False
 
 
-def test_person_sync_info_from_person(db_session, qdrant):
+def test_person_sync_info_from_person(db_session):
     """Test PersonSyncInfo.from_person factory method."""
     from memory.api.MCP.servers.teams import PersonSyncInfo
     from memory.common.db.models import DiscordUser
@@ -2264,7 +2014,7 @@ def test_person_sync_info_from_person(db_session, qdrant):
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_requeires_team_after_await(db_session, admin_session, qdrant):
+async def test_sync_from_discord_requeires_team_after_await(db_session, admin_session, discord_bot):
     """Test sync_from_discord re-queries team after async operation."""
     from memory.api.MCP.servers.teams import sync_from_discord
 
@@ -2278,7 +2028,7 @@ async def test_sync_from_discord_requeires_team_after_await(db_session, admin_se
     mock_members = {"members": [{"id": "111", "username": "user1", "display_name": "User One"}]}
 
     with (
-        patch("memory.api.MCP.servers.teams.resolve_bot_id", return_value=1),
+        mcp_auth_context(admin_session.id),
         patch("memory.common.discord.list_role_members", return_value=mock_members),
     ):
         # Should not raise DetachedInstanceError
@@ -2290,7 +2040,7 @@ async def test_sync_from_discord_requeires_team_after_await(db_session, admin_se
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_requeires_team_after_await(db_session, admin_session, qdrant):
+async def test_sync_from_github_requeires_team_after_await(db_session, admin_session):
     """Test sync_from_github re-queries team after async operation."""
     from memory.api.MCP.servers.teams import sync_from_github
 
@@ -2304,10 +2054,9 @@ async def test_sync_from_github_requeires_team_after_await(db_session, admin_ses
     mock_members = [{"login": "ghuser1"}]
     mock_client = MagicMock()
     mock_client.get_team_members.return_value = mock_members
-    mock_token = make_mock_access_token(admin_session.id)
 
     with (
-        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
     ):
         # Should not raise DetachedInstanceError
@@ -2316,3 +2065,101 @@ async def test_sync_from_github_requeires_team_after_await(db_session, admin_ses
         )
 
     assert result["imported"] == 1
+
+
+def test_nested_make_session_causes_detached_instance_error(db_session):
+    """Demonstrate that nested make_session() calls cause DetachedInstanceError.
+
+    This test documents a known issue: when make_session() is called nested,
+    the inner session.remove() invalidates objects from the outer session.
+
+    Any code using nested make_session() calls MUST handle the detachment by:
+    1. NOT using nested make_session() - pass session or resolved clients instead
+    2. Or capturing ORM values into dataclasses before nested calls
+    3. Or re-querying objects after nested calls return
+    """
+    from memory.common.db.connection import make_session
+    from sqlalchemy.orm.exc import DetachedInstanceError
+
+    # Create a team using the test fixture session
+    team = Team(name="Nested Session Test", slug="nested-session-test")
+    db_session.add(team)
+    db_session.commit()
+    team_id = team.id
+
+    # Now demonstrate the nested session bug
+    with make_session() as outer_session:
+        # Query the team in the outer session
+        team_obj = outer_session.query(Team).filter(Team.id == team_id).first()
+        assert team_obj is not None
+        assert team_obj.slug == "nested-session-test"
+
+        # Nested make_session() - this will call remove() on exit,
+        # which disposes the underlying session that outer_session is also using
+        with make_session() as inner_session:
+            # Do something in inner session
+            inner_team = inner_session.query(Team).filter(Team.id == team_id).first()
+            assert inner_team is not None
+        # inner session exits, calls session.remove()
+
+        # Now try to access team_obj - it's detached because the inner
+        # session.remove() disposed the shared underlying session
+        with pytest.raises(DetachedInstanceError):
+            _ = team_obj.members  # This raises DetachedInstanceError
+
+
+@pytest.mark.asyncio
+async def test_upsert_remove_members_with_github_avoids_detached_error(db_session, admin_session):
+    """Test that upsert with GitHub sync correctly avoids DetachedInstanceError.
+
+    The upsert function handles the nested session issue by:
+    1. Capturing values into dataclasses (TeamSyncInfo, PersonSyncInfo) before async
+    2. Re-querying the team after async operations complete
+
+    This test verifies that behavior works correctly.
+    """
+    from memory.api.MCP.servers.teams import upsert
+    from memory.common.db.models.sources import GithubUser
+
+    # Create a person with GitHub account so _github_remove_member has work to do
+    person = Person(identifier="nested_session_test", display_name="Nested Session Test")
+    db_session.add(person)
+    db_session.flush()
+
+    github_user = GithubUser(id=9999, username="nestedtestuser", person_id=person.id)
+    db_session.add(github_user)
+    db_session.commit()
+
+    # Mock GitHub client - returns success for remove_team_member
+    mock_client = MagicMock()
+    mock_client.fetch_team.return_value = {"github_id": 12345, "slug": "nested-test-team"}
+    mock_client.remove_team_member.return_value = True
+
+    upsert_fn = get_fn(upsert)
+
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
+    ):
+        # First create team with GitHub integration and add the member
+        result1 = await upsert_fn(
+            name="Nested Session Bug Test",
+            github_org="testorg",
+            github_team_slug="nested-test-team",
+            members=["nested_session_test"],
+        )
+        assert result1["success"], f"Failed to create team: {result1}"
+        assert result1["team"]["github_org"] == "testorg"
+
+        # Now remove all members - this triggers _github_remove_member
+        # which creates a nested make_session(). The code should handle this
+        # by using dataclasses and re-querying.
+        result2 = await upsert_fn(
+            name="Nested Session Bug Test",
+            members=[],  # Remove all members
+        )
+
+        # Should succeed because the code properly handles nested sessions
+        assert result2["success"], f"Remove members failed: {result2}"
+        assert result2["membership_changes"]["removed"] == ["nested_session_test"]
+

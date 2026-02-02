@@ -16,9 +16,6 @@ from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
     filter_projects_query,
     filter_teams_query,
-    get_accessible_project_ids,
-    get_accessible_team_ids,
-    has_admin_scope,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
@@ -27,7 +24,6 @@ from memory.common.db.models import (
     Project,
     Team,
     User,
-    can_access_project,
 )
 from memory.common.db.models.sources import (
     GithubRepo,
@@ -35,8 +31,8 @@ from memory.common.db.models.sources import (
     team_members,
 )
 from memory.common import discord as discord_client
-from memory.api.MCP.servers.discord import resolve_bot_id
-from memory.api.MCP.servers.github import add_team_member, remove_team_member
+from memory.common.github import GithubClient
+from memory.api.MCP.servers.discord import resolve_bot_id, resolve_guild_id
 from memory.api.MCP.servers.github_helpers import get_github_client_for_org
 
 logger = logging.getLogger(__name__)
@@ -96,12 +92,23 @@ class PersonSyncInfo:
 
     @classmethod
     def from_person(cls, person: Person) -> "PersonSyncInfo":
+        # Get GitHub usernames from linked accounts
+        github_usernames = [acc.username for acc in person.github_accounts]
+
+        # Also check contact_info for github username if no linked accounts
+        if not github_usernames and person.contact_info:
+            github_contact = person.contact_info.get("github")
+            if isinstance(github_contact, str) and github_contact.strip():
+                github_usernames = [github_contact.strip()]
+            elif isinstance(github_contact, list):
+                github_usernames = [u.strip() for u in github_contact if isinstance(u, str) and u.strip()]
+
         return cls(
             identifier=person.identifier,
             discord_accounts=tuple(
                 (acc.id, acc.username) for acc in person.discord_accounts
             ),
-            github_usernames=tuple(acc.username for acc in person.github_accounts),
+            github_usernames=tuple(github_usernames),
         )
 
 
@@ -115,8 +122,20 @@ def sanitize_error(e: Exception, context: str) -> str:
     return f"{context}: operation failed"
 
 
-def team_to_dict(team: Team, include_members: bool = False, include_projects: bool = False) -> dict[str, Any]:
-    """Convert a Team model to a dictionary for API responses."""
+def team_to_dict(
+    team: Team,
+    include_members: bool = False,
+    include_projects: bool = False,
+    member_roles: dict[int, str] | None = None,
+) -> dict[str, Any]:
+    """Convert a Team model to a dictionary for API responses.
+
+    Args:
+        team: The Team model instance
+        include_members: Whether to include member list
+        include_projects: Whether to include project list
+        member_roles: Optional dict mapping person_id -> role (from junction table)
+    """
     result = {
         "id": team.id,
         "name": team.name,
@@ -135,10 +154,22 @@ def team_to_dict(team: Team, include_members: bool = False, include_projects: bo
         "archived_at": team.archived_at.isoformat() if team.archived_at else None,
     }
     if include_members:
-        result["members"] = [
-            {"id": p.id, "identifier": p.identifier, "display_name": p.display_name}
-            for p in team.members
-        ]
+        if member_roles:
+            result["members"] = [
+                {
+                    "id": p.id,
+                    "identifier": p.identifier,
+                    "display_name": p.display_name,
+                    "contributor_status": p.contributor_status,
+                    "role": member_roles.get(p.id, "member"),
+                }
+                for p in team.members
+            ]
+        else:
+            result["members"] = [
+                {"id": p.id, "identifier": p.identifier, "display_name": p.display_name}
+                for p in team.members
+            ]
         result["member_count"] = len(team.members)
     if include_projects:
         result["projects"] = [project_summary(p) for p in team.projects]
@@ -173,12 +204,15 @@ def upsert_team_record(
     name: str,
     description: str | None,
     tags: list[str] | None,
+    is_active: bool | None,
 ) -> tuple[Team, str]:
     """Create or update the Team record.
 
     Returns:
         Tuple of (team, action) where action is "created" or "updated"
     """
+    from datetime import datetime, timezone
+
     team = session.query(Team).filter(Team.slug == slug).first()
 
     if team:
@@ -188,6 +222,10 @@ def upsert_team_record(
             team.description = description
         if tags is not None:
             team.tags = tags
+        if is_active is not None:
+            team.is_active = is_active
+            if not is_active and team.archived_at is None:
+                team.archived_at = datetime.now(timezone.utc)
         return team, "updated"
 
     team = Team(
@@ -195,6 +233,7 @@ def upsert_team_record(
         slug=slug,
         description=description,
         tags=tags or [],
+        is_active=is_active if is_active is not None else True,
     )
     session.add(team)
     session.flush()
@@ -220,24 +259,28 @@ def setup_discord_integration(
         team.auto_sync_discord = auto_sync_discord
         return None, None, False, warnings, sync_info
 
-    resolved_guild_id = discord_client.resolve_guild(guild, session)
+    try:
+        resolved_guild_id = resolve_guild_id(session, guild)
+    except ValueError as e:
+        warnings.append(f"Discord guild resolution failed: {e}")
+        team.auto_sync_discord = auto_sync_discord
+        return None, None, False, warnings, sync_info
+
     team.discord_guild_id = resolved_guild_id
 
     resolved_role_id = None
     role_created = False
 
-    if discord_role is not None and resolved_guild_id is not None:
+    if discord_role is not None:
         try:
-            bot_id = resolve_bot_id(None)
+            bot_id = resolve_bot_id(None, session=session)
             resolved_role_id, role_created = discord_client.resolve_role(
                 discord_role,
                 resolved_guild_id,
                 bot_id,
                 create_if_missing=True,
             )
-            logger.info(f"DEBUG resolve_role returned: role_id={resolved_role_id}, created={role_created}")
             team.discord_role_id = resolved_role_id
-            logger.info(f"DEBUG after assignment: team.discord_role_id={team.discord_role_id}")
             if role_created:
                 sync_info["role_created"] = True
                 sync_info["role_name"] = discord_role if isinstance(discord_role, str) else None
@@ -350,6 +393,8 @@ async def upsert(
     auto_sync_github: bool = True,
     # Membership
     members: list[str] | None = None,
+    # Status
+    is_active: bool | None = None,
 ) -> dict:
     """
     Create or update a team with optional Discord/GitHub integration.
@@ -367,6 +412,7 @@ async def upsert(
         auto_sync_github: Whether to auto-sync membership to GitHub (default: true)
         members: If provided, set team to exactly these members.
                  Pass [] to remove all members. Pass None to leave unchanged.
+        is_active: Active status (set to false to archive team)
 
     Behavior:
         - If team with slug exists: updates it
@@ -394,19 +440,19 @@ async def upsert(
     }
 
     with make_session() as session:
-        team, action = upsert_team_record(session, slug, name, description, tags)
+        team, action = upsert_team_record(session, slug, name, description, tags, is_active)
         result["action"] = action
+
+        # Capture team.id immediately - before any queries that might trigger autoflush
+        # and expire the object (DetachedInstanceError with scoped_session)
+        team_id = team.id
 
         # Configure Discord integration
         resolved_guild_id, resolved_role_id, role_created, discord_warnings, discord_sync = (
             setup_discord_integration(session, team, guild, discord_role, auto_sync_discord)
         )
-        logger.info(f"DEBUG upsert after setup_discord: team.discord_role_id={team.discord_role_id}, returned_role_id={resolved_role_id}")
         result["warnings"].extend(discord_warnings)
         result["discord_sync"].update(discord_sync)
-
-        # Capture team.id BEFORE any async operations to avoid DetachedInstanceError
-        team_id = team.id
 
         # Configure GitHub integration
         github_warnings, github_sync = await setup_github_integration(
@@ -430,9 +476,20 @@ async def upsert(
 
         # Handle explicit member list
         if members is not None:
-            membership_result = await set_team_members(session, team, members)
-            result["membership_changes"] = membership_result
+            # Re-query team to ensure it's attached after async operations
+            team = (
+                session.query(Team)
+                .options(selectinload(Team.members))
+                .filter(Team.id == team_id)
+                .first()
+            )
+            if team:
+                membership_result = await set_team_members(session, team, members)
+                result["membership_changes"] = membership_result
 
+        # Final flush to ensure all changes are written before commit
+        # This is critical because commit() will expire all objects
+        session.flush()
         session.commit()
 
         # Re-query with relationships to avoid lazy-load issues
@@ -549,7 +606,7 @@ async def sync_from_discord(
     result: dict[str, Any] = {"imported": 0, "created_people": []}
 
     try:
-        bot_id = resolve_bot_id(None)
+        bot_id = resolve_bot_id(None, session=session)
         members_data = await asyncio.to_thread(
             discord_client.list_role_members, bot_id, guild_id, role_id
         )
@@ -717,6 +774,17 @@ async def set_team_members(
     team_info = TeamSyncInfo.from_team(team)
     pending_syncs: list[tuple[PersonSyncInfo, bool]] = []  # (person_info, is_add)
 
+    # Resolve GitHub client upfront if needed for sync.
+    # IMPORTANT: Must resolve before any DB operations that might trigger commits,
+    # as get_github_client_for_org() opens its own session. Nested sessions cause
+    # DetachedInstanceError when the inner session closes and invalidates objects
+    # that the outer session expects to use.
+    github_client: GithubClient | None = None
+    if team_info.should_sync_github:
+        user = get_mcp_current_user(session, full=True)
+        if user and user.id and team.github_org:
+            github_client = get_github_client_for_org(session, team.github_org, user.id)
+
     # Remove members no longer in list
     for identifier in to_remove:
         person = session.query(Person).filter(Person.identifier == identifier).first()
@@ -746,10 +814,9 @@ async def set_team_members(
 
     # Run external syncs after DB changes are flushed
     for person_info, is_add in pending_syncs:
-        if is_add:
-            await _run_external_sync(team_info, person_info, add=True)
-        else:
-            await _run_external_sync(team_info, person_info, add=False)
+        await _run_external_sync(
+            team_info, person_info, add=is_add, github_client=github_client
+        )
 
     # Warning for clearing all members
     if not target_members and current_members:
@@ -760,7 +827,7 @@ async def set_team_members(
 
 @teams_mcp.tool()
 @visible_when(require_scopes("teams"))
-async def team_get(
+async def fetch(
     team: str | int,
     include_members: bool = True,
     include_projects: bool = False,
@@ -770,7 +837,7 @@ async def team_get(
 
     Args:
         team: Team slug (e.g., "engineering-core") or numeric ID
-        include_members: Whether to include member list (default: true)
+        include_members: Whether to include member list with roles (default: true)
         include_projects: Whether to include project list (default: false)
 
     Returns:
@@ -797,21 +864,40 @@ async def team_get(
         if not team_obj:
             return {"error": f"Team not found: {team}"}
 
-        return {"team": team_to_dict(team_obj, include_members=include_members, include_projects=include_projects)}
+        # Fetch member roles from junction table if including members
+        member_roles: dict[int, str] | None = None
+        if include_members:
+            role_query = session.execute(
+                select(team_members.c.person_id, team_members.c.role)
+                .where(team_members.c.team_id == team_obj.id)
+            )
+            member_roles = {row.person_id: row.role for row in role_query}
+
+        return {
+            "team": team_to_dict(
+                team_obj,
+                include_members=include_members,
+                include_projects=include_projects,
+                member_roles=member_roles,
+            )
+        }
 
 
 @teams_mcp.tool()
 @visible_when(require_scopes("teams"))
-async def team_list(
+async def list_all(
     tags: list[str] | None = None,
+    match_any_tag: bool = False,
     include_inactive: bool = False,
     include_projects: bool = False,
 ) -> dict:
     """
-    List all teams, optionally filtered by tags.
+    List all teams the user can access.
 
     Args:
-        tags: Filter to teams that have ALL of these tags
+        tags: Filter to teams by tags
+        match_any_tag: If true, match teams with ANY of the tags. If false (default),
+                       match only teams with ALL tags.
         include_inactive: Include archived/inactive teams (default: false)
         include_projects: Include projects assigned to each team (default: false)
 
@@ -835,8 +921,13 @@ async def team_list(
             query = query.filter(Team.is_active == True)  # noqa: E712
 
         if tags:
-            # Teams must have ALL specified tags (PostgreSQL array contains)
-            query = query.filter(Team.tags.op("@>")(cast(tags, PG_ARRAY(Text))))
+            if match_any_tag:
+                # Teams must have ANY of the specified tags
+                conditions = [Team.tags.op("@>")(cast([tag], PG_ARRAY(Text))) for tag in tags]
+                query = query.filter(or_(*conditions))
+            else:
+                # Teams must have ALL specified tags (PostgreSQL array contains)
+                query = query.filter(Team.tags.op("@>")(cast(tags, PG_ARRAY(Text))))
 
         teams = query.order_by(Team.name).all()
 
@@ -844,108 +935,6 @@ async def team_list(
             "teams": [team_to_dict(t, include_members=False, include_projects=include_projects) for t in teams],
             "count": len(teams),
         }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def team_update(
-    team: str | int,
-    name: str | None = None,
-    description: str | None = None,
-    tags: list[str] | None = None,
-    discord_role: int | str | None = None,
-    guild: int | str | None = None,
-    auto_sync_discord: bool | None = None,
-    github_team_id: int | None = None,
-    github_team_slug: str | None = None,
-    github_org: str | None = None,
-    auto_sync_github: bool | None = None,
-    is_active: bool | None = None,
-) -> dict:
-    """
-    Update team settings.
-
-    Args:
-        team: Team slug or ID
-        name: New display name
-        description: New description
-        tags: New tags (replaces existing)
-        discord_role: Discord role - can be numeric ID or role name (requires guild)
-        guild: Discord guild - can be numeric ID or server name
-        auto_sync_discord: Whether to sync to Discord
-        github_team_id: GitHub team ID
-        github_team_slug: GitHub team slug (e.g., "engineering-core") - required for sync
-        github_org: GitHub organization
-        auto_sync_github: Whether to sync to GitHub
-        is_active: Active status (set to false to archive)
-
-    Returns:
-        Updated team data, or error if not found/accessible
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        # Apply access control filtering
-        query = filter_teams_query(session, user, session.query(Team))
-
-        if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = query.filter(Team.id == int(team)).first()
-        else:
-            team_obj = query.filter(Team.slug == team).first()
-
-        if not team_obj:
-            return {"error": f"Team not found: {team}"}
-
-        # Update fields if provided
-        if name is not None:
-            team_obj.name = name
-        if description is not None:
-            team_obj.description = description
-        if tags is not None:
-            team_obj.tags = tags
-        # Resolve guild first (needed for role name resolution)
-        if guild is not None:
-            team_obj.discord_guild_id = discord_client.resolve_guild(guild, session)
-
-        # Resolve discord_role - can be int ID or string name
-        if discord_role is not None:
-            resolved_guild = team_obj.discord_guild_id
-            if not resolved_guild:
-                return {"error": "Cannot resolve Discord role without guild"}
-            try:
-                bot_id = resolve_bot_id(None)
-                role_id, _ = discord_client.resolve_role(
-                    discord_role, guild_id=resolved_guild, bot_id=bot_id, create_if_missing=False
-                )
-                if role_id:
-                    team_obj.discord_role_id = role_id
-                else:
-                    return {"error": f"Discord role '{discord_role}' not found in guild"}
-            except Exception as e:
-                return {"error": f"Failed to resolve Discord role: {e}"}
-        if auto_sync_discord is not None:
-            team_obj.auto_sync_discord = auto_sync_discord
-        if github_team_id is not None:
-            team_obj.github_team_id = github_team_id
-        if github_team_slug is not None:
-            team_obj.github_team_slug = github_team_slug
-        if github_org is not None:
-            team_obj.github_org = github_org
-        if auto_sync_github is not None:
-            team_obj.auto_sync_github = auto_sync_github
-        if is_active is not None:
-            team_obj.is_active = is_active
-            # Only set archived_at when transitioning to inactive for the first time
-            if not is_active and team_obj.archived_at is None:
-                from datetime import datetime, timezone
-                team_obj.archived_at = datetime.now(timezone.utc)
-
-        session.commit()
-        session.refresh(team_obj)
-
-        return {"success": True, "team": team_to_dict(team_obj)}
 
 
 # ============== Team Membership ==============
@@ -1042,7 +1031,15 @@ async def team_add_member(
 
         # Sync to external services
         if sync_external:
-            result["sync"] = await sync_membership_add(team_obj, person_obj)
+            # Resolve GitHub client if needed (avoids nested sessions in sync functions)
+            github_client: GithubClient | None = None
+            if team_obj.github_org and team_obj.auto_sync_github:
+                github_client = get_github_client_for_org(
+                    session, team_obj.github_org, user.id
+                )
+            result["sync"] = await sync_membership_add(
+                team_obj, person_obj, github_client=github_client
+            )
 
         return result
 
@@ -1122,57 +1119,17 @@ async def team_remove_member(
 
         # Sync to external services
         if sync_external:
-            result["sync"] = await sync_membership_remove(team_obj, person_obj)
+            # Resolve GitHub client if needed (avoids nested sessions in sync functions)
+            github_client: GithubClient | None = None
+            if team_obj.github_org and team_obj.auto_sync_github:
+                github_client = get_github_client_for_org(
+                    session, team_obj.github_org, user.id
+                )
+            result["sync"] = await sync_membership_remove(
+                team_obj, person_obj, github_client=github_client
+            )
 
         return result
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def team_list_members(
-    team: str | int,
-) -> dict:
-    """
-    List all members of a team.
-
-    Args:
-        team: Team slug or ID
-
-    Returns:
-        List of team members with their roles, or error if team not found/accessible
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        # Apply access control filtering
-        query = filter_teams_query(session, user, session.query(Team).options(selectinload(Team.members)))
-
-        if isinstance(team, int) or (isinstance(team, str) and team.isdigit()):
-            team_obj = query.filter(Team.id == int(team)).first()
-        else:
-            team_obj = query.filter(Team.slug == team).first()
-
-        if not team_obj:
-            return {"error": f"Team not found: {team}"}
-
-        # Fetch member roles from junction table
-        role_query = session.execute(
-            select(team_members.c.person_id, team_members.c.role)
-            .where(team_members.c.team_id == team_obj.id)
-        )
-        roles = {row.person_id: row.role for row in role_query}
-
-        return {
-            "team": team_obj.slug,
-            "team_name": team_obj.name,
-            "members": [
-                {**person_summary(p), "role": roles.get(p.id, "member")}
-                for p in team_obj.members
-            ],
-            "count": len(team_obj.members),
-        }
 
 
 # ============== External Service Sync ==============
@@ -1182,8 +1139,16 @@ async def _run_external_sync(
     team: TeamSyncInfo,
     person: PersonSyncInfo,
     add: bool,
+    github_client: GithubClient | None = None,
 ) -> dict[str, Any]:
-    """Run Discord and GitHub sync for a membership change."""
+    """Run Discord and GitHub sync for a membership change.
+
+    Args:
+        team: Team sync info
+        person: Person sync info
+        add: True to add member, False to remove
+        github_client: Pre-resolved GitHub client (required if team has GitHub sync enabled)
+    """
     result: dict[str, Any] = {"discord": None, "github": None}
 
     if team.should_sync_discord:
@@ -1192,28 +1157,56 @@ async def _run_external_sync(
         )
 
     if team.should_sync_github:
-        result["github"] = await (
-            _github_add_member(team, person) if add else _github_remove_member(team, person)
-        )
+        if not github_client:
+            result["github"] = {
+                "success": False,
+                "errors": ["GitHub sync skipped: no authenticated client (user not logged in or missing org access)"],
+            }
+        elif add:
+            result["github"] = await _github_add_member(github_client, team, person)
+        else:
+            result["github"] = await _github_remove_member(github_client, team, person)
 
     return result
 
 
-async def sync_membership_add(team: Team, person: Person) -> dict[str, Any]:
-    """Sync membership addition to Discord and GitHub."""
+async def sync_membership_add(
+    team: Team,
+    person: Person,
+    github_client: GithubClient | None = None,
+) -> dict[str, Any]:
+    """Sync membership addition to Discord and GitHub.
+
+    Args:
+        team: Team ORM object
+        person: Person ORM object
+        github_client: Pre-resolved GitHub client (required if team has GitHub sync)
+    """
     return await _run_external_sync(
         TeamSyncInfo.from_team(team),
         PersonSyncInfo.from_person(person),
         add=True,
+        github_client=github_client,
     )
 
 
-async def sync_membership_remove(team: Team, person: Person) -> dict[str, Any]:
-    """Sync membership removal to Discord and GitHub."""
+async def sync_membership_remove(
+    team: Team,
+    person: Person,
+    github_client: GithubClient | None = None,
+) -> dict[str, Any]:
+    """Sync membership removal to Discord and GitHub.
+
+    Args:
+        team: Team ORM object
+        person: Person ORM object
+        github_client: Pre-resolved GitHub client (required if team has GitHub sync)
+    """
     return await _run_external_sync(
         TeamSyncInfo.from_team(team),
         PersonSyncInfo.from_person(person),
         add=False,
+        github_client=github_client,
     )
 
 
@@ -1273,8 +1266,18 @@ async def _discord_remove_role(team: TeamSyncInfo, person: PersonSyncInfo) -> di
     return {"success": not errors, "users_removed": successes, "errors": errors}
 
 
-async def _github_add_member(team: TeamSyncInfo, person: PersonSyncInfo) -> dict[str, Any]:
-    """Add person's GitHub accounts to GitHub team."""
+async def _github_add_member(
+    client: GithubClient,
+    team: TeamSyncInfo,
+    person: PersonSyncInfo,
+) -> dict[str, Any]:
+    """Add person's GitHub accounts to GitHub team.
+
+    Args:
+        client: Pre-resolved GitHub client with org access
+        team: Team sync info with github_org and github_team_slug
+        person: Person sync info with github_usernames
+    """
     if not team.github_org or not team.github_team_slug:
         return {
             "success": False,
@@ -1287,23 +1290,36 @@ async def _github_add_member(team: TeamSyncInfo, person: PersonSyncInfo) -> dict
 
     for username in person.github_usernames:
         try:
-            result = await add_team_member(
-                org=team.github_org,
-                team_slug=team.github_team_slug,
-                username=username,
+            result = await asyncio.to_thread(
+                client.add_team_member,
+                team.github_org,
+                team.github_team_slug,
+                username,
             )
-            if "error" in result:
+            if result.get("error"):
                 errors.append(f"{username}: {result['error']}")
-            else:
+            elif result.get("success"):
                 successes.append(username)
+            else:
+                errors.append(f"{username}: Unknown result")
         except Exception as e:
             errors.append(sanitize_error(e, f"GitHub add {username}"))
 
     return {"success": not errors, "users_added": successes, "errors": errors}
 
 
-async def _github_remove_member(team: TeamSyncInfo, person: PersonSyncInfo) -> dict[str, Any]:
-    """Remove person's GitHub accounts from GitHub team."""
+async def _github_remove_member(
+    client: GithubClient,
+    team: TeamSyncInfo,
+    person: PersonSyncInfo,
+) -> dict[str, Any]:
+    """Remove person's GitHub accounts from GitHub team.
+
+    Args:
+        client: Pre-resolved GitHub client with org access
+        team: Team sync info with github_org and github_team_slug
+        person: Person sync info with github_usernames
+    """
     if not team.github_org or not team.github_team_slug:
         return {
             "success": False,
@@ -1316,105 +1332,21 @@ async def _github_remove_member(team: TeamSyncInfo, person: PersonSyncInfo) -> d
 
     for username in person.github_usernames:
         try:
-            result = await remove_team_member(
-                org=team.github_org,
-                team_slug=team.github_team_slug,
-                username=username,
+            # remove_team_member returns bool
+            success = await asyncio.to_thread(
+                client.remove_team_member,
+                team.github_org,
+                team.github_team_slug,
+                username,
             )
-            if "error" in result:
-                errors.append(f"{username}: {result['error']}")
-            else:
+            if success:
                 successes.append(username)
+            else:
+                errors.append(f"{username}: Failed to remove")
         except Exception as e:
             errors.append(sanitize_error(e, f"GitHub remove {username}"))
 
     return {"success": not errors, "users_removed": successes, "errors": errors}
-
-
-# ============== Query Helpers ==============
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def teams_by_tag(
-    tags: list[str],
-    match_all: bool = True,
-) -> dict:
-    """
-    Find teams by tags.
-
-    Args:
-        tags: Tags to search for
-        match_all: If true, teams must have ALL tags. If false, ANY tag matches.
-
-    Returns:
-        List of matching teams (filtered to teams the user has access to)
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        query = session.query(Team).filter(Team.is_active == True)  # noqa: E712
-
-        # Apply access control filtering
-        query = filter_teams_query(session, user, query)
-
-        if match_all:
-            # Teams must have ALL specified tags (PostgreSQL array contains)
-            query = query.filter(Team.tags.op("@>")(cast(tags, PG_ARRAY(Text))))
-        else:
-            # Teams must have ANY of the specified tags
-            conditions = [Team.tags.op("@>")(cast([tag], PG_ARRAY(Text))) for tag in tags]
-            query = query.filter(or_(*conditions))
-
-        teams = query.order_by(Team.name).all()
-
-        return {
-            "teams": [team_to_dict(t, include_members=False) for t in teams],
-            "count": len(teams),
-        }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def person_teams(
-    person: str | int,
-) -> dict:
-    """
-    List all teams a person belongs to.
-
-    Args:
-        person: Person identifier or ID
-
-    Returns:
-        List of teams the person is a member of (filtered to teams the user has access to)
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
-            person_obj = session.query(Person).options(selectinload(Person.teams)).filter(Person.id == int(person)).first()
-        else:
-            person_obj = session.query(Person).options(selectinload(Person.teams)).filter(Person.identifier == person).first()
-
-        if not person_obj:
-            return {"error": f"Person not found: {person}"}
-
-        # Filter teams to only those the user can access
-        if has_admin_scope(user):
-            accessible_teams = person_obj.teams
-        else:
-            accessible_ids = get_accessible_team_ids(session, user)
-            accessible_teams = [t for t in person_obj.teams if t.id in accessible_ids]
-
-        return {
-            "person": person_obj.identifier,
-            "teams": [team_to_dict(t, include_members=False) for t in accessible_teams],
-            "count": len(accessible_teams),
-        }
 
 
 # ============== Project-Team Assignment ==============
@@ -1536,36 +1468,6 @@ async def project_unassign_team(
 
 @teams_mcp.tool()
 @visible_when(require_scopes("teams"))
-async def project_list_teams(
-    project: int | str,
-) -> dict:
-    """
-    List all teams assigned to a project.
-
-    Args:
-        project: Project ID or slug
-
-    Returns:
-        List of assigned teams, or error if project not found/accessible
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        project_obj = find_project_with_access(session, user, project)
-        if not project_obj:
-            return {"error": f"Project not found: {project}"}
-
-        return {
-            "project": project_summary(project_obj),
-            "teams": [team_to_dict(t, include_members=False) for t in project_obj.teams],
-            "count": len(project_obj.teams),
-        }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
 async def project_list_access(
     project: int | str,
 ) -> dict:
@@ -1608,116 +1510,6 @@ async def project_list_access(
             "teams": teams_data,
             "all_people": [person_summary(p) for p in people_with_access.values()],
             "total_people_count": len(people_with_access),
-        }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def projects_for_person(
-    person: str | int,
-) -> dict:
-    """
-    List all projects a person can access (through team membership).
-
-    Args:
-        person: Person identifier or ID
-
-    Returns:
-        List of accessible projects (filtered to projects the user can see)
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
-            person_obj = session.query(Person).options(
-                selectinload(Person.teams).selectinload(Team.projects)
-            ).filter(Person.id == int(person)).first()
-        else:
-            person_obj = session.query(Person).options(
-                selectinload(Person.teams).selectinload(Team.projects)
-            ).filter(Person.identifier == person).first()
-
-        if not person_obj:
-            return {"error": f"Person not found: {person}"}
-
-        # Collect all accessible projects (for the queried person)
-        projects: dict[int, Project] = {}
-        for team in person_obj.teams:
-            for project in team.projects:
-                projects[project.id] = project
-
-        # Filter to only projects the current user can also see
-        if has_admin_scope(user):
-            visible_projects = list(projects.values())
-        else:
-            accessible_ids = get_accessible_project_ids(session, user)
-            visible_projects = [p for p in projects.values() if p.id in accessible_ids]
-
-        return {
-            "person": person_obj.identifier,
-            "projects": [project_summary(p) for p in visible_projects],
-            "count": len(visible_projects),
-        }
-
-
-@teams_mcp.tool()
-@visible_when(require_scopes("teams"))
-async def check_project_access(
-    person: str | int,
-    project: int | str,
-) -> dict:
-    """
-    Check if a person can access a specific project.
-
-    Args:
-        person: Person identifier or ID
-        project: Project ID or slug
-
-    Returns:
-        Access status and which teams grant access,
-        or error if project not found/accessible to current user
-    """
-    with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
-        if not user:
-            return {"error": "Not authenticated"}
-
-        # Find person
-        if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
-            person_obj = session.query(Person).options(
-                selectinload(Person.teams)
-            ).filter(Person.id == int(person)).first()
-        else:
-            person_obj = session.query(Person).options(
-                selectinload(Person.teams)
-            ).filter(Person.identifier == person).first()
-
-        if not person_obj:
-            return {"error": f"Person not found: {person}"}
-
-        # Find project with access control
-        project_obj = find_project_with_access(session, user, project)
-        if not project_obj:
-            return {"error": f"Project not found: {project}"}
-
-        # Check access
-        has_access = can_access_project(person_obj, project_obj)
-
-        # Find which teams grant access
-        granting_teams = []
-        if has_access:
-            person_team_ids = {t.id for t in person_obj.teams}
-            for team in project_obj.teams:
-                if team.id in person_team_ids:
-                    granting_teams.append({"slug": team.slug, "name": team.name})
-
-        return {
-            "person": person_obj.identifier,
-            "project": project_summary(project_obj),
-            "has_access": has_access,
-            "granting_teams": granting_teams,
         }
 
 

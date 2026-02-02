@@ -17,6 +17,8 @@ from memory.api.MCP.access import (
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import (
+    get_accessible_project_ids,
+    get_accessible_team_ids,
     has_admin_scope,
     user_can_access,
     user_can_edit,
@@ -24,7 +26,7 @@ from memory.common.access_control import (
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import make_session
-from memory.common.db.models import Person, PersonTidbit, User
+from memory.common.db.models import Person, PersonTidbit, Project, Team, User
 from memory.common.db.models.discord import DiscordUser
 
 logger = logging.getLogger(__name__)
@@ -193,11 +195,12 @@ def link_discord_from_contact_info(session: Any, person: Person, contact_info: d
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def add(
+async def upsert(
     identifier: str,
-    display_name: str,
+    display_name: str | None = None,
     aliases: list[str] | None = None,
     contact_info: dict | None = None,
+    replace_aliases: bool = False,
     content: str | None = None,
     tidbit_type: str = "note",
     tags: list[str] | None = None,
@@ -205,16 +208,28 @@ async def add(
     sensitivity: str = "basic",
 ) -> dict:
     """
-    Add a new person to track.
+    Create or update a person.
 
-    Creates a thin identity record. If content is provided, also queues
-    a task to create a tidbit with that content.
+    If the person exists, updates their identity fields. If not, creates them.
+    Optionally queues a tidbit creation task if content is provided.
+
+    Create mode (person doesn't exist):
+    - display_name is required
+    - Creates thin identity record
+
+    Update mode (person exists):
+    - display_name: Replaces if provided
+    - aliases: Union with existing (or replace if replace_aliases=True)
+    - contact_info: Deep merge with existing
+
+    To add information/notes about a person, use tidbit_add() instead.
 
     Args:
         identifier: Unique slug for the person (e.g., "alice_chen")
-        display_name: Human-readable name (e.g., "Alice Chen")
+        display_name: Human-readable name - required for create, optional for update
         aliases: Alternative names/handles (e.g., ["@alice_c", "alice.chen@work.com"])
         contact_info: Contact information as a dict (e.g., {"email": "...", "phone": "..."})
+        replace_aliases: If True, replace all aliases instead of merging (update only)
         content: Optional initial note about the person
         tidbit_type: Type of initial tidbit if content provided (default: "note")
         tags: Tags for the initial tidbit (e.g., ["work", "engineering"])
@@ -222,10 +237,10 @@ async def add(
         sensitivity: Sensitivity level for the initial tidbit (default: "basic")
 
     Returns:
-        Created person data with person_id
+        Person data with status "created" or "updated"
 
     Example:
-        add(
+        upsert(
             identifier="alice_chen",
             display_name="Alice Chen",
             aliases=["@alice_c"],
@@ -234,37 +249,62 @@ async def add(
             tags=["work", "engineering"],
         )
     """
-    logger.info(f"MCP: Adding person: {identifier}")
-
     # Get current user for creator_id
     user = get_mcp_current_user()
     creator_id = user.id if user else None
 
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()
-        if existing:
-            raise ValueError(f"Person with identifier '{identifier}' already exists")
 
-        # Create new person (thin identity record)
-        person = Person(
-            identifier=identifier,
-            display_name=display_name,
-            aliases=aliases or [],
-            contact_info=contact_info or {},
-        )
-        session.add(person)
+        if existing:
+            # Update mode
+            logger.info(f"MCP: Updating person: {identifier}")
+            person = existing
+
+            if display_name is not None:
+                person.display_name = display_name
+
+            if aliases is not None:
+                if replace_aliases:
+                    person.aliases = list(aliases)
+                else:
+                    existing_aliases = set(person.aliases or [])
+                    new_aliases = existing_aliases | set(aliases)
+                    person.aliases = list(new_aliases)
+
+            if contact_info is not None:
+                existing_contact = dict(person.contact_info or {})
+                person.contact_info = _deep_merge(existing_contact, contact_info)
+
+            person.updated_at = datetime.now(timezone.utc)
+            status = "updated"
+        else:
+            # Create mode - display_name is required
+            logger.info(f"MCP: Creating person: {identifier}")
+            if not display_name:
+                raise ValueError("display_name is required when creating a new person")
+
+            person = Person(
+                identifier=identifier,
+                display_name=display_name,
+                aliases=aliases or [],
+                contact_info=contact_info or {},
+            )
+            session.add(person)
+            status = "created"
+
         session.flush()
 
         # Auto-link User from contact_info email
-        linked_user = link_user_from_contact_info(session, person, contact_info)
+        linked_user = link_user_from_contact_info(session, person, person.contact_info)
 
         # Auto-link Discord users from contact_info
-        linked_discord = link_discord_from_contact_info(session, person, contact_info)
+        linked_discord = link_discord_from_contact_info(session, person, person.contact_info)
 
         session.commit()
 
         result: dict[str, Any] = {
-            "status": "created",
+            "status": status,
             "person_id": person.id,
             "identifier": identifier,
         }
@@ -296,116 +336,50 @@ async def add(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def update(
+async def fetch(
     identifier: str,
-    display_name: str | None = None,
-    aliases: list[str] | None = None,
-    contact_info: dict | None = None,
-    replace_aliases: bool = False,
-) -> dict:
+    include_tidbits: bool = True,
+    include_teams: bool = False,
+    include_projects: bool = False,
+) -> dict | None:
     """
-    Update identity information about a person.
+    Fetch a person by their identifier.
 
-    This updates the Person record itself (identity fields only).
-    To add information/notes about a person, use add_tidbit() instead.
-
-    Merge behavior (default):
-    - display_name: Replaces if provided
-    - aliases: Union with existing (or replace if replace_aliases=True)
-    - contact_info: Deep merge with existing
-
-    Args:
-        identifier: The person's unique identifier
-        display_name: New display name (replaces existing)
-        aliases: Aliases to add (or replace existing if replace_aliases=True)
-        contact_info: Additional contact info to merge
-        replace_aliases: If True, replace all aliases instead of merging
-
-    Returns:
-        Updated person data
-
-    Example:
-        update(
-            identifier="alice_chen",
-            contact_info={"phone": "555-1234"},  # Added to existing
-        )
-    """
-    logger.info(f"MCP: Updating person: {identifier}")
-
-    with make_session() as session:
-        person = session.query(Person).filter(Person.identifier == identifier).first()
-        if not person:
-            raise ValueError(f"Person with identifier '{identifier}' not found")
-
-        if display_name is not None:
-            person.display_name = display_name
-
-        if aliases is not None:
-            if replace_aliases:
-                person.aliases = list(aliases)
-            else:
-                existing_aliases = set(person.aliases or [])
-                new_aliases = existing_aliases | set(aliases)
-                person.aliases = list(new_aliases)
-
-        if contact_info is not None:
-            existing_contact = dict(person.contact_info or {})
-            person.contact_info = _deep_merge(existing_contact, contact_info)
-
-        # Update timestamp
-        person.updated_at = datetime.now(timezone.utc)
-
-        # Auto-link User from contact_info email
-        linked_user = link_user_from_contact_info(session, person, person.contact_info)
-
-        # Auto-link Discord users from contact_info
-        linked_discord = link_discord_from_contact_info(session, person, person.contact_info)
-
-        session.commit()
-
-        result: dict[str, Any] = {
-            "status": "updated",
-            "person_id": person.id,
-            "identifier": identifier,
-        }
-
-        if linked_user:
-            result["linked_user_id"] = linked_user
-        if linked_discord:
-            result["linked_discord_users"] = linked_discord
-
-        return result
-
-
-@people_mcp.tool()
-@visible_when(require_scopes("people"))
-async def get_person(identifier: str, include_tidbits: bool = True) -> dict | None:
-    """
-    Get a person by their identifier.
-
-    Returns the person's identity info and optionally their tidbits
-    (filtered by the caller's access permissions).
+    Returns the person's identity info and optionally their tidbits, teams,
+    and projects (filtered by the caller's access permissions).
 
     Args:
         identifier: The person's unique identifier
         include_tidbits: Whether to include tidbits (default: True)
+        include_teams: Whether to include teams the person belongs to (default: False)
+        include_projects: Whether to include projects accessible via team membership (default: False)
 
     Returns:
-        The person record with filtered tidbits, or None if not found
+        The person record with filtered tidbits/teams/projects, or None if not found
     """
-    logger.info(f"MCP: Getting person: {identifier}")
+    logger.info(f"MCP: Fetching person: {identifier}")
 
-    user = get_mcp_current_user()
-
-    # Fetch project_roles BEFORE opening session to avoid nested session issues
+    # For tidbits we can use UserProxy, but for teams/projects we need the full User
+    # Fetch project_roles before opening main session to avoid nested session issues
+    user_proxy = get_mcp_current_user()
     project_roles: dict[int, str] | None = None
-    if user and user.id is not None:
-        project_roles = get_project_roles_by_user_id(user.id)
+    if user_proxy and user_proxy.id is not None:
+        project_roles = get_project_roles_by_user_id(user_proxy.id)
 
     with make_session() as session:
+        # Get full user if we need it for team/project access filtering
+        full_user = None
+        if include_teams or include_projects:
+            full_user = get_mcp_current_user(session, full=True)
+
         query = session.query(Person)
         if include_tidbits:
             query = query.options(selectinload(Person.tidbits))
+        if include_projects:
+            # Projects require teams, so load both with chained selectinload
+            query = query.options(selectinload(Person.teams).selectinload(Team.projects))
+        elif include_teams:
+            query = query.options(selectinload(Person.teams))
 
         # First try exact identifier match
         person = query.filter(Person.identifier == identifier).first()
@@ -418,18 +392,60 @@ async def get_person(identifier: str, include_tidbits: bool = True) -> dict | No
         result = _person_to_dict(person)
         if include_tidbits and person.tidbits:
             # Filter tidbits by access - if no user, return empty list
-            if not user or user.id is None:
+            if not user_proxy or user_proxy.id is None:
                 result["tidbits"] = []
             else:
-                filtered_tidbits = _filter_tidbits_by_access(person.tidbits, user, project_roles)
+                filtered_tidbits = _filter_tidbits_by_access(person.tidbits, user_proxy, project_roles)
                 result["tidbits"] = [_tidbit_to_dict(t) for t in filtered_tidbits]
+
+        # Include teams (filtered by access)
+        if include_teams:
+            if not full_user or full_user.id is None:
+                result["teams"] = []
+            elif has_admin_scope(full_user):
+                result["teams"] = [
+                    {"id": t.id, "slug": t.slug, "name": t.name}
+                    for t in person.teams
+                ]
+            else:
+                accessible_ids = get_accessible_team_ids(session, full_user)
+                result["teams"] = [
+                    {"id": t.id, "slug": t.slug, "name": t.name}
+                    for t in person.teams
+                    if t.id in accessible_ids
+                ]
+            result["team_count"] = len(result["teams"])
+
+        # Include projects (filtered by access)
+        if include_projects:
+            # Collect all projects from all teams
+            projects: dict[int, Project] = {}
+            for team in person.teams:
+                for project in team.projects:
+                    projects[project.id] = project
+
+            if not full_user or full_user.id is None:
+                result["projects"] = []
+            elif has_admin_scope(full_user):
+                result["projects"] = [
+                    {"id": p.id, "title": p.title, "slug": p.slug, "state": p.state}
+                    for p in projects.values()
+                ]
+            else:
+                accessible_ids = get_accessible_project_ids(session, full_user)
+                result["projects"] = [
+                    {"id": p.id, "title": p.title, "slug": p.slug, "state": p.state}
+                    for p in projects.values()
+                    if p.id in accessible_ids
+                ]
+            result["project_count"] = len(result["projects"])
 
         return result
 
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def list_people(
+async def list_all(
     tags: list[str] | None = None,
     search: str | None = None,
     limit: int = 50,
@@ -439,7 +455,7 @@ async def list_people(
     List all tracked people, optionally filtered by tags or search term.
 
     Returns thin Person records (identity only, no tidbits).
-    Use get_person() to get tidbits for a specific person.
+    Use fetch() to get tidbits for a specific person.
 
     Args:
         tags: Filter to people with at least one of these tags (in their tidbits)
@@ -541,7 +557,7 @@ async def delete(identifier: str) -> dict:
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def add_tidbit(
+async def tidbit_add(
     identifier: str,
     content: str,
     tidbit_type: str = "note",
@@ -568,7 +584,7 @@ async def add_tidbit(
         Task status with task_id
 
     Example:
-        add_tidbit(
+        tidbit_add(
             identifier="alice_chen",
             content="Prefers morning meetings, allergic to peanuts",
             tidbit_type="preference",
@@ -610,7 +626,7 @@ async def add_tidbit(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def update_tidbit(
+async def tidbit_update(
     tidbit_id: int,
     content: str | None = None,
     tidbit_type: str | None = None,
@@ -663,7 +679,7 @@ async def update_tidbit(
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def delete_tidbit(tidbit_id: int) -> dict:
+async def tidbit_delete(tidbit_id: int) -> dict:
     """
     Delete a tidbit. Only the creator or admin can delete.
 
@@ -698,7 +714,7 @@ async def delete_tidbit(tidbit_id: int) -> dict:
 
 @people_mcp.tool()
 @visible_when(require_scopes("people"))
-async def list_tidbits(
+async def tidbit_list(
     identifier: str,
     tidbit_type: str | None = None,
     limit: int = 50,
