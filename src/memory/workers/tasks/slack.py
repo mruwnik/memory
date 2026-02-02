@@ -58,6 +58,39 @@ logger = logging.getLogger(__name__)
 # Cache TTL for Slack user mappings (5 minutes)
 USER_CACHE_TTL_SECONDS = 300
 
+# Lock TTL for channel sync (10 minutes) - safety timeout if task crashes
+CHANNEL_SYNC_LOCK_TTL_SECONDS = 600
+
+
+def get_redis_client() -> redis.Redis:
+    """Get Redis client for locking."""
+    return redis.from_url(settings.REDIS_URL)
+
+
+def acquire_channel_sync_lock(channel_id: str) -> bool:
+    """Try to acquire a lock for syncing a channel.
+
+    Returns True if lock acquired, False if another sync is in progress.
+    """
+    client = get_redis_client()
+    lock_key = f"slack_channel_sync:{channel_id}"
+    # SET NX (only if not exists) with TTL
+    return bool(client.set(lock_key, "1", nx=True, ex=CHANNEL_SYNC_LOCK_TTL_SECONDS))
+
+
+def release_channel_sync_lock(channel_id: str) -> None:
+    """Release the channel sync lock."""
+    client = get_redis_client()
+    lock_key = f"slack_channel_sync:{channel_id}"
+    client.delete(lock_key)
+
+
+def is_channel_sync_locked(channel_id: str) -> bool:
+    """Check if a channel sync is already in progress."""
+    client = get_redis_client()
+    lock_key = f"slack_channel_sync:{channel_id}"
+    return client.exists(lock_key) > 0
+
 
 def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
     """Get user ID -> name mapping with Redis caching.
@@ -287,12 +320,19 @@ def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
                 workspace.sync_error = None
                 session.commit()
 
-                # Trigger channel syncs for enabled channels
+                # Trigger channel syncs for enabled channels (skip if already syncing)
                 channels_triggered = 0
+                channels_skipped = 0
                 for channel in workspace.channels:
                     if channel.should_collect and not channel.is_archived:
+                        if is_channel_sync_locked(channel.id):
+                            channels_skipped += 1
+                            continue
                         app.send_task(SYNC_SLACK_CHANNEL, args=[channel.id])
                         channels_triggered += 1
+
+                if channels_skipped:
+                    logger.info(f"Skipped {channels_skipped} channels (already syncing)")
 
                 return {
                     "status": "completed",
@@ -393,9 +433,23 @@ def sync_slack_channel(channel_id: str) -> dict[str, Any]:
     Sync messages from a Slack channel.
 
     Uses incremental sync based on last_message_ts cursor.
+    Uses Redis lock to prevent concurrent syncs of the same channel.
     """
+    # Try to acquire lock - skip if another sync is already running
+    if not acquire_channel_sync_lock(channel_id):
+        logger.info(f"Skipping channel {channel_id} - sync already in progress")
+        return {"status": "skipped", "reason": "sync_in_progress"}
+
     logger.info(f"Syncing Slack channel {channel_id}")
 
+    try:
+        return _sync_slack_channel_impl(channel_id)
+    finally:
+        release_channel_sync_lock(channel_id)
+
+
+def _sync_slack_channel_impl(channel_id: str) -> dict[str, Any]:
+    """Implementation of channel sync (called with lock held)."""
     with make_session() as session:
         channel = session.get(SlackChannel, channel_id)
         if not channel:

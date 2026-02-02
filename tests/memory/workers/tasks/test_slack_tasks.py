@@ -463,3 +463,159 @@ def test_get_workspace_credentials_returns_none_when_no_creds(db_session, slack_
     result = slack.get_workspace_credentials(db_session, slack_workspace.id)
 
     assert result is None
+
+
+# =============================================================================
+# Channel Sync Lock Tests
+# =============================================================================
+
+
+def test_acquire_channel_sync_lock_success():
+    """Test acquiring a lock when none exists."""
+    channel_id = "C_TEST_LOCK_1"
+
+    result = slack.acquire_channel_sync_lock(channel_id)
+
+    assert result is True
+    assert slack.is_channel_sync_locked(channel_id) is True
+
+
+def test_acquire_channel_sync_lock_already_locked():
+    """Test acquiring a lock when one already exists."""
+    channel_id = "C_TEST_LOCK_2"
+
+    # First acquire should succeed
+    assert slack.acquire_channel_sync_lock(channel_id) is True
+
+    # Second acquire should fail
+    assert slack.acquire_channel_sync_lock(channel_id) is False
+
+
+def test_release_channel_sync_lock():
+    """Test releasing a lock."""
+    channel_id = "C_TEST_LOCK_3"
+
+    # Acquire then release
+    slack.acquire_channel_sync_lock(channel_id)
+    assert slack.is_channel_sync_locked(channel_id) is True
+
+    slack.release_channel_sync_lock(channel_id)
+    assert slack.is_channel_sync_locked(channel_id) is False
+
+
+def test_release_channel_sync_lock_allows_reacquire():
+    """Test that releasing a lock allows re-acquisition."""
+    channel_id = "C_TEST_LOCK_4"
+
+    # Acquire, release, acquire again
+    assert slack.acquire_channel_sync_lock(channel_id) is True
+    slack.release_channel_sync_lock(channel_id)
+    assert slack.acquire_channel_sync_lock(channel_id) is True
+
+
+def test_is_channel_sync_locked_returns_false_when_not_locked():
+    """Test is_channel_sync_locked returns False for unlocked channel."""
+    channel_id = "C_NEVER_LOCKED"
+
+    assert slack.is_channel_sync_locked(channel_id) is False
+
+
+def test_sync_slack_channel_skips_when_locked(db_session, slack_channel):
+    """Test that sync_slack_channel skips if channel is already locked."""
+    # Pre-acquire the lock
+    slack.acquire_channel_sync_lock(slack_channel.id)
+
+    # Try to sync - should skip
+    result = slack.sync_slack_channel(slack_channel.id)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "sync_in_progress"
+
+
+@patch("memory.workers.tasks.slack.SlackClient")
+@patch("memory.workers.tasks.slack.iter_messages")
+def test_sync_slack_channel_releases_lock_on_success(
+    mock_iter_messages, mock_client_class,
+    db_session, slack_channel, slack_credentials
+):
+    """Test that sync_slack_channel releases lock after successful sync."""
+    mock_client = MagicMock()
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
+    mock_iter_messages.return_value = iter([])
+
+    # Verify lock is not held before
+    assert slack.is_channel_sync_locked(slack_channel.id) is False
+
+    result = slack.sync_slack_channel(slack_channel.id)
+
+    assert result["status"] == "completed"
+    # Lock should be released after
+    assert slack.is_channel_sync_locked(slack_channel.id) is False
+
+
+@patch("memory.workers.tasks.slack.SlackClient")
+@patch("memory.workers.tasks.slack.iter_messages")
+def test_sync_slack_channel_releases_lock_on_error(
+    mock_iter_messages, mock_client_class,
+    db_session, slack_channel, slack_credentials
+):
+    """Test that sync_slack_channel releases lock even on error."""
+    mock_client = MagicMock()
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
+    mock_iter_messages.side_effect = slack.SlackAPIError("rate_limited")
+
+    result = slack.sync_slack_channel(slack_channel.id)
+
+    assert result["status"] == "error"
+    # Lock should still be released
+    assert slack.is_channel_sync_locked(slack_channel.id) is False
+
+
+@patch("memory.workers.tasks.slack.SlackClient")
+@patch("memory.workers.tasks.slack.sync_workspace_channels")
+@patch("memory.workers.tasks.slack.app")
+def test_sync_slack_workspace_skips_locked_channels(
+    mock_app, mock_sync_channels, mock_client_class,
+    db_session, slack_workspace, slack_channel, slack_credentials
+):
+    """Test that sync_slack_workspace skips channels that are already locked."""
+    mock_client = MagicMock()
+    mock_client.call.return_value = {"team": "Test Workspace"}
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
+    mock_sync_channels.return_value = 1
+
+    # Pre-lock the channel
+    slack.acquire_channel_sync_lock(slack_channel.id)
+
+    result = slack.sync_slack_workspace(slack_workspace.id)
+
+    assert result["status"] == "completed"
+    # Channel sync task should NOT have been sent (channel was locked)
+    mock_app.send_task.assert_not_called()
+
+
+@patch("memory.workers.tasks.slack.SlackClient")
+@patch("memory.workers.tasks.slack.sync_workspace_channels")
+@patch("memory.workers.tasks.slack.app")
+def test_sync_slack_workspace_triggers_unlocked_channels(
+    mock_app, mock_sync_channels, mock_client_class,
+    db_session, slack_workspace, slack_channel, slack_credentials
+):
+    """Test that sync_slack_workspace triggers sync for unlocked channels."""
+    mock_client = MagicMock()
+    mock_client.call.return_value = {"team": "Test Workspace"}
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
+    mock_sync_channels.return_value = 1
+
+    # Channel is NOT locked
+
+    result = slack.sync_slack_workspace(slack_workspace.id)
+
+    assert result["status"] == "completed"
+    assert result["channels_triggered"] == 1
+    # Channel sync task should have been sent
+    mock_app.send_task.assert_called_once()

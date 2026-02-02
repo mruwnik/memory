@@ -279,7 +279,7 @@ DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
 SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "")
 SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "")
 SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", f"{SERVER_URL}/slack/callback")
-SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 60))  # seconds
+SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 300))  # seconds (5 min)
 
 
 # S3 Backup settings

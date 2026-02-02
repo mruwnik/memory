@@ -58,14 +58,43 @@ def pytest_collection_modifyitems(config, items):
 class MockRedis:
     """In-memory mock of Redis for testing."""
 
+    _shared_data: dict = {}  # Shared across instances for test isolation
+
     def __init__(self):
-        self._data = {}
+        pass
+
+    @property
+    def _data(self):
+        return MockRedis._shared_data
 
     def get(self, key: str):
         return self._data.get(key)
 
-    def set(self, key: str, value):
+    def set(self, key: str, value, nx: bool = False, ex: int | None = None):
+        """Set a key with optional NX (only if not exists) and EX (expiry)."""
+        if nx and key in self._data:
+            return False
         self._data[key] = value
+        # Note: expiry is ignored in mock - tests should clean up explicitly
+        return True
+
+    def setex(self, key: str, ttl: int, value):
+        """Set key with expiry (expiry ignored in mock)."""
+        self._data[key] = value
+        return True
+
+    def delete(self, *keys: str) -> int:
+        """Delete one or more keys. Returns count of deleted keys."""
+        count = 0
+        for key in keys:
+            if key in self._data:
+                del self._data[key]
+                count += 1
+        return count
+
+    def exists(self, *keys: str) -> int:
+        """Return count of keys that exist."""
+        return sum(1 for key in keys if key in self._data)
 
     def scan_iter(self, match: str):
         import fnmatch
@@ -78,6 +107,11 @@ class MockRedis:
     @classmethod
     def from_url(cls, url: str):
         return cls()
+
+    @classmethod
+    def clear_all(cls):
+        """Clear all data - call in test teardown."""
+        cls._shared_data.clear()
 
 
 def get_test_db_name() -> str:
@@ -514,8 +548,11 @@ def mock_redis():
     """Mock Redis client for all tests."""
     import redis
 
-    with patch.object(redis, "Redis", MockRedis):
+    MockRedis.clear_all()  # Clear before each test
+    with patch.object(redis, "Redis", MockRedis), \
+         patch.object(redis, "from_url", MockRedis.from_url):
         yield
+    MockRedis.clear_all()  # Clear after each test
 
 
 @pytest.fixture(autouse=True)
