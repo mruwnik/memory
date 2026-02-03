@@ -88,6 +88,7 @@ class ProjectUpdate(BaseModel):
 
 class ProjectTreeNode(BaseModel):
     """Project with nested children for tree view."""
+
     id: int
     title: str
     description: str | None
@@ -98,7 +99,10 @@ class ProjectTreeNode(BaseModel):
 
 
 def project_to_response(
-    project: Project, children_count: int = 0, include_teams: bool = False, include_owner: bool = False
+    project: Project,
+    children_count: int = 0,
+    include_teams: bool = False,
+    include_owner: bool = False,
 ) -> ProjectResponse:
     """Convert a project model to response."""
     repo_path = None
@@ -205,7 +209,9 @@ def list_projects(
             children_counts = {pid: count for pid, count in counts}
 
     return [
-        project_to_response(p, children_counts.get(cast(int, p.id), 0), include_teams, include_owner)
+        project_to_response(
+            p, children_counts.get(cast(int, p.id), 0), include_teams, include_owner
+        )
         for p in projects
     ]
 
@@ -232,9 +238,7 @@ def get_project_tree(
     all_projects = query.all()
 
     # Build a map of id -> project
-    project_map: dict[int, Project] = {
-        cast(int, p.id): p for p in all_projects
-    }
+    project_map: dict[int, Project] = {cast(int, p.id): p for p in all_projects}
 
     # Build a map of parent_id -> children
     # Projects with orphaned parent_id (parent not in project_map) are treated as top-level
@@ -331,7 +335,9 @@ def create_project(
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
         # Non-admins must have access to the parent
-        if not has_admin_scope(user) and not user_can_access_project(db, user, data.parent_id):
+        if not has_admin_scope(user) and not user_can_access_project(
+            db, user, data.parent_id
+        ):
             raise HTTPException(status_code=400, detail="Parent project not found")
 
     # Validate owner exists if specified
@@ -346,7 +352,9 @@ def create_project(
         try:
             due_on = datetime.fromisoformat(data.due_on.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid due_on format. Use ISO 8601.")
+            raise HTTPException(
+                status_code=400, detail="Invalid due_on format. Use ISO 8601."
+            )
 
     # Generate a unique ID for standalone projects
     # Use negative IDs based on UUID to avoid collision with GitHub milestone IDs
@@ -378,7 +386,9 @@ def create_project(
         except IntegrityError:
             db.rollback()
             if attempt == max_retries - 1:
-                raise HTTPException(status_code=500, detail="Failed to generate unique project ID")
+                raise HTTPException(
+                    status_code=500, detail="Failed to generate unique project ID"
+                )
             # Retry with fresh UUID (collision virtually impossible)
             continue
 
@@ -406,7 +416,9 @@ def update_project(
     Use the teams MCP server to manage team assignments for access control.
     """
     # Fetch project with access check in one query
-    query = filter_projects_query(db, user, db.query(Project).filter(Project.id == project_id))
+    query = filter_projects_query(
+        db, user, db.query(Project).filter(Project.id == project_id)
+    )
     query = query.options(selectinload(Project.owner))
     project = query.first()
     if not project:
@@ -416,16 +428,22 @@ def update_project(
 
     # For GitHub-backed projects, only allow parent_id, owner_id, and due_on changes
     if not is_standalone:
-        if data.title is not None or data.description is not None or data.state is not None:
+        if (
+            data.title is not None
+            or data.description is not None
+            or data.state is not None
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Cannot modify title/description/state of GitHub-backed projects. These are synced from GitHub."
+                detail="Cannot modify title/description/state of GitHub-backed projects. These are synced from GitHub.",
             )
 
     # Validate parent if changing
     if data.parent_id is not None:
         if data.parent_id == project_id:
-            raise HTTPException(status_code=400, detail="Project cannot be its own parent")
+            raise HTTPException(
+                status_code=400, detail="Project cannot be its own parent"
+            )
         parent = db.get(Project, data.parent_id)
         if not parent:
             raise HTTPException(status_code=400, detail="Parent project not found")
@@ -438,10 +456,12 @@ def update_project(
             if depth > MAX_PROJECT_DEPTH:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Project hierarchy exceeds maximum depth ({MAX_PROJECT_DEPTH})"
+                    detail=f"Project hierarchy exceeds maximum depth ({MAX_PROJECT_DEPTH})",
                 )
             if current.parent_id == project_id:
-                raise HTTPException(status_code=400, detail="Circular parent reference detected")
+                raise HTTPException(
+                    status_code=400, detail="Circular parent reference detected"
+                )
             current = db.get(Project, current.parent_id)
             if not current:
                 break
@@ -458,7 +478,9 @@ def update_project(
         try:
             due_on = datetime.fromisoformat(data.due_on.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid due_on format. Use ISO 8601.")
+            raise HTTPException(
+                status_code=400, detail="Invalid due_on format. Use ISO 8601."
+            )
 
     # Apply updates
     if data.parent_id is not None:
@@ -516,7 +538,9 @@ def delete_project(
     Children of deleted projects will have their parent_id set to NULL.
     """
     # Fetch project with access check in one query
-    query = filter_projects_query(db, user, db.query(Project).filter(Project.id == project_id))
+    query = filter_projects_query(
+        db, user, db.query(Project).filter(Project.id == project_id)
+    )
     project = query.first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -524,7 +548,7 @@ def delete_project(
     if project.repo_id is not None:
         raise HTTPException(
             status_code=400,
-            detail="Cannot delete GitHub-backed projects. Close them in GitHub instead."
+            detail="Cannot delete GitHub-backed projects. Close them in GitHub instead.",
         )
 
     # Children will have parent_id set to NULL via ON DELETE SET NULL

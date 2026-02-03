@@ -63,7 +63,10 @@ def validate_teams_for_project(
         If error dict is returned, teams will be None.
     """
     if require_non_empty and not team_ids:
-        return None, {"error": "team_ids must be a non-empty list for new projects", "project": None}
+        return None, {
+            "error": "team_ids must be a non-empty list for new projects",
+            "project": None,
+        }
 
     if not team_ids:
         return [], None
@@ -114,13 +117,17 @@ def validate_parent_project(
     if not parent:
         return {"error": f"Parent project not found: {parent_id}", "project": None}
 
-    if not has_admin_scope(user) and not user_can_access_project(session, user, parent_id):
+    if not has_admin_scope(user) and not user_can_access_project(
+        session, user, parent_id
+    ):
         return {"error": f"Parent project not found: {parent_id}", "project": None}
 
     return None
 
 
-def generate_negative_project_id(session: Any, max_retries: int = 3) -> tuple[int | None, dict | None]:
+def generate_negative_project_id(
+    session: Any, max_retries: int = 3
+) -> tuple[int | None, dict | None]:
     """Generate a unique negative project ID with retry logic.
 
     Uses negative IDs to avoid collision with GitHub milestone IDs.
@@ -135,9 +142,7 @@ def generate_negative_project_id(session: Any, max_retries: int = 3) -> tuple[in
     """
     for attempt in range(max_retries):
         max_negative_id = (
-            session.query(func.min(Project.id))
-            .filter(Project.id < 0)
-            .scalar()
+            session.query(func.min(Project.id)).filter(Project.id < 0).scalar()
         )
         new_id = (max_negative_id or 0) - 1
 
@@ -180,9 +185,7 @@ def create_project_with_retry(
     """
     for attempt in range(max_retries):
         max_negative_id = (
-            session.query(func.min(Project.id))
-            .filter(Project.id < 0)
-            .scalar()
+            session.query(func.min(Project.id)).filter(Project.id < 0).scalar()
         )
         new_id = (max_negative_id or 0) - 1
 
@@ -263,9 +266,7 @@ def project_to_dict(
 def _build_tree(projects: list[Project]) -> list[dict[str, Any]]:
     """Build a nested tree structure from a flat list of projects."""
     # Build a map of id -> project
-    project_map: dict[int, Project] = {
-        cast(int, p.id): p for p in projects
-    }
+    project_map: dict[int, Project] = {cast(int, p.id): p for p in projects}
 
     # Build a map of parent_id -> children
     # Projects with orphaned parent_id (parent not in project_map) are treated as top-level
@@ -341,7 +342,9 @@ async def list_all(
         query = filter_projects_query(session, user, query)
 
         if include_teams:
-            query = query.options(selectinload(Project.teams).selectinload(Team.members))
+            query = query.options(
+                selectinload(Project.teams).selectinload(Team.members)
+            )
 
         if state:
             query = query.filter(Project.state == state)
@@ -367,7 +370,7 @@ async def list_all(
             all_projects = query.all()
             tree = _build_tree(all_projects)
             # Apply pagination to root nodes
-            paginated_tree = tree[offset:offset + limit]
+            paginated_tree = tree[offset : offset + limit]
             return {
                 "tree": paginated_tree,
                 "count": len(all_projects),
@@ -396,7 +399,7 @@ async def list_all(
                 project_to_dict(
                     p,
                     include_teams=include_teams,
-                    children_count=children_counts.get(cast(int, p.id), 0)
+                    children_count=children_counts.get(cast(int, p.id), 0),
                 )
                 for p in projects
             ],
@@ -433,7 +436,9 @@ async def fetch(
         # Build query with optional eager loading
         query = session.query(Project).filter(Project.id == project_id)
         if include_teams:
-            query = query.options(selectinload(Project.teams).selectinload(Team.members))
+            query = query.options(
+                selectinload(Project.teams).selectinload(Team.members)
+            )
         if include_owner:
             query = query.options(selectinload(Project.owner))
 
@@ -451,7 +456,11 @@ async def fetch(
             .scalar()
         ) or 0
 
-        return {"project": project_to_dict(project, include_teams, include_owner, children_count)}
+        return {
+            "project": project_to_dict(
+                project, include_teams, include_owner, children_count
+            )
+        }
 
 
 @projects_mcp.tool()
@@ -539,8 +548,19 @@ async def upsert(
         # UPDATE path
         if project_id is not None:
             return await update_project(
-                session, user, project_id, title, team_ids, description, state, parent_id, clear_parent,
-                owner_id, clear_owner, due_on, clear_due_on
+                session,
+                user,
+                project_id,
+                title,
+                team_ids,
+                description,
+                state,
+                parent_id,
+                clear_parent,
+                owner_id,
+                clear_owner,
+                due_on,
+                clear_due_on,
             )
 
         # Repo-level or milestone-level project path
@@ -548,26 +568,58 @@ async def upsert(
             if milestone is not None:
                 # Milestone-level project
                 return await create_milestone_project(
-                    session, user, repo, milestone, team_ids, description, parent_id, title,
-                    owner_id=owner_id, due_on=due_on, create_repo=create_repo, private=private
+                    session,
+                    user,
+                    repo,
+                    milestone,
+                    team_ids,
+                    description,
+                    parent_id,
+                    title,
+                    owner_id=owner_id,
+                    due_on=due_on,
+                    create_repo=create_repo,
+                    private=private,
                 )
             else:
                 # Repo-level project (no milestone)
                 return await create_repo_project(
-                    session, user, repo, team_ids, description, state or "open", parent_id, title,
-                    owner_id=owner_id, due_on=due_on, create_repo=create_repo, private=private
+                    session,
+                    user,
+                    repo,
+                    team_ids,
+                    description,
+                    state or "open",
+                    parent_id,
+                    title,
+                    owner_id=owner_id,
+                    due_on=due_on,
+                    create_repo=create_repo,
+                    private=private,
                 )
 
         # Standalone project path - title is required
         if not title:
-            return {"error": "title is required for standalone projects (or provide repo)", "project": None}
+            return {
+                "error": "title is required for standalone projects (or provide repo)",
+                "project": None,
+            }
         return await create_standalone_project(
-            session, user, title, team_ids, description, state or "open", parent_id,
-            owner_id=owner_id, due_on=due_on
+            session,
+            user,
+            title,
+            team_ids,
+            description,
+            state or "open",
+            parent_id,
+            owner_id=owner_id,
+            due_on=due_on,
         )
 
 
-def validate_owner(session: Any, owner_id: int | None) -> tuple[Person | None, dict | None]:
+def validate_owner(
+    session: Any, owner_id: int | None
+) -> tuple[Person | None, dict | None]:
     """Validate that an owner exists.
 
     Returns:
@@ -742,7 +794,10 @@ async def create_repo_project(
 
     # Parse repo path
     if "/" not in repo_path:
-        return {"error": f"Invalid repo path '{repo_path}'. Expected format: owner/name", "project": None}
+        return {
+            "error": f"Invalid repo path '{repo_path}'. Expected format: owner/name",
+            "project": None,
+        }
     owner, repo_name = repo_path.split("/", 1)
 
     # Validate teams
@@ -768,7 +823,10 @@ async def create_repo_project(
     # Get GitHub client
     client, repo_obj = get_github_client(session, repo_path, user.id)
     if not client:
-        return {"error": f"No GitHub access configured for '{repo_path}'", "project": None}
+        return {
+            "error": f"No GitHub access configured for '{repo_path}'",
+            "project": None,
+        }
 
     # If repo not tracked, ensure it exists (optionally creating on GitHub)
     github_repo_created = False
@@ -777,15 +835,23 @@ async def create_repo_project(
         # Get user's account for tracking
         account = (
             session.query(GithubAccount)
-            .filter(GithubAccount.user_id == user.id, GithubAccount.active == True)  # noqa: E712
+            .filter(
+                GithubAccount.user_id == user.id, GithubAccount.active == True
+            )  # noqa: E712
             .first()
         )
         if not account:
             return {"error": "No GitHub account configured", "project": None}
 
         repo_obj, github_repo_created, tracking_created = ensure_github_repo(
-            session, client, account.id, owner, repo_name,
-            description=description, create_if_missing=create_repo, private=private
+            session,
+            client,
+            account.id,
+            owner,
+            repo_name,
+            description=description,
+            create_if_missing=create_repo,
+            private=private,
         )
         if not repo_obj:
             return {
@@ -878,11 +944,16 @@ async def create_milestone_project(
     The milestone is created if it doesn't exist.
     Optionally creates the repo on GitHub if create_repo=True.
     """
-    logger.info(f"MCP: Creating milestone-level project: {repo_path} / {milestone_title}")
+    logger.info(
+        f"MCP: Creating milestone-level project: {repo_path} / {milestone_title}"
+    )
 
     # Parse repo path
     if "/" not in repo_path:
-        return {"error": f"Invalid repo path '{repo_path}'. Expected format: owner/name", "project": None}
+        return {
+            "error": f"Invalid repo path '{repo_path}'. Expected format: owner/name",
+            "project": None,
+        }
     owner, repo_name = repo_path.split("/", 1)
 
     # Validate teams
@@ -908,7 +979,10 @@ async def create_milestone_project(
     # Get GitHub client
     client, repo_obj = get_github_client(session, repo_path, user.id)
     if not client:
-        return {"error": f"No GitHub access configured for '{repo_path}'", "project": None}
+        return {
+            "error": f"No GitHub access configured for '{repo_path}'",
+            "project": None,
+        }
 
     # If repo not tracked, ensure it exists (optionally creating on GitHub)
     github_repo_created = False
@@ -916,15 +990,23 @@ async def create_milestone_project(
         # Get user's account for tracking
         account = (
             session.query(GithubAccount)
-            .filter(GithubAccount.user_id == user.id, GithubAccount.active == True)  # noqa: E712
+            .filter(
+                GithubAccount.user_id == user.id, GithubAccount.active == True
+            )  # noqa: E712
             .first()
         )
         if not account:
             return {"error": "No GitHub account configured", "project": None}
 
         repo_obj, github_repo_created, _ = ensure_github_repo(
-            session, client, account.id, owner, repo_name,
-            description=description, create_if_missing=create_repo, private=private
+            session,
+            client,
+            account.id,
+            owner,
+            repo_name,
+            description=description,
+            create_if_missing=create_repo,
+            private=private,
         )
         if not repo_obj:
             return {
@@ -937,7 +1019,10 @@ async def create_milestone_project(
         owner, repo_name, milestone_title, description=description
     )
     if not milestone_data:
-        return {"error": f"Failed to find or create milestone '{milestone_title}'", "project": None}
+        return {
+            "error": f"Failed to find or create milestone '{milestone_title}'",
+            "project": None,
+        }
 
     # Auto-parent to repo project if no parent specified
     if parent_id is None:
@@ -952,7 +1037,9 @@ async def create_milestone_project(
     # Check if project already exists for this milestone
     existing_project = (
         session.query(Project)
-        .filter(Project.repo_id == repo_obj.id, Project.number == milestone_data["number"])
+        .filter(
+            Project.repo_id == repo_obj.id, Project.number == milestone_data["number"]
+        )
         .first()
     )
     if existing_project:
@@ -977,7 +1064,9 @@ async def create_milestone_project(
     all_teams = list(teams) + teams_to_add  # type: ignore[arg-type]
 
     # Use provided due_on if set, otherwise use milestone's due_on from GitHub
-    effective_due_on = due_on_dt if due_on_dt is not None else milestone_data.get("due_on")
+    effective_due_on = (
+        due_on_dt if due_on_dt is not None else milestone_data.get("due_on")
+    )
 
     # Create project with unique negative ID (with retry for race conditions)
     project, error = create_project_with_retry(
@@ -1034,8 +1123,7 @@ async def update_project(
     """Update an existing project."""
     # Fetch project with access check
     query = filter_projects_query(
-        session, user,
-        session.query(Project).filter(Project.id == project_id)
+        session, user, session.query(Project).filter(Project.id == project_id)
     )
     query = query.options(selectinload(Project.owner))
     project = query.first()
@@ -1050,7 +1138,7 @@ async def update_project(
         if title is not None or description is not None or state is not None:
             return {
                 "error": "Cannot modify title/description/state of GitHub-backed projects. "
-                         "These are synced from GitHub.",
+                "These are synced from GitHub.",
                 "project": None,
             }
 
@@ -1090,7 +1178,10 @@ async def update_project(
     old_team_ids: set[int] = set()
     if team_ids is not None:
         if not team_ids:
-            return {"error": "team_ids cannot be empty - projects require at least one team", "project": None}
+            return {
+                "error": "team_ids cannot be empty - projects require at least one team",
+                "project": None,
+            }
 
         # Capture old teams before changes (for outbound sync)
         old_team_ids = {t.id for t in project.teams}
@@ -1101,14 +1192,20 @@ async def update_project(
         missing_ids = set(team_ids) - found_ids
 
         if missing_ids:
-            return {"error": f"Invalid team_ids: teams {missing_ids} do not exist", "project": None}
+            return {
+                "error": f"Invalid team_ids: teams {missing_ids} do not exist",
+                "project": None,
+            }
 
         # Non-admins must be a member of at least one specified team
         if not has_admin_scope(user):
             user_team_ids = get_user_team_ids(session, user)
             accessible_team_ids = set(team_ids) & user_team_ids
             if not accessible_team_ids:
-                return {"error": "You do not have access to any of the specified teams", "project": None}
+                return {
+                    "error": "You do not have access to any of the specified teams",
+                    "project": None,
+                }
 
     # Apply updates
     if clear_parent:
@@ -1156,14 +1253,18 @@ async def update_project(
         if added_team_ids:
             added_teams = [t for t in teams if t.id in added_team_ids]
             try:
-                client, _ = get_github_client(session, f"{project.repo.owner}/{project.repo.name}", user.id)
+                client, _ = get_github_client(
+                    session, f"{project.repo.owner}/{project.repo.name}", user.id
+                )
                 if client:
                     sync_result = perform_outbound_sync(
                         client, project.repo.owner, project.repo.name, added_teams
                     )
             except ValueError as e:
                 # GitHub client unavailable or not configured
-                logger.warning(f"Could not sync teams to GitHub: {type(e).__name__}: {e}")
+                logger.warning(
+                    f"Could not sync teams to GitHub: {type(e).__name__}: {e}"
+                )
 
     # Count children
     children_count = (
@@ -1175,7 +1276,9 @@ async def update_project(
     result: dict[str, Any] = {
         "success": True,
         "created": False,
-        "project": project_to_dict(project, include_teams=team_ids is not None, children_count=children_count),
+        "project": project_to_dict(
+            project, include_teams=team_ids is not None, children_count=children_count
+        ),
     }
     if sync_result:
         result["github_team_sync"] = sync_result
@@ -1209,8 +1312,7 @@ async def delete(
 
         # Fetch project with access check
         query = filter_projects_query(
-            session, user,
-            session.query(Project).filter(Project.id == project_id)
+            session, user, session.query(Project).filter(Project.id == project_id)
         )
         project = query.first()
 
