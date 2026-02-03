@@ -733,6 +733,8 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
                 break
     else:
         # Find by name - requires guild_id to avoid ambiguity
+        # channel_name must be non-None here due to check at line 720
+        assert request.channel_name is not None
         if request.guild_id is None:
             raise HTTPException(
                 status_code=400,
