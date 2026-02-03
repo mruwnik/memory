@@ -147,9 +147,20 @@ def create_test_database(test_db_name: str) -> str:
     safe_name = validate_db_identifier(test_db_name)
     admin_engine = create_engine(settings.DB_URL)
 
-    # Create a new database
-    with admin_engine.connect() as conn:
-        conn.execute(text("COMMIT"))  # Close any open transaction
+    # Create a new database - must use autocommit for DDL
+    with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        # Terminate any stale connections from previous crashed runs
+        conn.execute(
+            text(
+                f"""
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = '{safe_name}'
+                AND pid <> pg_backend_pid()
+                """
+            )
+        )
+
         conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
         conn.execute(text(f"CREATE DATABASE {safe_name}"))
 

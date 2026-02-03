@@ -9,7 +9,7 @@ For GitHub-backed projects, this can be set independently of GitHub
 since GitHub milestones don't have an owner concept.
 
 Revision ID: 20260203_project_owner
-Revises: 20260201_teams
+Revises: 20260201_scheduled_calls_channel
 Create Date: 2026-02-03
 """
 
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "20260203_project_owner"
-down_revision: Union[str, None] = "20260201_teams"
+down_revision: Union[str, None] = "20260201_scheduled_calls_channel"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

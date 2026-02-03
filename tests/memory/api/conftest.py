@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import User
+from memory.common.db.models import HumanUser, User
 
 
 # Session-scoped test client to avoid lifespan state issues
@@ -18,21 +18,27 @@ _auth_patches = None
 def app_client():
     """Create a session-scoped test client with mocked authentication."""
     global _test_client, _test_app, _auth_patches
-    from memory.api import auth
+    from memory.common import settings
     from memory.api.app import app
+    from memory.api.auth import get_current_user
 
     _test_app = app
 
-    token_patch = patch.object(auth, "get_token", return_value="fake-token")
-    user_patch = patch.object(auth, "get_session_user")
+    # Disable auth middleware for tests
+    original_disable_auth = settings.DISABLE_AUTH
+    settings.DISABLE_AUTH = True
 
-    token_patch.start()
-    mock_get_user = user_patch.start()
-
+    # Create a mock user that will be returned by the auth dependency
     mock_user = MagicMock()
     mock_user.id = 1
     mock_user.email = "test@example.com"
-    mock_get_user.return_value = mock_user
+    mock_user.scopes = ["*"]  # Admin scope for full access
+
+    def mock_get_current_user():
+        return mock_user
+
+    # Override the FastAPI dependency
+    app.dependency_overrides[get_current_user] = mock_get_current_user
 
     _test_client = TestClient(app, raise_server_exceptions=False)
     _test_client.__enter__()
@@ -40,8 +46,8 @@ def app_client():
     yield _test_client, app
 
     _test_client.__exit__(None, None, None)
-    token_patch.stop()
-    user_patch.stop()
+    app.dependency_overrides.pop(get_current_user, None)
+    settings.DISABLE_AUTH = original_disable_auth
 
 
 @pytest.fixture
@@ -59,7 +65,8 @@ def client(app_client, db_session):
 
     app.dependency_overrides[get_session] = get_test_session
     yield test_client
-    app.dependency_overrides.clear()
+    # Only remove the session override, not the auth override
+    app.dependency_overrides.pop(get_session, None)
 
 
 @pytest.fixture
@@ -68,10 +75,11 @@ def user(db_session):
     existing = db_session.query(User).filter(User.id == 1).first()
     if existing:
         return existing
-    test_user = User(
+    test_user = HumanUser(
         id=1,
         name="Test User",
         email="test@example.com",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(test_user)
     db_session.commit()

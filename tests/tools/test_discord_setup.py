@@ -10,9 +10,12 @@ from tools.discord_setup import generate_bot_invite_url, make_invite
 def test_make_invite_generates_expected_url():
     result = make_invite(123456789)
 
+    # Permissions: VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES |
+    #              READ_MESSAGE_HISTORY | ADD_REACTIONS | MANAGE_CHANNELS | MANAGE_ROLES
+    # = 1024 + 2048 + 16384 + 32768 + 65536 + 64 + 16 + 268435456 = 268553296
     assert (
         result
-        == "https://discord.com/oauth2/authorize?client_id=123456789&scope=bot&permissions=3088"
+        == "https://discord.com/oauth2/authorize?client_id=123456789&scope=bot&permissions=268553296"
     )
 
 

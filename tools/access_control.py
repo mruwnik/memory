@@ -1,22 +1,16 @@
 #!/usr/bin/env python
 """
-CLI tool for managing access control projects and collaborators.
+CLI tool for managing access control.
 
-Projects are GitHub milestones. Collaborators are Person entries linked via
-the project_collaborators junction table.
+Projects use team-based access control. Teams are assigned to projects,
+and users access projects through their team memberships.
 
 Usage:
-    # List projects (milestones)
+    # List projects
     python tools/access_control.py list-projects
 
-    # List collaborators of a project
-    python tools/access_control.py list-collaborators --project-id 123
-
-    # Add collaborator to project
-    python tools/access_control.py add-collaborator --project-id 123 --person-id 456 --role admin
-
-    # Remove collaborator from project
-    python tools/access_control.py remove-collaborator --project-id 123 --person-id 456
+    # List teams assigned to a project
+    python tools/access_control.py list-teams --project-id 123
 
     # Grant superadmin (add admin scope)
     python tools/access_control.py grant-admin --email user@example.com
@@ -35,136 +29,47 @@ import argparse
 import sys
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import Person, SourceItem
-from memory.common.db.models.sources import Project, project_collaborators  # type: ignore[attr-defined]
+from memory.common.db.models import SourceItem
+from memory.common.db.models.sources import Project
 from memory.common.db.models.users import User
 
 
-def list_projects(args):
-    """List all projects (GitHub milestones)."""
+def list_projects(args):  # noqa: ARG001
+    """List all projects."""
     with make_session() as session:
         projects = session.query(Project).order_by(Project.id).all()
         if not projects:
             print("No projects found")
             return
 
-        print(f"{'ID':<8} {'Slug':<40} {'Title':<30} {'Collaborators':<12}")
+        print(f"{'ID':<8} {'Slug':<40} {'Title':<30} {'Teams':<12}")
         print("-" * 95)
         for project in projects:
             slug = project.slug
-            collab_count = len(project.collaborators) if project.collaborators else 0  # type: ignore[attr-defined]
+            team_count = len(project.teams) if project.teams else 0
             title = (project.title or "")[:30]
-            print(f"{project.id:<8} {slug:<40} {title:<30} {collab_count:<12}")
+            print(f"{project.id:<8} {slug:<40} {title:<30} {team_count:<12}")
 
 
-def list_collaborators(args):
-    """List collaborators of a project."""
+def list_teams(args):
+    """List teams assigned to a project."""
     with make_session() as session:
         project = session.query(Project).filter(Project.id == args.project_id).first()
         if not project:
             print(f"Error: Project with ID {args.project_id} not found")
             sys.exit(1)
 
-        rows = session.execute(
-            project_collaborators.select().where(
-                project_collaborators.c.project_id == project.id
-            )
-        ).fetchall()
-
-        if not rows:
-            print(f"No collaborators in project '{project.slug}'")
+        teams = project.teams
+        if not teams:
+            print(f"No teams assigned to project '{project.slug}'")
             return
 
-        print(f"Collaborators of project '{project.slug}':")
-        print(f"{'Person ID':<12} {'Name':<30} {'Role':<12}")
-        print("-" * 55)
-        for row in rows:
-            person = session.query(Person).filter(Person.id == row.person_id).first()
-            name = person.display_name if person else f"(unknown person {row.person_id})"
-            print(f"{row.person_id:<12} {name:<30} {row.role:<12}")
-
-
-def add_collaborator(args):
-    """Add a person as collaborator to a project."""
-    with make_session() as session:
-        project = session.query(Project).filter(Project.id == args.project_id).first()
-        if not project:
-            print(f"Error: Project with ID {args.project_id} not found")
-            sys.exit(1)
-
-        person = session.query(Person).filter(Person.id == args.person_id).first()
-        if not person:
-            print(f"Error: Person with ID {args.person_id} not found")
-            sys.exit(1)
-
-        # Check if already exists
-        existing = session.execute(
-            project_collaborators.select().where(
-                project_collaborators.c.project_id == project.id,
-                project_collaborators.c.person_id == person.id,
-            )
-        ).first()
-
-        if existing:
-            if args.update:
-                session.execute(
-                    project_collaborators.update()
-                    .where(
-                        project_collaborators.c.project_id == project.id,
-                        project_collaborators.c.person_id == person.id,
-                    )
-                    .values(role=args.role)
-                )
-                session.commit()
-                print(f"Updated {person.display_name} role to '{args.role}' in project '{project.slug}'")
-            else:
-                print("Error: Person already in project. Use --update to change role.")
-                sys.exit(1)
-            return
-
-        session.execute(
-            project_collaborators.insert().values(
-                project_id=project.id,
-                person_id=person.id,
-                role=args.role,
-            )
-        )
-        session.commit()
-        print(f"Added {person.display_name} to project '{project.slug}' as {args.role}")
-
-
-def remove_collaborator(args):
-    """Remove a person from a project."""
-    with make_session() as session:
-        project = session.query(Project).filter(Project.id == args.project_id).first()
-        if not project:
-            print(f"Error: Project with ID {args.project_id} not found")
-            sys.exit(1)
-
-        person = session.query(Person).filter(Person.id == args.person_id).first()
-        if not person:
-            print(f"Error: Person with ID {args.person_id} not found")
-            sys.exit(1)
-
-        existing = session.execute(
-            project_collaborators.select().where(
-                project_collaborators.c.project_id == project.id,
-                project_collaborators.c.person_id == person.id,
-            )
-        ).first()
-
-        if not existing:
-            print("Error: Person not in project")
-            sys.exit(1)
-
-        session.execute(
-            project_collaborators.delete().where(
-                project_collaborators.c.project_id == project.id,
-                project_collaborators.c.person_id == person.id,
-            )
-        )
-        session.commit()
-        print(f"Removed {person.display_name} from project '{project.slug}'")
+        print(f"Teams assigned to project '{project.slug}':")
+        print(f"{'Team ID':<12} {'Name':<30} {'Slug':<20} {'Members':<10}")
+        print("-" * 75)
+        for team in teams:
+            member_count = len(team.members) if team.members else 0
+            print(f"{team.id:<12} {team.name:<30} {team.slug:<20} {member_count:<10}")
 
 
 def grant_admin(args):
@@ -236,7 +141,7 @@ def classify_content(args):
         print(f"Classified {count} items to project '{project.slug}' with sensitivity '{args.sensitivity}'")
 
 
-def list_unclassified(args):
+def list_unclassified(args):  # noqa: ARG001
     """List count of unclassified content by modality."""
     with make_session() as session:
         from sqlalchemy import func
@@ -268,32 +173,13 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # list-projects
-    list_projects_parser = subparsers.add_parser("list-projects", help="List all projects (milestones)")
+    list_projects_parser = subparsers.add_parser("list-projects", help="List all projects")
     list_projects_parser.set_defaults(func=list_projects)
 
-    # list-collaborators
-    list_collaborators_parser = subparsers.add_parser("list-collaborators", help="List collaborators of a project")
-    list_collaborators_parser.add_argument("--project-id", type=int, required=True, help="Project (milestone) ID")
-    list_collaborators_parser.set_defaults(func=list_collaborators)
-
-    # add-collaborator
-    add_collaborator_parser = subparsers.add_parser("add-collaborator", help="Add person to project")
-    add_collaborator_parser.add_argument("--project-id", type=int, required=True, help="Project (milestone) ID")
-    add_collaborator_parser.add_argument("--person-id", type=int, required=True, help="Person ID")
-    add_collaborator_parser.add_argument(
-        "--role",
-        required=True,
-        choices=["contributor", "manager", "admin"],
-        help="Role in project",
-    )
-    add_collaborator_parser.add_argument("--update", action="store_true", help="Update existing collaboration")
-    add_collaborator_parser.set_defaults(func=add_collaborator)
-
-    # remove-collaborator
-    remove_collaborator_parser = subparsers.add_parser("remove-collaborator", help="Remove person from project")
-    remove_collaborator_parser.add_argument("--project-id", type=int, required=True, help="Project (milestone) ID")
-    remove_collaborator_parser.add_argument("--person-id", type=int, required=True, help="Person ID")
-    remove_collaborator_parser.set_defaults(func=remove_collaborator)
+    # list-teams
+    list_teams_parser = subparsers.add_parser("list-teams", help="List teams assigned to a project")
+    list_teams_parser.add_argument("--project-id", type=int, required=True, help="Project ID")
+    list_teams_parser.set_defaults(func=list_teams)
 
     # grant-admin
     grant_admin_parser = subparsers.add_parser("grant-admin", help="Grant admin scope to user")
@@ -307,7 +193,7 @@ if __name__ == "__main__":
 
     # classify-content
     classify_parser = subparsers.add_parser("classify-content", help="Classify content to a project")
-    classify_parser.add_argument("--project-id", type=int, required=True, help="Project (milestone) ID")
+    classify_parser.add_argument("--project-id", type=int, required=True, help="Project ID")
     classify_parser.add_argument(
         "--sensitivity",
         required=True,
