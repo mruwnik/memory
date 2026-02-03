@@ -58,7 +58,7 @@ def upgrade() -> None:
             WHERE client_secret IS NOT NULL AND client_secret_encrypted IS NULL
         """)
     ).scalar()
-    if unencrypted_count > 0:
+    if unencrypted_count and unencrypted_count > 0:
         raise RuntimeError(
             f"Migration failed: {unencrypted_count} google_oauth_config rows still have "
             "unencrypted client_secret without encrypted equivalent. Aborting to prevent data loss."
@@ -105,7 +105,7 @@ def upgrade() -> None:
                OR (refresh_token IS NOT NULL AND refresh_token_encrypted IS NULL)
         """)
     ).scalar()
-    if unencrypted_count > 0:
+    if unencrypted_count and unencrypted_count > 0:
         raise RuntimeError(
             f"Migration failed: {unencrypted_count} google_accounts rows still have "
             "unencrypted tokens without encrypted equivalents. Aborting to prevent data loss."
