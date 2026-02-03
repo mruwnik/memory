@@ -26,7 +26,7 @@ from memory.common.access_control import (
     user_can_access_project,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
+from memory.common.db.models import GithubAccount, Project, Team
 from memory.common.db.models.sources import Person
 from memory.api.MCP.servers.github_helpers import (
     SyncResult,
