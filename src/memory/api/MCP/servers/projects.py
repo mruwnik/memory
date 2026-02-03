@@ -697,6 +697,7 @@ async def create_standalone_project(
     )
     if error:
         return error
+    assert project is not None  # error is None means project was created
 
     session.commit()
     session.refresh(project)
@@ -905,6 +906,7 @@ async def create_repo_project(
     )
     if error:
         return error
+    assert project is not None  # error is None means project was created
 
     session.commit()
     session.refresh(project)
@@ -1086,6 +1088,7 @@ async def create_milestone_project(
     )
     if error:
         return error
+    assert project is not None  # error is None means project was created
 
     session.commit()
     session.refresh(project)
