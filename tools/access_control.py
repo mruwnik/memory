@@ -36,7 +36,7 @@ import sys
 
 from memory.common.db.connection import make_session
 from memory.common.db.models import Person, SourceItem
-from memory.common.db.models.sources import Project, project_collaborators
+from memory.common.db.models.sources import Project, project_collaborators  # type: ignore[attr-defined]
 from memory.common.db.models.users import User
 
 
@@ -52,7 +52,7 @@ def list_projects(args):
         print("-" * 95)
         for project in projects:
             slug = project.slug
-            collab_count = len(project.collaborators) if project.collaborators else 0
+            collab_count = len(project.collaborators) if project.collaborators else 0  # type: ignore[attr-defined]
             title = (project.title or "")[:30]
             print(f"{project.id:<8} {slug:<40} {title:<30} {collab_count:<12}")
 

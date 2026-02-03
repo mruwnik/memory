@@ -5,11 +5,9 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mcp.server.auth.middleware.auth_context import (
-    auth_context_var,
-    AuthenticatedUser,
-    AccessToken,
-)
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 
 from memory.common.db.models import Person, Team, HumanUser, UserSession
 from memory.common.db.models.discord import DiscordBot

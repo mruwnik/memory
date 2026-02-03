@@ -335,11 +335,9 @@ def mcp_auth_context(session_token: str):
         with mcp_auth_context(admin_session.id):
             result = await some_mcp_tool(...)
     """
-    from mcp.server.auth.middleware.auth_context import (
-        AccessToken,
-        AuthenticatedUser,
-        auth_context_var,
-    )
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
 
     access_token = AccessToken(
         token=session_token,
