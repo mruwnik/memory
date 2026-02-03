@@ -401,6 +401,12 @@ class Project(Base):
         "Project", remote_side="Project.id", backref="children"
     )
 
+    # Project owner (person responsible for this project)
+    owner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
+    )
+    owner: Mapped["Person | None"] = relationship("Person", foreign_keys=[owner_id])
+
     # Timestamps from GitHub
     github_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -437,6 +443,7 @@ class Project(Base):
         Index("projects_repo_idx", "repo_id"),
         Index("projects_due_idx", "due_on"),
         Index("projects_parent_idx", "parent_id"),
+        Index("projects_owner_idx", "owner_id"),
         CheckConstraint("id != parent_id", name="ck_milestone_not_self_parent"),
     )
 
