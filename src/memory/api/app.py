@@ -19,7 +19,7 @@ from sqladmin import Admin
 
 from memory.common import extract, paths, settings
 from memory.common.db.connection import get_engine
-from memory.api.admin import setup_admin
+from memory.api.admin import AdminAuth, setup_admin
 from memory.api.auth import (
     AuthenticationMiddleware,
     router as auth_router,
@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 # Rate limiter setup
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=[settings.API_RATE_LIMIT_DEFAULT] if settings.API_RATE_LIMIT_ENABLED else [],
+    default_limits=[settings.API_RATE_LIMIT_DEFAULT]
+    if settings.API_RATE_LIMIT_ENABLED
+    else [],
     enabled=settings.API_RATE_LIMIT_ENABLED,
 )
 
@@ -67,8 +69,14 @@ tags_metadata = [
     {"name": "source-items", "description": "Manage ingested content items"},
     {"name": "jobs", "description": "Background job monitoring and management"},
     {"name": "sessions", "description": "User session management"},
-    {"name": "google-drive", "description": "Google Drive integration for content ingestion"},
-    {"name": "email-accounts", "description": "Email account configuration for ingestion"},
+    {
+        "name": "google-drive",
+        "description": "Google Drive integration for content ingestion",
+    },
+    {
+        "name": "email-accounts",
+        "description": "Email account configuration for ingestion",
+    },
     {"name": "article-feeds", "description": "RSS/Atom feed subscriptions"},
     {"name": "github-sources", "description": "GitHub repository ingestion"},
     {"name": "calendar-accounts", "description": "Calendar integration"},
@@ -110,6 +118,7 @@ Most endpoints require authentication via:
     lifespan=mcp_http_app.lifespan,
 )
 app.state.limiter = limiter
+
 
 # Rate limit exception handler
 @app.exception_handler(RateLimitExceeded)
@@ -162,6 +171,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
+
 # Add rate limiting middleware
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
@@ -176,7 +186,9 @@ app.add_middleware(
 )
 
 
-def validate_path_within_directory(base_dir: pathlib.Path, requested_path: str) -> pathlib.Path:
+def validate_path_within_directory(
+    base_dir: pathlib.Path, requested_path: str
+) -> pathlib.Path:
     """Validate that a requested path resolves within the base directory.
 
     Wraps the shared utility and converts ValueError to HTTPException.
@@ -246,16 +258,18 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
 
 # SQLAdmin setup with authentication requiring admin scope
 engine = get_engine()
-from memory.api.admin import AdminAuth
 _admin_secret_key = settings.SECRETS_ENCRYPTION_KEY
 if not _admin_secret_key:
     import logging as _logging
+
     _logging.getLogger(__name__).warning(
         "SECRETS_ENCRYPTION_KEY not set - using insecure dev key for admin auth. "
         "Set SECRETS_ENCRYPTION_KEY in production!"
     )
     _admin_secret_key = "dev-secret-key"
-admin = Admin(app, engine, authentication_backend=AdminAuth(secret_key=_admin_secret_key))
+admin = Admin(
+    app, engine, authentication_backend=AdminAuth(secret_key=_admin_secret_key)
+)
 
 # Setup admin views
 setup_admin(admin)

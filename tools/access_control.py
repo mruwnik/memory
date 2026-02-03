@@ -118,7 +118,7 @@ def add_collaborator(args):
                 session.commit()
                 print(f"Updated {person.display_name} role to '{args.role}' in project '{project.slug}'")
             else:
-                print(f"Error: Person already in project. Use --update to change role.")
+                print("Error: Person already in project. Use --update to change role.")
                 sys.exit(1)
             return
 
@@ -154,7 +154,7 @@ def remove_collaborator(args):
         ).first()
 
         if not existing:
-            print(f"Error: Person not in project")
+            print("Error: Person not in project")
             sys.exit(1)
 
         session.execute(
@@ -200,7 +200,7 @@ def revoke_admin(args):
             session.commit()
             print(f"Revoked admin scope from {args.email}")
         elif "*" in scopes:
-            print(f"Warning: User has '*' scope which also grants admin. Consider removing that too.")
+            print("Warning: User has '*' scope which also grants admin. Consider removing that too.")
         else:
             print(f"User {args.email} does not have admin scope")
 

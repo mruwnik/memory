@@ -7,7 +7,7 @@ from __future__ import annotations
 import pathlib
 import textwrap
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Annotated, NotRequired, Sequence
+from typing import TYPE_CHECKING, Any, Annotated, Sequence
 
 from PIL import Image
 import zlib

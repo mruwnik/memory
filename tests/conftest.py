@@ -267,7 +267,6 @@ def db_session(db_engine):
     After the test completes, all tables are truncated to ensure isolation.
     This is much faster than creating a new database for each test.
     """
-    from memory.common.db.models import Base
 
     SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
     session = SessionLocal()

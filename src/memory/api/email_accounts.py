@@ -4,15 +4,15 @@ import logging
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-
-logger = logging.getLogger(__name__)
 from pydantic import BaseModel, EmailStr, model_validator
 from sqlalchemy.orm import Session
 
+from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
-from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
 
@@ -114,7 +114,9 @@ class EmailAccountResponse(BaseModel):
     sensitivity: str
 
 
-def account_to_response(account: EmailAccount, db: Session | None = None) -> EmailAccountResponse:
+def account_to_response(
+    account: EmailAccount, db: Session | None = None
+) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
     google_account_info = None
     if account.google_account_id and db:
@@ -144,7 +146,9 @@ def account_to_response(account: EmailAccount, db: Session | None = None) -> Ema
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         sync_error=account.sync_error,
         active=cast(bool, account.active),
-        send_enabled=cast(bool, account.send_enabled) if account.send_enabled is not None else True,
+        send_enabled=cast(bool, account.send_enabled)
+        if account.send_enabled is not None
+        else True,
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         project_id=account.project_id,
@@ -340,14 +344,25 @@ def test_connection(
             }
     except Exception as e:
         # Log full error internally but return sanitized message
-        logger.warning(f"IMAP connection test failed for account {account_id}: {type(e).__name__}: {e}")
+        logger.warning(
+            f"IMAP connection test failed for account {account_id}: {type(e).__name__}: {e}"
+        )
         # Return generic error type without potentially sensitive details
         error_type = type(e).__name__
         if "authentication" in str(e).lower() or "login" in str(e).lower():
-            return {"status": "error", "message": "Authentication failed - check username/password"}
+            return {
+                "status": "error",
+                "message": "Authentication failed - check username/password",
+            }
         elif "timeout" in str(e).lower() or "timed out" in str(e).lower():
-            return {"status": "error", "message": "Connection timed out - check server address"}
+            return {
+                "status": "error",
+                "message": "Connection timed out - check server address",
+            }
         elif "refused" in str(e).lower() or "connect" in str(e).lower():
-            return {"status": "error", "message": "Connection refused - check server address and port"}
+            return {
+                "status": "error",
+                "message": "Connection refused - check server address and port",
+            }
         else:
             return {"status": "error", "message": f"Connection failed ({error_type})"}

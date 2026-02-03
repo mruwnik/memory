@@ -1,6 +1,5 @@
 """Tests for access control logic."""
 
-import pytest
 from memory.common.access_control import (
     SensitivityLevel,
     ProjectRole,

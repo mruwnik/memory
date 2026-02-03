@@ -18,7 +18,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.orm import Session
 
 # revision identifiers, used by Alembic.
 revision: str = "20260201_encrypt_google"

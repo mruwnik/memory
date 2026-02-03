@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from mcp.server.auth.middleware.auth_context import (
