@@ -475,7 +475,7 @@ def test_send_message_no_channel_type(db_session, sample_user, caplog):
     db_session.add(call)
     db_session.commit()
 
-    result = scheduled_calls.send_message(call)
+    result = scheduled_calls.send_message(call)  # type: ignore[arg-type]
 
     assert result is False
     assert "No channel_type" in caplog.text
@@ -496,7 +496,7 @@ def test_send_message_unknown_channel_type(db_session, sample_user, caplog):
     db_session.add(call)
     db_session.commit()
 
-    result = scheduled_calls.send_message(call)
+    result = scheduled_calls.send_message(call)  # type: ignore[arg-type]
 
     assert result is False
     assert "Unknown channel_type: sms" in caplog.text
@@ -520,7 +520,7 @@ def test_send_message_routes_to_discord(mock_send_discord, db_session, sample_us
     db_session.add(call)
     db_session.commit()
 
-    result = scheduled_calls.send_message(call)
+    result = scheduled_calls.send_message(call)  # type: ignore[arg-type]
 
     assert result is True
     mock_send_discord.assert_called_once_with(call)
@@ -544,7 +544,7 @@ def test_send_message_routes_to_slack(mock_send_slack, db_session, sample_user):
     db_session.add(call)
     db_session.commit()
 
-    result = scheduled_calls.send_message(call)
+    result = scheduled_calls.send_message(call)  # type: ignore[arg-type]
 
     assert result is True
     mock_send_slack.assert_called_once_with(call)
@@ -568,7 +568,7 @@ def test_send_message_routes_to_email(mock_send_email, db_session, sample_user):
     db_session.add(call)
     db_session.commit()
 
-    result = scheduled_calls.send_message(call)
+    result = scheduled_calls.send_message(call)  # type: ignore[arg-type]
 
     assert result is True
     mock_send_email.assert_called_once_with(call)

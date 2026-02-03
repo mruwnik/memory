@@ -422,7 +422,7 @@ class SimpleOAuthProvider(OAuthProvider):
             token = make_token_from_data(
                 session,
                 oauth_state_id=auth_code_id,
-                user_id=user_id,
+                user_id=user_id,  # type: ignore[arg-type]
                 client_id=client_id,
                 scopes=scopes,
             )
@@ -443,10 +443,12 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
+                oauth_state = user_session.oauth_state
+                assert oauth_state is not None  # Guaranteed by FK constraint
                 return AccessToken(
                     token=token,
-                    client_id=user_session.oauth_state.client_id,
-                    scopes=user_session.oauth_state.scopes,
+                    client_id=oauth_state.client_id,
+                    scopes=oauth_state.scopes,
                     expires_at=int(user_session.expires_at.timestamp()),
                 )
 

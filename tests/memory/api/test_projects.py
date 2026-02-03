@@ -3,7 +3,7 @@
 import pytest
 
 from memory.common.db.models import Person
-from memory.common.db.models.sources import Project, project_collaborators
+from memory.common.db.models.sources import Project, project_collaborators  # type: ignore[attr-defined]
 
 
 # ====== Fixtures ======

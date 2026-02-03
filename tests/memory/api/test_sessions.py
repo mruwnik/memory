@@ -188,7 +188,7 @@ def test_ingest_session_event_creates_project(
     # Check project was created
     project = (
         db_session.query(Project)
-        .filter(Project.user_id == user.id, Project.directory == cwd)
+        .filter(Project.user_id == user.id, Project.directory == cwd)  # type: ignore[attr-defined]
         .first()
     )
     assert project is not None
