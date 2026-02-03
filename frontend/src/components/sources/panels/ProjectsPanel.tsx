@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate } from '@/hooks/useProjects'
 import { useTeams, Team } from '@/hooks/useTeams'
+import { usePeople, Person } from '@/hooks/usePeople'
 import {
   Modal,
   EmptyState,
@@ -26,9 +27,12 @@ export const ProjectsPanel = () => {
     unassignTeamFromProject,
   } = useTeams()
 
+  const { listPeople } = usePeople()
+
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
   const [availableTeams, setAvailableTeams] = useState<Team[]>([])
+  const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('list')
@@ -56,21 +60,23 @@ export const ProjectsPanel = () => {
     setError(null)
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
-      const [projectsList, treeData, teamsList] = await Promise.all([
+      const [projectsList, treeData, teamsList, peopleList] = await Promise.all([
         listProjects({ state, include_teams: true }),
         getProjectTree({ state }),
         listTeams(),
+        listPeople({ limit: 200 }),
       ])
       // Ensure we always have arrays (API might return error objects)
       setProjects(Array.isArray(projectsList) ? projectsList : [])
       setTree(Array.isArray(treeData) ? treeData : [])
       setAvailableTeams(Array.isArray(teamsList) ? teamsList : [])
+      setAvailablePeople(Array.isArray(peopleList) ? peopleList : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load projects')
     } finally {
       setLoading(false)
     }
-  }, [listProjects, getProjectTree, listTeams, stateFilter])
+  }, [listProjects, getProjectTree, listTeams, listPeople, stateFilter])
 
   useEffect(() => {
     loadData()
@@ -191,6 +197,7 @@ export const ProjectsPanel = () => {
           onSubmit={handleCreate}
           onClose={() => setShowCreateModal(false)}
           availableTeams={availableTeams}
+          availablePeople={availablePeople}
         />
       )}
 
@@ -201,6 +208,7 @@ export const ProjectsPanel = () => {
           projects={projects}
           onSubmit={data => handleUpdate(editingProject.id, data)}
           onClose={() => setEditingProject(null)}
+          availablePeople={availablePeople}
         />
       )}
 
@@ -305,6 +313,8 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
                     number: null,
                     parent_id: node.parent_id,
                     children_count: node.children.length,
+                    owner_id: null,
+                    due_on: null,
                   }}
                   onEdit={() => project && onEdit(project)}
                   onDelete={() => project && onDelete(project)}
@@ -332,6 +342,28 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
   )
 }
 
+// Due date warning levels
+type DueWarningLevel = 'critical' | 'caution' | 'none' | 'no-date'
+
+const getDueWarningLevel = (dueOn: string | null): DueWarningLevel => {
+  if (!dueOn) return 'no-date'
+
+  const now = new Date()
+  const dueDate = new Date(dueOn)
+  const diffMs = dueDate.getTime() - now.getTime()
+  const diffDays = diffMs / (1000 * 60 * 60 * 24)
+
+  if (diffDays < 0) return 'critical'  // Overdue
+  if (diffDays < 7) return 'critical'  // Under 1 week
+  if (diffDays <= 21) return 'caution' // 2-3 weeks
+  return 'none'
+}
+
+const formatDueDate = (dueOn: string): string => {
+  const date = new Date(dueOn)
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 // Project card component
 interface ProjectCardProps {
   project: Project
@@ -344,6 +376,8 @@ interface ProjectCardProps {
 const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
+  const dueWarning = getDueWarningLevel(project.due_on)
+  const hasNoOwner = project.owner_id === null
 
   return (
     <div
@@ -355,7 +389,7 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
     >
       <div className={styles.cardHeader}>
         <div className={styles.cardInfo}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h4 className={cx(styles.cardTitle, compact && 'text-sm')}>
               {project.title}
             </h4>
@@ -371,6 +405,39 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
             {isGithubBacked && (
               <span className={cx(styles.badge, 'bg-purple-100 text-purple-700')}>
                 GitHub
+              </span>
+            )}
+            {/* Warning indicators - only show for open projects */}
+            {isOpen && hasNoOwner && (
+              <span
+                className={cx(styles.badge, 'bg-amber-100 text-amber-700')}
+                title="No owner assigned"
+              >
+                ⚠ No owner
+              </span>
+            )}
+            {isOpen && dueWarning === 'critical' && (
+              <span
+                className={cx(styles.badge, 'bg-red-100 text-red-700')}
+                title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
+              >
+                🔴 {project.due_on && new Date(project.due_on) < new Date() ? 'Overdue' : 'Due soon'}
+              </span>
+            )}
+            {isOpen && dueWarning === 'caution' && (
+              <span
+                className={cx(styles.badge, 'bg-yellow-100 text-yellow-700')}
+                title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
+              >
+                🟡 Due in 2-3 weeks
+              </span>
+            )}
+            {isOpen && dueWarning === 'no-date' && (
+              <span
+                className={cx(styles.badge, 'bg-slate-100 text-slate-500')}
+                title="No due date set"
+              >
+                No due date
               </span>
             )}
           </div>
@@ -405,6 +472,21 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
                 </>
               )}
             </p>
+          )}
+          {/* Owner and due date info */}
+          {(project.owner || project.due_on) && (
+            <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+              {project.owner && (
+                <span>
+                  Owner: <span className="text-slate-700">{project.owner.display_name || project.owner.identifier}</span>
+                </span>
+              )}
+              {project.due_on && (
+                <span>
+                  Due: <span className="text-slate-700">{formatDueDate(project.due_on)}</span>
+                </span>
+              )}
+            </div>
           )}
           {project.teams && project.teams.length > 0 && !compact && (
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -463,6 +545,7 @@ interface ProjectFormModalProps {
   onSubmit: (data: ProjectCreate | ProjectUpdate) => Promise<void>
   onClose: () => void
   availableTeams?: Team[]  // Required for create, used for team selection
+  availablePeople?: Person[]  // For owner selection
 }
 
 const ProjectFormModal = ({
@@ -472,6 +555,7 @@ const ProjectFormModal = ({
   onSubmit,
   onClose,
   availableTeams = [],
+  availablePeople = [],
 }: ProjectFormModalProps) => {
   const isEditing = !!project
   const isGithubBacked = project?.repo_path !== null
@@ -482,6 +566,8 @@ const ProjectFormModal = ({
     state: project?.state || 'open' as 'open' | 'closed',
     parent_id: project?.parent_id || null as number | null,
     team_ids: [] as number[],  // For new projects
+    owner_id: project?.owner_id || null as number | null,
+    due_on: project?.due_on ? project.due_on.split('T')[0] : '',  // Convert to date input format
   })
 
   const [submitting, setSubmitting] = useState(false)
@@ -523,16 +609,29 @@ const ProjectFormModal = ({
     setError(null)
 
     try {
+      // Convert date to ISO string if provided
+      const dueOnISO = formData.due_on ? new Date(formData.due_on + 'T00:00:00Z').toISOString() : null
+
       const data: ProjectCreate | ProjectUpdate = isEditing
         ? {
-            // For GitHub-backed, only allow parent_id changes
+            // For GitHub-backed, only allow parent_id, owner_id, and due_on changes
             ...(isGithubBacked
-              ? { parent_id: formData.parent_id }
+              ? {
+                  parent_id: formData.parent_id,
+                  owner_id: formData.owner_id,
+                  clear_owner: formData.owner_id === null && project?.owner_id !== null,
+                  due_on: dueOnISO,
+                  clear_due_on: !formData.due_on && !!project?.due_on,
+                }
               : {
                   title: formData.title || undefined,
                   description: formData.description || null,
                   state: formData.state,
                   parent_id: formData.parent_id,
+                  owner_id: formData.owner_id,
+                  clear_owner: formData.owner_id === null && project?.owner_id !== null,
+                  due_on: dueOnISO,
+                  clear_due_on: !formData.due_on && !!project?.due_on,
                 }),
           }
         : {
@@ -541,6 +640,8 @@ const ProjectFormModal = ({
             description: formData.description || null,
             state: formData.state,
             parent_id: formData.parent_id,
+            owner_id: formData.owner_id,
+            due_on: dueOnISO,
           }
 
       await onSubmit(data)
@@ -629,6 +730,41 @@ const ProjectFormModal = ({
           </select>
           <p className={styles.formHint}>
             Organize projects into a hierarchy by setting a parent.
+          </p>
+        </div>
+
+        <div className={styles.formGroup}>
+          <label className={styles.formLabel}>Owner</label>
+          <select
+            value={formData.owner_id ?? ''}
+            onChange={e => setFormData({
+              ...formData,
+              owner_id: e.target.value ? Number(e.target.value) : null,
+            })}
+            className={styles.formSelect}
+          >
+            <option value="">No owner</option>
+            {availablePeople.map(person => (
+              <option key={person.id} value={person.id}>
+                {person.display_name || person.identifier}
+              </option>
+            ))}
+          </select>
+          <p className={styles.formHint}>
+            Assign someone responsible for this project.
+          </p>
+        </div>
+
+        <div className={styles.formGroup}>
+          <label className={styles.formLabel}>Due Date</label>
+          <input
+            type="date"
+            value={formData.due_on}
+            onChange={e => setFormData({ ...formData, due_on: e.target.value })}
+            className={styles.formInput}
+          />
+          <p className={styles.formHint}>
+            Optional deadline for this project.
           </p>
         </div>
 

@@ -329,7 +329,7 @@ async def list_all(
         offset: Number of projects to skip (default: 0)
 
     Returns:
-        List of projects with count and pagination info
+        List of projects with count and pagination info.
     """
     with make_session() as session:
         user = get_mcp_current_user(session, full=True)
@@ -345,6 +345,11 @@ async def list_all(
             query = query.options(
                 selectinload(Project.teams).selectinload(Team.members)
             )
+
+        query = query.options(selectinload(Project.owner))
+
+        # Ensure no duplicates from joins
+        query = query.distinct()
 
         if state:
             query = query.filter(Project.state == state)
@@ -399,6 +404,7 @@ async def list_all(
                 project_to_dict(
                     p,
                     include_teams=include_teams,
+                    include_owner=True,
                     children_count=children_counts.get(cast(int, p.id), 0),
                 )
                 for p in projects

@@ -9,6 +9,12 @@ export interface ProjectTeam {
   member_count: number | null
 }
 
+export interface ProjectOwner {
+  id: number
+  identifier: string
+  display_name: string | null
+}
+
 export interface Project {
   id: number
   title: string
@@ -21,6 +27,10 @@ export interface Project {
   // Hierarchy
   parent_id: number | null
   children_count: number
+  // Owner and due date
+  owner_id: number | null
+  due_on: string | null  // ISO datetime string
+  owner?: ProjectOwner | null
   // Teams (optional)
   teams?: ProjectTeam[]
 }
@@ -41,6 +51,8 @@ export interface ProjectCreate {
   description?: string | null
   state?: 'open' | 'closed'
   parent_id?: number | null
+  owner_id?: number | null
+  due_on?: string | null  // ISO datetime string
 }
 
 export interface ProjectUpdate {
@@ -49,6 +61,10 @@ export interface ProjectUpdate {
   state?: 'open' | 'closed'
   parent_id?: number | null
   clear_parent?: boolean  // If true, removes the parent
+  owner_id?: number | null
+  clear_owner?: boolean  // If true, removes the owner
+  due_on?: string | null  // ISO datetime string
+  clear_due_on?: boolean  // If true, removes the due date
 }
 
 export interface ProjectFilters {
@@ -103,6 +119,8 @@ export const useProjects = () => {
       description: data.description,
       state: data.state ?? 'open',
       parent_id: data.parent_id,
+      owner_id: data.owner_id,
+      due_on: data.due_on,
     })
     const response = result?.[0]
     if (response?.error) {
@@ -119,6 +137,10 @@ export const useProjects = () => {
       state: data.state,
       parent_id: data.parent_id,
       clear_parent: data.clear_parent,
+      owner_id: data.owner_id,
+      clear_owner: data.clear_owner,
+      due_on: data.due_on,
+      clear_due_on: data.clear_due_on,
     })
     const response = result?.[0]
     if (response?.error) {
