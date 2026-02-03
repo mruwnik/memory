@@ -13,7 +13,6 @@ import pytest
 from memory.common.db.models import Person, PersonTidbit
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import people
-from memory.common.content_processing import create_content_hash
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:

@@ -55,7 +55,7 @@ class EmailSyncLock:
         end
         """
         result = self.redis_client.eval(
-            extend_script, 1, self.lock_key, self.lock_value, EMAIL_SYNC_LOCK_TIMEOUT
+            extend_script, 1, self.lock_key, self.lock_value, EMAIL_SYNC_LOCK_TIMEOUT  # type: ignore[arg-type]
         )
         return bool(result)
 
@@ -209,7 +209,7 @@ def process_email_batch(
         # Extend lock periodically to prevent expiry during long syncs
         if lock and messages_found % LOCK_EXTEND_INTERVAL == 0:
             if not lock.extend():
-                logger.warning(f"Failed to extend lock, another sync may have started - aborting")
+                logger.warning("Failed to extend lock, another sync may have started - aborting")
                 # Mark lock as not acquired to signal we should stop
                 lock.acquired = False
                 # Return partial stats - caller should check for incomplete sync

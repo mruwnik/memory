@@ -11,6 +11,7 @@ import requests
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+    from sqlalchemy.orm.scoping import scoped_session
 
 from memory.common import settings
 from memory.common.db.models import DiscordServer
@@ -692,7 +693,7 @@ def grant_role_channel_access(
 # =============================================================================
 
 
-def resolve_guild(guild: int | str | None, session: "Session | None" = None) -> int | None:
+def resolve_guild(guild: int | str | None, session: "Session | scoped_session[Session] | None" = None) -> int | None:
     """Resolve guild ID from either numeric ID or server name.
 
     Args:

@@ -671,7 +671,7 @@ def test_apply_access_filter_multiple_projects(
     for item in results:
         if item.project_id == second_project.id:
             assert item.sensitivity != "confidential", (
-                f"Manager saw confidential item from project 2!"
+                "Manager saw confidential item from project 2!"
             )
 
 

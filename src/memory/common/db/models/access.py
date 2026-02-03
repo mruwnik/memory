@@ -37,7 +37,7 @@ class AccessLogPayload(TypedDict):
     """Serialized representation of an AccessLog entry."""
 
     id: Annotated[int, "Log entry ID"]
-    user_id: Annotated[int, "User who performed the action"]
+    user_id: Annotated[int | None, "User who performed the action"]
     action: Annotated[str, "Action type: search, view_item, create, update"]
     query: Annotated[str | None, "Search query if applicable"]
     item_id: Annotated[int | None, "SourceItem ID if applicable"]

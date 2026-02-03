@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from sqlalchemy.orm.scoping import scoped_session
 
-    from memory.common.db.models.source_item import SourceItem
     from memory.common.db.models.users import User
 
 

@@ -147,9 +147,20 @@ def create_test_database(test_db_name: str) -> str:
     safe_name = validate_db_identifier(test_db_name)
     admin_engine = create_engine(settings.DB_URL)
 
-    # Create a new database
-    with admin_engine.connect() as conn:
-        conn.execute(text("COMMIT"))  # Close any open transaction
+    # Create a new database - must use autocommit for DDL
+    with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        # Terminate any stale connections from previous crashed runs
+        conn.execute(
+            text(
+                f"""
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = '{safe_name}'
+                AND pid <> pg_backend_pid()
+                """
+            )
+        )
+
         conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
         conn.execute(text(f"CREATE DATABASE {safe_name}"))
 
@@ -267,7 +278,6 @@ def db_session(db_engine):
     After the test completes, all tables are truncated to ensure isolation.
     This is much faster than creating a new database for each test.
     """
-    from memory.common.db.models import Base
 
     SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
     session = SessionLocal()
@@ -336,11 +346,9 @@ def mcp_auth_context(session_token: str):
         with mcp_auth_context(admin_session.id):
             result = await some_mcp_tool(...)
     """
-    from mcp.server.auth.middleware.auth_context import (
-        AccessToken,
-        AuthenticatedUser,
-        auth_context_var,
-    )
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
 
     access_token = AccessToken(
         token=session_token,

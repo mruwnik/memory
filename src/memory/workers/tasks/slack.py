@@ -89,7 +89,7 @@ def is_channel_sync_locked(channel_id: str) -> bool:
     """Check if a channel sync is already in progress."""
     client = get_redis_client()
     lock_key = f"slack_channel_sync:{channel_id}"
-    return client.exists(lock_key) > 0
+    return client.exists(lock_key) > 0  # type: ignore[operator]
 
 
 def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
@@ -104,7 +104,7 @@ def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, s
     # Try cache first
     cached = redis_client.get(cache_key)
     if cached:
-        return json.loads(cached)
+        return json.loads(cached)  # type: ignore[arg-type]
 
     # Cache miss - fetch from API
     try:

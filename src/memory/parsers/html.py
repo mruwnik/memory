@@ -6,7 +6,7 @@ import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests

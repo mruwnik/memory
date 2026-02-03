@@ -545,7 +545,7 @@ async def get_channel_permissions(channel_id: int, bot_id: int) -> dict[str, Any
         overwrites.append({
             "target_type": "role" if isinstance(target, discord.Role) else "member",
             "target_id": target.id,
-            "target_name": target.name if isinstance(target, discord.Role) else target.display_name,
+            "target_name": target.name if isinstance(target, discord.Role) else target.display_name,  # type: ignore[union-attr]
             "allow": [perm for perm, value in allow if value],
             "deny": [perm for perm, value in deny if value],
         })
@@ -669,7 +669,7 @@ async def create_channel(request: CreateChannelRequest) -> dict[str, Any]:
     # Get permissions to copy if specified
     overwrites = None
     if request.copy_permissions_from:
-        source_channel = guild.get_channel(request.copy_permissions_from)
+        source_channel = guild.get_channel(request.copy_permissions_from)  # type: ignore[arg-type]
         if source_channel and isinstance(source_channel, discord.abc.GuildChannel):
             overwrites = dict(source_channel.overwrites)
 
@@ -733,6 +733,8 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
                 break
     else:
         # Find by name - requires guild_id to avoid ambiguity
+        # channel_name must be non-None here due to check at line 720
+        assert request.channel_name is not None
         if request.guild_id is None:
             raise HTTPException(
                 status_code=400,
@@ -747,7 +749,7 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
             if ch.name == request.channel_name:
                 channel = ch
                 break
-            if case_insensitive_match is None and ch.name.lower() == request.channel_name.lower():
+            if case_insensitive_match is None and ch.name and ch.name.lower() == request.channel_name.lower():
                 case_insensitive_match = ch
         else:
             # No exact match found, use case-insensitive match if available

@@ -80,7 +80,7 @@ def send_via_discord(params: MessageParams) -> bool:
         with make_session() as session:
             bot = (
                 session.query(DiscordBot)
-                .filter(DiscordBot.user_id == params.user_id)
+                .filter(DiscordBot.user_id == params.user_id)  # type: ignore[attr-defined]
                 .first()
             )
             if bot:

@@ -288,10 +288,11 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                 ):
                     try:
                         file_data = client.fetch_file(file_meta, file_folder_path)
-                        serialized = _serialize_file_data(file_data)
-                        task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
-                        task_ids.append(task.id)
-                        docs_synced += 1
+                        if file_data:
+                            serialized = _serialize_file_data(file_data)
+                            task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
+                            task_ids.append(task.id)
+                            docs_synced += 1
                     except Exception as e:
                         logger.error(f"Error fetching file {file_meta.get('name')}: {e}")
                         continue
@@ -320,10 +321,11 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
                 try:
                     file_data = client.fetch_file(file_metadata, folder_path)
-                    serialized = _serialize_file_data(file_data)
-                    task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
-                    task_ids.append(task.id)
-                    docs_synced = 1
+                    if file_data:
+                        serialized = _serialize_file_data(file_data)
+                        task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
+                        task_ids.append(task.id)
+                        docs_synced = 1
                 except Exception as e:
                     logger.error(f"Error fetching document {file_metadata.get('name')}: {e}")
                     raise

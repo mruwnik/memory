@@ -418,7 +418,7 @@ async def fetch(
                     for t in person.teams
                 ]
             else:
-                accessible_ids = get_accessible_team_ids(session, full_user)
+                accessible_ids = get_accessible_team_ids(session, full_user) or set()
                 result["teams"] = [
                     {"id": t.id, "slug": t.slug, "name": t.name}
                     for t in person.teams
@@ -442,7 +442,7 @@ async def fetch(
                     for p in projects.values()
                 ]
             else:
-                accessible_ids = get_accessible_project_ids(session, full_user)
+                accessible_ids = get_accessible_project_ids(session, full_user) or set()
                 result["projects"] = [
                     {"id": p.id, "title": p.title, "slug": p.slug, "state": p.state}
                     for p in projects.values()

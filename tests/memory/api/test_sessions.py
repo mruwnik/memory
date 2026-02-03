@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
-from memory.common.db.models import Project, Session, User
+from memory.common.db.models import HumanUser, User
+from memory.common.db.models.sessions import CodingProject, Session
 
 
 @pytest.fixture
@@ -21,9 +22,9 @@ def sessions_storage_dir(tmp_path):
 
 
 @pytest.fixture
-def project_for_user(db_session, user):
+def coding_project_for_user(db_session, user):
     """Create a project owned by the test user."""
-    project = Project(
+    project = CodingProject(
         user_id=user.id,
         directory="/home/user/myproject",
         name="My Project",
@@ -35,7 +36,7 @@ def project_for_user(db_session, user):
 
 
 @pytest.fixture
-def session_for_user(db_session, user, project_for_user, sessions_storage_dir):
+def session_for_user(db_session, user, coding_project_for_user, sessions_storage_dir):
     """Create a session owned by the test user."""
     session_uuid = uuid4()
     transcript_path = f"{user.id}/{session_uuid}.jsonl"
@@ -48,7 +49,7 @@ def session_for_user(db_session, user, project_for_user, sessions_storage_dir):
     session = Session(
         id=session_uuid,
         user_id=user.id,
-        project_id=project_for_user.id,
+        coding_project_id=coding_project_for_user.id,
         git_branch="main",
         tool_version="1.0.0",
         source="test-host",
@@ -65,10 +66,11 @@ def other_user(db_session):
     existing = db_session.query(User).filter(User.id == 99999).first()
     if existing:
         return existing
-    other = User(
+    other = HumanUser(
         id=99999,
         name="Other User",
         email="other@example.com",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(other)
     db_session.commit()
@@ -187,8 +189,8 @@ def test_ingest_session_event_creates_project(
 
     # Check project was created
     project = (
-        db_session.query(Project)
-        .filter(Project.user_id == user.id, Project.directory == cwd)
+        db_session.query(CodingProject)
+        .filter(CodingProject.user_id == user.id, CodingProject.directory == cwd)  # type: ignore[attr-defined]
         .first()
     )
     assert project is not None
@@ -213,7 +215,7 @@ def test_ingest_session_event_invalid_uuid(client: TestClient, user):
     assert "Invalid session UUID" in response.json()["detail"]
 
 
-def test_list_projects(client: TestClient, project_for_user):
+def test_list_projects(client: TestClient, coding_project_for_user):
     """Test listing projects for current user."""
     response = client.get("/sessions/projects")
 
@@ -222,7 +224,7 @@ def test_list_projects(client: TestClient, project_for_user):
     assert data["total"] >= 1
 
     project_dirs = [p["directory"] for p in data["projects"]]
-    assert project_for_user.directory in project_dirs
+    assert coding_project_for_user.directory in project_dirs
 
 
 def test_list_projects_excludes_other_users(
@@ -230,7 +232,7 @@ def test_list_projects_excludes_other_users(
 ):
     """Test listing projects only returns current user's projects."""
     # Create project for other user
-    other_project = Project(
+    other_project = CodingProject(
         user_id=other_user.id,
         directory="/other/project",
     )
@@ -258,26 +260,26 @@ def test_list_sessions(client: TestClient, session_for_user):
 
 
 def test_list_sessions_filter_by_project(
-    client: TestClient, db_session, user, project_for_user, sessions_storage_dir
+    client: TestClient, db_session, user, coding_project_for_user, sessions_storage_dir
 ):
     """Test filtering sessions by project ID."""
     # Create another session without project
     other_session = Session(
         id=uuid4(),
         user_id=user.id,
-        project_id=None,
+        coding_project_id=None,
         source="test",
     )
     db_session.add(other_session)
     db_session.commit()
 
-    response = client.get(f"/sessions/?project_id={project_for_user.id}")
+    response = client.get(f"/sessions/?project_id={coding_project_for_user.id}")
 
     assert response.status_code == 200
     data = response.json()
     # All returned sessions should have the specified project
     for session in data["sessions"]:
-        assert session["project_id"] == project_for_user.id
+        assert session["project_id"] == coding_project_for_user.id
 
 
 def test_list_sessions_excludes_other_users(
@@ -443,7 +445,7 @@ def test_list_sessions_pagination_params(
     ],
 )
 def test_list_projects_pagination_params(
-    client: TestClient, project_for_user, limit, offset
+    client: TestClient, coding_project_for_user, limit, offset
 ):
     """Test projects list accepts pagination parameters."""
     response = client.get(f"/sessions/projects?limit={limit}&offset={offset}")

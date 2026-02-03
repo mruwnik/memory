@@ -21,7 +21,6 @@ from memory.common.db.models import (
     Team,
     UserSession,
 )
-from sqlalchemy.orm import selectinload
 from memory.common.discord_data import (
     fetch_channel_history,
     fetch_channels,

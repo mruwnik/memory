@@ -8,7 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Literal, Protocol, overload
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
+    from sqlalchemy.orm import Session, scoped_session
 
 from fastmcp.server.dependencies import get_access_token
 
@@ -77,7 +77,9 @@ class UserProxy:
         self.scopes = user_dict.get("scopes", [])
 
 
-def fetch_user_by_token(session: "Session", token: str) -> User | None:
+def fetch_user_by_token(
+    session: "Session | scoped_session[Session]", token: str
+) -> User | None:
     """Look up a user by token (session token or API key)."""
     user_session = session.get(UserSession, token)
     if user_session and user_session.user:
@@ -91,19 +93,26 @@ def fetch_user_by_token(session: "Session", token: str) -> User | None:
 
 
 @overload
-def get_mcp_current_user() -> UserProxy | None: ...
+def get_mcp_current_user() -> UserProxy | None:
+    ...
 
 
 @overload
-def get_mcp_current_user(session: "Session", full: Literal[True]) -> User | None: ...
+def get_mcp_current_user(
+    session: "Session | scoped_session[Session]", full: Literal[True]
+) -> User | None:
+    ...
 
 
 @overload
-def get_mcp_current_user(session: "Session", full: Literal[False] = False) -> UserProxy | None: ...
+def get_mcp_current_user(
+    session: "Session | scoped_session[Session]", full: Literal[False] = False
+) -> UserProxy | None:
+    ...
 
 
 def get_mcp_current_user(
-    session: "Session | None" = None,
+    session: "Session | scoped_session[Session] | None" = None,
     full: bool = False,
 ) -> UserProxy | User | None:
     """Get the current MCP user for access control.

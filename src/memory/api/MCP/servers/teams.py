@@ -9,7 +9,7 @@ from typing import Any
 from fastmcp import FastMCP
 from sqlalchemy import Text, cast, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, scoped_session, selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -199,7 +199,7 @@ def make_slug(name: str) -> str:
 
 
 def upsert_team_record(
-    session: Session,
+    session: Session | scoped_session[Session],
     slug: str,
     name: str,
     description: str | None,
@@ -241,7 +241,7 @@ def upsert_team_record(
 
 
 def setup_discord_integration(
-    session: Session,
+    session: Session | scoped_session[Session],
     team: Team,
     guild: int | str | None,
     discord_role: int | str | None,
@@ -292,7 +292,7 @@ def setup_discord_integration(
 
 
 async def setup_github_integration(
-    session: Session,
+    session: Session | scoped_session[Session],
     team: Team,
     name: str,
     github_org: str | None,
@@ -336,7 +336,7 @@ async def setup_github_integration(
 
 
 async def import_external_members(
-    session: Session,
+    session: Session | scoped_session[Session],
     team: Team,
     result: dict[str, Any],
     resolved_guild_id: int | None,
@@ -500,13 +500,14 @@ async def upsert(
             .filter(Team.id == team_id)
             .first()
         )
-        result["team"] = team_to_dict(team, include_members=True)
+        if team:
+            result["team"] = team_to_dict(team, include_members=True)
 
     return result
 
 
 async def ensure_github_team(
-    session: Session,
+    session: Session | scoped_session[Session],
     org: str,
     team_slug: str,
     team_name: str,
@@ -546,7 +547,7 @@ async def ensure_github_team(
 
 
 def import_external_user_to_team(
-    session: Session,
+    session: Session | scoped_session[Session],
     team: Team,
     external_user: Any,
     identifier: str,
@@ -591,7 +592,7 @@ def import_external_user_to_team(
 
 
 async def sync_from_discord(
-    session: Session,
+    session: Session | scoped_session[Session],
     team_slug: str,
     guild_id: int,
     role_id: int,
@@ -653,7 +654,7 @@ async def sync_from_discord(
 
 
 async def sync_from_github(
-    session: Session,
+    session: Session | scoped_session[Session],
     team_slug: str,
     org: str,
     github_team_slug: str,
@@ -719,7 +720,7 @@ async def sync_from_github(
 
 
 def find_or_create_person(
-    session: Session,
+    session: Session | scoped_session[Session],
     identifier: str,
     display_name: str,
     contact_info: dict[str, Any] | None = None,
@@ -747,7 +748,7 @@ def find_or_create_person(
 
 
 async def set_team_members(
-    session: Session,
+    session: Session | scoped_session[Session],
     team: Team,
     member_identifiers: list[str],
 ) -> dict[str, Any]:
@@ -1406,7 +1407,7 @@ async def project_list_access(
 # ============== Helper Functions ==============
 
 
-def find_project_with_access(session: Session, user: User, project: int | str) -> Project | None:
+def find_project_with_access(session: Session | scoped_session[Session], user: User, project: int | str) -> Project | None:
     """Find a project by ID or slug, with access control filtering."""
     query = session.query(Project).options(selectinload(Project.teams))
 

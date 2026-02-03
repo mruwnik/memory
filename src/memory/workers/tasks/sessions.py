@@ -194,6 +194,8 @@ def summarize_stale_sessions() -> dict:
         sessions = db.query(Session).filter(Session.transcript_path.isnot(None)).all()
 
         for session in sessions:
+            if not session.transcript_path:
+                continue
             transcript_file = settings.SESSIONS_STORAGE_DIR / session.transcript_path
 
             if not transcript_file.exists():
@@ -216,7 +218,7 @@ def summarize_stale_sessions() -> dict:
 
             # Queue summarization task
             try:
-                summarize_session.delay(str(session.id))
+                summarize_session.delay(str(session.id))  # type: ignore[attr-defined]
                 processed += 1
             except Exception as e:
                 logger.error(f"Failed to queue summarization for {session.id}: {e}")
