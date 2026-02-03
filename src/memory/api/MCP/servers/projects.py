@@ -836,8 +836,9 @@ async def create_repo_project(
         account = (
             session.query(GithubAccount)
             .filter(
-                GithubAccount.user_id == user.id, GithubAccount.active == True
-            )  # noqa: E712
+                GithubAccount.user_id == user.id,
+                GithubAccount.active.is_(True),
+            )
             .first()
         )
         if not account:
@@ -991,8 +992,9 @@ async def create_milestone_project(
         account = (
             session.query(GithubAccount)
             .filter(
-                GithubAccount.user_id == user.id, GithubAccount.active == True
-            )  # noqa: E712
+                GithubAccount.user_id == user.id,
+                GithubAccount.active.is_(True),
+            )
             .first()
         )
         if not account:
