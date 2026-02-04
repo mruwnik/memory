@@ -40,7 +40,7 @@ def _sync_milestone(
     milestone_data: GithubMilestoneData,
 ) -> Project:
     """Sync a milestone, creating or updating as needed."""
-    existing = (
+    milestone = (
         session.query(Project)
         .filter(
             Project.repo_id == repo.id,
@@ -49,30 +49,37 @@ def _sync_milestone(
         .first()
     )
 
-    if existing:
-        # Update existing milestone
-        existing.title = milestone_data["title"]
-        existing.description = milestone_data["description"]
-        existing.state = milestone_data["state"]
-        existing.due_on = milestone_data["due_on"]
-        existing.github_updated_at = milestone_data["github_updated_at"]
-        existing.closed_at = milestone_data["closed_at"]
-        return existing
-
-    # Create new milestone
-    milestone = Project(
-        repo_id=repo.id,
-        github_id=milestone_data["github_id"],
-        number=milestone_data["number"],
-        title=milestone_data["title"],
-        description=milestone_data["description"],
-        state=milestone_data["state"],
-        due_on=milestone_data["due_on"],
-        github_created_at=milestone_data["github_created_at"],
-        github_updated_at=milestone_data["github_updated_at"],
-        closed_at=milestone_data["closed_at"],
+    # Find repo-level project to use as parent (for new or orphaned milestones)
+    repo_project = (
+        session.query(Project)
+        .filter(
+            Project.repo_id == repo.id,
+            Project.number.is_(None),
+        )
+        .first()
     )
-    session.add(milestone)
+
+    if not milestone:
+        milestone = Project(
+            repo_id=repo.id,
+            github_id=milestone_data["github_id"],
+            number=milestone_data["number"],
+            parent_id=repo_project.id if repo_project else None,
+        )
+        session.add(milestone)
+    elif milestone.parent_id is None and repo_project:
+        # Backfill parent for existing milestones that don't have one
+        milestone.parent_id = repo_project.id
+
+    # Update fields
+    milestone.title = milestone_data["title"]
+    milestone.description = milestone_data["description"]
+    milestone.state = milestone_data["state"]
+    milestone.due_on = milestone_data["due_on"]
+    milestone.github_created_at = milestone_data["github_created_at"]
+    milestone.github_updated_at = milestone_data["github_updated_at"]
+    milestone.closed_at = milestone_data["closed_at"]
+
     session.flush()
     return milestone
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate } from '@/hooks/useProjects'
 import { useTeams, Team, TeamMember } from '@/hooks/useTeams'
-import { usePeople, Person } from '@/hooks/usePeople'
+import { Person } from '@/hooks/usePeople'
 import {
   Modal,
   EmptyState,
@@ -80,6 +80,76 @@ const TeamMembersPopover = ({ team, onClose, listMembers }: TeamMembersPopoverPr
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+// Due date selector popover component
+interface DueDateSelectorPopoverProps {
+  currentDueOn: string | null
+  onSelect: (dueOn: string | null) => void
+  onClose: () => void
+}
+
+const DueDateSelectorPopover = ({ currentDueOn, onSelect, onClose }: DueDateSelectorPopoverProps) => {
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [dateValue, setDateValue] = useState(currentDueOn ? currentDueOn.split('T')[0] : '')
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [onClose])
+
+  const handleApply = () => {
+    if (dateValue) {
+      onSelect(new Date(dateValue + 'T00:00:00Z').toISOString())
+    } else {
+      onSelect(null)
+    }
+    onClose()
+  }
+
+  const handleClear = () => {
+    onSelect(null)
+    onClose()
+  }
+
+  return (
+    <div
+      ref={popoverRef}
+      className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-56"
+    >
+      <input
+        type="date"
+        value={dateValue}
+        onChange={e => setDateValue(e.target.value)}
+        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        autoFocus
+      />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={handleApply}
+          className="flex-1 px-3 py-1.5 text-sm bg-primary text-white rounded hover:bg-primary/90 transition-colors"
+        >
+          Apply
+        </button>
+        {currentDueOn && (
+          <button
+            type="button"
+            onClick={handleClear}
+            className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -179,9 +249,8 @@ export const ProjectsPanel = () => {
     listProjectTeams,
     assignTeamToProject,
     unassignTeamFromProject,
+    getTeam,
   } = useTeams()
-
-  const { listPeople } = usePeople()
 
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
@@ -236,23 +305,45 @@ export const ProjectsPanel = () => {
     setError(null)
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
-      const [projectsList, treeData, teamsList, peopleList] = await Promise.all([
+      const [projectsList, treeData, teamsList, adminTeam, internalTeam] = await Promise.all([
         listProjects({ state, include_teams: true, limit: 500 }),
         getProjectTree({ state }),
         listTeams(),
-        listPeople({ limit: 200 }),
+        getTeam('admin', true),
+        getTeam('internal', true),
       ])
       // Ensure we always have arrays (API might return error objects)
       setProjects(Array.isArray(projectsList) ? projectsList : [])
       setTree(Array.isArray(treeData) ? treeData : [])
       setAvailableTeams(Array.isArray(teamsList) ? teamsList : [])
-      setAvailablePeople(Array.isArray(peopleList) ? peopleList : [])
+
+      // Combine and deduplicate members from admin and internal teams
+      const memberMap = new Map<number, Person>()
+      for (const team of [adminTeam, internalTeam]) {
+        if (team?.members) {
+          for (const member of team.members) {
+            if (!memberMap.has(member.id)) {
+              memberMap.set(member.id, {
+                id: member.id,
+                identifier: member.identifier,
+                display_name: member.display_name,
+                aliases: [],
+                contact_info: {},
+                tags: [],
+                notes: null,
+                created_at: null,
+              })
+            }
+          }
+        }
+      }
+      setAvailablePeople(Array.from(memberMap.values()))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load projects')
     } finally {
       setLoading(false)
     }
-  }, [listProjects, getProjectTree, listTeams, listPeople, stateFilter])
+  }, [listProjects, getProjectTree, listTeams, getTeam, stateFilter])
 
   useEffect(() => {
     loadData()
@@ -282,12 +373,35 @@ export const ProjectsPanel = () => {
   }
 
   const handleChangeOwner = useCallback(async (projectId: number, ownerId: number | null) => {
-    await updateProject(projectId, {
+    const result = await updateProject(projectId, {
       owner_id: ownerId,
       clear_owner: ownerId === null,
     })
-    loadData()
-  }, [updateProject, loadData])
+    // Update local state instead of reloading everything
+    if (result.success) {
+      // Find the owner from availablePeople to get display info
+      const owner = ownerId ? availablePeople.find(p => p.id === ownerId) : null
+      setProjects(prev => prev.map(p => p.id === projectId ? {
+        ...p,
+        owner_id: ownerId,
+        owner: owner ? { id: owner.id, identifier: owner.identifier, display_name: owner.display_name } : null,
+      } : p))
+    }
+  }, [updateProject, availablePeople])
+
+  const handleChangeDueDate = useCallback(async (projectId: number, dueOn: string | null) => {
+    const result = await updateProject(projectId, {
+      due_on: dueOn,
+      clear_due_on: dueOn === null,
+    })
+    // Update local state instead of reloading everything
+    if (result.success) {
+      setProjects(prev => prev.map(p => p.id === projectId ? {
+        ...p,
+        due_on: dueOn,
+      } : p))
+    }
+  }, [updateProject])
 
   // Check if there's any tree hierarchy (any project has children)
   const hasHierarchy = tree.some(node => node.children.length > 0)
@@ -408,6 +522,7 @@ export const ProjectsPanel = () => {
               onDelete={setDeletingProject}
               onManageTeams={setManagingTeams}
               onChangeOwner={handleChangeOwner}
+              onChangeDueDate={handleChangeDueDate}
               projects={projects}
               collapsedNodes={collapsedNodes}
               onToggleCollapse={toggleCollapse}
@@ -440,6 +555,7 @@ export const ProjectsPanel = () => {
                   onDelete={() => setDeletingProject(project)}
                   onManageTeams={() => setManagingTeams(project)}
                   onChangeOwner={handleChangeOwner}
+                  onChangeDueDate={handleChangeDueDate}
                   listMembers={listMembers}
                   availablePeople={availablePeople}
                   inheritedOwner={inheritedOwner}
@@ -523,6 +639,7 @@ interface ProjectTreeProps {
   onDelete: (project: Project) => void
   onManageTeams: (project: Project) => void
   onChangeOwner: (projectId: number, ownerId: number | null) => Promise<void>
+  onChangeDueDate: (projectId: number, dueOn: string | null) => Promise<void>
   projects: Project[]
   collapsedNodes: Set<number>
   onToggleCollapse: (nodeId: number) => void
@@ -532,7 +649,7 @@ interface ProjectTreeProps {
   depth?: number
 }
 
-const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0 }: ProjectTreeProps) => {
+const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0 }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
   return (
@@ -591,6 +708,7 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, pr
                   onDelete={() => onDelete(projectData)}
                   onManageTeams={() => onManageTeams(projectData)}
                   onChangeOwner={onChangeOwner}
+                  onChangeDueDate={onChangeDueDate}
                   listMembers={listMembers}
                   availablePeople={availablePeople}
                   inheritedOwner={inheritedOwner}
@@ -605,6 +723,7 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, pr
                 onDelete={onDelete}
                 onManageTeams={onManageTeams}
                 onChangeOwner={onChangeOwner}
+                onChangeDueDate={onChangeDueDate}
                 projects={projects}
                 collapsedNodes={collapsedNodes}
                 onToggleCollapse={onToggleCollapse}
@@ -650,13 +769,14 @@ interface ProjectCardProps {
   onDelete: () => void
   onManageTeams: () => void
   onChangeOwner?: (projectId: number, ownerId: number | null) => Promise<void>
+  onChangeDueDate?: (projectId: number, dueOn: string | null) => Promise<void>
   listMembers?: (team: number) => Promise<TeamMember[]>
   availablePeople?: Person[]
   inheritedOwner?: { id: number; display_name: string | null; identifier: string } | null
   compact?: boolean
 }
 
-const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, listMembers, availablePeople, inheritedOwner, compact }: ProjectCardProps) => {
+const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, listMembers, availablePeople, inheritedOwner, compact }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
   const dueWarning = getDueWarningLevel(project.due_on)
@@ -665,6 +785,7 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
   const isInheritedOwner = !hasOwnOwner && !!inheritedOwner
   const [expandedTeam, setExpandedTeam] = useState<{ id: number; name: string } | null>(null)
   const [showOwnerSelector, setShowOwnerSelector] = useState(false)
+  const [showDueDateSelector, setShowDueDateSelector] = useState(false)
 
   const handleTeamClick = (e: React.MouseEvent, team: { id: number; name: string }) => {
     e.stopPropagation()
@@ -685,6 +806,19 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
   const handleOwnerSelect = async (ownerId: number | null) => {
     if (onChangeOwner) {
       await onChangeOwner(project.id, ownerId)
+    }
+  }
+
+  const handleDueDateClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onChangeDueDate) {
+      setShowDueDateSelector(!showDueDateSelector)
+    }
+  }
+
+  const handleDueDateSelect = async (dueOn: string | null) => {
+    if (onChangeDueDate) {
+      await onChangeDueDate(project.id, dueOn)
     }
   }
 
@@ -803,11 +937,28 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
                 />
               )}
             </span>
-            {project.due_on && (
-              <span>
-                Due: <span className="text-slate-700">{formatDueDate(project.due_on)}</span>
+            <span className="relative">
+              Due:{' '}
+              <span
+                onClick={handleDueDateClick}
+                className={cx(
+                  'cursor-pointer px-1.5 py-0.5 rounded',
+                  project.due_on
+                    ? 'text-slate-700 hover:bg-slate-100'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                )}
+                title="Click to set due date"
+              >
+                {project.due_on ? formatDueDate(project.due_on) : 'None'}
               </span>
-            )}
+              {showDueDateSelector && onChangeDueDate && (
+                <DueDateSelectorPopover
+                  currentDueOn={project.due_on}
+                  onSelect={handleDueDateSelect}
+                  onClose={() => setShowDueDateSelector(false)}
+                />
+              )}
+            </span>
           </div>
           {project.teams && project.teams.length > 0 && (
             <div className="flex items-center gap-1.5 mt-2 flex-wrap relative">

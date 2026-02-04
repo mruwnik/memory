@@ -7,7 +7,7 @@ clients that expect certain keys.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from fastmcp import FastMCP
@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from memory.common.github import GithubClient
+from memory.common.github import GithubClient, GithubCredentials
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -26,7 +26,7 @@ from memory.common.access_control import (
     user_can_access_project,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubAccount, Project, Team
+from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
 from memory.common.db.models.sources import Person
 from memory.api.MCP.servers.github_helpers import (
     SyncResult,
@@ -212,6 +212,123 @@ def create_project_with_retry(
             continue
 
     return None, {"error": "Failed to create project", "project": None}
+
+
+def sync_milestone_due_date(
+    project: Project,
+    new_due_on: datetime | None,
+) -> dict[str, Any] | None:
+    """Sync a project's due date to its GitHub milestone.
+
+    This function syncs the due_on date to GitHub for milestone-backed projects.
+    It should be called BEFORE updating the local database to ensure consistency
+    (if GitHub fails, we don't leave the local database in an inconsistent state).
+
+    Args:
+        project: The project to sync (must have repo and milestone number)
+        new_due_on: The new due date to set, or None to clear it
+
+    Returns:
+        Error dict if sync failed, None if successful or sync not needed
+    """
+    github_repo = project.repo
+    if not github_repo:
+        return None
+
+    account = github_repo.account
+    if not account:
+        logger.warning(
+            f"Cannot sync due_on to GitHub: repo {github_repo.owner}/{github_repo.name} "
+            "has no associated account"
+        )
+        return None
+
+    # Format for GitHub API (None clears the date)
+    github_due_on: str | None = None
+    if new_due_on is not None:
+        utc_due_on = new_due_on.astimezone(timezone.utc)
+        github_due_on = utc_due_on.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    credentials = GithubCredentials(
+        auth_type=account.auth_type,
+        access_token=account.access_token,
+        app_id=account.app_id,
+        installation_id=account.installation_id,
+        private_key=account.private_key,
+    )
+    client = GithubClient(credentials)
+    try:
+        result = client.update_milestone(
+            owner=github_repo.owner,
+            repo=github_repo.name,
+            milestone_number=project.number,
+            due_on=github_due_on,
+        )
+        if result is None:
+            return {
+                "error": "Failed to update GitHub milestone due date",
+                "project": None,
+            }
+    except Exception as e:
+        logger.exception("Failed to sync due date to GitHub")
+        return {
+            "error": f"Failed to sync due date to GitHub: {e}",
+            "project": None,
+        }
+
+    return None
+
+
+def find_existing_project_by_repo(
+    session: Any,
+    repo_path: str,
+    milestone_title: str | None = None,
+) -> Project | None:
+    """Find an existing project by repo path and optional milestone title.
+
+    Args:
+        session: Database session
+        repo_path: GitHub repo path (e.g., "owner/name")
+        milestone_title: Optional milestone title to match. The match is
+            case-sensitive and exact - if the local project title was
+            modified after creation, it won't match the GitHub milestone.
+
+    Returns:
+        Existing Project if found, None otherwise
+    """
+    if "/" not in repo_path:
+        return None
+
+    owner, repo_name = repo_path.split("/", 1)
+
+    # Look up repo in database
+    repo_obj = (
+        session.query(GithubRepo)
+        .filter(GithubRepo.owner == owner, GithubRepo.name == repo_name)
+        .first()
+    )
+    if not repo_obj:
+        return None
+
+    if milestone_title is not None:
+        # Look for milestone project - match by title since we don't have the number yet
+        # This is a best-effort match; if title was overridden, it won't match
+        return (
+            session.query(Project)
+            .filter(
+                Project.repo_id == repo_obj.id,
+                Project.number.isnot(None),  # Has a milestone number
+                Project.title == milestone_title,
+            )
+            .first()
+        )
+    else:
+        # Look for repo-level project (no milestone)
+        return (
+            session.query(Project)
+            .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
+            .first()
+        )
 
 
 # ============== Response Helpers ==============
@@ -550,6 +667,27 @@ async def upsert(
         user = get_mcp_current_user(session, full=True)
         if not user:
             return {"error": "Not authenticated", "project": None}
+
+        # If milestone provided without repo, require explicit project_id
+        if project_id is None and milestone is not None and repo is None:
+            return {
+                "error": "project_id is required when specifying milestone without repo "
+                "(milestones can have the same name across different repos)",
+                "project": None,
+            }
+
+        # If no project_id but repo provided, try to find existing project
+        if project_id is None and repo is not None:
+            existing = find_existing_project_by_repo(session, repo, milestone)
+            if existing:
+                project_id = existing.id
+                logger.info(
+                    f"MCP: Found existing project {project_id} for repo={repo}, milestone={milestone}"
+                )
+            else:
+                logger.debug(
+                    f"MCP: No existing project found for repo={repo}, milestone={milestone}"
+                )
 
         # UPDATE path
         if project_id is not None:
@@ -1217,6 +1355,26 @@ async def update_project(
                     "error": "You do not have access to any of the specified teams",
                     "project": None,
                 }
+
+    # Sync due_on to GitHub for milestone-backed projects BEFORE local changes
+    # This ensures that if GitHub fails, we don't leave the local database inconsistent
+    if not is_standalone and project.repo and project.number:
+        # Determine if due_on is being changed
+        new_due_on_value: datetime | None = None
+        due_on_changed = False
+        if clear_due_on:
+            if project.due_on is not None:
+                due_on_changed = True
+                new_due_on_value = None
+        elif due_on_dt is not None:
+            if project.due_on != due_on_dt:
+                due_on_changed = True
+                new_due_on_value = due_on_dt
+
+        if due_on_changed:
+            sync_error = sync_milestone_due_date(project, new_due_on_value)
+            if sync_error:
+                return sync_error
 
     # Apply updates
     if clear_parent:

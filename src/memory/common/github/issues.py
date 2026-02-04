@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
     """Mixin providing issue and PR fetching methods."""
 
+    # Sentinel default: don't change the field. Pass None to clear, or a value to set.
+    UNCHANGED = "__UNCHANGED__"
+
     # GraphQL fragment for fetching project item field VALUES (actual data)
     _PROJECT_ITEM_VALUES_FRAGMENT = """
     fragment ProjectFieldValues on ProjectV2ItemConnection {
@@ -993,6 +996,66 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 return None
         except Exception as e:
             logger.error(f"Failed to create milestone '{title}': {e}")
+            return None
+
+    def update_milestone(
+        self,
+        owner: str,
+        repo: str,
+        milestone_number: int,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        due_on: str | None = UNCHANGED,  # type: ignore[assignment]
+        state: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update an existing GitHub milestone.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            milestone_number: The milestone number to update
+            title: Optional new title (None = don't change)
+            description: Optional new description (None = don't change)
+            due_on: Date string to set, None to clear, UNCHANGED to leave alone
+            state: Optional state ("open" or "closed", None = don't change)
+
+        Returns:
+            Updated milestone data dict, or None on failure
+
+        Raises:
+            ValueError: If called with no fields to update (programmer error)
+        """
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if description is not None:
+            payload["description"] = description
+        if due_on is None:
+            payload["due_on"] = None  # Explicitly clear
+        elif due_on != self.UNCHANGED:
+            payload["due_on"] = due_on  # Set to value
+        if state is not None:
+            payload["state"] = state
+
+        if not payload:
+            raise ValueError("update_milestone called with no fields to update")
+
+        try:
+            response = self.session.patch(
+                f"{GITHUB_API_URL}/repos/{owner}/{repo}/milestones/{milestone_number}",
+                json=payload,
+                timeout=30,
+            )
+            if response.ok:
+                data = response.json()
+                logger.info(f"Updated milestone #{milestone_number} in {owner}/{repo}")
+                return data
+            else:
+                logger.error(f"Failed to update milestone: {response.status_code} {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to update milestone #{milestone_number}: {e}")
             return None
 
     def fetch_issue_graphql(

@@ -670,9 +670,9 @@ def github_account(db_session, github_user):
         user_id=github_user.id,
         name="Test GitHub Account",
         auth_type="pat",
-        access_token_encrypted=b"fake_encrypted_token",
         active=True,
     )
+    account.access_token = "ghp_test_token_12345"  # Uses setter to encrypt
     db_session.add(account)
     db_session.commit()
     return account
@@ -874,10 +874,10 @@ async def test_repo_project_idempotent_update(
         mock_get_client.return_value = (mock_client, github_repo)
 
         # Upsert should find existing and update teams
+        # Note: description update is not allowed for GitHub-backed projects
         result = await get_fn(upsert)(
             repo="testorg/testrepo",
             team_ids=[team_alpha_id, team_beta_id],
-            description="Updated description",
         )
 
     assert result.get("success") is True, f"Expected success, got: {result}"
@@ -1680,3 +1680,266 @@ async def test_update_project_outbound_sync_for_new_teams(
         repo="testrepo",
         permission="push",
     )
+
+
+# =============================================================================
+# GitHub milestone due_on sync tests
+# =============================================================================
+
+
+@pytest.fixture
+def github_milestone_project(db_session):
+    """Create a GitHub-backed milestone project for testing due_on sync.
+
+    This fixture creates its own isolated user, account, repo, and session to avoid
+    test isolation issues with shared fixtures (ObjectDeletedError when running
+    tests in sequence).
+    """
+    from memory.common.db.models.sources import GithubAccount, GithubRepo, project_teams
+
+    unique_id = uuid.uuid4().hex[:8]
+
+    # Create isolated user for this fixture
+    user = HumanUser(
+        name="Milestone Test User",
+        email=f"milestone-test-{unique_id}@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["*"],
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    # Create isolated session for this fixture
+    session = UserSession(
+        id=f"milestone-test-session-{unique_id}",
+        user_id=user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.flush()
+
+    # Create isolated GitHub account
+    account = GithubAccount(
+        user_id=user.id,
+        name="Milestone Test GitHub Account",
+        auth_type="pat",
+        active=True,
+    )
+    account.access_token = "ghp_milestone_test_token"
+    db_session.add(account)
+    db_session.flush()
+
+    # Create isolated GitHub repo
+    repo = GithubRepo(
+        account_id=account.id,
+        github_id=99999,
+        owner="testorg",
+        name="testrepo",
+        track_issues=True,
+        track_prs=True,
+        active=True,
+    )
+    db_session.add(repo)
+    db_session.flush()
+
+    # Create a team for the project
+    team = Team(
+        name="Milestone Team",
+        slug=f"milestone-team-{unique_id}",
+        description="Team for milestone project",
+        is_active=True,
+    )
+    db_session.add(team)
+    db_session.flush()
+
+    # Create milestone project (uses positive ID to mimic GitHub milestone)
+    project = Project(
+        id=uuid.uuid4().int & ((1 << 62) - 1),  # Positive ID for GitHub-backed
+        repo_id=repo.id,
+        github_id=111,
+        number=5,  # Milestone number on GitHub
+        title="v1.0 Release",
+        description="First major release",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    # Assign team to project
+    db_session.execute(
+        project_teams.insert().values(
+            project_id=project.id,
+            team_id=team.id,
+        )
+    )
+    db_session.commit()
+
+    # Attach session_id to the project so tests can use it for auth
+    project._test_session_id = session.id
+    project._test_repo = repo
+
+    return project
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_due_on_syncs_to_milestone(
+    db_session, github_milestone_project
+):
+    """Updating due_on on a GitHub-backed milestone project syncs to GitHub."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_milestone_project._test_session_id)
+    due_date = "2026-06-15T12:00:00+00:00"
+
+    mock_github_client = MagicMock()
+    mock_github_client.update_milestone.return_value = {"number": 5, "due_on": due_date}
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+    ):
+        mock_client_class.return_value = mock_github_client
+
+        result = await get_fn(upsert)(
+            project_id=github_milestone_project.id,
+            due_on=due_date,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["project"]["due_on"] == "2026-06-15T12:00:00+00:00"
+
+    # Verify update_milestone was called with correct args
+    mock_github_client.update_milestone.assert_called_once_with(
+        owner="testorg",
+        repo="testrepo",
+        milestone_number=5,
+        due_on="2026-06-15T12:00:00Z",
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_clear_due_on_syncs_to_milestone(
+    db_session, github_milestone_project
+):
+    """Clearing due_on on a GitHub-backed milestone project syncs null to GitHub."""
+    from datetime import timezone as tz
+    from memory.api.MCP.servers.projects import upsert
+
+    # Set initial due date on the project
+    github_milestone_project.due_on = datetime(2026, 3, 1, tzinfo=tz.utc)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_milestone_project._test_session_id)
+
+    mock_github_client = MagicMock()
+    mock_github_client.update_milestone.return_value = {"number": 5, "due_on": None}
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+    ):
+        mock_client_class.return_value = mock_github_client
+
+        result = await get_fn(upsert)(
+            project_id=github_milestone_project.id,
+            clear_due_on=True,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result["project"]["due_on"] is None
+
+    # Verify update_milestone was called with None to clear due_on
+    mock_github_client.update_milestone.assert_called_once_with(
+        owner="testorg",
+        repo="testrepo",
+        milestone_number=5,
+        due_on=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_due_on_fails_gracefully(
+    db_session, github_milestone_project
+):
+    """When GitHub API fails to update milestone, the operation returns an error."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_milestone_project._test_session_id)
+    due_date = "2026-06-15T12:00:00+00:00"
+
+    mock_github_client = MagicMock()
+    mock_github_client.update_milestone.return_value = None  # Simulate failure
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+    ):
+        mock_client_class.return_value = mock_github_client
+
+        result = await get_fn(upsert)(
+            project_id=github_milestone_project.id,
+            due_on=due_date,
+        )
+
+    assert "error" in result
+    assert "Failed to update GitHub milestone" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_owner_does_not_call_github(
+    db_session, github_milestone_project, teams_and_projects
+):
+    """Updating owner on a GitHub-backed project does NOT call GitHub API."""
+    from memory.api.MCP.servers.projects import upsert
+
+    mock_token = make_mock_access_token(github_milestone_project._test_session_id)
+    person = teams_and_projects["person1"]
+
+    mock_github_client = MagicMock()
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+    ):
+        mock_client_class.return_value = mock_github_client
+
+        result = await get_fn(upsert)(
+            project_id=github_milestone_project.id,
+            owner_id=person.id,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    # Verify update_milestone was NOT called (owner is local-only)
+    mock_github_client.update_milestone.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_same_due_on_does_not_call_github(
+    db_session, github_milestone_project
+):
+    """Setting due_on to its current value does NOT call GitHub API."""
+    from datetime import timezone as tz
+    from memory.api.MCP.servers.projects import upsert
+
+    # Set initial due date on the project
+    github_milestone_project.due_on = datetime(2026, 6, 15, 12, 0, 0, tzinfo=tz.utc)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_milestone_project._test_session_id)
+
+    mock_github_client = MagicMock()
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+    ):
+        mock_client_class.return_value = mock_github_client
+
+        result = await get_fn(upsert)(
+            project_id=github_milestone_project.id,
+            due_on="2026-06-15T12:00:00+00:00",
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    # Verify update_milestone was NOT called (no change in due_on)
+    mock_github_client.update_milestone.assert_not_called()
