@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
     build_user_access_filter_from_dict,
@@ -581,12 +582,21 @@ async def fetch(id: int, include_content: bool = True, include_journal: bool = F
 
     Returns: Full item details including metadata, tags, and optionally content and journal entries.
     """
-    # Get access filter to check permissions
+    # Get access filter and user info BEFORE opening session to avoid nested session issues
     access_filter = get_current_user_access_filter()
+    user = get_mcp_current_user()
+    user_id: int | None = getattr(user, "id", None) if user else None
+
+    # Fetch project_roles before opening main session (creates its own session)
+    project_roles: dict[int, str] | None = None
+    if access_filter is not None and user_id is not None:
+        project_roles = get_project_roles_by_user_id(user_id)
 
     with make_session() as session:
+        # Eager load 'people' relationship since as_payload() accesses it
         item = (
             session.query(SourceItem)
+            .options(selectinload(SourceItem.people))
             .filter(
                 SourceItem.id == id,
                 SourceItem.embed_status == "STORED",
@@ -598,15 +608,11 @@ async def fetch(id: int, include_content: bool = True, include_journal: bool = F
 
         # Check access control
         # access_filter is None for superadmins (they see everything)
-        user = get_mcp_current_user()
-        user_id: int | None = getattr(user, "id", None) if user else None
         if access_filter is not None:
             # Need to check if user can access this item
             if user is None or user_id is None:
                 raise ValueError(f"Item {id} not found or access denied")
 
-            # user_id is guaranteed to be int here after the None check
-            project_roles = get_project_roles_by_user_id(user_id)
             if not user_can_access(user, item, project_roles):
                 raise ValueError(f"Item {id} not found or access denied")
 

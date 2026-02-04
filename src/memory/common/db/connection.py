@@ -67,8 +67,15 @@ def make_session() -> Generator[scoped_session[Session], None, None]:
     """
     Context manager for database sessions.
 
+    Uses a scoped_session which provides thread-local session management.
+    The session is committed on success, rolled back on exception.
+
+    Note: We don't call session.remove() here because that would invalidate
+    the session for the entire thread/scope, breaking nested session usage.
+    The scoped_session handles cleanup automatically when the scope ends.
+
     Yields:
-        SQLAlchemy session that will be automatically closed
+        SQLAlchemy session that will be automatically committed/rolled back
     """
     session = get_scoped_session()
     try:
@@ -77,5 +84,3 @@ def make_session() -> Generator[scoped_session[Session], None, None]:
     except Exception:
         session.rollback()
         raise
-    finally:
-        session.remove()

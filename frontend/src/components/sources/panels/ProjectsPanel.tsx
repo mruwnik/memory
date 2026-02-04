@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate } from '@/hooks/useProjects'
+import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, JournalEntry } from '@/hooks/useProjects'
 import { useTeams, Team, TeamMember } from '@/hooks/useTeams'
+import { useJournal } from '@/hooks/useJournal'
 import { Person } from '@/hooks/usePeople'
 import {
   Modal,
@@ -238,6 +239,7 @@ export const ProjectsPanel = () => {
   const {
     listProjects,
     getProjectTree,
+    getProject,
     createProject,
     updateProject,
     deleteProject,
@@ -251,6 +253,8 @@ export const ProjectsPanel = () => {
     unassignTeamFromProject,
     getTeam,
   } = useTeams()
+
+  const { addJournalEntry } = useJournal()
 
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
@@ -528,6 +532,8 @@ export const ProjectsPanel = () => {
               onToggleCollapse={toggleCollapse}
               listMembers={listMembers}
               availablePeople={availablePeople}
+              getProject={getProject}
+              addJournalEntry={addJournalEntry}
             />
           )}
         </div>
@@ -559,6 +565,8 @@ export const ProjectsPanel = () => {
                   listMembers={listMembers}
                   availablePeople={availablePeople}
                   inheritedOwner={inheritedOwner}
+                  getProject={getProject}
+                  addJournalEntry={addJournalEntry}
                 />
               )
             })
@@ -647,9 +655,11 @@ interface ProjectTreeProps {
   availablePeople: Person[]
   inheritedOwner?: { id: number; display_name: string | null; identifier: string } | null
   depth?: number
+  getProject: (id: number, options: { includeJournal?: boolean }) => Promise<{ project: Project | null; journal_entries?: JournalEntry[] }>
+  addJournalEntry: (targetId: number, content: string, targetType: 'project') => Promise<{ status: string; entry: JournalEntry }>
 }
 
-const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0 }: ProjectTreeProps) => {
+const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0, getProject, addJournalEntry }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
   return (
@@ -713,6 +723,8 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, on
                   availablePeople={availablePeople}
                   inheritedOwner={inheritedOwner}
                   compact
+                  getProject={getProject}
+                  addJournalEntry={addJournalEntry}
                 />
               </div>
             </div>
@@ -731,6 +743,8 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, on
                 availablePeople={availablePeople}
                 inheritedOwner={ownerToPassDown}
                 depth={depth + 1}
+                getProject={getProject}
+                addJournalEntry={addJournalEntry}
               />
             )}
           </div>
@@ -762,6 +776,137 @@ const formatDueDate = (dueOn: string): string => {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+// Journal section component
+interface JournalSectionProps {
+  projectId: number
+  getProject: (id: number, options: { includeJournal?: boolean }) => Promise<{ project: Project | null; journal_entries?: JournalEntry[] }>
+  addJournalEntry: (targetId: number, content: string, targetType: 'project') => Promise<{ status: string; entry: JournalEntry }>
+}
+
+const JournalSection = ({ projectId, getProject, addJournalEntry }: JournalSectionProps) => {
+  const [entries, setEntries] = useState<JournalEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+  const [newEntry, setNewEntry] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Load entries on mount
+  useEffect(() => {
+    let cancelled = false
+    const loadEntries = async () => {
+      try {
+        const result = await getProject(projectId, { includeJournal: true })
+        if (!cancelled) {
+          setEntries(result.journal_entries || [])
+        }
+      } catch (e) {
+        console.error('Failed to load journal entries:', e)
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+    loadEntries()
+    return () => { cancelled = true }
+  }, [projectId, getProject])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newEntry.trim() || submitting) return
+
+    setSubmitting(true)
+    try {
+      const result = await addJournalEntry(projectId, newEntry.trim(), 'project')
+      setEntries(prev => [...prev, result.entry])
+      setNewEntry('')
+    } catch (e) {
+      console.error('Failed to add journal entry:', e)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-100">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 transition-colors"
+      >
+        <svg
+          className={cx('w-3 h-3 transition-transform', expanded ? 'rotate-90' : '')}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        Journal{' '}
+        <span className="text-slate-400">
+          ({loading ? '...' : entries.length})
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="mt-2">
+          {loading ? (
+            <p className="text-xs text-slate-400">Loading entries...</p>
+          ) : (
+            <>
+              {entries.length === 0 ? (
+                <p className="text-xs text-slate-400 italic mb-2">No journal entries yet</p>
+              ) : (
+                <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
+                  {entries.map(entry => (
+                    <div key={entry.id} className="text-xs bg-slate-50 rounded p-2">
+                      <div className="text-slate-700 whitespace-pre-wrap">{entry.content}</div>
+                      <div className="text-slate-400 mt-1 flex items-center gap-2">
+                        <span>{formatDate(entry.created_at)}</span>
+                        {entry.private && (
+                          <span className="bg-amber-100 text-amber-700 px-1 rounded">private</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="flex gap-2">
+                <input
+                  type="text"
+                  value={newEntry}
+                  onChange={e => setNewEntry(e.target.value)}
+                  placeholder="Add a journal entry..."
+                  className="flex-1 text-xs px-2 py-1.5 border border-slate-200 rounded focus:outline-none focus:border-primary"
+                  disabled={submitting}
+                />
+                <button
+                  type="submit"
+                  disabled={!newEntry.trim() || submitting}
+                  className="text-xs px-3 py-1.5 bg-primary text-white rounded hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {submitting ? '...' : 'Add'}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Project card component
 interface ProjectCardProps {
   project: Project
@@ -774,9 +919,11 @@ interface ProjectCardProps {
   availablePeople?: Person[]
   inheritedOwner?: { id: number; display_name: string | null; identifier: string } | null
   compact?: boolean
+  getProject?: (id: number, options: { includeJournal?: boolean }) => Promise<{ project: Project | null; journal_entries?: JournalEntry[] }>
+  addJournalEntry?: (targetId: number, content: string, targetType: 'project') => Promise<{ status: string; entry: JournalEntry }>
 }
 
-const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, listMembers, availablePeople, inheritedOwner, compact }: ProjectCardProps) => {
+const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, listMembers, availablePeople, inheritedOwner, compact, getProject, addJournalEntry }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
   const dueWarning = getDueWarningLevel(project.due_on)
@@ -1016,6 +1163,15 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
           </button>
         </div>
       </div>
+
+      {/* Journal section */}
+      {getProject && addJournalEntry && (
+        <JournalSection
+          projectId={project.id}
+          getProject={getProject}
+          addJournalEntry={addJournalEntry}
+        />
+      )}
     </div>
   )
 }

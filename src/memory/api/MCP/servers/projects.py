@@ -28,6 +28,7 @@ from memory.common.access_control import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
 from memory.common.db.models.sources import Person
+from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.api.MCP.servers.github_helpers import (
     SyncResult,
     ensure_github_repo,
@@ -539,6 +540,7 @@ async def fetch(
     project_id: int,
     include_teams: bool = True,
     include_owner: bool = True,
+    include_journal: bool = False,
 ) -> dict:
     """
     Get a single project by ID.
@@ -547,6 +549,7 @@ async def fetch(
         project_id: The project ID
         include_teams: Whether to include team list (default: true)
         include_owner: Whether to include owner details (default: true)
+        include_journal: Whether to include journal entries (default: false)
 
     Returns:
         Project data with optional team list, or error if not found/accessible
@@ -579,11 +582,25 @@ async def fetch(
             .scalar()
         ) or 0
 
-        return {
+        result: dict[str, Any] = {
             "project": project_to_dict(
                 project, include_teams, include_owner, children_count
             )
         }
+
+        # Fetch journal entries if requested
+        if include_journal:
+            journal_query = session.query(JournalEntry).filter(
+                JournalEntry.target_type == "project",
+                JournalEntry.target_id == project_id,
+            )
+            access_filter = build_journal_access_filter(user, user.id)
+            if access_filter is not True:
+                journal_query = journal_query.filter(access_filter)
+            entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
+            result["journal_entries"] = [e.as_payload() for e in entries]
+
+        return result
 
 
 @projects_mcp.tool()

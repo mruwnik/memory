@@ -65,7 +65,7 @@ def get_target_and_project_id(
 
 @journal_mcp.tool()
 @visible_when(require_scopes("read"))
-async def journal_add(
+async def add(
     target_id: int,
     content: str,
     target_type: TargetType = "source_item",
@@ -125,7 +125,7 @@ async def journal_add(
 
 @journal_mcp.tool()
 @visible_when(require_scopes("read"))
-async def journal_list(
+async def list_all(
     target_id: int,
     target_type: TargetType = "source_item",
     limit: int = 50,

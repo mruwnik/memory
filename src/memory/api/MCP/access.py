@@ -33,7 +33,9 @@ class UserLike(Protocol):
     scopes: list[str]
 
 
-def get_project_roles_by_user_id(user_id: int) -> dict[int, str]:
+def get_project_roles_by_user_id(
+    user_id: int, session: "Session | scoped_session[Session] | None" = None
+) -> dict[int, str]:
     """
     Fetch project roles for a user by their ID.
 
@@ -42,10 +44,18 @@ def get_project_roles_by_user_id(user_id: int) -> dict[int, str]:
 
     Args:
         user_id: The user's database ID
+        session: Optional existing session to use (avoids nested session issues)
 
     Returns:
         Dict mapping project_id to role string
     """
+    if session is not None:
+        user = session.query(User).filter(User.id == user_id).first()
+        if user is None:
+            logger.warning("get_project_roles_by_user_id: user %d not found", user_id)
+            return {}
+        return get_user_project_roles(session, user)
+
     with make_session() as db:
         user = db.query(User).filter(User.id == user_id).first()
         if user is None:

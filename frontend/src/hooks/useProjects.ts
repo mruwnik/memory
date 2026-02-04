@@ -15,6 +15,17 @@ export interface ProjectOwner {
   display_name: string | null
 }
 
+export interface JournalEntry {
+  id: number
+  target_type: 'source_item' | 'project' | 'team' | 'poll'
+  target_id: number
+  creator_id: number | null
+  project_id: number | null
+  content: string
+  private: boolean
+  created_at: string
+}
+
 export interface Project {
   id: number
   title: string
@@ -33,6 +44,8 @@ export interface Project {
   owner?: ProjectOwner | null
   // Teams (optional)
   teams?: ProjectTeam[]
+  // Journal entries (optional)
+  journal_entries?: JournalEntry[]
 }
 
 export interface ProjectTreeNode {
@@ -107,15 +120,22 @@ export const useProjects = () => {
     return result?.[0]?.tree || []
   }, [mcpCall])
 
-  const getProject = useCallback(async (id: number, includeTeams = false): Promise<Project | null> => {
-    const result = await mcpCall<{ project: Project | null; error?: string }[]>('projects_fetch', {
+  const getProject = useCallback(async (
+    id: number,
+    options: { includeTeams?: boolean; includeJournal?: boolean } = {}
+  ): Promise<{ project: Project | null; journal_entries?: JournalEntry[] }> => {
+    const result = await mcpCall<{ project: Project | null; journal_entries?: JournalEntry[]; error?: string }[]>('projects_fetch', {
       project_id: id,
-      include_teams: includeTeams,
+      include_teams: options.includeTeams ?? false,
+      include_journal: options.includeJournal ?? false,
     })
     if (result?.[0]?.error) {
-      return null
+      return { project: null }
     }
-    return result?.[0]?.project || null
+    return {
+      project: result?.[0]?.project || null,
+      journal_entries: result?.[0]?.journal_entries,
+    }
   }, [mcpCall])
 
   const createProject = useCallback(async (data: ProjectCreate): Promise<{ success: boolean; project?: Project; error?: string }> => {

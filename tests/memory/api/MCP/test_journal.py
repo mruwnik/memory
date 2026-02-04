@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from memory.api.MCP.servers.journal import journal_add, journal_list
+from memory.api.MCP.servers.journal import add, list_all
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
 from memory.common.db.models import JournalEntry, SourceItem, HumanUser, UserSession, Person, Team
@@ -88,10 +88,10 @@ def user_with_project_access(db_session, regular_user, sample_project):
 
 
 @pytest.mark.asyncio
-async def test_journal_add(db_session, admin_user, admin_session, sample_item):
+async def test_add(db_session, admin_user, admin_session, sample_item):
     """Test adding a journal entry."""
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_add)(
+        result = await get_fn(add)(
             target_id=sample_item.id,
             content="First journal entry",
         )
@@ -103,10 +103,10 @@ async def test_journal_add(db_session, admin_user, admin_session, sample_item):
 
 
 @pytest.mark.asyncio
-async def test_journal_add_private(db_session, admin_user, admin_session, sample_item):
+async def test_add_private(db_session, admin_user, admin_session, sample_item):
     """Test adding a private journal entry."""
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_add)(
+        result = await get_fn(add)(
             target_id=sample_item.id,
             content="Private thought",
             private=True,
@@ -116,18 +116,18 @@ async def test_journal_add_private(db_session, admin_user, admin_session, sample
 
 
 @pytest.mark.asyncio
-async def test_journal_add_nonexistent_item(db_session, admin_user, admin_session):
+async def test_add_nonexistent_item(db_session, admin_user, admin_session):
     """Test adding a journal entry to a non-existent item."""
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError, match="not found"):
-            await get_fn(journal_add)(
+            await get_fn(add)(
                 target_id=999999,
                 content="Should fail",
             )
 
 
 @pytest.mark.asyncio
-async def test_journal_list(db_session, admin_user, admin_session, sample_item):
+async def test_list_all(db_session, admin_user, admin_session, sample_item):
     """Test listing journal entries for an item."""
     # Add some entries directly
     entries = [
@@ -144,7 +144,7 @@ async def test_journal_list(db_session, admin_user, admin_session, sample_item):
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id)
+        result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 3
     assert result["entries"][0]["content"] == "Entry 0"
@@ -152,17 +152,17 @@ async def test_journal_list(db_session, admin_user, admin_session, sample_item):
 
 
 @pytest.mark.asyncio
-async def test_journal_list_empty(db_session, admin_user, admin_session, sample_item):
+async def test_list_all_empty(db_session, admin_user, admin_session, sample_item):
     """Test listing journal entries when there are none."""
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id)
+        result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 0
     assert result["total"] == 0
 
 
 @pytest.mark.asyncio
-async def test_journal_list_pagination(db_session, admin_user, admin_session, sample_item):
+async def test_list_all_pagination(db_session, admin_user, admin_session, sample_item):
     """Test journal list pagination."""
     # Add 10 entries
     entries = [
@@ -179,7 +179,7 @@ async def test_journal_list_pagination(db_session, admin_user, admin_session, sa
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id, limit=3, offset=2)
+        result = await get_fn(list_all)(target_id=sample_item.id, limit=3, offset=2)
 
     assert len(result["entries"]) == 3
     assert result["total"] == 10
@@ -190,7 +190,7 @@ async def test_journal_list_pagination(db_session, admin_user, admin_session, sa
 
 
 @pytest.mark.asyncio
-async def test_journal_list_excludes_private(
+async def test_list_all_excludes_private(
     db_session, admin_user, user_with_project_access, user_session, sample_item
 ):
     """Test that private entries are excluded for non-creators."""
@@ -217,14 +217,14 @@ async def test_journal_list_excludes_private(
 
     # Regular user (with project access) should only see shared entry
     with mcp_auth_context(user_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id)
+        result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 1
     assert result["entries"][0]["content"] == "Shared entry"
 
 
 @pytest.mark.asyncio
-async def test_journal_list_shows_own_private(
+async def test_list_all_shows_own_private(
     db_session, user_with_project_access, user_session, sample_item
 ):
     """Test that users can see their own private entries."""
@@ -242,14 +242,14 @@ async def test_journal_list_shows_own_private(
 
     # Regular user should see their own private entry
     with mcp_auth_context(user_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id)
+        result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 1
     assert result["entries"][0]["content"] == "My private thought"
 
 
 @pytest.mark.asyncio
-async def test_journal_list_admin_sees_all(
+async def test_list_all_admin_sees_all(
     db_session, admin_user, admin_session, regular_user, sample_item
 ):
     """Test that admins can see all private entries."""
@@ -276,24 +276,24 @@ async def test_journal_list_admin_sees_all(
 
     # Admin should see both entries
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_list)(target_id=sample_item.id)
+        result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_journal_list_nonexistent_item(db_session, admin_user, admin_session):
+async def test_list_all_nonexistent_item(db_session, admin_user, admin_session):
     """Test listing journal entries for a non-existent item."""
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError, match="not found"):
-            await get_fn(journal_list)(target_id=999999)
+            await get_fn(list_all)(target_id=999999)
 
 
 @pytest.mark.asyncio
-async def test_journal_add_inherits_project(db_session, admin_user, admin_session, sample_item):
+async def test_add_inherits_project(db_session, admin_user, admin_session, sample_item):
     """Test that journal entries inherit project_id from target item."""
     with mcp_auth_context(admin_session.id):
-        result = await get_fn(journal_add)(
+        result = await get_fn(add)(
             target_id=sample_item.id,
             content="Test entry",
         )
