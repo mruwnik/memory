@@ -112,8 +112,10 @@ from memory.common.db.models.secrets import (
     encrypt_value,
     decrypt_value,
 )
-from memory.common.db.models.scheduled_calls import (
-    ScheduledLLMCall,
+from memory.common.db.models.scheduled_tasks import (
+    ScheduledTask,
+    TaskExecution,
+    compute_next_cron,
 )
 from memory.common.db.models.metrics import (
     MetricEvent,
@@ -264,8 +266,10 @@ __all__ = [
     "OAuthRefreshToken",
     "APIKey",
     "APIKeyType",
-    # Scheduled Calls
-    "ScheduledLLMCall",
+    # Scheduled Tasks
+    "ScheduledTask",
+    "TaskExecution",
+    "compute_next_cron",
     # Metrics
     "MetricEvent",
     # Telemetry

@@ -84,3 +84,42 @@ def user(db_session):
     db_session.add(test_user)
     db_session.commit()
     return test_user
+
+
+@pytest.fixture
+def regular_client(app_client, db_session, user):
+    """Test client with non-admin (regular user) scope for access control tests."""
+    from memory.api.auth import get_current_user
+    from memory.common.db.connection import get_session
+
+    test_client, app = app_client
+
+    # Create a mock user with non-admin scope
+    # Use spec=HumanUser to catch attribute access errors
+    mock_user = MagicMock(spec=HumanUser)
+    mock_user.id = user.id
+    mock_user.email = user.email
+    mock_user.scopes = ["read", "write"]  # Non-admin scopes
+
+    def mock_get_current_user():
+        return mock_user
+
+    def get_test_session():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    # Save original auth override (the admin one from app_client)
+    original_auth = app.dependency_overrides.get(get_current_user)
+
+    # Override with non-admin user
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    app.dependency_overrides[get_session] = get_test_session
+
+    yield test_client
+
+    # Restore admin user override
+    if original_auth:
+        app.dependency_overrides[get_current_user] = original_auth
+    # Session cleanup is done by the client fixture

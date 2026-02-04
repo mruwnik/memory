@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate } from '@/hooks/useProjects'
-import { useTeams, Team } from '@/hooks/useTeams'
+import { useTeams, Team, TeamMember } from '@/hooks/useTeams'
 import { usePeople, Person } from '@/hooks/usePeople'
 import {
   Modal,
@@ -10,6 +10,159 @@ import {
   ConfirmDialog,
 } from '../shared'
 import { styles, cx } from '../styles'
+
+// Team members popover component
+interface TeamMembersPopoverProps {
+  team: { id: number; name: string }
+  onClose: () => void
+  listMembers: (team: number) => Promise<TeamMember[]>
+}
+
+const TeamMembersPopover = ({ team, onClose, listMembers }: TeamMembersPopoverProps) => {
+  const [members, setMembers] = useState<TeamMember[]>([])
+  const [loading, setLoading] = useState(true)
+  const popoverRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const loadMembers = async () => {
+      setLoading(true)
+      try {
+        const data = await listMembers(team.id)
+        setMembers(data)
+      } catch {
+        setMembers([])
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadMembers()
+  }, [team.id, listMembers])
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [onClose])
+
+  return (
+    <div
+      ref={popoverRef}
+      className="absolute z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-48 max-w-64"
+    >
+      <div className="font-medium text-slate-800 mb-2 pb-2 border-b border-slate-100">
+        {team.name}
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading...</p>
+      ) : members.length === 0 ? (
+        <p className="text-sm text-slate-500">No members</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {members.map(member => (
+            <li key={member.id} className="flex items-center gap-2 text-sm">
+              <span className="text-slate-800">{member.display_name || member.identifier}</span>
+              {member.role && (
+                <span className={cx(
+                  'px-1.5 py-0.5 rounded text-xs',
+                  member.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                  member.role === 'lead' ? 'bg-blue-100 text-blue-700' :
+                  'bg-slate-100 text-slate-600'
+                )}>
+                  {member.role}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// Owner selector popover component
+interface OwnerSelectorPopoverProps {
+  currentOwnerId: number | null
+  availablePeople: Person[]
+  onSelect: (ownerId: number | null) => void
+  onClose: () => void
+}
+
+const OwnerSelectorPopover = ({ currentOwnerId, availablePeople, onSelect, onClose }: OwnerSelectorPopoverProps) => {
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [search, setSearch] = useState('')
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [onClose])
+
+  const filteredPeople = search.trim()
+    ? availablePeople.filter(p =>
+        (p.display_name?.toLowerCase().includes(search.toLowerCase())) ||
+        p.identifier.toLowerCase().includes(search.toLowerCase())
+      )
+    : availablePeople
+
+  return (
+    <div
+      ref={popoverRef}
+      className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-56 max-w-72"
+    >
+      <input
+        type="text"
+        placeholder="Search people..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        autoFocus
+      />
+      <div className="max-h-48 overflow-y-auto">
+        {/* None option */}
+        <button
+          type="button"
+          onClick={() => { onSelect(null); onClose() }}
+          className={cx(
+            'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
+            currentOwnerId === null
+              ? 'bg-primary/10 text-primary'
+              : 'hover:bg-slate-50 text-slate-500 italic'
+          )}
+        >
+          None
+        </button>
+        {filteredPeople.map(person => (
+          <button
+            key={person.id}
+            type="button"
+            onClick={() => { onSelect(person.id); onClose() }}
+            className={cx(
+              'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
+              currentOwnerId === person.id
+                ? 'bg-primary/10 text-primary'
+                : 'hover:bg-slate-50 text-slate-700'
+            )}
+          >
+            {person.display_name || person.identifier}
+          </button>
+        ))}
+        {filteredPeople.length === 0 && search && (
+          <p className="text-sm text-slate-500 px-2 py-1.5">No matches</p>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export const ProjectsPanel = () => {
   const {
@@ -22,6 +175,7 @@ export const ProjectsPanel = () => {
 
   const {
     listTeams,
+    listMembers,
     listProjectTeams,
     assignTeamToProject,
     unassignTeamFromProject,
@@ -45,7 +199,20 @@ export const ProjectsPanel = () => {
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [managingTeams, setManagingTeams] = useState<Project | null>(null)
-  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(new Set())
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(() => {
+    const saved = localStorage.getItem('projects-collapsed-nodes')
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) {
+          return new Set(parsed)
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+    return new Set()
+  })
 
   const toggleCollapse = useCallback((nodeId: number) => {
     setCollapsedNodes(prev => {
@@ -58,6 +225,11 @@ export const ProjectsPanel = () => {
       return next
     })
   }, [])
+
+  // Persist collapsed state to localStorage
+  useEffect(() => {
+    localStorage.setItem('projects-collapsed-nodes', JSON.stringify(Array.from(collapsedNodes)))
+  }, [collapsedNodes])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -108,6 +280,14 @@ export const ProjectsPanel = () => {
     setDeletingProject(null)
     loadData()
   }
+
+  const handleChangeOwner = useCallback(async (projectId: number, ownerId: number | null) => {
+    await updateProject(projectId, {
+      owner_id: ownerId,
+      clear_owner: ownerId === null,
+    })
+    loadData()
+  }, [updateProject, loadData])
 
   // Check if there's any tree hierarchy (any project has children)
   const hasHierarchy = tree.some(node => node.children.length > 0)
@@ -227,9 +407,12 @@ export const ProjectsPanel = () => {
               onEdit={setEditingProject}
               onDelete={setDeletingProject}
               onManageTeams={setManagingTeams}
+              onChangeOwner={handleChangeOwner}
               projects={projects}
               collapsedNodes={collapsedNodes}
               onToggleCollapse={toggleCollapse}
+              listMembers={listMembers}
+              availablePeople={availablePeople}
             />
           )}
         </div>
@@ -238,15 +421,31 @@ export const ProjectsPanel = () => {
           {filteredProjects.length === 0 && searchQuery ? (
             <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
           ) : (
-            filteredProjects.map(project => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                onEdit={() => setEditingProject(project)}
-                onDelete={() => setDeletingProject(project)}
-                onManageTeams={() => setManagingTeams(project)}
-              />
-            ))
+            filteredProjects.map(project => {
+              // For list view, compute inherited owner from parent chain
+              const getInheritedOwner = (p: Project): typeof project.owner => {
+                if (p.owner) return p.owner
+                if (p.parent_id) {
+                  const parent = projects.find(pr => pr.id === p.parent_id)
+                  if (parent) return getInheritedOwner(parent)
+                }
+                return null
+              }
+              const inheritedOwner = project.owner ? null : getInheritedOwner(project)
+              return (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  onEdit={() => setEditingProject(project)}
+                  onDelete={() => setDeletingProject(project)}
+                  onManageTeams={() => setManagingTeams(project)}
+                  onChangeOwner={handleChangeOwner}
+                  listMembers={listMembers}
+                  availablePeople={availablePeople}
+                  inheritedOwner={inheritedOwner}
+                />
+              )
+            })
           )}
         </div>
       )}
@@ -323,13 +522,17 @@ interface ProjectTreeProps {
   onEdit: (project: Project) => void
   onDelete: (project: Project) => void
   onManageTeams: (project: Project) => void
+  onChangeOwner: (projectId: number, ownerId: number | null) => Promise<void>
   projects: Project[]
   collapsedNodes: Set<number>
   onToggleCollapse: (nodeId: number) => void
+  listMembers: (team: number) => Promise<TeamMember[]>
+  availablePeople: Person[]
+  inheritedOwner?: { id: number; display_name: string | null; identifier: string } | null
   depth?: number
 }
 
-const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collapsedNodes, onToggleCollapse, depth = 0 }: ProjectTreeProps) => {
+const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0 }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
   return (
@@ -352,6 +555,11 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
         }
         const hasChildren = node.children.length > 0
         const isCollapsed = collapsedNodes.has(node.id)
+
+        // Calculate effective owner for this node (own owner or inherited)
+        const nodeOwner = projectData.owner || null
+        // Pass down: if this node has an owner, children inherit it; otherwise pass down what we inherited
+        const ownerToPassDown = nodeOwner || inheritedOwner
 
         return (
           <div key={node.id} className="mb-2">
@@ -382,6 +590,10 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
                   onEdit={() => onEdit(projectData)}
                   onDelete={() => onDelete(projectData)}
                   onManageTeams={() => onManageTeams(projectData)}
+                  onChangeOwner={onChangeOwner}
+                  listMembers={listMembers}
+                  availablePeople={availablePeople}
+                  inheritedOwner={inheritedOwner}
                   compact
                 />
               </div>
@@ -392,9 +604,13 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onManageTeams={onManageTeams}
+                onChangeOwner={onChangeOwner}
                 projects={projects}
                 collapsedNodes={collapsedNodes}
                 onToggleCollapse={onToggleCollapse}
+                listMembers={listMembers}
+                availablePeople={availablePeople}
+                inheritedOwner={ownerToPassDown}
                 depth={depth + 1}
               />
             )}
@@ -433,14 +649,44 @@ interface ProjectCardProps {
   onEdit: () => void
   onDelete: () => void
   onManageTeams: () => void
+  onChangeOwner?: (projectId: number, ownerId: number | null) => Promise<void>
+  listMembers?: (team: number) => Promise<TeamMember[]>
+  availablePeople?: Person[]
+  inheritedOwner?: { id: number; display_name: string | null; identifier: string } | null
   compact?: boolean
 }
 
-const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: ProjectCardProps) => {
+const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, listMembers, availablePeople, inheritedOwner, compact }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
   const dueWarning = getDueWarningLevel(project.due_on)
-  const hasNoOwner = project.owner_id === null
+  const hasOwnOwner = project.owner_id !== null
+  const effectiveOwner = project.owner || inheritedOwner
+  const isInheritedOwner = !hasOwnOwner && !!inheritedOwner
+  const [expandedTeam, setExpandedTeam] = useState<{ id: number; name: string } | null>(null)
+  const [showOwnerSelector, setShowOwnerSelector] = useState(false)
+
+  const handleTeamClick = (e: React.MouseEvent, team: { id: number; name: string }) => {
+    e.stopPropagation()
+    if (listMembers) {
+      setExpandedTeam(expandedTeam?.id === team.id ? null : team)
+    } else {
+      onManageTeams()
+    }
+  }
+
+  const handleOwnerClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onChangeOwner && availablePeople) {
+      setShowOwnerSelector(!showOwnerSelector)
+    }
+  }
+
+  const handleOwnerSelect = async (ownerId: number | null) => {
+    if (onChangeOwner) {
+      await onChangeOwner(project.id, ownerId)
+    }
+  }
 
   return (
     <div
@@ -471,14 +717,6 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
               </span>
             )}
             {/* Warning indicators - only show for open projects */}
-            {isOpen && hasNoOwner && (
-              <span
-                className={cx(styles.badge, 'bg-amber-100 text-amber-700')}
-                title="No owner assigned"
-              >
-                ⚠ No owner
-              </span>
-            )}
             {isOpen && dueWarning === 'critical' && (
               <span
                 className={cx(styles.badge, 'bg-red-100 text-red-700')}
@@ -536,40 +774,71 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, compact }: Proj
               )}
             </p>
           )}
-          {/* Owner and due date info */}
-          {(project.owner || project.due_on) && (
-            <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
-              {project.owner && (
-                <span>
-                  Owner: <span className="text-slate-700">{project.owner.display_name || project.owner.identifier}</span>
-                </span>
+          {/* Owner and due date info - always show owner */}
+          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+            <span className="relative">
+              Owner:{' '}
+              <span
+                onClick={handleOwnerClick}
+                className={cx(
+                  'cursor-pointer px-1.5 py-0.5 rounded',
+                  effectiveOwner
+                    ? isInheritedOwner
+                      ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 italic'
+                      : 'text-slate-700 hover:bg-slate-100'
+                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                )}
+                title={isInheritedOwner ? 'Inherited from parent' : effectiveOwner ? 'Click to change' : 'No owner - click to assign'}
+              >
+                {effectiveOwner
+                  ? `${effectiveOwner.display_name || effectiveOwner.identifier}${isInheritedOwner ? ' (inherited)' : ''}`
+                  : 'None'}
+              </span>
+              {showOwnerSelector && onChangeOwner && availablePeople && (
+                <OwnerSelectorPopover
+                  currentOwnerId={project.owner_id}
+                  availablePeople={availablePeople}
+                  onSelect={handleOwnerSelect}
+                  onClose={() => setShowOwnerSelector(false)}
+                />
               )}
-              {project.due_on && (
-                <span>
-                  Due: <span className="text-slate-700">{formatDueDate(project.due_on)}</span>
-                </span>
-              )}
-            </div>
-          )}
-          {project.teams && project.teams.length > 0 && !compact && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            </span>
+            {project.due_on && (
+              <span>
+                Due: <span className="text-slate-700">{formatDueDate(project.due_on)}</span>
+              </span>
+            )}
+          </div>
+          {project.teams && project.teams.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap relative">
               <span className="text-xs text-slate-500">Teams:</span>
-              {project.teams.slice(0, 3).map(team => (
+              {project.teams.slice(0, compact ? 2 : 3).map(team => (
                 <span
                   key={team.id}
-                  className="bg-green-50 text-green-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-green-100"
-                  onClick={onManageTeams}
+                  className="relative"
                 >
-                  {team.name}
+                  <span
+                    className="bg-green-50 text-green-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-green-100"
+                    onClick={(e) => handleTeamClick(e, team)}
+                  >
+                    {team.name}
+                  </span>
+                  {expandedTeam?.id === team.id && listMembers && (
+                    <TeamMembersPopover
+                      team={team}
+                      onClose={() => setExpandedTeam(null)}
+                      listMembers={listMembers}
+                    />
+                  )}
                 </span>
               ))}
-              {project.teams.length > 3 && (
+              {project.teams.length > (compact ? 2 : 3) && (
                 <span
                   className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
                   onClick={onManageTeams}
-                  title={project.teams.slice(3).map(t => t.name).join(', ')}
+                  title={project.teams.slice(compact ? 2 : 3).map(t => t.name).join(', ')}
                 >
-                  +{project.teams.length - 3} more
+                  +{project.teams.length - (compact ? 2 : 3)} more
                 </span>
               )}
             </div>

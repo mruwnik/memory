@@ -8,14 +8,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memory.api import email_accounts
-from memory.common.db.models import EmailAccount, GoogleAccount, User
+from memory.common.db.models import EmailAccount, GoogleAccount, HumanUser
 
 
 # Test list_accounts
 
 
 def test_list_accounts_returns_user_accounts_only(client, user, db_session):
-    """List should only return accounts owned by the current user."""
+    """List should only return accounts owned by the specified user when filtered."""
     # Create accounts for current user
     account1 = EmailAccount(
         user_id=user.id,
@@ -36,7 +36,12 @@ def test_list_accounts_returns_user_accounts_only(client, user, db_session):
         password="pass",
     )
     # Create a different user first
-    other_user = User(id=999, name="Other User", email="other@example.com")
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -54,7 +59,8 @@ def test_list_accounts_returns_user_accounts_only(client, user, db_session):
     db_session.add_all([account1, account2, other_account])
     db_session.commit()
 
-    response = client.get("/email-accounts")
+    # Filter by user_id to get only the current user's accounts
+    response = client.get(f"/email-accounts?user_id={user.id}")
 
     assert response.status_code == 200
     data = response.json()
@@ -364,9 +370,14 @@ def test_get_account_not_found(client, user, db_session):
     assert response.status_code == 404
 
 
-def test_get_account_not_owned(client, user, db_session):
-    """Getting account owned by different user should return 404."""
-    other_user = User(id=999, name="Other User", email="other@example.com")
+def test_get_account_not_owned(regular_client, user, db_session):
+    """Getting account owned by different user should return 404 for non-admin users."""
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -382,7 +393,7 @@ def test_get_account_not_owned(client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = client.get(f"/email-accounts/{other_account.id}")
+    response = regular_client.get(f"/email-accounts/{other_account.id}")
 
     assert response.status_code == 404
 
@@ -476,9 +487,14 @@ def test_update_account_multiple_fields(client, user, db_session):
     assert data["tags"] == ["updated"]
 
 
-def test_update_account_not_owned(client, user, db_session):
+def test_update_account_not_owned(regular_client, user, db_session):
     """Updating account owned by different user should return 404."""
-    other_user = User(id=999, name="Other User", email="other@example.com")
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -494,7 +510,7 @@ def test_update_account_not_owned(client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = client.patch(f"/email-accounts/{other_account.id}", json={"name": "Hacked"})
+    response = regular_client.patch(f"/email-accounts/{other_account.id}", json={"name": "Hacked"})
 
     assert response.status_code == 404
 
@@ -534,9 +550,14 @@ def test_delete_account_success(client, user, db_session):
     assert deleted is None
 
 
-def test_delete_account_not_owned(client, user, db_session):
+def test_delete_account_not_owned(regular_client, user, db_session):
     """Deleting account owned by different user should return 404."""
-    other_user = User(id=999, name="Other User", email="other@example.com")
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -552,7 +573,7 @@ def test_delete_account_not_owned(client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = client.delete(f"/email-accounts/{other_account.id}")
+    response = regular_client.delete(f"/email-accounts/{other_account.id}")
 
     assert response.status_code == 404
 
@@ -634,9 +655,14 @@ def test_trigger_sync_with_since_date(mock_app, client, user, db_session):
 
 
 @patch("memory.common.celery_app.app")
-def test_trigger_sync_not_owned(mock_app, client, user, db_session):
+def test_trigger_sync_not_owned(mock_app, regular_client, user, db_session):
     """Triggering sync on account owned by different user should return 404."""
-    other_user = User(id=999, name="Other User", email="other@example.com")
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -652,7 +678,7 @@ def test_trigger_sync_not_owned(mock_app, client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = client.post(f"/email-accounts/{other_account.id}/sync")
+    response = regular_client.post(f"/email-accounts/{other_account.id}/sync")
 
     assert response.status_code == 404
     mock_app.send_task.assert_not_called()
@@ -724,9 +750,14 @@ def test_connection_failure(mock_imap, client, user, db_session):
 
 
 @patch("memory.workers.email.imap_connection")
-def test_connection_not_owned(mock_imap, client, user, db_session):
+def test_connection_not_owned(mock_imap, regular_client, user, db_session):
     """Testing connection on account owned by different user should return 404."""
-    other_user = User(id=999, name="Other User", email="other@example.com")
+    other_user = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(other_user)
     db_session.flush()
 
@@ -742,7 +773,7 @@ def test_connection_not_owned(mock_imap, client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = client.post(f"/email-accounts/{other_account.id}/test")
+    response = regular_client.post(f"/email-accounts/{other_account.id}/test")
 
     assert response.status_code == 404
     mock_imap.assert_not_called()

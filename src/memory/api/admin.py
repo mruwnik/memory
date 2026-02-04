@@ -31,7 +31,8 @@ from memory.common.db.models import (
     MiscDoc,
     Note,
     Photo,
-    ScheduledLLMCall,
+    ScheduledTask,
+    TaskExecution,
     SourceItem,
     User,
     GoogleDoc,
@@ -329,23 +330,34 @@ class DiscordBotAdmin(ModelView, model=DiscordBot):
     ]
 
 
-class ScheduledLLMCallAdmin(ModelView, model=ScheduledLLMCall):
+class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
     column_list = [
         "id",
         "user",
+        "task_type",
         "topic",
-        "scheduled_time",
-        "model",
-        "status",
-        "error_message",
-        "response",
-        "discord_channel",
-        "discord_user",
-        "executed_at",
+        "notification_channel",
+        "notification_target",
+        "cron_expression",
+        "next_scheduled_time",
+        "enabled",
         "created_at",
         "updated_at",
     ]
-    column_sortable_list = ["executed_at", "scheduled_time", "created_at", "updated_at"]
+    column_sortable_list = ["next_scheduled_time", "created_at", "updated_at"]
+
+
+class TaskExecutionAdmin(ModelView, model=TaskExecution):
+    column_list = [
+        "id",
+        "task_id",
+        "scheduled_time",
+        "started_at",
+        "finished_at",
+        "status",
+        "error_message",
+    ]
+    column_sortable_list = ["scheduled_time", "started_at", "finished_at"]
 
 
 class GithubAccountAdmin(ModelView, model=GithubAccount):
@@ -574,7 +586,8 @@ def setup_admin(admin: Admin):
     admin.add_view(DiscordChannelAdmin)
     admin.add_view(DiscordBotAdmin)
     admin.add_view(MCPServerAdmin)
-    admin.add_view(ScheduledLLMCallAdmin)
+    admin.add_view(ScheduledTaskAdmin)
+    admin.add_view(TaskExecutionAdmin)
     admin.add_view(GithubAccountAdmin)
     admin.add_view(GithubRepoAdmin)
     admin.add_view(GithubItemAdmin)

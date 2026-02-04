@@ -4,17 +4,18 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from memory.common.db.models import User
+from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 
 
 @pytest.fixture
 def other_user(db_session):
     """Create a second user for testing access control."""
-    other = User(
+    other = HumanUser(
         id=999,
-        name="Other User",
         email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(other)
     db_session.commit()
@@ -151,7 +152,7 @@ def test_get_account_not_found(client, db_session, user):
     assert response.status_code == 404
 
 
-def test_get_account_not_owned(client, db_session, user, other_user):
+def test_get_account_not_owned(regular_client, db_session, user, other_user):
     """Get account returns 404 when account belongs to another user."""
     # Create account for a different user
     account = GithubAccount(
@@ -163,7 +164,7 @@ def test_get_account_not_owned(client, db_session, user, other_user):
     db_session.add(account)
     db_session.commit()
 
-    response = client.get(f"/github/accounts/{account.id}")
+    response = regular_client.get(f"/github/accounts/{account.id}")
 
     assert response.status_code == 404
 
@@ -227,7 +228,7 @@ def test_update_account_fields(client, db_session, user, field, value):
     assert getattr(account, field) == value
 
 
-def test_update_account_not_owned(client, db_session, user, other_user):
+def test_update_account_not_owned(regular_client, db_session, user, other_user):
     """Update account fails when not owned by user."""
     account = GithubAccount(
         user_id=other_user.id,
@@ -238,7 +239,7 @@ def test_update_account_not_owned(client, db_session, user, other_user):
     db_session.add(account)
     db_session.commit()
 
-    response = client.patch(
+    response = regular_client.patch(
         f"/github/accounts/{account.id}",
         json={"name": "New Name"},
     )
@@ -277,7 +278,7 @@ def test_delete_account_not_found(client, db_session, user):
     assert response.status_code == 404
 
 
-def test_delete_account_not_owned(client, db_session, user, other_user):
+def test_delete_account_not_owned(regular_client, db_session, user, other_user):
     """Delete account fails when not owned."""
     account = GithubAccount(
         user_id=other_user.id,
@@ -288,7 +289,7 @@ def test_delete_account_not_owned(client, db_session, user, other_user):
     db_session.add(account)
     db_session.commit()
 
-    response = client.delete(f"/github/accounts/{account.id}")
+    response = regular_client.delete(f"/github/accounts/{account.id}")
 
     assert response.status_code == 404
 

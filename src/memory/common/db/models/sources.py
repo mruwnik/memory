@@ -388,7 +388,7 @@ class GithubRepo(Base):
         Boolean, nullable=False, server_default="true"
     )
     track_project_fields: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
+        Boolean, nullable=False, server_default="true"
     )
 
     # Filtering

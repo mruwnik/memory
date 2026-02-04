@@ -741,3 +741,9 @@ def test_user(db_session):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+@pytest.fixture
+def sample_user(test_user):
+    """Alias for test_user for compatibility with existing tests."""
+    return test_user

@@ -7,17 +7,19 @@ from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from sqlalchemy import nullslast
 
 from memory.common import qdrant
-from memory.common.celery_app import EXECUTE_SCHEDULED_CALL
+from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
     EmailAccount,
-    ScheduledLLMCall,
+    ScheduledTask,
     SourceItem,
+    TaskExecution,
     UserSession,
 )
 
@@ -259,7 +261,7 @@ def create_notification(
     details_url: str | None,
     scheduled_time: datetime,
     extra_data: dict[str, Any] | None = None,
-) -> ScheduledLLMCall:
+) -> ScheduledTask:
     """Create a notification record in the database."""
     # Format message with subject and details URL
     full_message = f"**{subject}**\n\n{message}"
@@ -274,19 +276,20 @@ def create_notification(
     if extra_data:
         data.update(extra_data)
 
-    scheduled_call = ScheduledLLMCall(
+    scheduled_task = ScheduledTask(
         user_id=user_id,
-        scheduled_time=scheduled_time,
+        task_type="notification",
+        enabled=True,
+        next_scheduled_time=scheduled_time,
         message=full_message,
         topic=subject,
-        model=None,  # No LLM processing, send as-is
-        channel_type=channel_type,
-        channel_identifier=channel_identifier,
+        notification_channel=channel_type,
+        notification_target=channel_identifier,
         data=data,
     )
 
-    session.add(scheduled_call)
-    return scheduled_call
+    session.add(scheduled_task)
+    return scheduled_task
 
 
 @meta_mcp.tool()
@@ -368,13 +371,26 @@ async def notify_user(
             scheduled_time=scheduled_dt,
             extra_data=extra_data,
         )
-        session.commit()
 
+        # For immediate notifications, create execution in the same transaction
+        # to avoid orphaned ScheduledTask records if execution creation fails
+        execution_id = None
+        if not scheduled_time:
+            execution = TaskExecution(
+                task_id=notification.id,
+                scheduled_time=scheduled_dt,
+                status="pending",
+            )
+            session.add(execution)
+            session.flush()  # Get the execution ID before commit
+            execution_id = execution.id
+
+        session.commit()
         notification_id = notification.id
 
-    # For immediate notifications, dispatch Celery task now
-    if not scheduled_time:
-        celery_app.send_task(EXECUTE_SCHEDULED_CALL, args=[notification_id])
+    # Dispatch Celery task after successful commit
+    if execution_id:
+        celery_app.send_task(EXECUTE_SCHEDULED_TASK, args=[execution_id])
 
     return {
         "success": True,
@@ -383,3 +399,115 @@ async def notify_user(
         "channel_type": channel_type,
         "scheduled_time": scheduled_dt.isoformat() if scheduled_time else None,
     }
+
+
+@meta_mcp.tool()
+async def list_scheduled_tasks(
+    task_type: str | None = None,
+    enabled: bool | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    List scheduled tasks for the current user.
+
+    Args:
+        task_type: Filter by task type (notification, claude_session)
+        enabled: Filter by enabled status
+        limit: Maximum number of tasks to return (default 50)
+
+    Returns:
+        List of scheduled tasks with their details
+    """
+    with make_session() as session:
+        current_user = _get_current_user(session)
+        if not current_user.get("authenticated"):
+            raise ValueError("Not authenticated")
+
+        user_id = current_user.get("user", {}).get("user_id")
+        if not user_id:
+            raise ValueError("User not found")
+
+        query = session.query(ScheduledTask).filter(ScheduledTask.user_id == user_id)
+
+        if task_type:
+            query = query.filter(ScheduledTask.task_type == task_type)
+        if enabled is not None:
+            query = query.filter(ScheduledTask.enabled == enabled)
+
+        # Use nullslast to ensure NULL next_scheduled_time (completed one-time tasks) come last
+        tasks = query.order_by(nullslast(ScheduledTask.next_scheduled_time)).limit(limit).all()
+
+        return [task.serialize() for task in tasks]
+
+
+@meta_mcp.tool()
+async def cancel_scheduled_task(task_id: str) -> dict[str, Any]:
+    """
+    Cancel (disable) a scheduled task.
+
+    Args:
+        task_id: The ID of the task to cancel
+
+    Returns:
+        Updated task details
+    """
+    with make_session() as session:
+        current_user = _get_current_user(session)
+        if not current_user.get("authenticated"):
+            raise ValueError("Not authenticated")
+
+        user_id = current_user.get("user", {}).get("user_id")
+        if not user_id:
+            raise ValueError("User not found")
+
+        task = session.get(ScheduledTask, task_id)
+        if not task:
+            raise ValueError("Task not found")
+        if task.user_id != user_id:
+            raise ValueError("Not authorized to cancel this task")
+
+        task.enabled = False
+        session.commit()
+
+        return {"success": True, "task": task.serialize()}
+
+
+@meta_mcp.tool()
+async def get_task_executions(
+    task_id: str,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Get execution history for a scheduled task.
+
+    Args:
+        task_id: The ID of the task
+        limit: Maximum number of executions to return (default 10)
+
+    Returns:
+        List of task executions, most recent first
+    """
+    with make_session() as session:
+        current_user = _get_current_user(session)
+        if not current_user.get("authenticated"):
+            raise ValueError("Not authenticated")
+
+        user_id = current_user.get("user", {}).get("user_id")
+        if not user_id:
+            raise ValueError("User not found")
+
+        task = session.get(ScheduledTask, task_id)
+        if not task:
+            raise ValueError("Task not found")
+        if task.user_id != user_id:
+            raise ValueError("Not authorized to view this task")
+
+        executions = (
+            session.query(TaskExecution)
+            .filter(TaskExecution.task_id == task_id)
+            .order_by(TaskExecution.scheduled_time.desc())
+            .limit(limit)
+            .all()
+        )
+
+        return [e.serialize() for e in executions]

@@ -781,7 +781,7 @@ def ensure_github_repo(
         track_issues=True,
         track_prs=True,
         track_comments=True,
-        track_project_fields=False,
+        track_project_fields=True,
         active=True,
     )
     session.add(new_repo)

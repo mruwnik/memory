@@ -56,15 +56,23 @@ export const GitHubPanel = () => {
 
   useEffect(() => { loadData() }, [loadData])
 
+  // Note: These handlers don't call loadData() - GitHubRepoForm handles batch
+  // operations and calls onComplete when done, which triggers a single reload
   const handleAddRepo = async (accountId: number, data: any) => {
     await addGithubRepo(accountId, data)
-    setAddingRepoTo(null)
-    loadData()
   }
 
   const handleDeleteRepo = async (accountId: number, repoId: number) => {
     await deleteGithubRepo(accountId, repoId)
+  }
+
+  const handleRepoFormComplete = () => {
+    setAddingRepoTo(null)
     loadData()
+  }
+
+  const handleRepoFormCancel = () => {
+    setAddingRepoTo(null)
   }
 
   const handleToggleRepoActive = async (accountId: number, repoId: number, active: boolean) => {
@@ -146,7 +154,7 @@ export const GitHubPanel = () => {
                   <p className="text-sm text-slate-400 italic">No repositories tracked</p>
                 ) : (
                   <div className="space-y-2">
-                    {account.repos.map(repo => (
+                    {[...account.repos].sort((a, b) => a.repo_path.localeCompare(b.repo_path)).map(repo => (
                       <div key={repo.id} className={cx(
                         'flex flex-wrap items-center gap-3 p-3 rounded border',
                         repo.active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50 opacity-60'
@@ -246,7 +254,8 @@ export const GitHubPanel = () => {
             repoIdMap={repoIdMap}
             onAdd={(data) => handleAddRepo(addingRepoTo, data)}
             onRemove={(repoId) => handleDeleteRepo(addingRepoTo, repoId)}
-            onCancel={() => setAddingRepoTo(null)}
+            onComplete={handleRepoFormComplete}
+            onCancel={handleRepoFormCancel}
           />
         )
       })()}
@@ -626,10 +635,11 @@ interface GitHubRepoFormProps {
   repoIdMap: Map<string, number> // map repo_path to repo id for deletion
   onAdd: (data: any) => Promise<void>
   onRemove: (repoId: number) => Promise<void>
-  onCancel: () => void
+  onComplete: () => void  // Called after successful changes (triggers reload)
+  onCancel: () => void    // Called when cancelled without changes
 }
 
-const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, onCancel }: GitHubRepoFormProps) => {
+const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, onComplete, onCancel }: GitHubRepoFormProps) => {
   const [monitoredRepos, setMonitoredRepos] = useState<Set<string>>(() => new Set(existingRepos))
   const [formData, setFormData] = useState({
     track_issues: true,
@@ -676,7 +686,7 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
         await onAdd({ ...formData, owner, name })
       }
 
-      onCancel() // Close modal on success
+      onComplete() // Close modal and trigger single reload
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update repositories')
     } finally {

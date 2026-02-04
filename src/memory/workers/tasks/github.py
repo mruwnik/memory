@@ -114,10 +114,30 @@ def _create_pr_data(issue_data: GithubIssueData) -> GithubPRData | None:
     return pr_data
 
 
+def _lookup_repo_project_id(session: Any, repo: GithubRepo) -> int | None:
+    """Look up the project ID for a repo (not a milestone).
+
+    Returns the project that has repo_id set but no milestone number,
+    which represents the repo-level project for access control.
+    """
+    project = (
+        session.query(Project)
+        .filter(
+            Project.repo_id == repo.id,
+            Project.number.is_(None),
+        )
+        .first()
+    )
+    if project:
+        return cast(int, project.id)
+    return None
+
+
 def _create_github_item(
     repo: GithubRepo,
     issue_data: GithubIssueData,
     milestone_id: int | None = None,
+    project_id: int | None = None,
 ) -> GithubItem:
     """Create a GithubItem from parsed issue/PR data."""
     content = _build_content(issue_data)
@@ -149,6 +169,7 @@ def _create_github_item(
         labels=issue_data["labels"],
         assignees=issue_data["assignees"],
         milestone_id=milestone_id,
+        project_id=project_id,
         created_at=issue_data["created_at"],
         closed_at=issue_data["closed_at"],
         merged_at=issue_data["merged_at"],
@@ -201,6 +222,7 @@ def _update_existing_item(
     repo: GithubRepo,
     issue_data: GithubIssueData,
     milestone_id: int | None = None,
+    project_id: int | None = None,
 ) -> dict[str, Any]:
     """Update an existing GithubItem and reindex if content changed."""
     if not _needs_reindex(existing, issue_data):
@@ -240,6 +262,7 @@ def _update_existing_item(
     existing.labels = issue_data["labels"]  # type: ignore
     existing.assignees = issue_data["assignees"]  # type: ignore
     existing.milestone_id = milestone_id  # type: ignore
+    existing.project_id = project_id  # type: ignore
     existing.closed_at = issue_data["closed_at"]  # type: ignore
     existing.merged_at = issue_data["merged_at"]  # type: ignore
     existing.github_updated_at = issue_data["github_updated_at"]  # type: ignore
@@ -409,6 +432,12 @@ def sync_github_item(
             session, repo, issue_data.get("milestone_number"), client
         )
 
+        # Determine project_id: use milestone if set, otherwise use repo project
+        if milestone_id:
+            project_id = milestone_id
+        else:
+            project_id = _lookup_repo_project_id(session, repo)
+
         # Check for existing item
         existing = (
             session.query(GithubItem)
@@ -422,11 +451,11 @@ def sync_github_item(
 
         if existing:
             return _update_existing_item(
-                session, existing, repo, issue_data, milestone_id
+                session, existing, repo, issue_data, milestone_id, project_id
             )
 
         # Create new item
-        github_item = _create_github_item(repo, issue_data, milestone_id)
+        github_item = _create_github_item(repo, issue_data, milestone_id, project_id)
         return process_content_item(github_item, session)
 
 

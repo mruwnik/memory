@@ -19,7 +19,7 @@ from memory.common.celery_app import (
     SYNC_ALL_ARTICLE_FEEDS,
     TRACK_GIT_CHANGES,
     SYNC_LESSWRONG,
-    RUN_SCHEDULED_CALLS,
+    RUN_SCHEDULED_TASKS,
     BACKUP_ALL,
     SYNC_ALL_GITHUB_REPOS,
     SYNC_ALL_GOOGLE_ACCOUNTS,
@@ -68,8 +68,8 @@ app.conf.beat_schedule.update({
         "task": TRACK_GIT_CHANGES,
         "schedule": settings.NOTES_SYNC_INTERVAL,
     },
-    "run-scheduled-calls": {
-        "task": RUN_SCHEDULED_CALLS,
+    "run-scheduled-tasks": {
+        "task": RUN_SCHEDULED_TASKS,
         "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,
     },
     "backup-all": {

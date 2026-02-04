@@ -30,8 +30,23 @@ const Calendar = () => {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [selectedDayEvents, setSelectedDayEvents] = useState<{ date: Date; events: CalendarEvent[] } | null>(null)
-  const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(new Set())
+  const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(() => {
+    // Load saved selection from localStorage
+    const saved = localStorage.getItem('calendar-enabled-calendars')
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) {
+          return new Set(parsed)
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+    return new Set()
+  })
   const [showCalendarFilter, setShowCalendarFilter] = useState(false)
+  const [hasLoadedInitialCalendars, setHasLoadedInitialCalendars] = useState(false)
 
   // Attendee popup state
   const [selectedAttendee, setSelectedAttendee] = useState<{ email: string; person: Person | null; loading: boolean } | null>(null)
@@ -80,21 +95,26 @@ const Calendar = () => {
     try {
       const data = await getEventsForMonths(date.getFullYear(), date.getMonth(), userIds)
       setEvents(data)
-      // Add any new calendar names to enabled set (preserves user's deselections)
+      // Handle calendar selection
       const newCalendarNames = new Set(data.map(e => e.calendar_name || 'Unknown').filter(Boolean))
       setEnabledCalendars(prev => {
-        if (prev.size === 0) return newCalendarNames
-        // Add any calendars that weren't in the previous set
+        // First load ever (no saved selection): enable all calendars
+        if (!hasLoadedInitialCalendars && prev.size === 0 && !localStorage.getItem('calendar-enabled-calendars')) {
+          return newCalendarNames
+        }
+        // Otherwise, just add any new calendars that weren't in the previous set
+        // (preserves user's deselections while showing newly added calendars)
         const updated = new Set(prev)
         newCalendarNames.forEach(name => updated.add(name))
         return updated
       })
+      setHasLoadedInitialCalendars(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load events')
     } finally {
       setLoading(false)
     }
-  }, [getEventsForMonths])
+  }, [getEventsForMonths, hasLoadedInitialCalendars])
 
   useEffect(() => {
     // Wait for auth to load before fetching - we need to know if user is admin
@@ -104,6 +124,13 @@ const Calendar = () => {
     if (isAdmin && !usersLoaded) return
     loadEvents(currentDate, selectedUserIds)
   }, [loadEvents, currentDate, selectedUserIds, isAdmin, usersLoaded, authLoading])
+
+  // Persist calendar selection to localStorage
+  useEffect(() => {
+    if (hasLoadedInitialCalendars) {
+      localStorage.setItem('calendar-enabled-calendars', JSON.stringify(Array.from(enabledCalendars)))
+    }
+  }, [enabledCalendars, hasLoadedInitialCalendars])
 
   // Get unique calendar names for filter
   const calendarNames = useMemo(() => {

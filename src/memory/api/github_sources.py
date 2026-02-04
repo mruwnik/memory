@@ -1,19 +1,39 @@
 """API endpoints for GitHub Account and Repo management."""
 
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Literal, cast
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, get_user_account, has_admin_scope, resolve_user_filter
+from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials
+
+logger = logging.getLogger(__name__)
+
+# Cache TTL for available repos (5 minutes)
+AVAILABLE_REPOS_CACHE_TTL = 300
+
+# Redis connection pool for caching (lazy initialized)
+_redis_pool: redis.ConnectionPool | None = None
+
+
+def get_redis_client() -> redis.Redis:
+    """Get Redis client with connection pooling."""
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
+    return redis.Redis(connection_pool=_redis_pool)
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -87,7 +107,7 @@ class GithubRepoCreate(BaseModel):
     track_issues: bool = True
     track_prs: bool = True
     track_comments: bool = True
-    track_project_fields: bool = False
+    track_project_fields: bool = True
     labels_filter: list[str] = []
     state_filter: str | None = None
     tags: list[str] = []
@@ -356,11 +376,44 @@ class AvailableProjectResponse(BaseModel):
     items_total_count: int
 
 
+def get_available_repos_cache_key(account_id: int, include_archived: bool) -> str:
+    """Generate cache key for available repos."""
+    return f"github:available-repos:{account_id}:archived={include_archived}"
+
+
+def get_cached_available_repos(
+    account_id: int, include_archived: bool
+) -> list[dict] | None:
+    """Get cached available repos from Redis."""
+    try:
+        r = get_redis_client()
+        cache_key = get_available_repos_cache_key(account_id, include_archived)
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning(f"Failed to read from cache: {e}")
+    return None
+
+
+def set_cached_available_repos(
+    account_id: int, include_archived: bool, repos: list[dict]
+) -> None:
+    """Cache available repos in Redis."""
+    try:
+        r = get_redis_client()
+        cache_key = get_available_repos_cache_key(account_id, include_archived)
+        r.set(cache_key, json.dumps(repos), ex=AVAILABLE_REPOS_CACHE_TTL)
+    except Exception as e:
+        logger.warning(f"Failed to write to cache: {e}")
+
+
 @router.get("/accounts/{account_id}/available-repos")
 def list_available_repos(
     account_id: int,
     limit: int | None = None,
     include_archived: bool = False,
+    refresh: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AvailableRepoResponse]:
@@ -370,11 +423,18 @@ def list_available_repos(
         account_id: GitHub account ID.
         limit: Maximum number of repos to return. None or 0 means fetch all available repos.
         include_archived: Whether to include archived repos (default: False).
+        refresh: Force refresh from GitHub API, bypassing cache (default: False).
     """
     account = get_user_account(db, GithubAccount, account_id, user)
 
     # Treat 0 as "no limit" for API convenience
     max_repos = limit if limit else None
+
+    # Try cache first (unless refresh requested or limit specified)
+    if not refresh and max_repos is None:
+        cached = get_cached_available_repos(account_id, include_archived)
+        if cached is not None:
+            return [AvailableRepoResponse(**repo) for repo in cached]
 
     try:
         credentials = GithubCredentials(
@@ -386,10 +446,15 @@ def list_available_repos(
         )
         client = GithubClient(credentials)
 
-        repos = []
+        repos_data = []
         for repo in client.list_repos(max_repos=max_repos, include_archived=include_archived):
-            repos.append(AvailableRepoResponse(**repo))
-        return repos
+            repos_data.append(repo)
+
+        # Cache the full result (only if no limit was applied)
+        if max_repos is None:
+            set_cached_available_repos(account_id, include_archived, repos_data)
+
+        return [AvailableRepoResponse(**repo) for repo in repos_data]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
