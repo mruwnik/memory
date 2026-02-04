@@ -31,6 +31,7 @@ class EnvironmentResponse(BaseModel):
     volume_name: str
     description: str | None
     initialized_from_snapshot_id: int | None
+    cloned_from_environment_id: int | None
     size_bytes: int | None
     last_used_at: str | None
     created_at: str | None
@@ -44,6 +45,7 @@ class EnvironmentResponse(BaseModel):
             volume_name=env.volume_name,
             description=env.description,
             initialized_from_snapshot_id=env.initialized_from_snapshot_id,
+            cloned_from_environment_id=env.cloned_from_environment_id,
             size_bytes=env.size_bytes,
             last_used_at=env.last_used_at.isoformat() if env.last_used_at else None,
             created_at=env.created_at.isoformat() if env.created_at else None,
@@ -57,6 +59,7 @@ class CreateEnvironmentRequest(BaseModel):
     name: str
     description: str | None = None
     snapshot_id: int | None = None  # Optional: initialize from this snapshot
+    source_environment_id: int | None = None  # Optional: clone from this environment
 
 
 class ResetEnvironmentRequest(BaseModel):
@@ -107,11 +110,17 @@ async def create_environment(
 ) -> EnvironmentResponse:
     """Create a new persistent environment.
 
-    Optionally initialize from a snapshot. If no snapshot is provided,
-    creates an empty environment.
+    Optionally initialize from a snapshot or clone from another environment.
+    If neither is provided, creates an empty environment.
     """
+    # Validate that at most one source is provided
+    if request.snapshot_id and request.source_environment_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot specify both snapshot_id and source_environment_id",
+        )
+
     # Validate snapshot if provided
-    snapshot = None
     snapshot_path = None
     if request.snapshot_id:
         snapshot = (
@@ -126,6 +135,20 @@ async def create_environment(
             raise HTTPException(status_code=404, detail="Snapshot not found")
         snapshot_path = str(settings.HOST_STORAGE_DIR / "snapshots" / snapshot.filename)
 
+    # Validate source environment if provided
+    source_env = None
+    if request.source_environment_id:
+        source_env = (
+            db.query(ClaudeEnvironment)
+            .filter(
+                ClaudeEnvironment.id == request.source_environment_id,
+                ClaudeEnvironment.user_id == user.id,
+            )
+            .first()
+        )
+        if not source_env:
+            raise HTTPException(status_code=404, detail="Source environment not found")
+
     # Create DB record first to get ID for volume name
     env = ClaudeEnvironment(
         user_id=user.id,
@@ -133,6 +156,7 @@ async def create_environment(
         description=request.description,
         volume_name="placeholder",  # Will update after we have the ID
         initialized_from_snapshot_id=request.snapshot_id,
+        cloned_from_environment_id=request.source_environment_id,
     )
     db.add(env)
     db.flush()  # Get the ID without committing
@@ -143,7 +167,13 @@ async def create_environment(
     # Create the Docker volume via orchestrator
     client = get_orchestrator_client()
     try:
-        if snapshot_path:
+        if source_env:
+            # Clone volume from another environment
+            response = await client.clone_environment_volume(
+                source_volume=source_env.volume_name,
+                dest_volume=env.volume_name,
+            )
+        elif snapshot_path:
             # Initialize volume from snapshot
             response = await client.initialize_environment(
                 volume_name=env.volume_name,

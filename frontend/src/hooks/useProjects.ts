@@ -71,6 +71,9 @@ export interface ProjectFilters {
   state?: 'open' | 'closed'
   parent_id?: number  // Use 0 for root-level only
   include_teams?: boolean
+  limit?: number
+  offset?: number
+  search?: string
 }
 
 export const useProjects = () => {
@@ -81,6 +84,9 @@ export const useProjects = () => {
       state: options.state,
       parent_id: options.parent_id,
       include_teams: options.include_teams ?? false,
+      limit: options.limit,
+      offset: options.offset,
+      search: options.search,
     })
     if (result?.[0]?.error) {
       throw new Error(result[0].error)

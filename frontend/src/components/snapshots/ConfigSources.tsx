@@ -34,7 +34,9 @@ const ConfigSources = () => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newEnvName, setNewEnvName] = useState('')
   const [newEnvDescription, setNewEnvDescription] = useState('')
+  const [newEnvSourceType, setNewEnvSourceType] = useState<'empty' | 'snapshot' | 'environment'>('empty')
   const [newEnvSnapshotId, setNewEnvSnapshotId] = useState<number | null>(null)
+  const [newEnvSourceEnvId, setNewEnvSourceEnvId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
 
   // Reset environment modal state
@@ -105,13 +107,16 @@ const ConfigSources = () => {
       const request: CreateEnvironmentRequest = {
         name: newEnvName.trim(),
         description: newEnvDescription.trim() || undefined,
-        snapshot_id: newEnvSnapshotId || undefined,
+        snapshot_id: newEnvSourceType === 'snapshot' ? (newEnvSnapshotId || undefined) : undefined,
+        source_environment_id: newEnvSourceType === 'environment' ? (newEnvSourceEnvId || undefined) : undefined,
       }
       await createEnvironment(request)
       setShowCreateModal(false)
       setNewEnvName('')
       setNewEnvDescription('')
+      setNewEnvSourceType('empty')
       setNewEnvSnapshotId(null)
+      setNewEnvSourceEnvId(null)
       loadData()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create environment')
@@ -430,21 +435,77 @@ const ConfigSources = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Initialize from Snapshot</label>
-                <select
-                  value={newEnvSnapshotId ?? ''}
-                  onChange={(e) => setNewEnvSnapshotId(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">Empty (no snapshot)</option>
-                  {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Initialize from</label>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewEnvSourceType('empty')}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      newEnvSourceType === 'empty'
+                        ? 'bg-primary text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Empty
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewEnvSourceType('snapshot')}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      newEnvSourceType === 'snapshot'
+                        ? 'bg-primary text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Snapshot
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewEnvSourceType('environment')}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      newEnvSourceType === 'environment'
+                        ? 'bg-primary text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Environment
+                  </button>
+                </div>
+
+                {newEnvSourceType === 'snapshot' && (
+                  <select
+                    value={newEnvSnapshotId ?? ''}
+                    onChange={(e) => setNewEnvSnapshotId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Select a snapshot...</option>
+                    {snapshots.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {newEnvSourceType === 'environment' && (
+                  <select
+                    value={newEnvSourceEnvId ?? ''}
+                    onChange={(e) => setNewEnvSourceEnvId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Select an environment...</option>
+                    {environments.map((env) => (
+                      <option key={env.id} value={env.id}>
+                        {env.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
                 <p className="text-xs text-slate-500 mt-1">
-                  Optionally pre-populate with config from a snapshot
+                  {newEnvSourceType === 'empty' && 'Create a blank environment'}
+                  {newEnvSourceType === 'snapshot' && 'Initialize with config from a snapshot'}
+                  {newEnvSourceType === 'environment' && 'Clone all data from an existing environment'}
                 </p>
               </div>
             </div>
@@ -455,7 +516,9 @@ const ConfigSources = () => {
                   setShowCreateModal(false)
                   setNewEnvName('')
                   setNewEnvDescription('')
+                  setNewEnvSourceType('empty')
                   setNewEnvSnapshotId(null)
+                  setNewEnvSourceEnvId(null)
                 }}
                 className="bg-slate-100 text-slate-600 py-2 px-4 rounded-lg text-sm font-medium hover:bg-slate-200"
               >

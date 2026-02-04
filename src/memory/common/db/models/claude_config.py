@@ -101,6 +101,7 @@ class ClaudeEnvironmentPayload(TypedDict):
     volume_name: Annotated[str, "Docker volume name"]
     description: Annotated[str | None, "User description"]
     initialized_from_snapshot_id: Annotated[int | None, "Snapshot used for initialization"]
+    cloned_from_environment_id: Annotated[int | None, "Environment cloned from"]
     size_bytes: Annotated[int | None, "Last known size in bytes"]
     last_used_at: Annotated[str | None, "ISO timestamp of last use"]
     created_at: Annotated[str | None, "ISO timestamp of creation"]
@@ -137,6 +138,16 @@ class ClaudeEnvironment(Base):
     )
     initialized_from_snapshot: Mapped[ClaudeConfigSnapshot | None] = relationship("ClaudeConfigSnapshot", lazy="select")
 
+    # Clone source (optional - tracks what environment was cloned from)
+    cloned_from_environment_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("claude_environments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cloned_from_environment: Mapped[ClaudeEnvironment | None] = relationship(
+        "ClaudeEnvironment", remote_side="ClaudeEnvironment.id", lazy="select"
+    )
+
     # Usage tracking
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -161,6 +172,7 @@ class ClaudeEnvironment(Base):
             volume_name=self.volume_name,
             description=self.description,
             initialized_from_snapshot_id=self.initialized_from_snapshot_id,
+            cloned_from_environment_id=self.cloned_from_environment_id,
             size_bytes=self.size_bytes,
             last_used_at=self.last_used_at.isoformat() if self.last_used_at else None,
             created_at=self.created_at.isoformat() if self.created_at else None,

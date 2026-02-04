@@ -35,8 +35,12 @@ export const ProjectsPanel = () => {
   const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'tree' | 'list'>('list')
+  const [viewMode, setViewMode] = useState<'tree' | 'list'>(() => {
+    const stored = localStorage.getItem('projects-view-mode')
+    return stored === 'list' || stored === 'tree' ? stored : 'tree'
+  })
   const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('open')
+  const [searchQuery, setSearchQuery] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
@@ -61,7 +65,7 @@ export const ProjectsPanel = () => {
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
       const [projectsList, treeData, teamsList, peopleList] = await Promise.all([
-        listProjects({ state, include_teams: true }),
+        listProjects({ state, include_teams: true, limit: 500 }),
         getProjectTree({ state }),
         listTeams(),
         listPeople({ limit: 200 }),
@@ -81,6 +85,11 @@ export const ProjectsPanel = () => {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Persist view mode preference
+  useEffect(() => {
+    localStorage.setItem('projects-view-mode', viewMode)
+  }, [viewMode])
 
   const handleCreate = async (data: ProjectCreate) => {
     await createProject(data)
@@ -105,6 +114,42 @@ export const ProjectsPanel = () => {
   // Always show toggle if currently in tree mode (so user can switch back)
   const showViewToggle = hasHierarchy || viewMode === 'tree'
 
+  // Filter projects by search query (for list view)
+  const filteredProjects = searchQuery.trim()
+    ? projects.filter(p =>
+        p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.repo_path?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : projects
+
+  // Filter tree nodes recursively (for tree view)
+  const filterTreeNodes = (nodes: ProjectTreeNode[]): ProjectTreeNode[] => {
+    if (!searchQuery.trim()) return nodes
+    const query = searchQuery.toLowerCase()
+
+    const filterNode = (node: ProjectTreeNode): ProjectTreeNode | null => {
+      const matchesSelf =
+        node.title.toLowerCase().includes(query) ||
+        node.description?.toLowerCase().includes(query) ||
+        node.repo_path?.toLowerCase().includes(query)
+
+      const filteredChildren = node.children
+        .map(filterNode)
+        .filter((n): n is ProjectTreeNode => n !== null)
+
+      // Include node if it matches or has matching children
+      if (matchesSelf || filteredChildren.length > 0) {
+        return { ...node, children: filteredChildren }
+      }
+      return null
+    }
+
+    return nodes.map(filterNode).filter((n): n is ProjectTreeNode => n !== null)
+  }
+
+  const filteredTree = filterTreeNodes(tree)
+
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
@@ -113,6 +158,14 @@ export const ProjectsPanel = () => {
       <div className={styles.panelHeader}>
         <h3 className={styles.panelTitle}>Projects</h3>
         <div className="flex items-center gap-2">
+          {/* Search filter */}
+          <input
+            type="text"
+            placeholder="Search projects..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={cx(styles.formInput, 'w-48 py-1.5')}
+          />
           {/* State filter */}
           <select
             value={stateFilter}
@@ -166,27 +219,35 @@ export const ProjectsPanel = () => {
         />
       ) : viewMode === 'tree' && hasHierarchy ? (
         <div className={styles.sourceList}>
-          <ProjectTree
-            nodes={tree}
-            onEdit={setEditingProject}
-            onDelete={setDeletingProject}
-            onManageTeams={setManagingTeams}
-            projects={projects}
-            collapsedNodes={collapsedNodes}
-            onToggleCollapse={toggleCollapse}
-          />
+          {filteredTree.length === 0 && searchQuery ? (
+            <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
+          ) : (
+            <ProjectTree
+              nodes={filteredTree}
+              onEdit={setEditingProject}
+              onDelete={setDeletingProject}
+              onManageTeams={setManagingTeams}
+              projects={projects}
+              collapsedNodes={collapsedNodes}
+              onToggleCollapse={toggleCollapse}
+            />
+          )}
         </div>
       ) : (
         <div className={styles.sourceList}>
-          {projects.map(project => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onEdit={() => setEditingProject(project)}
-              onDelete={() => setDeletingProject(project)}
-              onManageTeams={() => setManagingTeams(project)}
-            />
-          ))}
+          {filteredProjects.length === 0 && searchQuery ? (
+            <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
+          ) : (
+            filteredProjects.map(project => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onEdit={() => setEditingProject(project)}
+                onDelete={() => setDeletingProject(project)}
+                onManageTeams={() => setManagingTeams(project)}
+              />
+            ))
+          )}
         </div>
       )}
 
@@ -274,7 +335,21 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
   return (
     <div className={depth > 0 ? 'ml-6 border-l border-slate-200 pl-4' : ''}>
       {nodes.map(node => {
+        // Try to find full project data, fall back to node data
         const project = projects.find(p => p.id === node.id)
+        const projectData: Project = project || {
+          id: node.id,
+          title: node.title,
+          description: node.description,
+          state: node.state as 'open' | 'closed',
+          repo_path: node.repo_path,
+          github_id: null,
+          number: null,
+          parent_id: node.parent_id,
+          children_count: node.children.length,
+          owner_id: null,
+          due_on: null,
+        }
         const hasChildren = node.children.length > 0
         const isCollapsed = collapsedNodes.has(node.id)
 
@@ -303,22 +378,10 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, projects, collaps
               )}
               <div className="flex-1">
                 <ProjectCard
-                  project={project || {
-                    id: node.id,
-                    title: node.title,
-                    description: node.description,
-                    state: node.state as 'open' | 'closed',
-                    repo_path: node.repo_path,
-                    github_id: null,
-                    number: null,
-                    parent_id: node.parent_id,
-                    children_count: node.children.length,
-                    owner_id: null,
-                    due_on: null,
-                  }}
-                  onEdit={() => project && onEdit(project)}
-                  onDelete={() => project && onDelete(project)}
-                  onManageTeams={() => project && onManageTeams(project)}
+                  project={projectData}
+                  onEdit={() => onEdit(projectData)}
+                  onDelete={() => onDelete(projectData)}
+                  onManageTeams={() => onManageTeams(projectData)}
                   compact
                 />
               </div>

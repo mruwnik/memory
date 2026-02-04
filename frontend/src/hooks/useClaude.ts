@@ -55,6 +55,7 @@ export interface Environment {
   volume_name: string
   description: string | null
   initialized_from_snapshot_id: number | null
+  cloned_from_environment_id: number | null
   size_bytes: number | null
   last_used_at: string | null
   created_at: string | null
@@ -65,6 +66,7 @@ export interface CreateEnvironmentRequest {
   name: string
   description?: string
   snapshot_id?: number // Optional: initialize from this snapshot
+  source_environment_id?: number // Optional: clone from this environment
 }
 
 export interface ResetEnvironmentRequest {

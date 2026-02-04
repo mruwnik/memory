@@ -348,6 +348,20 @@ class OrchestratorClient:
             snapshot_path=snapshot_path,
         )
 
+    async def clone_environment_volume(
+        self, source_volume: str, dest_volume: str
+    ) -> dict[str, Any]:
+        """Clone an environment volume by copying all data to a new volume.
+
+        Returns:
+            Dict with status: "cloned" | "error"
+        """
+        return await self._call(
+            "clone_environment_volume",
+            source_volume=source_volume,
+            dest_volume=dest_volume,
+        )
+
 
 # Singleton client instance
 _client: OrchestratorClient | None = None

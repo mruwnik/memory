@@ -806,6 +806,68 @@ class Orchestrator:
         else:
             return self.create_environment_volume(volume_name)
 
+    def clone_environment_volume(
+        self, source_volume: str, dest_volume: str
+    ) -> dict[str, Any]:
+        """Clone an environment volume by copying all data to a new volume.
+
+        Creates the destination volume and copies all files from the source.
+        """
+        # Validate both volume names (defense-in-depth)
+        is_valid, error_msg = validate_volume_name(source_volume)
+        if not is_valid:
+            logger.warning(
+                f"Invalid source volume name rejected: {source_volume!r} - {error_msg}"
+            )
+            return {"status": "error", "error": f"Invalid source volume name: {error_msg}"}
+
+        is_valid, error_msg = validate_volume_name(dest_volume)
+        if not is_valid:
+            logger.warning(
+                f"Invalid dest volume name rejected: {dest_volume!r} - {error_msg}"
+            )
+            return {"status": "error", "error": f"Invalid dest volume name: {error_msg}"}
+
+        # Verify source volume exists
+        try:
+            self.docker.volumes.get(source_volume)
+        except NotFound:
+            return {"status": "error", "error": f"Source volume not found: {source_volume}"}
+
+        # Create destination volume
+        create_result = self.create_environment_volume(dest_volume)
+        if create_result.get("status") == "error":
+            return create_result
+
+        # Copy data using a temporary container
+        # Use cp -a to preserve permissions, ownership, and timestamps
+        clone_container_name = f"clone-{dest_volume[:20]}-{int(time.time())}"
+        try:
+            self.docker.containers.run(
+                "alpine:latest",
+                command=[
+                    "sh",
+                    "-c",
+                    # Copy all files preserving attributes
+                    # Use -a for archive mode (preserves permissions, ownership, timestamps)
+                    "cp -a /source/. /dest/",
+                ],
+                name=clone_container_name,
+                volumes={
+                    source_volume: {"bind": "/source", "mode": "ro"},
+                    dest_volume: {"bind": "/dest", "mode": "rw"},
+                },
+                remove=True,  # Auto-remove after completion
+                detach=False,  # Wait for completion
+            )
+            logger.info(f"Cloned volume {source_volume} to {dest_volume}")
+            return {"status": "cloned", "volume_name": dest_volume}
+        except APIError as e:
+            logger.error(f"Failed to clone volume {source_volume} to {dest_volume}: {e}")
+            # Clean up the destination volume we just created
+            self.delete_environment_volume(dest_volume)
+            return {"status": "error", "error": str(e)}
+
     # -------------------------------------------------------------------------
     # Container Management
     # -------------------------------------------------------------------------
@@ -934,6 +996,11 @@ class Orchestrator:
         elif action == "reset_environment_volume":
             return self.reset_environment_volume(
                 data["volume_name"], data.get("snapshot_path")
+            )
+
+        elif action == "clone_environment_volume":
+            return self.clone_environment_volume(
+                data["source_volume"], data["dest_volume"]
             )
 
         else:
