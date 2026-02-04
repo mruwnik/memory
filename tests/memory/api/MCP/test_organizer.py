@@ -23,7 +23,12 @@ class MockFastMCP:
 # Mock the fastmcp module before importing anything that uses it
 _mock_fastmcp = MagicMock()
 _mock_fastmcp.FastMCP = MockFastMCP
+_mock_fastmcp.server = MagicMock()
+_mock_fastmcp.server.dependencies = MagicMock()
+_mock_fastmcp.server.dependencies.get_access_token = MagicMock(return_value=None)
 sys.modules["fastmcp"] = _mock_fastmcp
+sys.modules["fastmcp.server"] = _mock_fastmcp.server
+sys.modules["fastmcp.server.dependencies"] = _mock_fastmcp.server.dependencies
 
 # Mock the mcp module and all its submodules
 _mock_mcp = MagicMock()
@@ -323,23 +328,23 @@ async def test_list_tasks_offset(db_session, sample_tasks):
 
 
 # =============================================================================
-# Tests for get_task
+# Tests for fetch
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_get_task_found(db_session, sample_tasks):
-    """Test getting a task that exists."""
-    from memory.api.MCP.servers.organizer import get_task
+async def test_fetch_found(db_session, sample_tasks):
+    """Test fetching a task that exists."""
+    from memory.api.MCP.servers.organizer import fetch
 
-    get_task_fn = get_fn(get_task)
+    fetch_fn = get_fn(fetch)
     task_id = sample_tasks[0].id
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await get_task_fn(task_id=task_id)
+        result = await fetch_fn(task_id=task_id)
 
     assert result["success"] is True
     assert result["task"]["task_title"] == "Urgent task due today"
@@ -347,20 +352,83 @@ async def test_get_task_found(db_session, sample_tasks):
 
 
 @pytest.mark.asyncio
-async def test_get_task_not_found(db_session, sample_tasks):
-    """Test getting a task that doesn't exist."""
-    from memory.api.MCP.servers.organizer import get_task
+async def test_fetch_not_found(db_session, sample_tasks):
+    """Test fetching a task that doesn't exist."""
+    from memory.api.MCP.servers.organizer import fetch
 
-    get_task_fn = get_fn(get_task)
+    fetch_fn = get_fn(fetch)
 
     with patch(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await get_task_fn(task_id=99999)
+        result = await fetch_fn(task_id=99999)
 
     assert "error" in result
     assert "not found" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_with_journal_entries(db_session, sample_tasks):
+    """Test fetching a task with include_journal=True returns journal_entries key.
+
+    Note: 'task' is not currently a valid target_type in the journal system.
+    The journal feature for tasks is a placeholder - this test verifies the
+    include_journal parameter adds the journal_entries key to the response,
+    but returns empty results until task support is added to the journal system.
+    """
+    from memory.api.MCP.servers.organizer import fetch
+    from memory.common.db.models import HumanUser
+
+    task = sample_tasks[0]
+
+    # Create a user for the test
+    user = HumanUser(
+        name="Test Admin",
+        email="admin-journal@example.com",
+        password_hash="hash",
+        scopes=["*"],
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    fetch_fn = get_fn(fetch)
+
+    # Mock make_session and get_mcp_current_user for the test
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=user,
+        ),
+    ):
+        result = await fetch_fn(task_id=task.id, include_journal=True)
+
+    assert result["success"] is True
+    assert "journal_entries" in result
+    # Empty because 'task' is not a valid target_type in the journal system yet
+    assert len(result["journal_entries"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_without_journal_entries(db_session, sample_tasks):
+    """Test fetching a task without journal entries by default."""
+    from memory.api.MCP.servers.organizer import fetch
+
+    fetch_fn = get_fn(fetch)
+    task = sample_tasks[0]
+
+    with patch(
+        "memory.api.MCP.servers.organizer.make_session",
+        return_value=db_session.__enter__(),
+    ):
+        result = await fetch_fn(task_id=task.id)
+
+    assert result["success"] is True
+    assert "journal_entries" not in result
 
 
 # =============================================================================

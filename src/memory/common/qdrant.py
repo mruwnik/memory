@@ -144,11 +144,11 @@ def upsert_vectors(
 
     points = [
         qdrant_models.PointStruct(
-            id=id_str,
+            id=str(id_val),  # Convert UUID to string if needed
             vector=vector,
             payload=payload,
         )
-        for id_str, vector, payload in zip(ids, vectors, payloads)
+        for id_val, vector, payload in zip(ids, vectors, payloads)
     ]
 
     client.upsert(

@@ -224,7 +224,7 @@ async def delete_poll(poll_id: int) -> dict:
 
 @polling_mcp.tool()
 @visible_when(require_scopes("polling"))
-async def get_poll(poll_id: int | None = None, slug: str | None = None) -> dict:
+async def fetch(poll_id: int | None = None, slug: str | None = None) -> dict:
     """
     Get poll details and aggregated results by ID or slug.
 

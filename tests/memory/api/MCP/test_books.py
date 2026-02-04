@@ -4,7 +4,28 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from memory.api.MCP.servers.books import list_books, read_book
+from memory.api.MCP.servers.books import fetch, list_books
+from memory.common.content_processing import create_content_hash
+from memory.common.db import connection as db_connection
+from memory.common.db.models import Book, BookSection, JournalEntry
+from tests.conftest import mcp_auth_context
+
+
+def get_fn(tool):
+    """Extract underlying function from FunctionTool if wrapped."""
+    return getattr(tool, "fn", tool)
+
+
+@pytest.fixture(autouse=True)
+def reset_db_cache():
+    """Reset the cached database engine between tests."""
+    db_connection._engine = None
+    db_connection._session_factory = None
+    db_connection._scoped_session = None
+    yield
+    db_connection._engine = None
+    db_connection._session_factory = None
+    db_connection._scoped_session = None
 
 
 # ====== list_books tests ======
@@ -239,11 +260,11 @@ async def test_list_books_combines_filters(mock_make_session):
     assert query_mock.filter.call_count == 3
 
 
-# ====== read_book tests ======
+# ====== fetch tests ======
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_returns_all_sections(mock_make_session):
+def test_fetch_returns_all_sections(mock_make_session):
     """Read book returns all sections when no specific sections requested."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -270,7 +291,7 @@ def test_read_book_returns_all_sections(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = [mock_section1, mock_section2]
 
-    result = read_book.fn(book_id=1)
+    result = fetch.fn(book_id=1)
 
     assert len(result) == 2
     assert result[0]["title"] == "Chapter 1"
@@ -278,7 +299,7 @@ def test_read_book_returns_all_sections(mock_make_session):
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_filters_by_section_ids(mock_make_session):
+def test_fetch_filters_by_section_ids(mock_make_session):
     """Read book filters by specific section IDs."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -292,7 +313,7 @@ def test_read_book_filters_by_section_ids(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = [mock_section]
 
-    result = read_book.fn(book_id=1, sections=[1, 2])
+    result = fetch.fn(book_id=1, sections=[1, 2])
 
     # Should have two filter calls (book_id and section IDs)
     assert query_mock.filter.call_count == 2
@@ -300,7 +321,7 @@ def test_read_book_filters_by_section_ids(mock_make_session):
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_returns_leaf_sections(mock_make_session):
+def test_fetch_returns_leaf_sections(mock_make_session):
     """Read book returns only leaf sections (sections without children)."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -319,7 +340,7 @@ def test_read_book_returns_leaf_sections(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = [mock_parent, mock_child]
 
-    result = read_book.fn(book_id=1)
+    result = fetch.fn(book_id=1)
 
     # Should only return child/leaf section (id=2)
     # Parent section (id=1) is excluded because it has children
@@ -328,7 +349,7 @@ def test_read_book_returns_leaf_sections(mock_make_session):
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_empty_when_no_sections(mock_make_session):
+def test_fetch_empty_when_no_sections(mock_make_session):
     """Read book returns empty list when book has no sections."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -337,13 +358,13 @@ def test_read_book_empty_when_no_sections(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = []
 
-    result = read_book.fn(book_id=999)
+    result = fetch.fn(book_id=999)
 
     assert result == []
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_with_nested_structure(mock_make_session):
+def test_fetch_with_nested_structure(mock_make_session):
     """Read book correctly handles nested section structures."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -368,7 +389,7 @@ def test_read_book_with_nested_structure(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = [mock_sec1, mock_sec2, mock_sec3]
 
-    result = read_book.fn(book_id=1)
+    result = fetch.fn(book_id=1)
 
     # Should only return the deepest leaf section (id=3)
     # Sections 1 and 2 have children so are excluded
@@ -377,7 +398,7 @@ def test_read_book_with_nested_structure(mock_make_session):
 
 
 @patch("memory.api.MCP.servers.books.make_session")
-def test_read_book_multiple_leaf_sections(mock_make_session):
+def test_fetch_multiple_leaf_sections(mock_make_session):
     """Read book returns multiple leaf sections."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -401,7 +422,7 @@ def test_read_book_multiple_leaf_sections(mock_make_session):
     query_mock.filter.return_value = query_mock
     query_mock.all.return_value = [mock_sec1, mock_sec2, mock_child]
 
-    result = read_book.fn(book_id=1)
+    result = fetch.fn(book_id=1)
 
     # Should return leaf sections (2 and 3)
     # Section 1 has a child (3), so it's excluded
@@ -409,3 +430,46 @@ def test_read_book_multiple_leaf_sections(mock_make_session):
     # Section 3 is a child of 1, and has no children, so it's a leaf
     assert len(result) == 2
     assert {r["id"] for r in result} == {2, 3}
+
+
+def test_fetch_with_include_journal(db_session, admin_user, admin_session):
+    """Fetch with include_journal=True returns sections and journal entries."""
+    # Create a book
+    book = Book(title="Test Book", author="Test Author")
+    db_session.add(book)
+    db_session.flush()
+
+    # Create a section for the book
+    section = BookSection(
+        book_id=book.id,
+        section_title="Chapter 1",
+        section_number=1,
+        section_level=1,
+        modality="text",
+        sha256=create_content_hash("chapter 1 content"),
+        content="Chapter 1 content",
+    )
+    db_session.add(section)
+    db_session.flush()
+
+    # Create a journal entry for the book section
+    journal_entry = JournalEntry(
+        target_type="source_item",
+        target_id=section.id,
+        creator_id=admin_user.id,
+        content="Note about this book",
+    )
+    db_session.add(journal_entry)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = get_fn(fetch)(book_id=book.id, include_journal=True)
+
+    # Should return dict with sections and journal_entries
+    assert isinstance(result, dict)
+    assert "sections" in result
+    assert "journal_entries" in result
+    assert len(result["sections"]) == 1
+    assert result["sections"][0]["section_title"] == "Chapter 1"
+    assert len(result["journal_entries"]) == 1
+    assert result["journal_entries"][0]["content"] == "Note about this book"

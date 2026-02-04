@@ -459,7 +459,7 @@ def test_tidbit_chunk_contents(db_session, qdrant):
     assert "morning meetings" in chunk_text
 
 
-def test_tidbit_access_control_fields(db_session, qdrant):
+def test_tidbit_access_control_fields(db_session, qdrant, admin_user):
     """Test that PersonTidbit has access control fields."""
     # Create person
     person = Person(
@@ -473,7 +473,7 @@ def test_tidbit_access_control_fields(db_session, qdrant):
     sha256 = create_content_hash("tidbit:access_test")
     tidbit = PersonTidbit(
         person_id=person.id,
-        creator_id=42,
+        creator_id=admin_user.id,
         tidbit_type="note",
         content="Private note",
         modality="person_tidbit",
@@ -488,6 +488,6 @@ def test_tidbit_access_control_fields(db_session, qdrant):
 
     retrieved = db_session.get(PersonTidbit, tidbit.id)
 
-    assert retrieved.creator_id == 42
+    assert retrieved.creator_id == admin_user.id
     assert retrieved.project_id is None
     assert retrieved.sensitivity == "confidential"

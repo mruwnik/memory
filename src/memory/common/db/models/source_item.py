@@ -31,6 +31,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA
+from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.types import Numeric
 
@@ -43,6 +44,7 @@ from memory.common.db.models.base import Base
 from memory.common.access_control import SensitivityLevelLiteral as SensitivityLevel
 
 if TYPE_CHECKING:
+    from memory.common.db.models.journal import JournalEntry
     from memory.common.db.models.sources import Person
 
 
@@ -192,6 +194,18 @@ class Chunk(Base):
         self.images = kwargs.pop("images", [])
         self.relevance_score = kwargs.pop("relevance_score", 0.0)
         super().__init__(**kwargs)
+
+    @orm.reconstructor
+    def init_on_load(self) -> None:
+        """Initialize transient attributes when loading from database.
+
+        SQLAlchemy doesn't call __init__ when loading objects from DB,
+        so transient attributes need to be initialized here.
+        """
+        self.vector = []
+        self.item_metadata = {}
+        self.images = []
+        self.relevance_score = 0.0
 
     # One of file_path or content must be populated
     __table_args__ = (
@@ -367,6 +381,17 @@ class SourceItem(Base):
         "Person",
         secondary=source_item_people,
         lazy="select",
+    )
+
+    # Journal entries (append-only notes attached to this item)
+    # Uses polymorphic target: JournalEntry.target_type='source_item' + target_id=id
+    journal_entries: Mapped[list["JournalEntry"]] = relationship(
+        "JournalEntry",
+        primaryjoin="and_(SourceItem.id == foreign(JournalEntry.target_id), "
+        "JournalEntry.target_type == 'source_item')",
+        cascade="all, delete-orphan",
+        order_by="JournalEntry.created_at",
+        viewonly=True,  # Polymorphic relationship - use helper functions to create entries
     )
 
     __mapper_args__: dict[str, Any] = {

@@ -8,10 +8,11 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import joinedload
 
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-
 from memory.common.db.connection import make_session
 from memory.common.db.models import Book, BookSection, BookSectionPayload
+from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,11 @@ async def list_books(
 
 @books_mcp.tool()
 @visible_when(require_scopes("read"), has_items(Book))
-def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload]:
+def fetch(
+    book_id: int,
+    sections: list[int] = [],
+    include_journal: bool = False,
+) -> list[BookSectionPayload] | dict:
     """
     Read a book from the database.
 
@@ -81,9 +86,11 @@ def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload
     Args:
         book_id: The ID of the book to read.
         sections: The IDs of the sections to read. Defaults to all sections.
+        include_journal: Whether to include journal entries (default False)
 
     Returns:
         List of sections in the book, with contents. In the case of nested sections, only the top-level sections are returned.
+        If include_journal is True, returns a dict with "sections" and "journal_entries".
     """
     with make_session() as session:
         book_sections = session.query(BookSection).filter(
@@ -94,8 +101,40 @@ def read_book(book_id: int, sections: list[int] = []) -> list[BookSectionPayload
 
         all_sections = book_sections.all()
         parents = [section.parent_section_id for section in all_sections]
-        return [
+        section_payloads = [
             section.as_payload()
             for section in all_sections
             if section.id not in parents
         ]
+
+        if not include_journal:
+            return section_payloads
+
+        # Include journal entries for all sections in the book
+        # Journal entries attach to SourceItems (sections), not Books
+        section_ids = [section.id for section in all_sections]
+        if not section_ids:
+            return {
+                "sections": section_payloads,
+                "journal_entries": [],
+            }
+
+        user = get_mcp_current_user()
+        user_id = getattr(user, "id", None) if user else None
+        journal_query = (
+            session.query(JournalEntry)
+            .filter(
+                JournalEntry.target_type == "source_item",
+                JournalEntry.target_id.in_(section_ids),
+            )
+        )
+        if user is not None:
+            journal_filter = build_journal_access_filter(user, user_id)
+            if journal_filter is not True:
+                journal_query = journal_query.filter(journal_filter)
+        journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
+
+        return {
+            "sections": section_payloads,
+            "journal_entries": [e.as_payload() for e in journal_entries],
+        }

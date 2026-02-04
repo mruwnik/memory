@@ -434,9 +434,10 @@ class GithubRepo(Base):
     )
 
     __table_args__ = (
-        # Case-insensitive uniqueness (functional index created in migration)
-        # UniqueConstraint is replaced by: CREATE UNIQUE INDEX unique_repo_per_account_ci
-        #   ON github_repos (account_id, LOWER(owner), LOWER(name))
+        # Global uniqueness on repo (case-insensitive)
+        # A repo should only be tracked once regardless of account
+        # Functional index: CREATE UNIQUE INDEX unique_github_repo_owner_name
+        #   ON github_repos (LOWER(owner), LOWER(name))
         Index("github_repos_active_idx", "active", "last_sync_at"),
         Index("github_repos_owner_name_idx", "owner", "name"),
     )

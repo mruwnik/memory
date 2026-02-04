@@ -155,6 +155,11 @@ from memory.common.db.models.watchlist import (
     WatchedMarket,
     WatchedMarketPayload,
 )
+from memory.common.db.models.journal import (
+    JournalEntry,
+    user_can_access_journal_entry,
+    build_journal_access_filter,
+)
 
 Payload = (
     SourceItemPayload
@@ -310,4 +315,8 @@ __all__ = [
     # Watchlist
     "WatchedMarket",
     "WatchedMarketPayload",
+    # Journal
+    "JournalEntry",
+    "user_can_access_journal_entry",
+    "build_journal_access_filter",
 ]

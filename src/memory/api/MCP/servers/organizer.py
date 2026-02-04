@@ -9,10 +9,13 @@ from typing import Literal
 
 from fastmcp import FastMCP
 
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.common.access_control import has_admin_scope
 from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent, Task
+from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.tasks import TaskDict, get_tasks, task_to_dict
 
 logger = logging.getLogger(__name__)
@@ -99,13 +102,14 @@ async def list_tasks(
 
 @organizer_mcp.tool()
 @visible_when(require_scopes("organizer"), has_items(Task))
-async def get_task(task_id: int) -> TaskDict | dict:
+async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
     """
     Get a specific task by ID.
     Use to retrieve full details of a single task.
 
     Args:
         task_id: ID of the task to retrieve
+        include_journal: Whether to include journal entries (default False)
 
     Returns:
         Dict with task details (id, task_title, due_date, priority, status,
@@ -115,7 +119,29 @@ async def get_task(task_id: int) -> TaskDict | dict:
         task = session.get(Task, task_id)
         if not task:
             return {"error": f"Task {task_id} not found"}
-        return {"success": True, "task": task_to_dict(task)}
+
+        result: TaskDict | dict = {"success": True, "task": task_to_dict(task)}
+
+        if include_journal:
+            user = get_mcp_current_user()
+            user_id = getattr(user, "id", None) if user else None
+            # Note: 'task' is not currently a valid target_type in the journal system.
+            # This query will return empty until 'task' support is added.
+            journal_query = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.target_type == "task",
+                    JournalEntry.target_id == task_id,
+                )
+            )
+            if user is not None and not has_admin_scope(user):
+                journal_filter = build_journal_access_filter(user, user_id)
+                if journal_filter is not True:
+                    journal_query = journal_query.filter(journal_filter)
+            journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
+            result["journal_entries"] = [e.as_payload() for e in journal_entries]
+
+        return result
 
 
 @organizer_mcp.tool()

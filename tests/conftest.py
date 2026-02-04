@@ -47,7 +47,7 @@ def pytest_collection_modifyitems(config, items):
         return
 
     skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
-    slow_fixtures = {"test_db", "db_engine", "db_session", "qdrant"}
+    slow_fixtures = {"test_db", "db_engine", "db_session", "qdrant", "qdrant_container"}
 
     for item in items:
         # Check if test uses any slow fixtures
@@ -266,8 +266,23 @@ def db_engine(test_db):
     engine.dispose()
 
 
-# Tables to skip during truncation (alembic's migration tracking)
-_SKIP_TRUNCATE = {"alembic_version"}
+# Cache table list for faster truncation (populated once per session)
+_TABLES_TO_TRUNCATE: list[str] | None = None
+
+
+def get_tables_to_truncate(conn) -> list[str]:
+    """Get list of tables to truncate, cached for performance."""
+    global _TABLES_TO_TRUNCATE
+    if _TABLES_TO_TRUNCATE is None:
+        result = conn.execute(
+            text("""
+                SELECT tablename FROM pg_tables
+                WHERE schemaname = 'public'
+                AND tablename != 'alembic_version'
+            """)
+        )
+        _TABLES_TO_TRUNCATE = [row[0] for row in result]
+    return _TABLES_TO_TRUNCATE
 
 
 @pytest.fixture
@@ -288,28 +303,16 @@ def db_session(db_engine):
         session.rollback()
         session.close()
 
-        # Truncate only non-empty tables for test isolation
-        # Use a new connection for truncation to avoid session state issues
+        # Truncate all tables for test isolation (faster than checking which are non-empty)
         with db_engine.connect() as conn:
-            # Find non-empty tables using pg_stat_user_tables for efficiency
-            # This uses cached statistics instead of N queries
-            # Note: n_live_tup is an estimate; we also check for exact 0 to be safe
-            result = conn.execute(
-                text("""
-                    SELECT relname FROM pg_stat_user_tables
-                    WHERE schemaname = 'public'
-                    AND relname NOT IN ('alembic_version')
-                    AND n_live_tup > 0
-                """)
-            )
-            non_empty_tables = [row[0] for row in result]
-
-            if non_empty_tables:
-                # Disable foreign key checks for faster truncation
+            tables = get_tables_to_truncate(conn)
+            if tables:
+                # Batch truncate all tables in one statement
                 conn.execute(text("SET session_replication_role = 'replica'"))
-                for table_name in non_empty_tables:
-                    # RESTART IDENTITY resets sequences for more predictable test IDs
-                    conn.execute(text(f'TRUNCATE TABLE "{table_name}" RESTART IDENTITY CASCADE'))
+                table_list = ", ".join(f'"{t}"' for t in tables)
+                conn.execute(
+                    text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE")
+                )
                 conn.execute(text("SET session_replication_role = 'origin'"))
                 conn.commit()
 
@@ -493,13 +496,32 @@ def mock_file_storage(tmp_path: Path):
         yield
 
 
+@pytest.fixture(scope="session")
+def qdrant_container():
+    """Session-scoped Qdrant container - started once per test session.
+
+    This avoids the ~2s overhead of starting a new Docker container per test.
+    """
+    with QdrantContainer() as container:
+        yield container
+
+
 @pytest.fixture
-def qdrant():
-    with QdrantContainer() as qdrant:
-        client = qdrant.get_client()
-        with patch.object(qdrant_client, "QdrantClient", return_value=client):
-            initialize_collections(client)
-            yield client
+def qdrant(qdrant_container):
+    """Function-scoped Qdrant client that cleans collections between tests.
+
+    Uses the session-scoped container but ensures test isolation by
+    deleting and recreating all collections for each test.
+    """
+    client = qdrant_container.get_client()
+
+    # Clean up any existing collections from previous tests
+    for collection in client.get_collections().collections:
+        client.delete_collection(collection.name)
+
+    with patch.object(qdrant_client, "QdrantClient", return_value=client):
+        initialize_collections(client)
+        yield client
 
 
 @pytest.fixture(autouse=True)

@@ -13,8 +13,8 @@ from memory.api.MCP.servers.core import (
     search,
     observe,
     search_observations,
+    fetch,
     fetch_file,
-    get_item,
     list_items,
     count_items,
     filter_observation_source_ids,
@@ -885,13 +885,13 @@ def test_filter_source_ids_by_modalities(mock_make_session):
     assert result == [1]
 
 
-# ====== get_item tests ======
+# ====== fetch tests ======
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_returns_full_details(mock_make_session, mock_access_filter):
+async def test_fetch_returns_full_details(mock_make_session, mock_access_filter):
     """Get source item returns full item details with content."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -910,7 +910,7 @@ async def test_get_item_returns_full_details(mock_make_session, mock_access_filt
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_item.fn(id=123, include_content=True)
+    result = await fetch.fn(id=123, include_content=True)
 
     assert result["id"] == 123
     assert result["modality"] == "blog"
@@ -923,7 +923,7 @@ async def test_get_item_returns_full_details(mock_make_session, mock_access_filt
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_without_content(mock_make_session, mock_access_filter):
+async def test_fetch_without_content(mock_make_session, mock_access_filter):
     """Get source item without content when requested."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -942,7 +942,7 @@ async def test_get_item_without_content(mock_make_session, mock_access_filter):
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_item.fn(id=123, include_content=False)
+    result = await fetch.fn(id=123, include_content=False)
 
     assert "content" not in result
     assert result["id"] == 123
@@ -951,20 +951,20 @@ async def test_get_item_without_content(mock_make_session, mock_access_filter):
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_not_found(mock_make_session, mock_access_filter):
+async def test_fetch_not_found(mock_make_session, mock_access_filter):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
     mock_session.query.return_value.filter.return_value.first.return_value = None
 
     with pytest.raises(ValueError, match="Item 999 not found"):
-        await get_item.fn(id=999)
+        await fetch.fn(id=999)
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_get_item_handles_null_inserted_at(mock_make_session, mock_access_filter):
+async def test_fetch_handles_null_inserted_at(mock_make_session, mock_access_filter):
     """Get source item handles None inserted_at."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -982,9 +982,93 @@ async def test_get_item_handles_null_inserted_at(mock_make_session, mock_access_
 
     mock_session.query.return_value.filter.return_value.first.return_value = mock_item
 
-    result = await get_item.fn(id=123, include_content=False)
+    result = await fetch.fn(id=123, include_content=False)
 
     assert result["inserted_at"] is None
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
+@patch("memory.api.MCP.servers.core.get_mcp_current_user")
+@patch("memory.api.MCP.servers.core.make_session")
+async def test_fetch_with_journal_entries(mock_make_session, mock_get_user, mock_access_filter):
+    """Fetch source item with journal entries when requested."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+
+    mock_user = MagicMock()
+    mock_user.id = 1
+    mock_get_user.return_value = mock_user
+
+    mock_item = MagicMock()
+    mock_item.id = 123
+    mock_item.modality = "blog"
+    mock_item.title = "Test"
+    mock_item.mime_type = "text/html"
+    mock_item.filename = "test.html"
+    mock_item.size = 1000
+    mock_item.tags = []
+    mock_item.inserted_at = None
+    mock_item.content = "Content"
+    mock_item.as_payload.return_value = {}
+
+    mock_entry1 = MagicMock()
+    mock_entry1.as_payload.return_value = {"id": 1, "content": "Entry 1"}
+    mock_entry2 = MagicMock()
+    mock_entry2.as_payload.return_value = {"id": 2, "content": "Entry 2"}
+
+    # Setup query chains
+    item_query = MagicMock()
+    item_query.filter.return_value = item_query
+    item_query.first.return_value = mock_item
+
+    journal_query = MagicMock()
+    journal_query.filter.return_value = journal_query
+    journal_query.order_by.return_value = journal_query
+    journal_query.all.return_value = [mock_entry1, mock_entry2]
+
+    def query_side_effect(model):
+        from memory.common.db.models import SourceItem
+        from memory.common.db.models.journal import JournalEntry
+        if model == SourceItem:
+            return item_query
+        elif model == JournalEntry:
+            return journal_query
+        return MagicMock()
+
+    mock_session.query.side_effect = query_side_effect
+
+    result = await fetch.fn(id=123, include_content=False, include_journal=True)
+
+    assert "journal_entries" in result
+    assert len(result["journal_entries"]) == 2
+    assert result["journal_entries"][0]["content"] == "Entry 1"
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
+@patch("memory.api.MCP.servers.core.make_session")
+async def test_fetch_without_journal_entries(mock_make_session, mock_access_filter):
+    """Fetch source item without journal entries by default."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+
+    mock_item = MagicMock()
+    mock_item.id = 123
+    mock_item.modality = "blog"
+    mock_item.title = "Test"
+    mock_item.mime_type = "text/html"
+    mock_item.filename = "test.html"
+    mock_item.size = 1000
+    mock_item.tags = []
+    mock_item.inserted_at = None
+    mock_item.as_payload.return_value = {}
+
+    mock_session.query.return_value.filter.return_value.first.return_value = mock_item
+
+    result = await fetch.fn(id=123, include_content=False)
+
+    assert "journal_entries" not in result
 
 
 # ====== list_items tests ======

@@ -492,17 +492,21 @@ def add_repo(
     canonical_owner = github_repo["owner"]["login"]
     canonical_name = github_repo["name"]
 
-    # Check for duplicate (case-insensitive, matches the database constraint)
+    # Check for duplicate globally (case-insensitive)
+    # A repo should only be tracked once, regardless of which account
     existing = (
         db.query(GithubRepo)
         .filter(
-            GithubRepo.account_id == account_id,
             func.lower(GithubRepo.owner) == canonical_owner.lower(),
             func.lower(GithubRepo.name) == canonical_name.lower(),
         )
         .first()
     )
     if existing:
+        # If repo exists but is tracked by a different account, return it
+        # (repos can be shared across accounts - access is controlled at project level)
+        if existing.account_id != account_id:
+            return repo_to_response(existing)
         raise HTTPException(status_code=400, detail="Repo already tracked")
 
     repo = GithubRepo(

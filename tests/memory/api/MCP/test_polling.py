@@ -9,7 +9,7 @@ from memory.api.MCP.servers.polling import (
     upsert_poll,
     list_polls,
     delete_poll,
-    get_poll,
+    fetch,
     parse_datetime,
     get_current_user_id,
 )
@@ -431,7 +431,7 @@ async def test_delete_poll_not_found_raises(mock_make_session, mock_get_user_id)
         await delete_poll.fn(poll_id=999)
 
 
-# ====== get_poll tests ======
+# ====== fetch tests ======
 
 
 @pytest.mark.asyncio
@@ -439,10 +439,10 @@ async def test_delete_poll_not_found_raises(mock_make_session, mock_get_user_id)
 @patch("memory.api.MCP.servers.polling.make_session")
 @patch("memory.api.MCP.servers.polling.poll_to_payload")
 @patch("memory.api.MCP.servers.polling.aggregate_availability")
-async def test_get_poll_by_id(
+async def test_fetch_by_id(
     mock_aggregate, mock_poll_to_payload, mock_make_session, mock_get_user_id
 ):
-    """Get poll by ID returns poll with aggregated results."""
+    """Fetch poll by ID returns poll with aggregated results."""
     mock_get_user_id.return_value = 1
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -462,7 +462,7 @@ async def test_get_poll_by_id(
     mock_slot2.model_dump.return_value = {"time": "10:00", "available": 1}
     mock_aggregate.return_value = [mock_slot1, mock_slot2]
 
-    result = await get_poll.fn(poll_id=1)
+    result = await fetch.fn(poll_id=1)
 
     assert result["poll"]["title"] == "Test Poll"
     assert result["response_count"] == 3
@@ -476,10 +476,10 @@ async def test_get_poll_by_id(
 @patch("memory.api.MCP.servers.polling.make_session")
 @patch("memory.api.MCP.servers.polling.poll_to_payload")
 @patch("memory.api.MCP.servers.polling.aggregate_availability")
-async def test_get_poll_by_slug(
+async def test_fetch_by_slug(
     mock_aggregate, mock_poll_to_payload, mock_make_session, mock_get_user_id
 ):
-    """Get poll by slug returns poll (public access)."""
+    """Fetch poll by slug returns poll (public access)."""
     mock_get_user_id.return_value = 1
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -494,7 +494,7 @@ async def test_get_poll_by_slug(
     mock_poll_to_payload.return_value.model_dump.return_value = {"slug": "abc123"}
     mock_aggregate.return_value = []
 
-    result = await get_poll.fn(slug="abc123")
+    result = await fetch.fn(slug="abc123")
 
     assert result["poll"]["slug"] == "abc123"
     assert result["best_slots"] == []
@@ -502,29 +502,29 @@ async def test_get_poll_by_slug(
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.polling.get_current_user_id")
-async def test_get_poll_no_identifier_raises(mock_get_user_id):
-    """Get poll without ID or slug raises ValueError."""
+async def test_fetch_no_identifier_raises(mock_get_user_id):
+    """Fetch poll without ID or slug raises ValueError."""
     mock_get_user_id.return_value = 1
 
     with pytest.raises(ValueError, match="Must provide either poll_id or slug"):
-        await get_poll.fn()
+        await fetch.fn()
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.polling.get_current_user_id")
-async def test_get_poll_both_identifiers_raises(mock_get_user_id):
-    """Get poll with both ID and slug raises ValueError."""
+async def test_fetch_both_identifiers_raises(mock_get_user_id):
+    """Fetch poll with both ID and slug raises ValueError."""
     mock_get_user_id.return_value = 1
 
     with pytest.raises(ValueError, match="Cannot provide both poll_id and slug"):
-        await get_poll.fn(poll_id=1, slug="abc123")
+        await fetch.fn(poll_id=1, slug="abc123")
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.polling.get_current_user_id")
 @patch("memory.api.MCP.servers.polling.make_session")
-async def test_get_poll_by_id_not_owned_raises(mock_make_session, mock_get_user_id):
-    """Get poll by ID not owned raises ValueError."""
+async def test_fetch_by_id_not_owned_raises(mock_make_session, mock_get_user_id):
+    """Fetch poll by ID not owned raises ValueError."""
     mock_get_user_id.return_value = 1
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -534,14 +534,14 @@ async def test_get_poll_by_id_not_owned_raises(mock_make_session, mock_get_user_
     mock_session.get.return_value = mock_poll
 
     with pytest.raises(ValueError, match="Poll 1 not found"):
-        await get_poll.fn(poll_id=1)
+        await fetch.fn(poll_id=1)
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.polling.get_current_user_id")
 @patch("memory.api.MCP.servers.polling.make_session")
-async def test_get_poll_by_slug_not_found_raises(mock_make_session, mock_get_user_id):
-    """Get poll by non-existent slug raises ValueError."""
+async def test_fetch_by_slug_not_found_raises(mock_make_session, mock_get_user_id):
+    """Fetch poll by non-existent slug raises ValueError."""
     mock_get_user_id.return_value = 1
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
@@ -551,4 +551,4 @@ async def test_get_poll_by_slug_not_found_raises(mock_make_session, mock_get_use
     query_mock.first.return_value = None
 
     with pytest.raises(ValueError, match="Poll with slug 'nonexistent' not found"):
-        await get_poll.fn(slug="nonexistent")
+        await fetch.fn(slug="nonexistent")

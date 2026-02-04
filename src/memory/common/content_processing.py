@@ -186,6 +186,33 @@ def by_collection(chunks: Sequence[Chunk]) -> dict[str, dict[str, Any]]:
     return collections
 
 
+def push_chunks_to_qdrant(chunks: Sequence[Chunk]) -> None:
+    """Push chunks with their vectors directly to Qdrant.
+
+    This function takes chunks that already have their vector attribute populated,
+    avoiding the need to reload them from the database.
+
+    Args:
+        chunks: Sequence of Chunk objects with populated vector attributes
+
+    Raises:
+        Exception: If the Qdrant upsert operation fails
+    """
+    if not chunks:
+        return
+
+    client = qdrant.get_qdrant_client()
+    collections = by_collection(chunks)
+    for collection_name, collection in collections.items():
+        qdrant.upsert_vectors(
+            client=client,
+            collection_name=collection_name,
+            ids=collection["ids"],
+            vectors=collection["vectors"],
+            payloads=collection["payloads"],
+        )
+
+
 def push_to_qdrant(source_items: Sequence[SourceItem]):
     """
     Push embeddings to Qdrant vector database.
@@ -311,10 +338,14 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     # haven't been pushed to Qdrant yet. If process crashes here, items remain
     # QUEUED and can be retried.
     item.embed_status = "QUEUED"  # type: ignore
+
+    # Keep chunks in memory before commit - after commit, SQLAlchemy expires
+    # the relationship and reloads from DB, losing the transient vector attribute
+    chunks_with_vectors = list(item.chunks)
     session.commit()
 
     try:
-        push_to_qdrant([item])
+        push_chunks_to_qdrant(chunks_with_vectors)
         status = "processed"
         item.embed_status = "STORED"  # type: ignore
         logger.info(

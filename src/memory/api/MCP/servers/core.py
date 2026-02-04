@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from memory.api.MCP.access import (
     build_user_access_filter_from_dict,
     get_mcp_current_user,
+    get_project_roles_by_user_id,
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import AccessFilter, user_can_access
@@ -38,6 +39,7 @@ from memory.common.db.models import (
     SourceItem,
     UserSession,
 )
+from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
 
 
@@ -567,7 +569,7 @@ def fetch_file(filename: str) -> dict:
 
 @core_mcp.tool()
 @visible_when(require_scopes("read"))
-async def get_item(id: int, include_content: bool = True) -> dict:
+async def fetch(id: int, include_content: bool = True, include_journal: bool = False) -> dict:
     """
     Get full details of a source item by ID.
     Use after search to drill down into specific results.
@@ -575,11 +577,10 @@ async def get_item(id: int, include_content: bool = True) -> dict:
     Args:
         id: The source item ID (from search results)
         include_content: Whether to include full content (default True)
+        include_journal: Whether to include journal entries (default False)
 
-    Returns: Full item details including metadata, tags, and optionally content.
+    Returns: Full item details including metadata, tags, and optionally content and journal entries.
     """
-    from memory.api.MCP.access import get_project_roles_by_user_id
-
     # Get access filter to check permissions
     access_filter = get_current_user_access_filter()
 
@@ -597,13 +598,15 @@ async def get_item(id: int, include_content: bool = True) -> dict:
 
         # Check access control
         # access_filter is None for superadmins (they see everything)
+        user = get_mcp_current_user()
+        user_id: int | None = getattr(user, "id", None) if user else None
         if access_filter is not None:
             # Need to check if user can access this item
-            user = get_mcp_current_user()
-            if user is None or user.id is None:
+            if user is None or user_id is None:
                 raise ValueError(f"Item {id} not found or access denied")
 
-            project_roles = get_project_roles_by_user_id(user.id)
+            # user_id is guaranteed to be int here after the None check
+            project_roles = get_project_roles_by_user_id(user_id)
             if not user_can_access(user, item, project_roles):
                 raise ValueError(f"Item {id} not found or access denied")
 
@@ -621,6 +624,22 @@ async def get_item(id: int, include_content: bool = True) -> dict:
 
         if include_content:
             result["content"] = item.content
+
+        if include_journal:
+            journal_query = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.target_type == "source_item",
+                    JournalEntry.target_id == id,
+                )
+            )
+            # Apply access control for journal entries
+            if user is not None:
+                journal_filter = build_journal_access_filter(user, user_id)
+                if journal_filter is not True:
+                    journal_query = journal_query.filter(journal_filter)
+            journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
+            result["journal_entries"] = [e.as_payload() for e in journal_entries]
 
         return result
 

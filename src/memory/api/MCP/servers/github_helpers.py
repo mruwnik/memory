@@ -743,11 +743,11 @@ def ensure_github_repo(
         Tuple of (GithubRepo, repo_was_created_on_github, tracking_entry_was_created)
         Returns (None, False, False) if the repo doesn't exist and create_if_missing=False
     """
-    # Check if we already have a tracking entry
+    # Check if we already have a tracking entry (globally, not per-account)
+    # A repo should only be tracked once - access is controlled at project level
     existing_repo = (
         session.query(GithubRepo)
         .filter(
-            GithubRepo.account_id == account_id,
             GithubRepo.owner.ilike(owner),
             GithubRepo.name.ilike(repo_name),
         )

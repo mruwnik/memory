@@ -533,14 +533,15 @@ def test_team_role_maps_to_project_role(db_session, qdrant, team_role, expected_
     db_session.add_all([team, person, project])
     db_session.flush()
 
-    # Create user linked to person
+    # Create user and link to person
     user = HumanUser(
         email=f"roletest_{team_role}@example.com",
         password_hash="test",
         name=f"Role Test {team_role}",
-        person_id=person.id,
     )
     db_session.add(user)
+    db_session.flush()
+    person.user_id = user.id
 
     # Add person to team with specific role
     db_session.execute(
@@ -578,14 +579,15 @@ def test_get_user_project_roles_multiple_teams_highest_wins(db_session, qdrant):
     db_session.add_all([team1, team2, person, project])
     db_session.flush()
 
-    # Create user linked to person
+    # Create user and link to person
     user = HumanUser(
         email="multiteam@example.com",
         password_hash="test",
         name="Multi Team User",
-        person_id=person.id,
     )
     db_session.add(user)
+    db_session.flush()
+    person.user_id = user.id
 
     # Add person to both teams with different roles
     db_session.execute(
@@ -634,9 +636,10 @@ def test_get_user_project_roles_inactive_team_still_grants_access(db_session, qd
         email="inactiveteam@example.com",
         password_hash="test",
         name="Inactive Team User",
-        person_id=person.id,
     )
     db_session.add(user)
+    db_session.flush()
+    person.user_id = user.id
 
     # Add person to team
     db_session.execute(
@@ -665,11 +668,11 @@ def test_get_user_project_roles_no_person_returns_empty(db_session, qdrant):
     from memory.common.db.models.users import HumanUser
     from memory.common.access_control import get_user_project_roles
 
+    # User without linked person (no person.user_id set)
     user = HumanUser(
         email="noperson@example.com",
         password_hash="test",
         name="No Person User",
-        person_id=None,
     )
     db_session.add(user)
     db_session.commit()
@@ -692,9 +695,10 @@ def test_get_user_project_roles_person_not_in_any_team(db_session, qdrant):
         email="lonely@example.com",
         password_hash="test",
         name="Lonely User",
-        person_id=person.id,
     )
     db_session.add(user)
+    db_session.flush()
+    person.user_id = user.id
     db_session.commit()
 
     db_session.refresh(user)
