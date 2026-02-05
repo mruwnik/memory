@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
@@ -10,6 +10,86 @@ import {
   ConfirmDialog,
 } from '../shared'
 import { styles, cx } from '../styles'
+
+// Owner selector dropdown for teams
+interface OwnerSelectorPopoverProps {
+  currentOwnerId: number | null
+  availablePeople: Person[]
+  onSelect: (ownerId: number | null) => void
+  onClose: () => void
+}
+
+const OwnerSelectorPopover = ({ currentOwnerId, availablePeople, onSelect, onClose }: OwnerSelectorPopoverProps) => {
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [search, setSearch] = useState('')
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [onClose])
+
+  const filteredPeople = search.trim()
+    ? availablePeople.filter(p =>
+        (p.display_name?.toLowerCase().includes(search.toLowerCase())) ||
+        p.identifier.toLowerCase().includes(search.toLowerCase())
+      )
+    : availablePeople
+
+  return (
+    <div
+      ref={popoverRef}
+      className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-56 max-w-72"
+    >
+      <input
+        type="text"
+        placeholder="Search people..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        autoFocus
+      />
+      <div className="max-h-48 overflow-y-auto">
+        {/* None option */}
+        <button
+          type="button"
+          onClick={() => { onSelect(null); onClose() }}
+          className={cx(
+            'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
+            currentOwnerId === null
+              ? 'bg-primary/10 text-primary'
+              : 'hover:bg-slate-50 text-slate-500 italic'
+          )}
+        >
+          None
+        </button>
+        {filteredPeople.map(person => (
+          <button
+            key={person.id}
+            type="button"
+            onClick={() => { onSelect(person.id); onClose() }}
+            className={cx(
+              'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
+              currentOwnerId === person.id
+                ? 'bg-primary/10 text-primary'
+                : 'hover:bg-slate-50 text-slate-700'
+            )}
+          >
+            {person.display_name || person.identifier}
+          </button>
+        ))}
+        {filteredPeople.length === 0 && search && (
+          <p className="text-sm text-slate-500 px-2 py-1.5">No matches</p>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export const TeamsPanel = () => {
   const {
@@ -27,6 +107,7 @@ export const TeamsPanel = () => {
   const { listProjects } = useProjects()
 
   const [teams, setTeams] = useState<Team[]>([])
+  const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showInactive, setShowInactive] = useState(false)
@@ -40,14 +121,18 @@ export const TeamsPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const teamsList = await listTeams({ include_inactive: showInactive, include_projects: true })
+      const [teamsList, people] = await Promise.all([
+        listTeams({ include_inactive: showInactive, include_projects: true }),
+        listPeople({ limit: 100 }),
+      ])
       setTeams(Array.isArray(teamsList) ? teamsList : [])
+      setAvailablePeople(Array.isArray(people) ? people : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load teams')
     } finally {
       setLoading(false)
     }
-  }, [listTeams, showInactive])
+  }, [listTeams, listPeople, showInactive])
 
   useEffect(() => {
     loadTeams()
@@ -72,6 +157,21 @@ export const TeamsPanel = () => {
       throw new Error(result.error || 'Failed to update team')
     }
   }
+
+  const handleChangeOwner = useCallback(async (teamSlug: string, ownerId: number | null) => {
+    const result = await updateTeam(teamSlug, { owner: ownerId })
+    if (!result.success) {
+      setError(result.error || 'Failed to update owner')
+      return
+    }
+    // Update local state instead of reloading everything
+    const owner = ownerId != null ? availablePeople.find(p => p.id === ownerId) : null
+    setTeams(prev => prev.map(t => t.slug === teamSlug ? {
+      ...t,
+      owner_id: ownerId,
+      owner: owner ? { id: owner.id, identifier: owner.identifier, display_name: owner.display_name } : null,
+    } : t))
+  }, [updateTeam, availablePeople])
 
   const handleArchive = async (team: Team) => {
     await updateTeam(team.slug, { is_active: false })
@@ -109,7 +209,7 @@ export const TeamsPanel = () => {
           onAction={() => setShowCreateModal(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
           {teams.map(team => (
             <TeamCard
               key={team.id}
@@ -118,6 +218,8 @@ export const TeamsPanel = () => {
               onManageMembers={() => setManagingMembers(team)}
               onManageProjects={() => setManagingProjects(team)}
               onArchive={() => setArchivingTeam(team)}
+              onChangeOwner={handleChangeOwner}
+              availablePeople={availablePeople}
             />
           ))}
         </div>
@@ -130,6 +232,7 @@ export const TeamsPanel = () => {
           onClose={() => setShowCreateModal(false)}
           listPeople={listPeople}
           addMember={addMember}
+          availablePeople={availablePeople}
         />
       )}
 
@@ -141,6 +244,7 @@ export const TeamsPanel = () => {
           onClose={() => setEditingTeam(null)}
           listPeople={listPeople}
           addMember={addMember}
+          availablePeople={availablePeople}
         />
       )}
 
@@ -148,9 +252,11 @@ export const TeamsPanel = () => {
       {managingMembers && (
         <MembersModal
           team={managingMembers}
-          onClose={() => {
+          onClose={(hasChanges) => {
             setManagingMembers(null)
-            loadTeams()
+            if (hasChanges) {
+              loadTeams()
+            }
           }}
           addMember={addMember}
           removeMember={removeMember}
@@ -175,9 +281,11 @@ export const TeamsPanel = () => {
       {managingProjects && (
         <TeamProjectsModal
           team={managingProjects}
-          onClose={() => {
+          onClose={(hasChanges) => {
             setManagingProjects(null)
-            loadTeams()
+            if (hasChanges) {
+              loadTeams()
+            }
           }}
           getTeam={getTeam}
           listProjects={listProjects}
@@ -196,93 +304,168 @@ const TeamCard = ({
   onManageMembers,
   onManageProjects,
   onArchive,
+  onChangeOwner,
+  availablePeople,
 }: {
   team: Team
   onEdit: () => void
   onManageMembers: () => void
   onManageProjects: () => void
   onArchive: () => void
+  onChangeOwner?: (teamSlug: string, ownerId: number | null) => Promise<void>
+  availablePeople?: Person[]
 }) => {
+  const [showOwnerSelector, setShowOwnerSelector] = useState(false)
+
+  const handleOwnerClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onChangeOwner && availablePeople) {
+      setShowOwnerSelector(!showOwnerSelector)
+    }
+  }
+
+  const handleOwnerSelect = async (ownerId: number | null) => {
+    if (onChangeOwner) {
+      await onChangeOwner(team.slug, ownerId)
+    }
+  }
+
   return (
-    <div className={team.is_active ? styles.card : styles.cardInactive}>
-      <div className={styles.cardHeader}>
-        <div className={styles.cardInfo}>
-          <div className="flex items-center gap-2">
-            <h4 className={styles.cardTitle}>{team.name}</h4>
+    <div className={cx(
+      'bg-white rounded-xl border border-slate-200 p-4 flex flex-col',
+      !team.is_active && 'opacity-60'
+    )}>
+      {/* Header */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="font-semibold text-slate-800 truncate">{team.name}</h4>
             {!team.is_active && (
               <span className={cx(styles.badge, styles.badgeInactive)}>Archived</span>
             )}
           </div>
-          <p className={styles.cardSubtitle}>@{team.slug}</p>
-          {team.description && (
-            <p className="text-sm text-slate-600 mt-1">{team.description}</p>
-          )}
-          {team.tags && team.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {team.tags.map(tag => (
-                <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
-            {team.member_count !== undefined && (
-              <span>{team.member_count} member{team.member_count !== 1 ? 's' : ''}</span>
-            )}
-            {team.discord_role_id && (
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 bg-indigo-500 rounded-full"></span>
-                Discord
-              </span>
-            )}
-            {team.github_team_id && (
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 bg-slate-800 rounded-full"></span>
-                GitHub
-              </span>
-            )}
-          </div>
-          {team.projects && team.projects.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              <span className="text-xs text-slate-500">Projects:</span>
-              {team.projects.slice(0, 3).map(project => (
-                <span
-                  key={project.id}
-                  className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-blue-100"
-                  onClick={onManageProjects}
-                >
-                  {project.title}
-                </span>
-              ))}
-              {team.projects.length > 3 && (
-                <span
-                  className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
-                  onClick={onManageProjects}
-                  title={team.projects.slice(3).map(p => p.title).join(', ')}
-                >
-                  +{team.projects.length - 3} more
-                </span>
-              )}
-            </div>
+          <p className="text-xs text-slate-500">@{team.slug}</p>
+        </div>
+      </div>
+
+      {/* Description */}
+      {team.description && (
+        <p className="text-sm text-slate-600 mb-3 line-clamp-2">{team.description}</p>
+      )}
+
+      {/* Tags */}
+      {team.tags && team.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-3">
+          {team.tags.slice(0, 3).map(tag => (
+            <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
+              {tag}
+            </span>
+          ))}
+          {team.tags.length > 3 && (
+            <span className="text-xs text-slate-400">+{team.tags.length - 3}</span>
           )}
         </div>
-        <div className={styles.cardActions}>
-          <button className={styles.btnEdit} onClick={onManageMembers}>
-            Members
-          </button>
-          <button className={styles.btnEdit} onClick={onManageProjects}>
-            Projects
-          </button>
-          <button className={styles.btnEdit} onClick={onEdit}>
-            Edit
-          </button>
-          {team.is_active && (
-            <button className={styles.btnDelete} onClick={onArchive}>
-              Archive
-            </button>
+      )}
+
+      {/* Owner */}
+      <div className="text-xs text-slate-500 mb-2 relative">
+        Owner:{' '}
+        <span
+          onClick={handleOwnerClick}
+          className={cx(
+            'cursor-pointer px-1.5 py-0.5 rounded',
+            team.owner
+              ? 'text-slate-700 hover:bg-slate-100'
+              : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+          )}
+          title={team.owner ? 'Click to change' : 'No owner - click to assign'}
+        >
+          {team.owner
+            ? team.owner.display_name || team.owner.identifier
+            : 'None'}
+        </span>
+        {showOwnerSelector && onChangeOwner && availablePeople && (
+          <OwnerSelectorPopover
+            currentOwnerId={team.owner_id}
+            availablePeople={availablePeople}
+            onSelect={handleOwnerSelect}
+            onClose={() => setShowOwnerSelector(false)}
+          />
+        )}
+      </div>
+
+      {/* Stats row */}
+      <div className="flex items-center gap-3 text-xs text-slate-500 mb-3">
+        {team.member_count !== undefined && (
+          <span>{team.member_count} member{team.member_count !== 1 ? 's' : ''}</span>
+        )}
+        {team.discord_role_id && (
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 bg-indigo-500 rounded-full"></span>
+            Discord
+          </span>
+        )}
+        {team.github_team_id && (
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 bg-slate-800 rounded-full"></span>
+            GitHub
+          </span>
+        )}
+      </div>
+
+      {/* Projects */}
+      {team.projects && team.projects.length > 0 && (
+        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+          <span className="text-xs text-slate-500">Projects:</span>
+          {team.projects.slice(0, 2).map(project => (
+            <span
+              key={project.id}
+              className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-blue-100"
+              onClick={onManageProjects}
+            >
+              {project.title}
+            </span>
+          ))}
+          {team.projects.length > 2 && (
+            <span
+              className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
+              onClick={onManageProjects}
+              title={team.projects.slice(2).map(p => p.title).join(', ')}
+            >
+              +{team.projects.length - 2} more
+            </span>
           )}
         </div>
+      )}
+
+      {/* Actions - pushed to bottom */}
+      <div className="mt-auto pt-3 border-t border-slate-100 flex flex-wrap gap-2">
+        <button
+          className="text-xs text-primary hover:text-primary/80 font-medium"
+          onClick={onManageMembers}
+        >
+          Members
+        </button>
+        <button
+          className="text-xs text-primary hover:text-primary/80 font-medium"
+          onClick={onManageProjects}
+        >
+          Projects
+        </button>
+        <button
+          className="text-xs text-primary hover:text-primary/80 font-medium"
+          onClick={onEdit}
+        >
+          Edit
+        </button>
+        {team.is_active && (
+          <button
+            className="text-xs text-red-600 hover:text-red-700 font-medium ml-auto"
+            onClick={onArchive}
+          >
+            Archive
+          </button>
+        )}
       </div>
     </div>
   )
@@ -295,16 +478,19 @@ const TeamFormModal = ({
   onClose,
   listPeople,
   addMember,
+  availablePeople = [],
 }: {
   team?: Team
   onSubmit: (data: TeamCreate | TeamUpdate) => Promise<void>
   onClose: () => void
   listPeople: (filters?: { search?: string; limit?: number }) => Promise<Person[]>
   addMember: (team: string, person: string, role?: string) => Promise<{ success: boolean; error?: string }>
+  availablePeople?: Person[]
 }) => {
   const [name, setName] = useState(team?.name || '')
   const [slug, setSlug] = useState(team?.slug || '')
   const [description, setDescription] = useState(team?.description || '')
+  const [ownerId, setOwnerId] = useState<number | null>(team?.owner_id ?? null)
   const [tags, setTags] = useState(team?.tags?.join(', ') || '')
   const [discordRoleId, setDiscordRoleId] = useState(team?.discord_role_id?.toString() || '')
   const [discordGuildId, setDiscordGuildId] = useState(team?.discord_guild_id?.toString() || '')
@@ -374,6 +560,7 @@ const TeamFormModal = ({
         name,
         ...(isEditing ? {} : { slug }),
         description: description || undefined,
+        ...(isEditing ? { owner: ownerId } : ownerId != null ? { owner: ownerId } : {}),
         tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
         discord_role_id: discordRoleId ? parseInt(discordRoleId) : undefined,
         discord_guild_id: discordGuildId ? parseInt(discordGuildId) : undefined,
@@ -457,6 +644,23 @@ const TeamFormModal = ({
             placeholder="engineering, core, platform"
           />
           <p className={styles.formHint}>Comma-separated tags for filtering</p>
+        </div>
+
+        <div className={styles.formGroup}>
+          <label className={styles.formLabel}>Owner</label>
+          <select
+            value={ownerId ?? ''}
+            onChange={e => setOwnerId(e.target.value ? Number(e.target.value) : null)}
+            className={styles.formSelect}
+          >
+            <option value="">No owner</option>
+            {availablePeople.map(person => (
+              <option key={person.id} value={person.id}>
+                {person.display_name || person.identifier}
+              </option>
+            ))}
+          </select>
+          <p className={styles.formHint}>Assign someone responsible for this team</p>
         </div>
 
         {/* Member selection for new teams */}
@@ -610,7 +814,7 @@ const MembersModal = ({
   getPerson,
 }: {
   team: Team
-  onClose: () => void
+  onClose: (hasChanges: boolean) => void
   addMember: (team: string, person: string, role?: string) => Promise<{ success: boolean; error?: string }>
   removeMember: (team: string, person: string) => Promise<{ success: boolean; error?: string }>
   listPeople: (filters?: { search?: string; limit?: number }) => Promise<Person[]>
@@ -623,6 +827,7 @@ const MembersModal = ({
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedMember, setSelectedMember] = useState<{ identifier: string; person: Person | null; loading: boolean } | null>(null)
+  const [hasChanges, setHasChanges] = useState(false)
 
   // Load members
   useEffect(() => {
@@ -670,6 +875,7 @@ const MembersModal = ({
       }])
       setSearchTerm('')
       setSearchResults([])
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to add member')
     }
@@ -680,6 +886,7 @@ const MembersModal = ({
     const result = await removeMember(team.slug, member.identifier)
     if (result.success) {
       setMembers(prev => prev.filter(m => m.id !== member.id))
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to remove member')
     }
@@ -695,8 +902,10 @@ const MembersModal = ({
     }
   }
 
+  const handleClose = () => onClose(hasChanges)
+
   return (
-    <Modal title={`Members of ${team.name}`} onClose={onClose}>
+    <Modal title={`Members of ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && <div className={styles.formError}>{error}</div>}
 
@@ -777,7 +986,7 @@ const MembersModal = ({
         </div>
 
         <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={onClose}>
+          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
             Done
           </button>
         </div>
@@ -921,7 +1130,7 @@ const TeamProjectsModal = ({
   unassignTeam,
 }: {
   team: Team
-  onClose: () => void
+  onClose: (hasChanges: boolean) => void
   getTeam: (team: string | number, includeMembers?: boolean, includeProjects?: boolean) => Promise<Team | null>
   listProjects: (options?: { state?: string; include_children?: boolean }) => Promise<Project[]>
   assignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
@@ -931,6 +1140,7 @@ const TeamProjectsModal = ({
   const [allProjects, setAllProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasChanges, setHasChanges] = useState(false)
 
   // Load data on mount
   useEffect(() => {
@@ -962,6 +1172,7 @@ const TeamProjectsModal = ({
         state: project.state,
         repo_path: project.repo_path,
       }])
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to assign project')
     }
@@ -972,6 +1183,7 @@ const TeamProjectsModal = ({
     const result = await unassignTeam(project.id, team.id)
     if (result.success) {
       setAssignedProjects(prev => prev.filter(p => p.id !== project.id))
+      setHasChanges(true)
     } else {
       setError(result.error || 'Failed to unassign project')
     }
@@ -980,8 +1192,10 @@ const TeamProjectsModal = ({
   const assignedIds = new Set(assignedProjects.map(p => p.id))
   const availableProjects = allProjects.filter(p => !assignedIds.has(p.id))
 
+  const handleClose = () => onClose(hasChanges)
+
   return (
-    <Modal title={`Projects for ${team.name}`} onClose={onClose}>
+    <Modal title={`Projects for ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && <div className={styles.formError}>{error}</div>}
 
@@ -1056,7 +1270,7 @@ const TeamProjectsModal = ({
         )}
 
         <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={onClose}>
+          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
             Done
           </button>
         </div>

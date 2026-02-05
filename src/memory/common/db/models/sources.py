@@ -1404,6 +1404,12 @@ class Team(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Team owner (person responsible for this team)
+    owner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
+    )
+    owner: Mapped["Person | None"] = relationship("Person", foreign_keys=[owner_id])
+
     # Categorization via tags (for queries like "all engineering teams")
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), server_default="{}", nullable=False
@@ -1447,19 +1453,24 @@ class Team(Base):
         Index("teams_slug_idx", "slug"),
         Index("teams_tags_idx", "tags", postgresql_using="gin"),
         Index("teams_is_active_idx", "is_active"),
+        Index("teams_owner_idx", "owner_id"),
     )
 
     @property
     def display_contents(self) -> dict:
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "slug": self.slug,
             "description": self.description,
+            "owner_id": self.owner_id,
             "tags": self.tags,
             "member_count": len(self.members) if self.members else 0,
             "is_active": self.is_active,
         }
+        if self.owner:
+            result["owner"] = self.owner.identifier
+        return result
 
 
 def can_access_project(person: "Person", project: "Project") -> bool:

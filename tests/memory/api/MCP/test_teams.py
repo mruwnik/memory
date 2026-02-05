@@ -9,10 +9,33 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 
-from memory.common.db.models import Person, Team, HumanUser, UserSession
-from memory.common.db.models.discord import DiscordBot
-from memory.common.db.models.sources import Project, team_members, project_teams
+from memory.common.db.models import DiscordUser, Person, Team, HumanUser, UserSession
+from memory.common.db.models.discord import DiscordBot, DiscordServer
+from memory.common.db.models.sources import GithubUser, Project, team_members, project_teams
 from memory.common.db import connection as db_connection
+from memory.common.db.connection import make_session
+from memory.common import discord as discord_client
+from memory.common.github import GithubClient, GithubCredentials
+from memory.api.MCP.servers.discord import create_role
+from memory.api.MCP.servers.teams import (
+    PersonSyncInfo,
+    TeamSyncInfo,
+    _discord_add_role,
+    _discord_remove_role,
+    _github_add_member,
+    _github_remove_member,
+    fetch,
+    find_or_create_person,
+    list_all,
+    make_slug,
+    project_list_access,
+    sync_from_discord,
+    sync_from_github,
+    team_add_member,
+    team_remove_member,
+    upsert,
+    upsert_team_record,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -211,7 +234,6 @@ async def test_list_all_access_control(
     use_admin, expected_team_count, expected_slugs
 ):
     """Test that list_all respects access control."""
-    from memory.api.MCP.servers.teams import list_all
 
     session_id = admin_session.id if use_admin else user_session.id
 
@@ -228,7 +250,6 @@ async def test_list_all_access_control(
 @pytest.mark.asyncio
 async def test_list_all_unauthenticated_returns_error(db_session):
     """Unauthenticated requests should return an error."""
-    from memory.api.MCP.servers.teams import list_all
 
     # No auth context set - simulates unauthenticated request
     result = await get_fn(list_all)()
@@ -256,7 +277,6 @@ async def test_fetch_access_control(
     use_admin, team_slug, expect_success
 ):
     """Test that fetch respects access control."""
-    from memory.api.MCP.servers.teams import fetch
 
     session_id = admin_session.id if use_admin else user_session.id
     with mcp_auth_context(session_id):
@@ -280,7 +300,6 @@ async def test_list_all_includes_projects_when_requested(
     db_session, user_session, teams_and_projects
 ):
     """list_all should include projects when include_projects=True."""
-    from memory.api.MCP.servers.teams import list_all
 
     with mcp_auth_context(user_session.id):
         result = await get_fn(list_all)(include_projects=True)
@@ -312,7 +331,6 @@ async def test_team_add_member_access_control(
     use_admin, team_slug, expect_success
 ):
     """Test that team_add_member respects access control."""
-    from memory.api.MCP.servers.teams import team_add_member
 
     session_id = admin_session.id if use_admin else user_session.id
     with mcp_auth_context(session_id):
@@ -345,29 +363,24 @@ async def test_team_add_member_access_control(
 )
 def test_make_slug(name, expected_slug):
     """Test make_slug generates correct URL-safe slugs."""
-    from memory.api.MCP.servers.teams import make_slug
 
     assert make_slug(name) == expected_slug
 
 
 def test_resolve_guild_with_int(db_session):
     """Test resolve_guild returns int directly."""
-    from memory.common import discord as discord_client
 
     assert discord_client.resolve_guild(123456789, db_session) == 123456789
 
 
 def test_resolve_guild_with_numeric_string(db_session):
     """Test resolve_guild parses numeric string as ID."""
-    from memory.common import discord as discord_client
 
     assert discord_client.resolve_guild("123456789", db_session) == 123456789
 
 
 def test_resolve_guild_with_name(db_session):
     """Test resolve_guild looks up server by name."""
-    from memory.common import discord as discord_client
-    from memory.common.db.models import DiscordServer
 
     # Create a Discord server
     server = DiscordServer(id=987654321, name="Test Server")
@@ -379,7 +392,6 @@ def test_resolve_guild_with_name(db_session):
 
 def test_resolve_guild_not_found(db_session):
     """Test resolve_guild raises for unknown server name."""
-    from memory.common import discord as discord_client
 
     with pytest.raises(ValueError, match="Discord server 'Unknown Server' not found"):
         discord_client.resolve_guild("Unknown Server", db_session)
@@ -387,14 +399,12 @@ def test_resolve_guild_not_found(db_session):
 
 def test_resolve_guild_none(db_session):
     """Test resolve_guild returns None for None input."""
-    from memory.common import discord as discord_client
 
     assert discord_client.resolve_guild(None, db_session) is None
 
 
 def test_find_or_create_person_creates_new(db_session):
     """Test find_or_create_person creates a new person."""
-    from memory.api.MCP.servers.teams import find_or_create_person
 
     person = find_or_create_person(
         db_session,
@@ -410,7 +420,6 @@ def test_find_or_create_person_creates_new(db_session):
 
 def test_find_or_create_person_finds_existing(db_session):
     """Test find_or_create_person returns existing person."""
-    from memory.api.MCP.servers.teams import find_or_create_person
 
     # Create first
     person1 = find_or_create_person(db_session, "bob_smith", "Bob Smith")
@@ -425,7 +434,6 @@ def test_find_or_create_person_finds_existing(db_session):
 
 def test_find_or_create_person_normalizes_identifier(db_session):
     """Test find_or_create_person normalizes identifiers."""
-    from memory.api.MCP.servers.teams import find_or_create_person
 
     person = find_or_create_person(db_session, "Alice Chen", "Alice Chen")
     assert person.identifier == "alice_chen"
@@ -439,7 +447,6 @@ def test_find_or_create_person_normalizes_identifier(db_session):
 @pytest.mark.asyncio
 async def test_upsert_creates_new_team(db_session, admin_session):
     """Test upsert creates a new team."""
-    from memory.api.MCP.servers.teams import upsert
 
     with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
@@ -460,7 +467,6 @@ async def test_upsert_creates_new_team(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_updates_existing_team(db_session, admin_session):
     """Test upsert updates an existing team."""
-    from memory.api.MCP.servers.teams import upsert
 
     # Create initial team
     team = Team(name="Original Name", slug="update-me", description="Original")
@@ -483,7 +489,6 @@ async def test_upsert_updates_existing_team(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_auto_generates_slug(db_session, admin_session):
     """Test upsert generates slug from name if not provided."""
-    from memory.api.MCP.servers.teams import upsert
 
     with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(name="Auto Slug Team")
@@ -495,7 +500,6 @@ async def test_upsert_auto_generates_slug(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_with_members_list(db_session, admin_session):
     """Test upsert with explicit members list."""
-    from memory.api.MCP.servers.teams import upsert
 
     # Create some people
     person1 = Person(identifier="member_one", display_name="Member One")
@@ -518,7 +522,6 @@ async def test_upsert_with_members_list(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_creates_missing_person(db_session, admin_session):
     """Test upsert creates Person for unknown member identifier."""
-    from memory.api.MCP.servers.teams import upsert
 
     with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
@@ -534,7 +537,6 @@ async def test_upsert_creates_missing_person(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_clears_members_with_empty_list(db_session, admin_session):
     """Test upsert removes all members when passed empty list."""
-    from memory.api.MCP.servers.teams import upsert
 
     # Create team with members
     team = Team(name="Clear Me", slug="clear-me")
@@ -560,7 +562,6 @@ async def test_upsert_clears_members_with_empty_list(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
     """Test upsert with Discord guild specified by ID."""
-    from memory.api.MCP.servers.teams import upsert
 
     with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
@@ -581,8 +582,6 @@ async def test_upsert_with_discord_role_creates_role(db_session, admin_session, 
     This test uses the real make_session() to test actual session behavior.
     Only external Discord/GitHub API calls are mocked.
     """
-    from memory.api.MCP.servers.teams import upsert
-    from memory.common.db.models import DiscordServer
 
     # Create Discord server - use the test database
     server = DiscordServer(id=111222333, name="Test Guild")
@@ -617,8 +616,6 @@ async def test_upsert_with_discord_role_creates_role(db_session, admin_session, 
 @pytest.mark.asyncio
 async def test_upsert_with_existing_discord_role(db_session, admin_session, discord_bot):
     """Test upsert links to existing Discord role."""
-    from memory.api.MCP.servers.teams import upsert
-    from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=111222333, name="Test Guild")
     db_session.add(server)
@@ -650,14 +647,12 @@ async def test_team_create_alias_removed(db_session, admin_session):
     spec = importlib.util.find_spec("memory.api.MCP.servers.teams")
     assert spec is not None
     # team_create was removed, only upsert exists now
-    from memory.api.MCP.servers.teams import upsert
     assert upsert is not None
 
 
 @pytest.mark.asyncio
 async def test_upsert_with_github_org(db_session, admin_session):
     """Test upsert with GitHub organization."""
-    from memory.api.MCP.servers.teams import upsert
 
     with mcp_auth_context(admin_session.id):
         result = await get_fn(upsert)(
@@ -685,7 +680,6 @@ async def test_upsert_with_github_and_members(db_session, admin_session):
     The issue was that after the async ensure_github_team() call, the Team
     object would become detached from the session.
     """
-    from memory.api.MCP.servers.teams import upsert
 
     # Create a person to add as a member
     person = Person(identifier="gh_test_person", display_name="GH Test Person")
@@ -729,7 +723,6 @@ async def test_upsert_remove_members_with_github(db_session, admin_session):
     _github_remove_member opened its own make_session() context, causing
     nested sessions and object detachment.
     """
-    from memory.api.MCP.servers.teams import upsert
 
     # Create a person to add then remove
     person = Person(
@@ -788,8 +781,6 @@ async def test_upsert_remove_members_with_github(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_discord_create_role_basic(db_session, admin_session, discord_bot):
     """Test Discord create MCP tool for roles."""
-    from memory.api.MCP.servers.discord import create_role
-    from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=123456789, name="Test Server")
     db_session.add(server)
@@ -813,8 +804,6 @@ async def test_discord_create_role_basic(db_session, admin_session, discord_bot)
 @pytest.mark.asyncio
 async def test_discord_create_role_with_options(db_session, admin_session, discord_bot):
     """Test Discord create with color and mentionable options."""
-    from memory.api.MCP.servers.discord import create_role
-    from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=123456789, name="Test Server")
     db_session.add(server)
@@ -848,7 +837,6 @@ async def test_discord_create_role_with_options(db_session, admin_session, disco
 
 def test_discord_resolve_role_finds_existing():
     """Test discord_client.resolve_role finds existing role by name."""
-    from memory.common import discord as discord_client
 
     mock_roles = {"roles": [
         {"id": "111", "name": "Admin"},
@@ -869,7 +857,6 @@ def test_discord_resolve_role_finds_existing():
 
 def test_discord_resolve_role_creates_when_missing():
     """Test discord_client.resolve_role creates role when missing."""
-    from memory.common import discord as discord_client
 
     mock_roles = {"roles": []}
     mock_created = {"success": True, "role": {"id": "333", "name": "New Role"}}
@@ -896,7 +883,6 @@ def test_discord_resolve_role_creates_when_missing():
 
 def test_github_create_team_success():
     """Test GitHub create_team method."""
-    from memory.common.github import GithubClient, GithubCredentials
 
     mock_response = MagicMock()
     mock_response.status_code = 201
@@ -931,7 +917,6 @@ def test_github_create_team_success():
 
 def test_github_create_team_already_exists():
     """Test GitHub create_team when team already exists."""
-    from memory.common.github import GithubClient, GithubCredentials
 
     mock_response = MagicMock()
     mock_response.status_code = 422
@@ -957,7 +942,6 @@ def test_github_create_team_already_exists():
 @pytest.mark.asyncio
 async def test_upsert_archive_team(db_session, admin_session):
     """Test upsert can archive a team via is_active=False."""
-    from memory.api.MCP.servers.teams import upsert
 
     team = Team(name="Archive Me", slug="upsert-archive-test", is_active=True)
     db_session.add(team)
@@ -982,8 +966,7 @@ async def test_upsert_reactivate_team(db_session, admin_session):
     Note: The current implementation sets is_active=True but preserves
     archived_at for audit trail purposes.
     """
-    from memory.api.MCP.servers.teams import upsert
-    from datetime import datetime, timezone
+    from datetime import timezone
 
     team = Team(
         name="Reactivate Me",
@@ -1015,8 +998,6 @@ async def test_upsert_reactivate_team(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_team_remove_member_success(db_session, admin_session):
     """Test team_remove_member removes a person from a team."""
-    from memory.api.MCP.servers.teams import team_remove_member
-    from memory.common.db.models.sources import team_members
 
     team = Team(name="Remove Test", slug="remove-member-test")
     person = Person(identifier="removable", display_name="Removable Person")
@@ -1040,7 +1021,6 @@ async def test_team_remove_member_success(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_team_remove_member_not_a_member(db_session, admin_session):
     """Test team_remove_member handles non-member gracefully."""
-    from memory.api.MCP.servers.teams import team_remove_member
 
     team = Team(name="Remove Test 2", slug="remove-test-2")
     person = Person(identifier="not_member", display_name="Not Member")
@@ -1060,9 +1040,6 @@ async def test_team_remove_member_not_a_member(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_team_remove_member_with_discord_sync(db_session, admin_session, discord_bot):
     """Test team_remove_member syncs to Discord when enabled."""
-    from memory.api.MCP.servers.teams import team_remove_member
-    from memory.common.db.models.sources import team_members
-    from memory.common.db.models import DiscordUser
 
     team = Team(
         name="Discord Sync Team",
@@ -1104,8 +1081,6 @@ async def test_team_remove_member_with_discord_sync(db_session, admin_session, d
 @pytest.mark.asyncio
 async def test_fetch_with_include_members(db_session, admin_session):
     """Test fetch returns members with roles when include_members=True."""
-    from memory.api.MCP.servers.teams import fetch
-    from memory.common.db.models.sources import team_members
 
     team = Team(name="Fetch Members Test", slug="fetch-members-test")
     person1 = Person(identifier="fetch_member1", display_name="Member One")
@@ -1134,8 +1109,6 @@ async def test_fetch_with_include_members(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_fetch_without_include_members(db_session, admin_session):
     """Test fetch does not include member details when include_members=False."""
-    from memory.api.MCP.servers.teams import fetch
-    from memory.common.db.models.sources import team_members
 
     team = Team(name="Fetch No Members Test", slug="fetch-no-members-test")
     person = Person(identifier="fetch_no_member", display_name="No Member")
@@ -1158,8 +1131,6 @@ async def test_fetch_without_include_members(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_fetch_with_include_projects(db_session, admin_session):
     """Test fetch returns projects when include_projects=True."""
-    from memory.api.MCP.servers.teams import fetch
-    from memory.common.db.models.sources import project_teams
 
     team = Team(name="Fetch Projects Test", slug="fetch-projects-test")
     project1 = Project(id=-200, title="Fetch Project 1", state="open")
@@ -1188,8 +1159,6 @@ async def test_fetch_with_include_projects(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_project_list_access_success(db_session, admin_session):
     """Test project_list_access returns all people with access."""
-    from memory.api.MCP.servers.teams import project_list_access
-    from memory.common.db.models.sources import team_members, project_teams
 
     team1 = Team(name="Access Team 1", slug="access-team-1")
     team2 = Team(name="Access Team 2", slug="access-team-2")
@@ -1226,7 +1195,6 @@ async def test_project_list_access_success(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_list_all_filter_by_tags_match_all(db_session, admin_session):
     """Test list_all filters by tags with match_any_tag=False (default, requires all)."""
-    from memory.api.MCP.servers.teams import list_all
 
     team1 = Team(name="Tags Test 1", slug="tags-test-1", tags=["engineering", "frontend"])
     team2 = Team(name="Tags Test 2", slug="tags-test-2", tags=["engineering", "backend"])
@@ -1246,7 +1214,6 @@ async def test_list_all_filter_by_tags_match_all(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_list_all_filter_by_tags_match_any(db_session, admin_session):
     """Test list_all filters by tags with match_any_tag=True (matches any)."""
-    from memory.api.MCP.servers.teams import list_all
 
     team1 = Team(name="Any Tags 1", slug="any-tags-1", tags=["design"])
     team2 = Team(name="Any Tags 2", slug="any-tags-2", tags=["marketing"])
@@ -1271,7 +1238,6 @@ async def test_list_all_filter_by_tags_match_any(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_sync_from_discord_imports_members(db_session, admin_session, discord_bot):
     """Test sync_from_discord imports Discord role members to team."""
-    from memory.api.MCP.servers.teams import sync_from_discord
 
     team = Team(name="Discord Import", slug="discord-import")
     db_session.add(team)
@@ -1299,8 +1265,6 @@ async def test_sync_from_discord_imports_members(db_session, admin_session, disc
 @pytest.mark.asyncio
 async def test_sync_from_discord_links_existing_discord_user(db_session, admin_session, discord_bot):
     """Test sync_from_discord links existing DiscordUser to team."""
-    from memory.api.MCP.servers.teams import sync_from_discord
-    from memory.common.db.models import DiscordUser
 
     team = Team(name="Discord Link", slug="discord-link")
     person = Person(identifier="existing_discord", display_name="Existing Discord")
@@ -1332,7 +1296,6 @@ async def test_sync_from_discord_links_existing_discord_user(db_session, admin_s
 @pytest.mark.asyncio
 async def test_sync_from_discord_handles_failure(db_session, admin_session, discord_bot):
     """Test sync_from_discord handles API failure gracefully."""
-    from memory.api.MCP.servers.teams import sync_from_discord
 
     team = Team(name="Discord Fail", slug="discord-fail")
     db_session.add(team)
@@ -1358,7 +1321,6 @@ async def test_sync_from_discord_handles_failure(db_session, admin_session, disc
 @pytest.mark.asyncio
 async def test_sync_from_github_imports_members(db_session, admin_session):
     """Test sync_from_github imports GitHub team members."""
-    from memory.api.MCP.servers.teams import sync_from_github
 
     team = Team(name="GitHub Import", slug="github-import")
     db_session.add(team)
@@ -1386,7 +1348,6 @@ async def test_sync_from_github_imports_members(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_sync_from_github_no_client(db_session, admin_session):
     """Test sync_from_github returns empty when no GitHub client available."""
-    from memory.api.MCP.servers.teams import sync_from_github
 
     team = Team(name="GitHub No Client", slug="github-no-client")
     db_session.add(team)
@@ -1410,8 +1371,6 @@ async def test_sync_from_github_no_client(db_session, admin_session):
 
 def test_person_sync_info_github_from_accounts(db_session):
     """Test PersonSyncInfo gets github usernames from linked accounts."""
-    from memory.api.MCP.servers.teams import PersonSyncInfo
-    from memory.common.db.models.sources import GithubUser
 
     person = Person(identifier="with_github_account", display_name="Has GitHub")
     db_session.add(person)
@@ -1430,7 +1389,6 @@ def test_person_sync_info_github_from_accounts(db_session):
 
 def test_person_sync_info_github_from_contact_info(db_session):
     """Test PersonSyncInfo falls back to contact_info for github username."""
-    from memory.api.MCP.servers.teams import PersonSyncInfo
 
     person = Person(
         identifier="contact_info_github",
@@ -1446,7 +1404,6 @@ def test_person_sync_info_github_from_contact_info(db_session):
 
 def test_person_sync_info_github_from_contact_info_list(db_session):
     """Test PersonSyncInfo handles list of github usernames in contact_info."""
-    from memory.api.MCP.servers.teams import PersonSyncInfo
 
     person = Person(
         identifier="contact_info_github_list",
@@ -1462,8 +1419,6 @@ def test_person_sync_info_github_from_contact_info_list(db_session):
 
 def test_person_sync_info_prefers_accounts_over_contact_info(db_session):
     """Test PersonSyncInfo prefers linked accounts over contact_info."""
-    from memory.api.MCP.servers.teams import PersonSyncInfo
-    from memory.common.db.models.sources import GithubUser
 
     person = Person(
         identifier="both_sources",
@@ -1492,7 +1447,6 @@ def test_person_sync_info_prefers_accounts_over_contact_info(db_session):
 @pytest.mark.asyncio
 async def test_discord_add_role_success(db_session, admin_session, discord_bot):
     """Test _discord_add_role adds role to Discord accounts."""
-    from memory.api.MCP.servers.teams import _discord_add_role, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1523,7 +1477,6 @@ async def test_discord_add_role_success(db_session, admin_session, discord_bot):
 @pytest.mark.asyncio
 async def test_discord_add_role_failure(db_session, admin_session, discord_bot):
     """Test _discord_add_role handles failure gracefully."""
-    from memory.api.MCP.servers.teams import _discord_add_role, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1554,7 +1507,6 @@ async def test_discord_add_role_failure(db_session, admin_session, discord_bot):
 @pytest.mark.asyncio
 async def test_discord_remove_role_success(db_session, admin_session, discord_bot):
     """Test _discord_remove_role removes role from Discord accounts."""
-    from memory.api.MCP.servers.teams import _discord_remove_role, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1585,7 +1537,6 @@ async def test_discord_remove_role_success(db_session, admin_session, discord_bo
 @pytest.mark.asyncio
 async def test_discord_remove_role_failure(db_session, admin_session, discord_bot):
     """Test _discord_remove_role handles failure gracefully."""
-    from memory.api.MCP.servers.teams import _discord_remove_role, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1621,7 +1572,6 @@ async def test_discord_remove_role_failure(db_session, admin_session, discord_bo
 @pytest.mark.asyncio
 async def test_github_add_member_success(db_session, admin_session):
     """Test _github_add_member adds user to GitHub team."""
-    from memory.api.MCP.servers.teams import _github_add_member, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1653,7 +1603,6 @@ async def test_github_add_member_success(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_github_add_member_missing_team_slug(db_session):
     """Test _github_add_member returns error when team_slug is missing."""
-    from memory.api.MCP.servers.teams import _github_add_member, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1683,7 +1632,6 @@ async def test_github_add_member_missing_team_slug(db_session):
 @pytest.mark.asyncio
 async def test_github_remove_member_success(db_session, admin_session):
     """Test _github_remove_member removes user from GitHub team."""
-    from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1715,7 +1663,6 @@ async def test_github_remove_member_success(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_github_remove_member_failure(db_session):
     """Test _github_remove_member handles API failure gracefully."""
-    from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1747,7 +1694,6 @@ async def test_github_remove_member_failure(db_session):
 @pytest.mark.asyncio
 async def test_github_remove_member_missing_team_slug(db_session):
     """Test _github_remove_member returns error when team_slug is missing."""
-    from memory.api.MCP.servers.teams import _github_remove_member, TeamSyncInfo, PersonSyncInfo
 
     team_info = TeamSyncInfo(
         slug="test-team",
@@ -1782,8 +1728,6 @@ async def test_github_remove_member_missing_team_slug(db_session):
 @pytest.mark.asyncio
 async def test_upsert_discord_role_resolution_failure(db_session, admin_session, discord_bot):
     """Test upsert handles Discord role resolution failure gracefully."""
-    from memory.api.MCP.servers.teams import upsert
-    from memory.common.db.models import DiscordServer
 
     server = DiscordServer(id=999, name="Fail Server")
     db_session.add(server)
@@ -1806,7 +1750,6 @@ async def test_upsert_discord_role_resolution_failure(db_session, admin_session,
 @pytest.mark.asyncio
 async def test_team_add_member_invalid_role(db_session, admin_session):
     """Test team_add_member rejects invalid roles."""
-    from memory.api.MCP.servers.teams import team_add_member
 
     team = Team(name="Role Test", slug="role-test")
     person = Person(identifier="role_person", display_name="Role Person")
@@ -1831,7 +1774,6 @@ async def test_team_add_member_invalid_role(db_session, admin_session):
 
 def test_team_sync_info_should_sync_discord():
     """Test TeamSyncInfo.should_sync_discord property."""
-    from memory.api.MCP.servers.teams import TeamSyncInfo
 
     # All conditions met
     info = TeamSyncInfo(
@@ -1875,7 +1817,6 @@ def test_team_sync_info_should_sync_discord():
 
 def test_team_sync_info_should_sync_github():
     """Test TeamSyncInfo.should_sync_github property."""
-    from memory.api.MCP.servers.teams import TeamSyncInfo
 
     # All conditions met
     info = TeamSyncInfo(
@@ -1906,9 +1847,6 @@ def test_team_sync_info_should_sync_github():
 
 def test_person_sync_info_from_person(db_session):
     """Test PersonSyncInfo.from_person factory method."""
-    from memory.api.MCP.servers.teams import PersonSyncInfo
-    from memory.common.db.models import DiscordUser
-    from memory.common.db.models.sources import GithubUser
 
     person = Person(identifier="sync_test", display_name="Sync Test")
     db_session.add(person)
@@ -1936,7 +1874,6 @@ def test_person_sync_info_from_person(db_session):
 @pytest.mark.asyncio
 async def test_sync_from_discord_requeires_team_after_await(db_session, admin_session, discord_bot):
     """Test sync_from_discord re-queries team after async operation."""
-    from memory.api.MCP.servers.teams import sync_from_discord
 
     team = Team(name="Requery Test", slug="requery-test")
     db_session.add(team)
@@ -1962,7 +1899,6 @@ async def test_sync_from_discord_requeires_team_after_await(db_session, admin_se
 @pytest.mark.asyncio
 async def test_sync_from_github_requeires_team_after_await(db_session, admin_session):
     """Test sync_from_github re-queries team after async operation."""
-    from memory.api.MCP.servers.teams import sync_from_github
 
     team = Team(name="GH Requery Test", slug="gh-requery-test")
     db_session.add(team)
@@ -1987,45 +1923,31 @@ async def test_sync_from_github_requeires_team_after_await(db_session, admin_ses
     assert result["imported"] == 1
 
 
-def test_nested_make_session_causes_detached_instance_error(db_session):
-    """Demonstrate that nested make_session() calls cause DetachedInstanceError.
+def test_nested_make_session_shares_underlying_session(db_session):
+    """Verify that nested make_session() calls share the same scoped session.
 
-    This test documents a known issue: when make_session() is called nested,
-    the inner session.remove() invalidates objects from the outer session.
-
-    Any code using nested make_session() calls MUST handle the detachment by:
-    1. NOT using nested make_session() - pass session or resolved clients instead
-    2. Or capturing ORM values into dataclasses before nested calls
-    3. Or re-querying objects after nested calls return
+    Since make_session() uses scoped_session (thread-local), nested calls
+    return the same underlying session. Objects remain valid across nesting.
     """
-    from memory.common.db.connection import make_session
-    from sqlalchemy.orm.exc import DetachedInstanceError
-
-    # Create a team using the test fixture session
     team = Team(name="Nested Session Test", slug="nested-session-test")
     db_session.add(team)
     db_session.commit()
     team_id = team.id
 
-    # Now demonstrate the nested session bug
     with make_session() as outer_session:
-        # Query the team in the outer session
         team_obj = outer_session.query(Team).filter(Team.id == team_id).first()
         assert team_obj is not None
         assert team_obj.slug == "nested-session-test"
 
-        # Nested make_session() - this will call remove() on exit,
-        # which disposes the underlying session that outer_session is also using
         with make_session() as inner_session:
-            # Do something in inner session
+            # Same underlying session
+            assert inner_session is outer_session
             inner_team = inner_session.query(Team).filter(Team.id == team_id).first()
             assert inner_team is not None
-        # inner session exits, calls session.remove()
 
-        # Now try to access team_obj - it's detached because the inner
-        # session.remove() disposed the shared underlying session
-        with pytest.raises(DetachedInstanceError):
-            _ = team_obj.members  # This raises DetachedInstanceError
+        # Objects remain valid after inner context exits
+        assert team_obj.slug == "nested-session-test"
+        _ = team_obj.members  # No DetachedInstanceError
 
 
 @pytest.mark.asyncio
@@ -2038,8 +1960,6 @@ async def test_upsert_remove_members_with_github_avoids_detached_error(db_sessio
 
     This test verifies that behavior works correctly.
     """
-    from memory.api.MCP.servers.teams import upsert
-    from memory.common.db.models.sources import GithubUser
 
     # Create a person with GitHub account so _github_remove_member has work to do
     person = Person(identifier="nested_session_test", display_name="Nested Session Test")
@@ -2082,4 +2002,239 @@ async def test_upsert_remove_members_with_github_avoids_detached_error(db_sessio
         # Should succeed because the code properly handles nested sessions
         assert result2["success"], f"Remove members failed: {result2}"
         assert result2["membership_changes"]["removed"] == ["nested_session_test"]
+
+
+# =============================================================================
+# Owner management tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_upsert_create_with_owner(db_session, admin_session):
+    """Test creating a team with an owner set."""
+    person = Person(identifier="team_owner", display_name="Team Owner")
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Owned Team",
+            slug="owned-team",
+            owner="team_owner",
+        )
+
+    assert result["success"] is True
+    assert result["action"] == "created"
+    assert result["team"]["owner_id"] == person.id
+    assert result["team"]["owner"]["identifier"] == "team_owner"
+
+
+@pytest.mark.asyncio
+async def test_upsert_create_with_owner_by_id(db_session, admin_session):
+    """Test creating a team with owner specified by numeric ID."""
+    person = Person(identifier="owner_by_id", display_name="Owner By ID")
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Owned By ID Team",
+            owner=person.id,
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] == person.id
+
+
+@pytest.mark.asyncio
+async def test_upsert_create_without_owner(db_session, admin_session):
+    """Test creating a team without setting an owner."""
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="No Owner Team",
+            slug="no-owner-team",
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] is None
+    assert result["team"]["owner"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_set_owner_on_existing_team(db_session, admin_session):
+    """Test setting an owner on an existing team that had no owner."""
+    team = Team(name="Ownerless Team", slug="ownerless-team")
+    person = Person(identifier="new_owner", display_name="New Owner")
+    db_session.add_all([team, person])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Ownerless Team",
+            slug="ownerless-team",
+            owner="new_owner",
+        )
+
+    assert result["success"] is True
+    assert result["action"] == "updated"
+    assert result["team"]["owner_id"] == person.id
+    assert result["team"]["owner"]["identifier"] == "new_owner"
+
+
+@pytest.mark.asyncio
+async def test_upsert_clear_owner(db_session, admin_session):
+    """Test clearing an owner by passing owner=None."""
+    person = Person(identifier="soon_removed", display_name="Soon Removed")
+    db_session.add(person)
+    db_session.flush()
+    team = Team(name="Has Owner", slug="has-owner", owner_id=person.id)
+    db_session.add(team)
+    db_session.commit()
+
+    # Verify owner is set
+    assert team.owner_id == person.id
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Has Owner",
+            slug="has-owner",
+            owner=None,
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] is None
+    assert result["team"]["owner"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_change_owner(db_session, admin_session):
+    """Test changing owner from one person to another."""
+    person1 = Person(identifier="old_owner", display_name="Old Owner")
+    person2 = Person(identifier="replacement_owner", display_name="Replacement Owner")
+    db_session.add_all([person1, person2])
+    db_session.flush()
+    team = Team(name="Change Owner", slug="change-owner", owner_id=person1.id)
+    db_session.add(team)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Change Owner",
+            slug="change-owner",
+            owner="replacement_owner",
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] == person2.id
+    assert result["team"]["owner"]["identifier"] == "replacement_owner"
+
+
+@pytest.mark.asyncio
+async def test_upsert_owner_not_provided_preserves_existing(db_session, admin_session):
+    """Test that not providing owner preserves the existing owner (no change)."""
+    person = Person(identifier="preserved_owner", display_name="Preserved Owner")
+    db_session.add(person)
+    db_session.flush()
+    team = Team(name="Preserve Owner", slug="preserve-owner", owner_id=person.id)
+    db_session.add(team)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Preserve Owner",
+            slug="preserve-owner",
+            description="Updated description only",
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] == person.id
+    assert result["team"]["owner"]["identifier"] == "preserved_owner"
+
+
+@pytest.mark.asyncio
+async def test_upsert_owner_not_found_warns(db_session, admin_session):
+    """Test that a non-existent owner identifier produces a warning."""
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Bad Owner Team",
+            owner="nonexistent_person",
+        )
+
+    assert result["success"] is True
+    assert any("Owner not found" in w for w in result["warnings"])
+    assert result["team"]["owner_id"] is None
+
+
+def test_upsert_team_record_owner_skip(db_session):
+    """Test upsert_team_record with owner_id=0 (skip) on update."""
+    person = Person(identifier="record_owner", display_name="Record Owner")
+    db_session.add(person)
+    db_session.flush()
+    team = Team(name="Record Test", slug="record-test", owner_id=person.id)
+    db_session.add(team)
+    db_session.commit()
+
+    # Update with owner_id=0 (default/skip) - should not change owner
+    updated_team, action = upsert_team_record(
+        db_session, "record-test", "Record Test", None, None, None
+    )
+    assert action == "updated"
+    assert updated_team.owner_id == person.id
+
+
+def test_upsert_team_record_owner_clear(db_session):
+    """Test upsert_team_record with owner_id=None (clear)."""
+    person = Person(identifier="clear_owner", display_name="Clear Owner")
+    db_session.add(person)
+    db_session.flush()
+    team = Team(name="Clear Test", slug="clear-test", owner_id=person.id)
+    db_session.add(team)
+    db_session.commit()
+
+    # Update with owner_id=None - should clear owner
+    updated_team, action = upsert_team_record(
+        db_session, "clear-test", "Clear Test", None, None, None, owner_id=None
+    )
+    assert action == "updated"
+    assert updated_team.owner_id is None
+
+
+def test_upsert_team_record_owner_set(db_session):
+    """Test upsert_team_record with a positive int owner_id (set)."""
+    person = Person(identifier="set_owner", display_name="Set Owner")
+    db_session.add(person)
+    db_session.flush()
+    team = Team(name="Set Test", slug="set-test")
+    db_session.add(team)
+    db_session.commit()
+
+    # Update with owner_id=person.id - should set owner
+    updated_team, action = upsert_team_record(
+        db_session, "set-test", "Set Test", None, None, None, owner_id=person.id
+    )
+    assert action == "updated"
+    assert updated_team.owner_id == person.id
+
+
+def test_upsert_team_record_create_with_owner(db_session):
+    """Test upsert_team_record creates team with owner."""
+    person = Person(identifier="create_owner", display_name="Create Owner")
+    db_session.add(person)
+    db_session.flush()
+
+    new_team, action = upsert_team_record(
+        db_session, "create-with-owner", "Create With Owner", None, None, None,
+        owner_id=person.id,
+    )
+    assert action == "created"
+    assert new_team.owner_id == person.id
+
+
+def test_upsert_team_record_create_without_owner(db_session):
+    """Test upsert_team_record creates team without owner (default)."""
+    new_team, action = upsert_team_record(
+        db_session, "create-no-owner", "Create No Owner", None, None, None
+    )
+    assert action == "created"
+    assert new_team.owner_id is None
 

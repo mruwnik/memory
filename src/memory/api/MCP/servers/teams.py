@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 teams_mcp = FastMCP("memory-teams")
 
+_UNSET = "__UNSET__"
+
 
 # ============== Async-Safe Data Capture ==============
 #
@@ -141,6 +143,8 @@ def team_to_dict(
         "name": team.name,
         "slug": team.slug,
         "description": team.description,
+        "owner_id": team.owner_id,
+        "owner": person_summary(team.owner) if team.owner else None,
         "tags": list(team.tags or []),
         "discord_role_id": team.discord_role_id,
         "discord_guild_id": team.discord_guild_id,
@@ -205,8 +209,12 @@ def upsert_team_record(
     description: str | None,
     tags: list[str] | None,
     is_active: bool | None,
+    owner_id: int | None = 0,
 ) -> tuple[Team, str]:
     """Create or update the Team record.
+
+    Args:
+        owner_id: 0 = skip (don't change), None = clear, positive int = set.
 
     Returns:
         Tuple of (team, action) where action is "created" or "updated"
@@ -226,6 +234,8 @@ def upsert_team_record(
             team.is_active = is_active
             if not is_active and team.archived_at is None:
                 team.archived_at = datetime.now(timezone.utc)
+        if owner_id != 0:
+            team.owner_id = owner_id  # None clears, int sets
         return team, "updated"
 
     team = Team(
@@ -234,6 +244,7 @@ def upsert_team_record(
         description=description,
         tags=tags or [],
         is_active=is_active if is_active is not None else True,
+        owner_id=owner_id or None,
     )
     session.add(team)
     session.flush()
@@ -383,6 +394,8 @@ async def upsert(
     slug: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
+    # Ownership
+    owner: str | int | None = _UNSET,
     # Discord integration
     guild: int | str | None = None,
     discord_role: int | str | None = None,
@@ -404,6 +417,8 @@ async def upsert(
         slug: URL-safe identifier (auto-generated from name if not provided)
         description: Optional description of the team's purpose
         tags: Tags for categorization (e.g., ["engineering", "core"])
+        owner: Person responsible for this team - can be person identifier or ID.
+               Set to null to clear the owner.
         guild: Discord guild - can be numeric ID or server name
         discord_role: Discord role - can be numeric ID or role name (creates if doesn't exist)
         auto_sync_discord: Whether to auto-sync membership to Discord (default: true)
@@ -440,7 +455,21 @@ async def upsert(
     }
 
     with make_session() as session:
-        team, action = upsert_team_record(session, slug, name, description, tags, is_active)
+        # Resolve owner: _UNSET = skip, None = clear, str/int = resolve person
+        owner_id: int | None = 0  # 0 = skip
+        if owner is None:
+            owner_id = None  # Explicitly clear
+        elif owner is not _UNSET:
+            if isinstance(owner, int) or (isinstance(owner, str) and owner.isdigit()):
+                owner_person = session.query(Person).filter(Person.id == int(owner)).first()
+            else:
+                owner_person = session.query(Person).filter(Person.identifier == owner).first()
+            if owner_person:
+                owner_id = owner_person.id
+            else:
+                result["warnings"].append(f"Owner not found: {owner}")
+
+        team, action = upsert_team_record(session, slug, name, description, tags, is_active, owner_id)
         result["action"] = action
 
         # Capture team.id immediately - before any queries that might trigger autoflush
@@ -496,7 +525,7 @@ async def upsert(
         # Use team_id captured earlier to avoid DetachedInstanceError
         team = (
             session.query(Team)
-            .options(selectinload(Team.members))
+            .options(selectinload(Team.members), selectinload(Team.owner))
             .filter(Team.id == team_id)
             .first()
         )
@@ -849,7 +878,10 @@ async def fetch(
         if not user:
             return {"error": "Not authenticated"}
 
-        query = session.query(Team).options(selectinload(Team.members))
+        query = session.query(Team).options(
+            selectinload(Team.members),
+            selectinload(Team.owner),
+        )
 
         # Apply access control filtering
         query = filter_teams_query(session, user, query)
@@ -910,7 +942,10 @@ async def list_all(
         if not user:
             return {"error": "Not authenticated"}
 
-        query = session.query(Team).options(selectinload(Team.members))
+        query = session.query(Team).options(
+            selectinload(Team.members),
+            selectinload(Team.owner),
+        )
 
         # Apply access control filtering (non-admins only see their teams)
         query = filter_teams_query(session, user, query)

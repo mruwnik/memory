@@ -8,11 +8,20 @@ export interface TeamProject {
   repo_path: string | null
 }
 
+export interface TeamOwner {
+  id: number
+  identifier: string
+  display_name: string | null
+  contributor_status?: string
+}
+
 export interface Team {
   id: number
   name: string
   slug: string
   description: string | null
+  owner_id: number | null
+  owner: TeamOwner | null
   tags: string[]
   discord_role_id: number | null
   discord_guild_id: number | null
@@ -42,6 +51,7 @@ export interface TeamCreate {
   name: string
   slug?: string
   description?: string
+  owner?: string | number
   tags?: string[]
   guild?: number | string
   discord_role?: number | string
@@ -54,6 +64,7 @@ export interface TeamCreate {
 export interface TeamUpdate {
   name?: string
   description?: string
+  owner?: string | number | null
   tags?: string[]
   guild?: number | string
   discord_role?: number | string
@@ -97,6 +108,7 @@ export const useTeams = () => {
       name: data.name,
       slug: data.slug,
       description: data.description,
+      owner: data.owner,
       tags: data.tags,
       guild: data.guild,
       discord_role: data.discord_role,
@@ -119,6 +131,7 @@ export const useTeams = () => {
       name: data.name ?? existing.name,
       slug: existing.slug,  // Use existing slug to identify the team
       description: data.description,
+      owner: data.owner,
       tags: data.tags,
       guild: data.guild,
       discord_role: data.discord_role,
