@@ -121,22 +121,20 @@ CONTAINER_CPU_LIMIT = int(os.environ.get("CLAUDE_CPU_LIMIT", "2"))
 LOG_DIR = Path(os.environ.get("CLAUDE_LOG_DIR", "/var/log/claude-sessions"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Tmux session name used inside containers (must match entrypoint.sh)
-# IMPORTANT: Must be alphanumeric/underscore/dash only - used in shell scripts
-TMUX_SESSION_NAME = "claude"
-assert re.match(r"^[a-zA-Z0-9_-]+$", TMUX_SESSION_NAME), (
-    f"TMUX_SESSION_NAME must be alphanumeric/underscore/dash only: {TMUX_SESSION_NAME}"
-)
-
-
 IMAGES = {
     "claude-cloud": {
         "dockerfile": "docker/claude-cloud/Dockerfile",
-        "entrypoint": "docker/claude-cloud/entrypoint.sh",
+        "sources": [
+            "docker/claude-cloud/entrypoint.sh",
+            "docker/claude-cloud/terminal_relay.py",
+        ],
     },
     "claude-cloud-happy": {
         "dockerfile": "docker/claude-cloud/Dockerfile.happy",
-        "entrypoint": "docker/claude-cloud/entrypoint.sh",
+        "sources": [
+            "docker/claude-cloud/entrypoint.sh",
+            "docker/claude-cloud/terminal_relay.py",
+        ],
     },
 }
 
@@ -210,17 +208,17 @@ class Orchestrator:
             logger.info(f"Created network: {CLAUDE_NETWORK_NAME} (ICC disabled)")
 
     def _get_source_hash(self, image: str) -> str:
-        """Compute hash of Dockerfile + entrypoint for change detection."""
+        """Compute hash of Dockerfile + source files for change detection."""
         image_name = image.split(":")[0]
 
         if image_name not in IMAGES:
             raise ValueError(f"Unknown image: {image_name}")
 
-        dockerfile = IMAGES[image_name]["dockerfile"]
-        entrypoint = IMAGES[image_name]["entrypoint"]
+        config = IMAGES[image_name]
+        files = [config["dockerfile"]] + config.get("sources", [])
 
         hasher = hashlib.sha256()
-        for filename in [dockerfile, entrypoint]:
+        for filename in files:
             filepath = INSTALL_DIR / filename
             if filepath.exists():
                 hasher.update(filepath.read_bytes())
@@ -476,198 +474,6 @@ class Orchestrator:
                 "session_id": session_id,
                 "status": "not_found",
                 "error": "No logs available - container not found and no log file exists",
-            }
-
-    def capture_screen(self, session_id: str) -> dict[str, Any]:
-        """Capture current tmux screen content for a session."""
-        container_name = f"claude-{session_id}"
-        try:
-            container = cast(Container, self.docker.containers.get(container_name))
-            if container.status != "running":
-                return {
-                    "session_id": session_id,
-                    "status": "not_running",
-                    "error": f"Container status: {container.status}",
-                }
-
-            # Run tmux capture-pane inside the container (as claude user who owns the session)
-            # Use -e to preserve ANSI escape sequences for terminal rendering
-            exit_code, output = container.exec_run(
-                ["tmux", "capture-pane", "-t", TMUX_SESSION_NAME, "-p", "-e"],
-                demux=False,
-                user="claude",
-            )
-
-            if exit_code == 0:
-                # Also get tmux window dimensions
-                cols, rows = 80, 24  # defaults
-                try:
-                    size_exit, size_output = container.exec_run(
-                        [
-                            "tmux",
-                            "display-message",
-                            "-t",
-                            TMUX_SESSION_NAME,
-                            "-p",
-                            "#{window_width} #{window_height}",
-                        ],
-                        demux=False,
-                        user="claude",
-                    )
-                    logger.debug(
-                        f"tmux size query: exit={size_exit}, output={size_output!r}"
-                    )
-                    if size_exit == 0:
-                        parts = size_output.decode().strip().split()
-                        if len(parts) == 2:
-                            cols, rows = int(parts[0]), int(parts[1])
-                            logger.debug(f"Parsed tmux size: cols={cols}, rows={rows}")
-                except Exception as e:
-                    logger.debug(f"Failed to get tmux size: {e}")
-
-                logger.info(f"capture_screen returning cols={cols}, rows={rows}")
-                return {
-                    "session_id": session_id,
-                    "status": "ok",
-                    "screen": output.decode("utf-8", errors="replace"),
-                    "cols": cols,
-                    "rows": rows,
-                }
-            else:
-                error_msg = output.decode("utf-8", errors="replace").strip()
-                # Distinguish tmux not ready from other errors
-                # Various tmux error messages when session/server doesn't exist yet:
-                # - "no server running on /tmp/tmux-..."
-                # - "session not found: claude"
-                # - "error connecting to /tmp/tmux-10000/default (No such file or directory)"
-                error_lower = error_msg.lower()
-                tmux_not_ready = (
-                    "no server running" in error_lower
-                    or "session not found" in error_lower
-                    or "error connecting to" in error_lower
-                    or "no such file or directory" in error_lower
-                )
-                if tmux_not_ready:
-                    return {
-                        "session_id": session_id,
-                        "status": "tmux_not_ready",
-                        "error": error_msg,
-                    }
-                return {
-                    "session_id": session_id,
-                    "status": "error",
-                    "error": error_msg,
-                }
-
-        except NotFound:
-            return {
-                "session_id": session_id,
-                "status": "not_found",
-                "error": "Container not found",
-            }
-
-    def send_keys(
-        self, session_id: str, keys: str, literal: bool = True
-    ) -> dict[str, Any]:
-        """Send keystrokes to a tmux session.
-
-        Args:
-            session_id: The session identifier
-            keys: The keys to send - either literal text or tmux key names
-            literal: If True, send as literal text (using -l flag).
-                     If False, send as tmux key names (e.g., "C-c", "Enter", "Up")
-        """
-        container_name = f"claude-{session_id}"
-        try:
-            container = cast(Container, self.docker.containers.get(container_name))
-            if container.status != "running":
-                return {
-                    "session_id": session_id,
-                    "status": "not_running",
-                    "error": f"Container status: {container.status}",
-                }
-
-            # Build tmux command based on literal flag
-            # Use debug level to avoid logging sensitive keystrokes (passwords, etc.)
-            logger.debug(f"send_keys: keys={keys!r}, literal={literal}")
-            if literal:
-                # Send as literal text (no key name interpretation)
-                cmd = ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, "-l", keys]
-            else:
-                # Send as tmux key name (e.g., "C-c", "Enter", "Up")
-                cmd = ["tmux", "send-keys", "-t", TMUX_SESSION_NAME, keys]
-            logger.debug(f"send_keys: cmd={cmd}")
-
-            exit_code, output = container.exec_run(cmd, demux=False, user="claude")
-
-            if exit_code == 0:
-                return {"session_id": session_id, "status": "ok"}
-            else:
-                return {
-                    "session_id": session_id,
-                    "status": "error",
-                    "error": output.decode("utf-8", errors="replace").strip(),
-                }
-
-        except NotFound:
-            return {
-                "session_id": session_id,
-                "status": "not_found",
-                "error": "Container not found",
-            }
-
-    def resize_terminal(self, session_id: str, cols: int, rows: int) -> dict[str, Any]:
-        """Resize the tmux terminal for a session.
-
-        Args:
-            session_id: The session identifier
-            cols: Number of columns
-            rows: Number of rows
-        """
-        container_name = f"claude-{session_id}"
-        try:
-            container = cast(Container, self.docker.containers.get(container_name))
-            if container.status != "running":
-                return {
-                    "session_id": session_id,
-                    "status": "not_running",
-                    "error": f"Container status: {container.status}",
-                }
-
-            # Resize tmux window to match terminal size
-            # Multiple approaches since tmux resize without attached client is tricky:
-            # 1. Set window-size to manual and aggressive-resize
-            # 2. Resize the window/pane
-            # 3. Set COLUMNS/LINES environment and send SIGWINCH
-            resize_script = f"""
-                # Enable aggressive resize and manual window sizing
-                tmux set-option -g aggressive-resize on 2>/dev/null || true
-                tmux set-option -t {TMUX_SESSION_NAME} window-size manual 2>/dev/null || true
-
-                # Try to resize the window and pane
-                tmux resize-window -t {TMUX_SESSION_NAME}:0 -x {cols} -y {rows} 2>/dev/null || true
-                tmux resize-pane -t {TMUX_SESSION_NAME}:0 -x {cols} -y {rows} 2>/dev/null || true
-
-                # Also try setting size via control mode (attach phantom client with size)
-                tmux set-option -t {TMUX_SESSION_NAME} default-size {cols}x{rows} 2>/dev/null || true
-
-                # Force refresh
-                tmux refresh-client -t {TMUX_SESSION_NAME} 2>/dev/null || true
-            """
-            container.exec_run(
-                ["bash", "-c", resize_script],
-                demux=False,
-                user="claude",
-            )
-
-            # Don't fail hard on resize errors - it's not critical
-            return {"session_id": session_id, "status": "ok"}
-
-        except NotFound:
-            return {
-                "session_id": session_id,
-                "status": "not_found",
-                "error": "Container not found",
             }
 
     # -------------------------------------------------------------------------
@@ -957,23 +763,6 @@ class Orchestrator:
 
         elif action == "logs":
             return self.get_logs(data["session_id"], tail=data.get("tail", 100))
-
-        elif action == "capture_screen":
-            return self.capture_screen(data["session_id"])
-
-        elif action == "send_keys":
-            return self.send_keys(
-                data["session_id"],
-                data.get("keys", ""),
-                literal=data.get("literal", True),
-            )
-
-        elif action == "resize_terminal":
-            return self.resize_terminal(
-                data["session_id"],
-                data.get("cols", 80),
-                data.get("rows", 24),
-            )
 
         elif action == "ping":
             return {"status": "pong"}

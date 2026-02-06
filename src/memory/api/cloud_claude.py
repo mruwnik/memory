@@ -31,6 +31,7 @@ from memory.api.orchestrator_client import (
     OrchestratorError,
     get_orchestrator_client,
 )
+from memory.api.terminal_relay_client import RelayClient
 from memory.api.tmux_session import (
     input_handler_loop,
     screen_capture_loop,
@@ -531,6 +532,10 @@ async def stream_session_logs(
     await websocket.accept()
     client = get_orchestrator_client()
 
+    # Connect to the in-container terminal relay for fast tmux interaction.
+    # Container hostname is claude-{session_id} on the shared Docker network.
+    relay = RelayClient(host=f"claude-{session_id}")
+
     try:
         await send_ws_json(websocket, "status", f"Connected to {session_id}")
 
@@ -544,10 +549,10 @@ async def stream_session_logs(
 
         # Run screen capture and input handling concurrently
         screen_task = asyncio.create_task(
-            screen_capture_loop(websocket, session_id, client, activity_state)
+            screen_capture_loop(websocket, session_id, client, activity_state, relay)
         )
         input_task = asyncio.create_task(
-            input_handler_loop(websocket, session_id, client, activity_state)
+            input_handler_loop(websocket, session_id, relay, activity_state)
         )
 
         # Wait for either task to complete (usually screen_task on container exit,
@@ -573,3 +578,5 @@ async def stream_session_logs(
             await send_ws_json(websocket, "error", str(e))
         except Exception:
             pass
+    finally:
+        await relay.close()

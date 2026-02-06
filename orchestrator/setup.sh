@@ -47,6 +47,7 @@ mkdir -p "$INSTALL_DIR/docker/claude-cloud"
 cp "$PROJECT_DIR/docker/claude-cloud/Dockerfile" "$INSTALL_DIR/docker/claude-cloud/"
 cp "$PROJECT_DIR/docker/claude-cloud/Dockerfile.happy" "$INSTALL_DIR/docker/claude-cloud/" 2>/dev/null || true
 cp "$PROJECT_DIR/docker/claude-cloud/entrypoint.sh" "$INSTALL_DIR/docker/claude-cloud/"
+cp "$PROJECT_DIR/docker/claude-cloud/terminal_relay.py" "$INSTALL_DIR/docker/claude-cloud/"
 chmod +x "$INSTALL_DIR/docker/claude-cloud/entrypoint.sh"
 echo "  Copied docker/claude-cloud/ to $INSTALL_DIR/docker/claude-cloud/"
 

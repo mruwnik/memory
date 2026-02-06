@@ -335,8 +335,33 @@ launch_claude() {
         exec "${cmd[@]}"
     fi
 
-    # Interactive mode: tmux provides PTY, docker attach connects to session
-    exec tmux new-session -s claude -- "${cmd[@]}"
+    # Clean up relay and tmux on signals
+    cleanup() {
+        log "Caught signal, shutting down..."
+        kill "$RELAY_PID" 2>/dev/null || true
+        tmux kill-session -t claude 2>/dev/null || true
+        exit 0
+    }
+    trap cleanup TERM INT
+
+    # Start tmux detached
+    tmux new-session -d -s claude -- "${cmd[@]}"
+    log "tmux session started"
+
+    # Start terminal relay (fast path for screen capture/input)
+    python3 /opt/terminal_relay.py &
+    RELAY_PID=$!
+    log "Terminal relay started (PID $RELAY_PID)"
+
+    # Attach to tmux - blocks until session ends.
+    # Interactive (docker run -it): user sees and interacts with tmux directly.
+    # Orchestrated (API): relay handles all I/O, attach just waits for exit.
+    tmux attach-session -t claude || true
+    log "tmux session ended"
+
+    # Clean up relay
+    kill "$RELAY_PID" 2>/dev/null || true
+    wait "$RELAY_PID" 2>/dev/null || true
 }
 
 # -----------------------------------------------------------------------------

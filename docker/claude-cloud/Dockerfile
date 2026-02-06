@@ -83,6 +83,7 @@ WORKDIR /
 
 COPY docker/claude-cloud/entrypoint.sh /entrypoint.sh
 COPY docker/claude-cloud/verify-setup.sh /verify-setup.sh
+COPY docker/claude-cloud/terminal_relay.py /opt/terminal_relay.py
 RUN chmod 755 /entrypoint.sh /verify-setup.sh
 
 # Entrypoint runs as root to switch between users

@@ -196,7 +196,7 @@ run_session() {
 
     # Build docker run command
     echo -e "${GREEN}Running session...${NC}"
-    local docker_cmd="docker run --rm -it"
+    local docker_cmd="docker run --rm -it -p 127.0.0.1:9100:9100"
 
     # Add custom command if specified
     if [[ -n "$custom_cmd" ]]; then
