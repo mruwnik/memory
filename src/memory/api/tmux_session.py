@@ -170,6 +170,7 @@ async def screen_capture_loop(
             screen = str(result["screen"])
             cols = result.get("cols", 80)
             rows = result.get("rows", 24)
+
             # Only send if screen changed (avoid noise)
             if screen and screen != last_screen:
                 await send_ws_json(websocket, "screen", screen, cols=cols, rows=rows)

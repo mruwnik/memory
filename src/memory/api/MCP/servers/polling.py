@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import make_session
+from memory.common.scopes import SCOPE_POLLING, SCOPE_POLLING_WRITE
 from memory.common.db.models import (
     AvailabilityPoll,
     PollStatus,
@@ -48,7 +49,7 @@ def parse_datetime(s: str | None) -> datetime | None:
 
 
 @polling_mcp.tool()
-@visible_when(require_scopes("polling"))
+@visible_when(require_scopes(SCOPE_POLLING_WRITE))
 async def upsert_poll(
     poll_id: int | None = None,
     title: str | None = None,
@@ -156,7 +157,7 @@ async def upsert_poll(
 
 
 @polling_mcp.tool()
-@visible_when(require_scopes("polling"))
+@visible_when(require_scopes(SCOPE_POLLING))
 async def list_polls(
     status: Literal["open", "closed", "finalized", "cancelled"] | None = None,
     limit: int = 50,
@@ -191,7 +192,7 @@ async def list_polls(
 
 
 @polling_mcp.tool()
-@visible_when(require_scopes("polling"))
+@visible_when(require_scopes(SCOPE_POLLING_WRITE))
 async def delete_poll(poll_id: int) -> dict:
     """
     Delete an availability poll permanently.
@@ -223,7 +224,7 @@ async def delete_poll(poll_id: int) -> dict:
 
 
 @polling_mcp.tool()
-@visible_when(require_scopes("polling"))
+@visible_when(require_scopes(SCOPE_POLLING))
 async def fetch(poll_id: int | None = None, slug: str | None = None) -> dict:
     """
     Get poll details and aggregated results by ID or slug.

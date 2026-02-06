@@ -19,6 +19,7 @@ from memory.common.db.models import (
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
+from memory.common.scopes import SCOPE_ADMIN
 
 T = TypeVar("T", bound=Base)
 
@@ -315,7 +316,7 @@ def require_scope(scope: str):
 
     def checker(user: User = Depends(get_current_user)) -> User:
         user_scopes = user.scopes or []
-        if "*" in user_scopes or scope in user_scopes:
+        if SCOPE_ADMIN in user_scopes or scope in user_scopes:
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
@@ -403,7 +404,7 @@ def has_admin_scope(user: User) -> bool:
     Admin users have either '*' (full access) or 'admin' scope.
     """
     user_scopes = user.scopes or []
-    return "*" in user_scopes or "admin" in user_scopes
+    return SCOPE_ADMIN in user_scopes
 
 
 def resolve_user_filter(

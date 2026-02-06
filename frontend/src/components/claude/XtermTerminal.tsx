@@ -51,15 +51,13 @@ interface XtermTerminalProps {
   wsRef: React.RefObject<WebSocket | null>
   screenContent: string
   connected: boolean
-  tmuxSize: { cols: number; rows: number } | null
 }
 
-export default function XtermTerminal({ wsRef, screenContent, connected, tmuxSize }: XtermTerminalProps) {
+export default function XtermTerminal({ wsRef, screenContent, connected }: XtermTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const lastScreenRef = useRef<string>('')
-  const hasTmuxSizeRef = useRef<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   // Send input to WebSocket
@@ -101,7 +99,7 @@ export default function XtermTerminal({ wsRef, screenContent, connected, tmuxSiz
           selectionBackground: '#334155', // slate-700
         },
         convertEol: true,
-        scrollback: 1000,
+        scrollback: 0,
       })
 
       const fitAddon = new FitAddon()
@@ -121,13 +119,10 @@ export default function XtermTerminal({ wsRef, screenContent, connected, tmuxSiz
       xtermRef.current = term
       fitAddonRef.current = fitAddon
 
-      // Resize handler - only fit if we don't have tmux-reported size
+      // Resize handler - fit terminal to container and tell tmux to match
       const handleResize = () => {
-        if (!hasTmuxSizeRef.current) {
-          fitAddon.fit()
-          sendResize(term.cols, term.rows)
-        }
-        // If we have tmux size, don't resize - tmux controls the size
+        fitAddon.fit()
+        sendResize(term.cols, term.rows)
       }
       window.addEventListener('resize', handleResize)
 
@@ -147,37 +142,17 @@ export default function XtermTerminal({ wsRef, screenContent, connected, tmuxSiz
   }, [sendInput, sendResize])
 
   // Fit terminal when container might have resized, and send size on connect
-  // But only if we don't have tmux-reported size yet
   useEffect(() => {
-    if (fitAddonRef.current && xtermRef.current && !hasTmuxSizeRef.current) {
+    if (fitAddonRef.current && xtermRef.current) {
       // Small delay to ensure container has finished layout
       setTimeout(() => {
-        if (!hasTmuxSizeRef.current) {
-          fitAddonRef.current?.fit()
-          if (connected && xtermRef.current) {
-            sendResize(xtermRef.current.cols, xtermRef.current.rows)
-          }
+        fitAddonRef.current?.fit()
+        if (connected && xtermRef.current) {
+          sendResize(xtermRef.current.cols, xtermRef.current.rows)
         }
       }, 10)
     }
   }, [connected, sendResize])
-
-  // Resize xterm.js to match tmux dimensions when reported
-  useEffect(() => {
-    if (!tmuxSize) return
-
-    // Track that we've received tmux size (prevents auto-fit from overriding)
-    hasTmuxSizeRef.current = true
-
-    if (!xtermRef.current) return
-
-    const term = xtermRef.current
-    // Only resize if different from current size
-    if (term.cols !== tmuxSize.cols || term.rows !== tmuxSize.rows) {
-      console.log(`Resizing xterm to match tmux: ${tmuxSize.cols}x${tmuxSize.rows} (was ${term.cols}x${term.rows})`)
-      term.resize(tmuxSize.cols, tmuxSize.rows)
-    }
-  }, [tmuxSize])
 
   // Update terminal content when screen changes
   useEffect(() => {
@@ -188,12 +163,6 @@ export default function XtermTerminal({ wsRef, screenContent, connected, tmuxSiz
     lastScreenRef.current = screenContent
 
     const term = xtermRef.current
-
-    // Clear and write new content.
-    // We use reset() to clear both screen and scrollback because we're displaying
-    // tmux's captured screen state (which includes its own scrollback). Preserving
-    // xterm's scrollback would show duplicate/stale content. Users who need to
-    // scroll back can use tmux's scrollback (Ctrl+B, [).
     term.reset()
     term.write(screenContent)
   }, [screenContent])

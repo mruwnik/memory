@@ -273,7 +273,6 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
     environment:
       <<: *worker-env
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
     volumes:

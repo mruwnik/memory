@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import has_admin_scope
+from memory.common.scopes import SCOPE_ORGANIZER, SCOPE_ORGANIZER_WRITE
 from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent, Task
@@ -24,7 +25,7 @@ organizer_mcp = FastMCP("org")
 
 
 @organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(CalendarEvent))
+@visible_when(require_scopes(SCOPE_ORGANIZER), has_items(CalendarEvent))
 async def upcoming(
     start_date: str | None = None,
     end_date: str | None = None,
@@ -64,7 +65,7 @@ async def upcoming(
 
 
 @organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(Task))
+@visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Task))
 async def list_tasks(
     status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
     priority: Literal["low", "medium", "high", "urgent"] | None = None,
@@ -101,7 +102,7 @@ async def list_tasks(
 
 
 @organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(Task))
+@visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Task))
 async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
     """
     Get a specific task by ID.
@@ -145,7 +146,7 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
 
 
 @organizer_mcp.tool()
-@visible_when(require_scopes("organizer"))
+@visible_when(require_scopes(SCOPE_ORGANIZER_WRITE))
 async def create_task(
     title: str,
     due_date: str | None = None,
@@ -198,7 +199,7 @@ async def create_task(
 
 
 @organizer_mcp.tool()
-@visible_when(require_scopes("organizer"), has_items(Task))
+@visible_when(require_scopes(SCOPE_ORGANIZER_WRITE), has_items(Task))
 async def update_task(
     task_id: int,
     title: str | None = None,

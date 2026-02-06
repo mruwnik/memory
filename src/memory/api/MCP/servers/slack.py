@@ -9,6 +9,7 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
+from memory.common.scopes import SCOPE_SLACK, SCOPE_SLACK_WRITE
 from memory.common.db.models import UserSession
 from memory.common.db.models.slack import (
     SlackChannel,
@@ -247,7 +248,7 @@ def _get_history_data(
 
 
 @slack_mcp.tool()
-@visible_when(require_scopes("slack"), has_slack_workspaces)
+@visible_when(require_scopes(SCOPE_SLACK_WRITE), has_slack_workspaces)
 async def send(
     message: str,
     channel: str | None = None,
@@ -317,7 +318,7 @@ async def send(
 
 
 @slack_mcp.tool()
-@visible_when(require_scopes("slack"), has_slack_workspaces)
+@visible_when(require_scopes(SCOPE_SLACK_WRITE), has_slack_workspaces)
 async def add_reaction(
     channel: str,
     message_ts: str,
@@ -370,7 +371,7 @@ async def add_reaction(
 
 
 @slack_mcp.tool()
-@visible_when(require_scopes("slack"), has_slack_workspaces)
+@visible_when(require_scopes(SCOPE_SLACK), has_slack_workspaces)
 async def list_channels(
     workspace_id: str | None = None,
     include_private: bool = True,
@@ -428,7 +429,7 @@ async def list_channels(
 
 
 @slack_mcp.tool()
-@visible_when(require_scopes("slack"), has_slack_workspaces)
+@visible_when(require_scopes(SCOPE_SLACK), has_slack_workspaces)
 async def get_channel_history(
     channel: str,
     workspace_id: str | None = None,

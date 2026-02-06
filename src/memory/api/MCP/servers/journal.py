@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from memory.api.MCP.access import get_mcp_current_user, get_project_roles_by_user_id
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import has_admin_scope, user_can_access
+from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import JournalEntry, SourceItem
 from memory.common.db.models.polls import AvailabilityPoll
@@ -64,7 +65,7 @@ def get_target_and_project_id(
 
 
 @journal_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_WRITE))
 async def add(
     target_id: int,
     content: str,
@@ -124,7 +125,7 @@ async def add(
 
 
 @journal_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 async def list_all(
     target_id: int,
     target_type: TargetType = "source_item",

@@ -353,10 +353,12 @@ launch_claude() {
     RELAY_PID=$!
     log "Terminal relay started (PID $RELAY_PID)"
 
-    # Attach to tmux - blocks until session ends.
-    # Interactive (docker run -it): user sees and interacts with tmux directly.
-    # Orchestrated (API): relay handles all I/O, attach just waits for exit.
-    tmux attach-session -t claude || true
+    # Wait for tmux session to end. No client attached so the relay has
+    # full control over window sizing (attach would create a client whose
+    # PTY constrains resize-window).
+    while tmux has-session -t claude 2>/dev/null; do
+        sleep 1
+    done
     log "tmux session ended"
 
     # Clean up relay

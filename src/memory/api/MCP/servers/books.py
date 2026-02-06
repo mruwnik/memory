@@ -11,6 +11,7 @@ from sqlalchemy.orm import joinedload
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.db.connection import make_session
+from memory.common.scopes import SCOPE_READ
 from memory.common.db.models import Book, BookSection, BookSectionPayload
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 
@@ -26,7 +27,7 @@ books_mcp = FastMCP("memory-books")
 
 
 @books_mcp.tool()
-@visible_when(require_scopes("read"), has_items(Book))
+@visible_when(require_scopes(SCOPE_READ), has_items(Book))
 async def list_books(
     sections: bool = False,
     title: str | None = None,
@@ -72,7 +73,7 @@ async def list_books(
 
 
 @books_mcp.tool()
-@visible_when(require_scopes("read"), has_items(Book))
+@visible_when(require_scopes(SCOPE_READ), has_items(Book))
 def fetch(
     book_id: int,
     sections: list[int] = [],

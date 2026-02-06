@@ -24,6 +24,7 @@ from sqlalchemy import literal, select
 from sqlalchemy.orm import Query
 
 from memory.common.db.models.sources import Project, Team, project_teams, team_members
+from memory.common.scopes import SCOPE_ADMIN
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -143,7 +144,7 @@ def has_admin_scope(user: UserLike) -> bool:
     scopes = getattr(user, "scopes", None)
     if scopes is None:
         scopes = []
-    return "*" in scopes or "admin" in scopes
+    return SCOPE_ADMIN in scopes
 
 
 def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User") -> dict[int, str]:

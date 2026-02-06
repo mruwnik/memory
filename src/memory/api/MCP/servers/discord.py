@@ -13,6 +13,12 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import discord as discord_client
+from memory.common.scopes import (
+    SCOPE_DISCORD,
+    SCOPE_DISCORD_ADMIN,
+    SCOPE_DISCORD_ADMIN_WRITE,
+    SCOPE_DISCORD_WRITE,
+)
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     DiscordBot,
@@ -132,7 +138,7 @@ def resolve_guild_id(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_WRITE), has_discord_bots)
 async def send_message(
     message: str,
     channel_id: int | str | None = None,
@@ -251,7 +257,7 @@ async def send_message(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def channel_history(
     channel_id: int | str | None = None,
     channel_name: str | None = None,
@@ -309,7 +315,7 @@ async def channel_history(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_channels(
     server: int | str | None = None,
     include_dms: bool = False,
@@ -329,7 +335,7 @@ async def list_channels(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_roles(
     guild: int | str | None = None,
     bot_id: int | None = None,
@@ -358,7 +364,7 @@ async def list_roles(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def list_role_members(
     role: int | str,
     guild: int | str | None = None,
@@ -392,7 +398,7 @@ async def list_role_members(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def list_categories(
     guild: int | str | None = None,
     bot_id: int | None = None,
@@ -504,7 +510,7 @@ def resolve_user(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def role_add_user(
     role: int | str,
     user: int | str,
@@ -541,7 +547,7 @@ async def role_add_user(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def role_remove_user(
     role: int | str,
     user: int | str,
@@ -578,7 +584,7 @@ async def role_remove_user(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def create_role(
     name: str,
     guild: int | str | None = None,
@@ -661,7 +667,7 @@ def resolve_channel_id(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def perms(
     channel_id: int | str | None = None,
     channel_name: str | None = None,
@@ -694,7 +700,7 @@ async def perms(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def set_perms(
     channel: int | str | None = None,
     role: int | str | None = None,
@@ -759,7 +765,7 @@ async def set_perms(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def del_perms(
     channel: int | str,
     role: int | str | None = None,
@@ -1039,7 +1045,7 @@ async def attach_teams_to_channel(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def upsert_channel(
     name: str,
     guild: int | str | None = None,
@@ -1165,7 +1171,7 @@ async def upsert_channel(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def upsert_category(
     name: str,
     guild: int | str | None = None,
@@ -1239,7 +1245,7 @@ async def upsert_category(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def delete_channel(
     channel_id: int | str | None = None,
     channel_name: str | None = None,
@@ -1285,7 +1291,7 @@ async def delete_channel(
 
 
 @discord_mcp.tool()
-@visible_when(require_scopes("discord-admin"), has_discord_bots)
+@visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def delete_category(
     category_id: int | str | None = None,
     category_name: str | None = None,

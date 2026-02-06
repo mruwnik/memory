@@ -38,6 +38,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
 from memory.common.db.connection import DBSession, make_session
+from memory.common.scopes import SCOPE_ADMIN
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def require_scopes(*scopes: str) -> VisibilityCheckerFunc:
     async def checker(user_info: dict, session: DBSession | None) -> bool:
         user_scopes = user_info.get("scopes", [])
         # Wildcard grants access to everything
-        if "*" in user_scopes:
+        if SCOPE_ADMIN in user_scopes:
             return True
         return any(scope in user_scopes for scope in scopes)
 

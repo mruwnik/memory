@@ -24,13 +24,13 @@ from memory.api.MCP.servers.teams import (
     _discord_remove_role,
     _github_add_member,
     _github_remove_member,
+    ensure_discord_role,
+    ensure_github_team,
     fetch,
     find_or_create_person,
     list_all,
     make_slug,
     project_list_access,
-    sync_from_discord,
-    sync_from_github,
     team_add_member,
     team_remove_member,
     upsert,
@@ -1231,71 +1231,51 @@ async def test_list_all_filter_by_tags_match_any(db_session, admin_session):
 
 
 # =============================================================================
-# sync_from_discord tests
+# ensure_discord_role tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_imports_members(db_session, admin_session, discord_bot):
-    """Test sync_from_discord imports Discord role members to team."""
+async def test_ensure_discord_role_syncs_members(db_session, admin_session, discord_bot):
+    """Test ensure_discord_role adds internal members to Discord role."""
 
-    team = Team(name="Discord Import", slug="discord-import")
-    db_session.add(team)
-    db_session.commit()
-
-    mock_members = {
-        "members": [
-            {"id": "111", "username": "user1", "display_name": "User One"},
-            {"id": "222", "username": "user2", "display_name": "User Two"},
-        ]
-    }
-
-    with (
-        mcp_auth_context(admin_session.id),
-        patch("memory.common.discord.list_role_members", return_value=mock_members),
-    ):
-        result = await sync_from_discord(
-            db_session, "discord-import", guild_id=123, role_id=456
-        )
-
-    assert result["imported"] == 2
-    assert len(result["created_people"]) == 2
-
-
-@pytest.mark.asyncio
-async def test_sync_from_discord_links_existing_discord_user(db_session, admin_session, discord_bot):
-    """Test sync_from_discord links existing DiscordUser to team."""
-
-    team = Team(name="Discord Link", slug="discord-link")
-    person = Person(identifier="existing_discord", display_name="Existing Discord")
+    team = Team(
+        name="Discord Sync",
+        slug="discord-sync",
+        discord_guild_id=123,
+        discord_role_id=456,
+    )
+    person = Person(identifier="discord_sync_person", display_name="Discord Sync Person")
     db_session.add_all([team, person])
     db_session.flush()
 
-    discord_user = DiscordUser(id=333, username="existing", person_id=person.id)
+    discord_user = DiscordUser(id=111, username="syncuser", person_id=person.id)
     db_session.add(discord_user)
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=person.id, role="member")
+    )
     db_session.commit()
 
-    mock_members = {
-        "members": [
-            {"id": "333", "username": "existing", "display_name": "Existing"},
-        ]
-    }
+    # Discord role has no members yet -> internal member should be added
+    mock_role_members = {"members": []}
 
     with (
         mcp_auth_context(admin_session.id),
-        patch("memory.common.discord.list_role_members", return_value=mock_members),
+        patch("memory.common.discord.list_roles", return_value={"roles": [{"id": "456", "name": "Role"}]}),
+        patch("memory.common.discord.list_role_members", return_value=mock_role_members),
+        patch("memory.common.discord.add_role_member", return_value={"success": True}),
     ):
-        result = await sync_from_discord(
-            db_session, "discord-link", guild_id=123, role_id=456
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
         )
 
-    assert result["imported"] == 1
-    assert len(result["created_people"]) == 0  # No new person created
+    assert sync_info.get("members_added", 0) >= 1
+    assert not warnings
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_handles_failure(db_session, admin_session, discord_bot):
-    """Test sync_from_discord handles API failure gracefully."""
+async def test_ensure_discord_role_handles_failure(db_session, admin_session, discord_bot):
+    """Test ensure_discord_role handles API failure gracefully."""
 
     team = Team(name="Discord Fail", slug="discord-fail")
     db_session.add(team)
@@ -1303,65 +1283,98 @@ async def test_sync_from_discord_handles_failure(db_session, admin_session, disc
 
     with (
         mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles", return_value={"roles": [{"id": "456", "name": "Role"}]}),
         patch("memory.common.discord.list_role_members", side_effect=Exception("API Error")),
     ):
-        result = await sync_from_discord(
-            db_session, "discord-fail", guild_id=123, role_id=456
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
         )
 
-    assert result["imported"] == 0
-    assert result["created_people"] == []
+    assert any("Discord membership sync failed" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_ensure_discord_role_no_sync_when_disabled(db_session, admin_session, discord_bot):
+    """Test ensure_discord_role skips membership sync when auto_sync_discord=False."""
+
+    team = Team(name="Discord No Sync", slug="discord-no-sync")
+    db_session.add(team)
+    db_session.commit()
+
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles", return_value={"roles": [{"id": "456", "name": "Role"}]}),
+        patch("memory.common.discord.list_role_members") as mock_list,
+    ):
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=False
+        )
+
+    # Should not call list_role_members since sync is disabled
+    mock_list.assert_not_called()
+    assert "members_added" not in sync_info
 
 
 # =============================================================================
-# sync_from_github tests
+# ensure_github_team tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_imports_members(db_session, admin_session):
-    """Test sync_from_github imports GitHub team members."""
+async def test_ensure_github_team_syncs_members(db_session, admin_session):
+    """Test ensure_github_team adds internal members to GitHub team."""
 
-    team = Team(name="GitHub Import", slug="github-import")
-    db_session.add(team)
+    team = Team(name="GitHub Sync", slug="github-sync")
+    person = Person(
+        identifier="gh_sync_person",
+        display_name="GH Sync Person",
+        contact_info={"github": "ghsyncuser"},
+    )
+    db_session.add_all([team, person])
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=person.id, role="member")
+    )
     db_session.commit()
 
-    mock_members = [
-        {"login": "ghuser1"},
-        {"login": "ghuser2"},
-    ]
     mock_client = MagicMock()
-    mock_client.get_team_members.return_value = mock_members
+    mock_client.fetch_team.return_value = {"github_id": 999, "slug": "github-sync"}
+    mock_client.get_team_members.return_value = []  # No external members
+    mock_client.add_team_member.return_value = {"success": True}
 
     with (
         mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
     ):
-        result = await sync_from_github(
-            db_session, "github-import", org="myorg", github_team_slug="myteam"
+        sync_info, warnings = await ensure_github_team(
+            db_session, team.id, "GitHub Sync", "myorg", "github-sync", auto_sync_github=True
         )
 
-    assert result["imported"] == 2
-    assert len(result["created_people"]) == 2
+    assert sync_info.get("members_added", 0) >= 1
+    assert not warnings
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_no_client(db_session, admin_session):
-    """Test sync_from_github returns empty when no GitHub client available."""
+async def test_ensure_github_team_no_client(db_session, admin_session):
+    """Test ensure_github_team warns when no GitHub client available."""
 
     team = Team(name="GitHub No Client", slug="github-no-client")
     db_session.add(team)
     db_session.commit()
 
+    mock_client = MagicMock()
+    mock_client.fetch_team.return_value = {"github_id": 999, "slug": "github-no-client"}
+
     with (
         mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=None),
+        patch("memory.api.MCP.servers.teams.fetch_or_create_github_team", return_value={"id": 999, "slug": "github-no-client", "created": False}),
     ):
-        result = await sync_from_github(
-            db_session, "github-no-client", org="myorg", github_team_slug="myteam"
+        sync_info, warnings = await ensure_github_team(
+            db_session, team.id, "GitHub No Client", "myorg", "github-no-client", auto_sync_github=True
         )
 
-    assert result["imported"] == 0
+    assert any("no GitHub client" in w for w in warnings)
 
 
 # =============================================================================
@@ -1872,55 +1885,58 @@ def test_person_sync_info_from_person(db_session):
 
 
 @pytest.mark.asyncio
-async def test_sync_from_discord_requeires_team_after_await(db_session, admin_session, discord_bot):
-    """Test sync_from_discord re-queries team after async operation."""
+async def test_ensure_discord_role_requeries_team_after_await(db_session, admin_session, discord_bot):
+    """Test ensure_discord_role re-queries team by ID after async operation."""
 
     team = Team(name="Requery Test", slug="requery-test")
     db_session.add(team)
     db_session.commit()
+    team_id = team.id
 
     # Clear the team from session to simulate detachment
     db_session.expunge(team)
 
-    mock_members = {"members": [{"id": "111", "username": "user1", "display_name": "User One"}]}
+    mock_role_members = {"members": []}
 
     with (
         mcp_auth_context(admin_session.id),
-        patch("memory.common.discord.list_role_members", return_value=mock_members),
+        patch("memory.common.discord.list_roles", return_value={"roles": [{"id": "456", "name": "Role"}]}),
+        patch("memory.common.discord.list_role_members", return_value=mock_role_members),
     ):
-        # Should not raise DetachedInstanceError
-        result = await sync_from_discord(
-            db_session, "requery-test", guild_id=123, role_id=456
+        # Should not raise DetachedInstanceError - uses team_id to re-query
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team_id, guild=123, discord_role=456, auto_sync_discord=True
         )
 
-    assert result["imported"] == 1
+    assert not any("not found" in w for w in warnings)
 
 
 @pytest.mark.asyncio
-async def test_sync_from_github_requeires_team_after_await(db_session, admin_session):
-    """Test sync_from_github re-queries team after async operation."""
+async def test_ensure_github_team_requeries_team_after_await(db_session, admin_session):
+    """Test ensure_github_team re-queries team by ID after async operation."""
 
     team = Team(name="GH Requery Test", slug="gh-requery-test")
     db_session.add(team)
     db_session.commit()
+    team_id = team.id
 
     # Clear the team from session to simulate detachment
     db_session.expunge(team)
 
-    mock_members = [{"login": "ghuser1"}]
     mock_client = MagicMock()
-    mock_client.get_team_members.return_value = mock_members
+    mock_client.fetch_team.return_value = {"github_id": 999, "slug": "gh-requery-test"}
+    mock_client.get_team_members.return_value = []
 
     with (
         mcp_auth_context(admin_session.id),
         patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
     ):
-        # Should not raise DetachedInstanceError
-        result = await sync_from_github(
-            db_session, "gh-requery-test", org="myorg", github_team_slug="myteam"
+        # Should not raise DetachedInstanceError - uses team_id to re-query
+        sync_info, warnings = await ensure_github_team(
+            db_session, team_id, "GH Requery Test", "myorg", "gh-requery-test", auto_sync_github=True
         )
 
-    assert result["imported"] == 1
+    assert not any("not found" in w for w in warnings)
 
 
 def test_nested_make_session_shares_underlying_session(db_session):

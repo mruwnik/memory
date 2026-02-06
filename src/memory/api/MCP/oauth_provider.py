@@ -43,9 +43,11 @@ def token_id(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
 
-ALLOWED_SCOPES = ["read", "write", "claudeai"]
-BASE_SCOPES = ["read"]
-RW_SCOPES = ["read", "write"]
+from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
+
+ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
+BASE_SCOPES = [SCOPE_READ]
+RW_SCOPES = [SCOPE_READ, SCOPE_WRITE]
 
 
 # Token configuration constants
@@ -194,7 +196,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 # User's configured scopes define which MCP tools they can access
                 user_scopes = user_session.user.scopes if user_session.user else []
                 # Also include OAuth scopes (read, write) for FastMCP endpoint auth
-                scopes: list[str] = list(set(user_scopes or []) | {"read", "write"})
+                scopes: list[str] = list(set(user_scopes or []) | {SCOPE_READ, SCOPE_WRITE})
 
                 # Get client_id from oauth_state if available
                 if user_session.oauth_state_id and user_session.oauth_state:
@@ -208,7 +210,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 return FastMCPAccessToken(
                     token=token,
                     client_id=client_id,
-                    scopes=scopes or ["read"],
+                    scopes=scopes or [SCOPE_READ],
                 )
 
             # Try as API key (bot or user)
@@ -219,7 +221,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     f"User {user.name} (id={user.id}) authenticated via API key"
                 )
                 # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
+                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
                 # Handle API key usage (update last_used_at, delete one-time keys)
                 handle_api_key_use(api_key_record, session)
                 return FastMCPAccessToken(
@@ -460,7 +462,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     f"User {user.name} (id={user.id}) authenticated via API key"
                 )
                 # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or ["read"]
+                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
                 # Handle API key usage (update last_used_at, delete one-time keys)
                 handle_api_key_use(api_key_record, session)
                 return AccessToken(

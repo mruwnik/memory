@@ -36,18 +36,19 @@ from memory.common.markets import (
     get_cached_search,
     set_cached_search,
 )
-from memory.common.scopes import has_scope
+from memory.common.scopes import SCOPE_FORECAST, SCOPE_FORECAST_WRITE, has_scope
 
 # Short name to stay under 20 char limit for full server name
 forecast_mcp = FastMCP("memory-forecast")
 
 
-def _check_forecast_scope() -> bool:
+def _check_forecast_scope(write: bool = False) -> bool:
     """Check if the current user has the forecast scope."""
     access_token = get_access_token()
     if not access_token:
         return False
-    return has_scope(access_token.scopes, "forecast")
+    scope = SCOPE_FORECAST_WRITE if write else SCOPE_FORECAST
+    return has_scope(access_token.scopes, scope)
 
 
 def _get_user_session_from_token(session) -> "UserSession | None":
@@ -108,8 +109,8 @@ async def clear_cache() -> dict:
     Returns:
         Dict confirming caches were cleared.
     """
-    if not _check_forecast_scope():
-        return {"error": "Missing 'forecast' scope"}
+    if not _check_forecast_scope(write=True):
+        return {"error": "Missing 'forecast:write' scope"}
 
     return clear_all_caches()
 
@@ -431,8 +432,8 @@ async def watch_market(
     Returns:
         Dict with status and market info.
     """
-    if not _check_forecast_scope():
-        return {"error": "Missing 'forecast' scope"}
+    if not _check_forecast_scope(write=True):
+        return {"error": "Missing 'forecast:write' scope"}
 
     # Get user info first
     with make_session() as session:
@@ -606,8 +607,8 @@ async def unwatch_market(
     Returns:
         Dict with status of the removal.
     """
-    if not _check_forecast_scope():
-        return {"error": "Missing 'forecast' scope"}
+    if not _check_forecast_scope(write=True):
+        return {"error": "Missing 'forecast:write' scope"}
 
     with make_session() as session:
         user_session = _get_user_session_from_token(session)

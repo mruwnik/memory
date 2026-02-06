@@ -71,6 +71,9 @@ class RelayClient:
     async def resize(self, cols: int, rows: int) -> dict[str, Any]:
         return await self._request({"action": "resize", "cols": cols, "rows": rows})
 
+    async def capture_history(self, start: int = -1000, end: int = -1) -> dict[str, Any]:
+        return await self._request({"action": "capture_history", "start": start, "end": end})
+
     async def ping(self) -> bool:
         try:
             result = await self._request({"action": "ping"})

@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
+from memory.common.scopes import SCOPE_GITHUB, SCOPE_GITHUB_WRITE
 from memory.common.db.models import UserSession
 from memory.common.db.models.sources import GithubAccount
 
@@ -73,7 +74,7 @@ GithubEntityType = Literal["issue", "milestone", "project", "team"]
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"))
+@visible_when(require_scopes(SCOPE_GITHUB))
 async def list_entities(
     type: GithubEntityType,
     repo: str | None = None,
@@ -171,7 +172,7 @@ async def list_entities(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"))
+@visible_when(require_scopes(SCOPE_GITHUB))
 async def fetch(
     type: GithubEntityType,
     repo: str | None = None,
@@ -230,7 +231,7 @@ async def fetch(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_github_account)
+@visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def upsert_issue(
     repo: str,
     title: str,
@@ -366,7 +367,7 @@ async def upsert_issue(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_github_account)
+@visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def add_team_member(
     org: str,
     team_slug: str,
@@ -412,7 +413,7 @@ async def add_team_member(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_github_account)
+@visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def remove_team_member(
     org: str,
     team_slug: str,
@@ -456,7 +457,7 @@ async def remove_team_member(
 
 
 @github_mcp.tool()
-@visible_when(require_scopes("github"), has_github_account)
+@visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def comment_on_issue(
     repo: str,
     number: int,

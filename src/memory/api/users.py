@@ -11,9 +11,8 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, Person, User
 from memory.common.db.models.users import hash_password, verify_password
 from memory.common.scopes import (
-    ADMIN_SCOPE,
+    SCOPE_ADMIN,
     VALID_SCOPES,
-    WILDCARD_SCOPE,
     validate_scopes,
 )
 from memory.api.auth import get_current_user, require_scope
@@ -88,7 +87,7 @@ def user_to_response(user: User) -> UserResponse:
 def has_admin_scope(user: User) -> bool:
     """Check if user has admin scope."""
     user_scopes = user.scopes or []
-    return "*" in user_scopes or ADMIN_SCOPE in user_scopes
+    return SCOPE_ADMIN in user_scopes
 
 
 def link_person_to_user(db: Session, user: User) -> Person | None:
@@ -120,7 +119,7 @@ def link_person_to_user(db: Session, user: User) -> Person | None:
 
 @router.get("")
 def list_users(
-    user: User = require_scope(ADMIN_SCOPE),
+    user: User = require_scope(SCOPE_ADMIN),
     db: Session = Depends(get_session),
 ) -> list[UserResponse]:
     """List all users. Requires admin:users scope."""
@@ -131,7 +130,7 @@ def list_users(
 @router.post("")
 def create_user(
     data: UserCreate,
-    user: User = require_scope(ADMIN_SCOPE),
+    user: User = require_scope(SCOPE_ADMIN),
     db: Session = Depends(get_session),
 ) -> UserResponse:
     """Create a new user. Requires admin:users scope."""
@@ -150,7 +149,7 @@ def create_user(
 
     # Prevent scope escalation: only users with * scope can grant * scope
     user_scopes = user.scopes or []
-    if WILDCARD_SCOPE in data.scopes and WILDCARD_SCOPE not in user_scopes:
+    if SCOPE_ADMIN in data.scopes and SCOPE_ADMIN not in user_scopes:
         raise HTTPException(
             status_code=403,
             detail="Only users with full admin (*) scope can grant full admin scope",
@@ -202,7 +201,7 @@ class ScopeResponse(BaseModel):
 
 @router.get("/scopes")
 def list_available_scopes(
-    user: User = require_scope(ADMIN_SCOPE),
+    user: User = require_scope(SCOPE_ADMIN),
 ) -> list[ScopeResponse]:
     """List all available scopes. Requires admin:users scope."""
     return [ScopeResponse(**scope) for scope in VALID_SCOPES]
@@ -268,7 +267,7 @@ def update_user(
 
         # Prevent scope escalation: only users with * scope can grant * scope
         user_scopes = user.scopes or []
-        if WILDCARD_SCOPE in updates.scopes and WILDCARD_SCOPE not in user_scopes:
+        if SCOPE_ADMIN in updates.scopes and SCOPE_ADMIN not in user_scopes:
             raise HTTPException(
                 status_code=403,
                 detail="Only users with full admin (*) scope can grant full admin scope",
@@ -285,7 +284,7 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    user: User = require_scope(ADMIN_SCOPE),
+    user: User = require_scope(SCOPE_ADMIN),
     db: Session = Depends(get_session),
 ):
     """Delete a user. Requires admin:users scope."""
@@ -332,7 +331,7 @@ def change_password(
 def reset_password(
     user_id: int,
     data: PasswordReset,
-    user: User = require_scope(ADMIN_SCOPE),
+    user: User = require_scope(SCOPE_ADMIN),
     db: Session = Depends(get_session),
 ):
     """Reset a user's password (admin only). Does not require current password."""

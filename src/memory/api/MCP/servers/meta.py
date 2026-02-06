@@ -10,6 +10,7 @@ from fastmcp.server.dependencies import get_access_token
 from sqlalchemy import nullslast
 
 from memory.common import qdrant
+from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -51,7 +52,7 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
     """
     # Combine OAuth scopes with user's MCP tool scopes
     user_scopes = list(user_session.user.scopes or [])
-    scopes = list(set(user_scopes) | {"read", "write"})
+    scopes = list(set(user_scopes) | {SCOPE_READ, SCOPE_WRITE})
 
     one_time_key = APIKey.create(
         user_id=user_session.user.id,

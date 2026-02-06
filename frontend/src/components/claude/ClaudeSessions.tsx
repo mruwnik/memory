@@ -57,7 +57,6 @@ const ClaudeSessions = () => {
 
   // Screen streaming state
   const [screenContent, setScreenContent] = useState<string>('')
-  const [tmuxSize, setTmuxSize] = useState<{ cols: number; rows: number } | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -180,7 +179,6 @@ const ClaudeSessions = () => {
     }
 
     setScreenContent('')
-    setTmuxSize(null)
     setWsError(null)
 
     const ws = new WebSocket(wsUrl)
@@ -196,9 +194,6 @@ const ClaudeSessions = () => {
         const msg: ScreenMessage = JSON.parse(event.data)
         if (msg.type === 'screen') {
           setScreenContent(msg.data)
-          if (msg.cols && msg.rows) {
-            setTmuxSize({ cols: msg.cols, rows: msg.rows })
-          }
         } else if (msg.type === 'error') {
           setWsError(msg.data)
         }
@@ -764,8 +759,8 @@ const ClaudeSessions = () => {
                   <XtermTerminal
                     wsRef={wsRef}
                     screenContent={screenContent}
+
                     connected={wsConnected}
-                    tmuxSize={tmuxSize}
                   />
                 </div>
               </div>

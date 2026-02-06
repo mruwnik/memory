@@ -16,6 +16,7 @@ from memory.api.MCP.access import (
 )
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_PEOPLE, SCOPE_PEOPLE_WRITE
 from memory.common.access_control import (
     get_accessible_project_ids,
     get_accessible_team_ids,
@@ -204,7 +205,7 @@ def link_discord_from_contact_info(session: Any, person: Person, contact_info: d
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE_WRITE))
 async def upsert(
     identifier: str,
     display_name: str | None = None,
@@ -345,7 +346,7 @@ async def upsert(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE))
 async def fetch(
     identifier: str,
     include_tidbits: bool = True,
@@ -454,7 +455,7 @@ async def fetch(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE))
 async def list_all(
     tags: list[str] | None = None,
     search: str | None = None,
@@ -521,7 +522,7 @@ async def list_all(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE_WRITE))
 async def delete(identifier: str) -> dict:
     """
     Delete a person by their identifier.
@@ -563,7 +564,7 @@ async def delete(identifier: str) -> dict:
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("admin"))
+@visible_when(require_scopes(SCOPE_ADMIN))
 async def merge(
     identifiers: list[str],
     primary_identifier: str | None = None,
@@ -828,7 +829,7 @@ async def merge(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE_WRITE))
 async def tidbit_add(
     identifier: str,
     content: str,
@@ -897,7 +898,7 @@ async def tidbit_add(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE_WRITE))
 async def tidbit_update(
     tidbit_id: int,
     content: str | None = None,
@@ -950,7 +951,7 @@ async def tidbit_update(
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE_WRITE))
 async def tidbit_delete(tidbit_id: int) -> dict:
     """
     Delete a tidbit. Only the creator or admin can delete.
@@ -985,7 +986,7 @@ async def tidbit_delete(tidbit_id: int) -> dict:
 
 
 @people_mcp.tool()
-@visible_when(require_scopes("people"))
+@visible_when(require_scopes(SCOPE_PEOPLE))
 async def tidbit_list(
     identifier: str,
     tidbit_type: str | None = None,

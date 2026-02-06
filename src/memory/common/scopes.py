@@ -5,6 +5,7 @@ Scopes control access to MCP tools and API functionality. This module is the
 single source of truth for what scopes exist and their metadata.
 
 Usage:
+    from memory.common.scopes import SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN
     from memory.common.scopes import VALID_SCOPES, ALL_SCOPE_VALUES, validate_scopes
 
     # Check if scopes are valid
@@ -27,98 +28,249 @@ class ScopeInfo(TypedDict):
     category: str  # Grouping for UI display
 
 
-# All valid scopes with their metadata
-# Order matters for UI display - grouped by category
+# ---------------------------------------------------------------------------
+# Scope constants — every scope string used in the codebase lives here.
+# ---------------------------------------------------------------------------
+
+# Special / admin
+SCOPE_ADMIN = "*"
+
+# Core
+SCOPE_READ = "read"
+SCOPE_WRITE = "write"
+SCOPE_OBSERVE = "observe"
+SCOPE_OBSERVE_WRITE = "observe:write"
+SCOPE_NOTES = "notes"
+SCOPE_NOTES_WRITE = "notes:write"
+
+# Integrations
+SCOPE_GITHUB = "github"
+SCOPE_GITHUB_WRITE = "github:write"
+SCOPE_EMAIL = "email"
+SCOPE_EMAIL_WRITE = "email:write"
+SCOPE_DISCORD = "discord"
+SCOPE_DISCORD_WRITE = "discord:write"
+SCOPE_DISCORD_ADMIN = "discord-admin"
+SCOPE_DISCORD_ADMIN_WRITE = "discord-admin:write"
+SCOPE_SLACK = "slack"
+SCOPE_SLACK_WRITE = "slack:write"
+
+# Research
+SCOPE_FORECAST = "forecast"
+SCOPE_FORECAST_WRITE = "forecast:write"
+
+# Organisation & planning
+SCOPE_ORGANIZER = "organizer"
+SCOPE_ORGANIZER_WRITE = "organizer:write"
+SCOPE_PEOPLE = "people"
+SCOPE_PEOPLE_WRITE = "people:write"
+SCOPE_POLLING = "polling"
+SCOPE_POLLING_WRITE = "polling:write"
+SCOPE_SCHEDULE = "schedule"
+SCOPE_TEAMS = "teams"
+SCOPE_TEAMS_WRITE = "teams:write"
+SCOPE_PROJECTS = "projects"
+SCOPE_PROJECTS_WRITE = "projects:write"
+
+# AI
+SCOPE_CLAUDE_AI = "claudeai"
+
+# ---------------------------------------------------------------------------
+# Metadata for UI display — grouped by category.
+# ---------------------------------------------------------------------------
+
 VALID_SCOPES: list[ScopeInfo] = [
     # Special scopes
     {
-        "value": "*",
+        "value": SCOPE_ADMIN,
         "label": "Full Access",
         "description": "Grants access to all features and tools",
         "category": "special",
     },
     # Core functionality
     {
-        "value": "read",
+        "value": SCOPE_READ,
         "label": "Read",
         "description": "Search and view knowledge base content",
         "category": "core",
     },
     {
-        "value": "observe",
-        "label": "Observe",
-        "description": "Record and search observations about user preferences",
+        "value": SCOPE_WRITE,
+        "label": "Write",
+        "description": "Create and modify knowledge base content",
         "category": "core",
     },
     {
-        "value": "notes",
+        "value": SCOPE_OBSERVE,
+        "label": "Observe",
+        "description": "Search observations about user preferences",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_OBSERVE_WRITE,
+        "label": "Observe (write)",
+        "description": "Record observations about user preferences",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_NOTES,
         "label": "Notes",
+        "description": "View notes",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_NOTES_WRITE,
+        "label": "Notes (write)",
         "description": "Create and manage notes",
         "category": "core",
     },
     # Integrations
     {
-        "value": "github",
+        "value": SCOPE_GITHUB,
         "label": "GitHub",
-        "description": "Access GitHub repositories, issues, and PRs",
+        "description": "View GitHub repositories, issues, and PRs",
         "category": "integrations",
     },
     {
-        "value": "email",
+        "value": SCOPE_GITHUB_WRITE,
+        "label": "GitHub (write)",
+        "description": "Create/modify GitHub issues, PRs, and team members",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_EMAIL,
         "label": "Email",
+        "description": "View email configuration",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_EMAIL_WRITE,
+        "label": "Email (write)",
         "description": "Send emails via configured accounts",
         "category": "integrations",
     },
     {
-        "value": "discord",
+        "value": SCOPE_DISCORD,
         "label": "Discord",
-        "description": "Send messages and access Discord channels",
+        "description": "View Discord channels and message history",
         "category": "integrations",
     },
     {
-        "value": "discord-admin",
+        "value": SCOPE_DISCORD_WRITE,
+        "label": "Discord (write)",
+        "description": "Send messages to Discord channels",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_DISCORD_ADMIN,
         "label": "Discord Admin",
+        "description": "View Discord roles, permissions, and categories",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_DISCORD_ADMIN_WRITE,
+        "label": "Discord Admin (write)",
         "description": "Manage Discord roles, permissions, and channels",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_SLACK,
+        "label": "Slack",
+        "description": "View Slack channels and message history",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_SLACK_WRITE,
+        "label": "Slack (write)",
+        "description": "Send messages and reactions to Slack",
         "category": "integrations",
     },
     # Research & Analysis
     {
-        "value": "forecast",
+        "value": SCOPE_FORECAST,
         "label": "Forecasts",
-        "description": "Access prediction market data and analysis tools",
+        "description": "View prediction market data and analysis",
+        "category": "research",
+    },
+    {
+        "value": SCOPE_FORECAST_WRITE,
+        "label": "Forecasts (write)",
+        "description": "Manage forecast watchlist and cache",
         "category": "research",
     },
     # Organization & Planning
     {
-        "value": "organizer",
+        "value": SCOPE_ORGANIZER,
         "label": "Organizer",
-        "description": "Access calendar events and task management",
+        "description": "View calendar events and tasks",
         "category": "organization",
     },
     {
-        "value": "people",
+        "value": SCOPE_ORGANIZER_WRITE,
+        "label": "Organizer (write)",
+        "description": "Create and modify calendar events and tasks",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_PEOPLE,
         "label": "People",
-        "description": "Manage people/contacts information",
+        "description": "View people/contacts information",
         "category": "organization",
     },
     {
-        "value": "polling",
+        "value": SCOPE_PEOPLE_WRITE,
+        "label": "People (write)",
+        "description": "Create, modify, and delete people/contacts",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_POLLING,
         "label": "Polling",
+        "description": "View polls",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_POLLING_WRITE,
+        "label": "Polling (write)",
         "description": "Create and manage polls for scheduling",
         "category": "organization",
     },
     {
-        "value": "schedule",
+        "value": SCOPE_SCHEDULE,
         "label": "Schedule",
         "description": "Schedule messages and reminders",
         "category": "organization",
     },
-    # Administration
     {
-        "value": "admin:users",
-        "label": "User Admin",
-        "description": "Create, modify, and delete users",
-        "category": "admin",
+        "value": SCOPE_TEAMS,
+        "label": "Teams",
+        "description": "View teams and membership",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_TEAMS_WRITE,
+        "label": "Teams (write)",
+        "description": "Create and manage teams and membership",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_PROJECTS,
+        "label": "Projects",
+        "description": "View projects",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_PROJECTS_WRITE,
+        "label": "Projects (write)",
+        "description": "Create and manage projects",
+        "category": "organization",
+    },
+    # AI
+    {
+        "value": SCOPE_CLAUDE_AI,
+        "label": "Claude AI",
+        "description": "Access Claude AI features",
+        "category": "ai",
     },
 ]
 
@@ -126,13 +278,7 @@ VALID_SCOPES: list[ScopeInfo] = [
 ALL_SCOPE_VALUES: frozenset[str] = frozenset(s["value"] for s in VALID_SCOPES)
 
 # Default scope for new users
-DEFAULT_SCOPES: list[str] = ["read"]
-
-# Scope that grants all permissions (wildcard)
-WILDCARD_SCOPE = "*"
-
-# Admin scope for user management
-ADMIN_SCOPE = "admin:users"
+DEFAULT_SCOPES: list[str] = [SCOPE_READ]
 
 
 def validate_scopes(scopes: list[str]) -> list[str]:
@@ -157,7 +303,7 @@ def has_scope(user_scopes: list[str], required: str) -> bool:
     Returns:
         True if user has the required scope or wildcard
     """
-    return WILDCARD_SCOPE in user_scopes or required in user_scopes
+    return SCOPE_ADMIN in user_scopes or required in user_scopes
 
 
 def has_any_scope(user_scopes: list[str], required: list[str]) -> bool:
@@ -170,7 +316,7 @@ def has_any_scope(user_scopes: list[str], required: list[str]) -> bool:
     Returns:
         True if user has any of the required scopes or wildcard
     """
-    if WILDCARD_SCOPE in user_scopes:
+    if SCOPE_ADMIN in user_scopes:
         return True
     return any(s in user_scopes for s in required)
 

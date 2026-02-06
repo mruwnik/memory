@@ -25,6 +25,7 @@ from memory.common.access_control import (
     has_admin_scope,
     user_can_access_project,
 )
+from memory.common.scopes import SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
 from memory.common.db.models.sources import Person
@@ -420,7 +421,7 @@ def _build_tree(projects: list[Project]) -> list[dict[str, Any]]:
 
 
 @projects_mcp.tool()
-@visible_when(require_scopes("projects"))
+@visible_when(require_scopes(SCOPE_PROJECTS))
 async def list_all(
     state: Literal["open", "closed"] | None = None,
     parent_id: int | None = None,
@@ -535,7 +536,7 @@ async def list_all(
 
 
 @projects_mcp.tool()
-@visible_when(require_scopes("projects"))
+@visible_when(require_scopes(SCOPE_PROJECTS))
 async def fetch(
     project_id: int,
     include_teams: bool = True,
@@ -604,7 +605,7 @@ async def fetch(
 
 
 @projects_mcp.tool()
-@visible_when(require_scopes("projects"))
+@visible_when(require_scopes(SCOPE_PROJECTS_WRITE))
 async def upsert(
     title: str | None = None,
     team_ids: list[int] | None = None,
@@ -1472,7 +1473,7 @@ async def update_project(
 
 
 @projects_mcp.tool()
-@visible_when(require_scopes("projects"))
+@visible_when(require_scopes(SCOPE_PROJECTS_WRITE))
 async def delete(
     project_id: int,
 ) -> dict:

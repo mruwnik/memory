@@ -23,6 +23,13 @@ from memory.api.MCP.access import (
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import AccessFilter, user_can_access
+from memory.common.scopes import (
+    SCOPE_NOTES,
+    SCOPE_NOTES_WRITE,
+    SCOPE_OBSERVE,
+    SCOPE_OBSERVE_WRITE,
+    SCOPE_READ,
+)
 from memory.api.auth import lookup_api_key
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
@@ -235,7 +242,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
 
 
 @core_mcp.tool(description=_build_search_description())
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 async def search(
     query: str,
     filters: MCPSearchFilters = {},
@@ -281,7 +288,7 @@ class RawObservation(BaseModel):
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("observe"))
+@visible_when(require_scopes(SCOPE_OBSERVE_WRITE))
 async def observe(
     observations: list[RawObservation],
     session_id: str | None = None,
@@ -365,7 +372,7 @@ async def observe(
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("observe"), has_items(AgentObservation))
+@visible_when(require_scopes(SCOPE_OBSERVE), has_items(AgentObservation))
 async def search_observations(
     query: str,
     subject: str = "",
@@ -436,7 +443,7 @@ async def search_observations(
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("notes"))
+@visible_when(require_scopes(SCOPE_NOTES_WRITE))
 async def create_note(
     subject: str,
     content: str,
@@ -495,7 +502,7 @@ async def create_note(
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("notes"))
+@visible_when(require_scopes(SCOPE_NOTES))
 async def note_files(path: str = "/"):
     """
     List note files in the user's note storage.
@@ -522,7 +529,7 @@ async def note_files(path: str = "/"):
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 def fetch_file(filename: str) -> dict:
     """
     Read file content with automatic type detection.
@@ -569,7 +576,7 @@ def fetch_file(filename: str) -> dict:
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 async def fetch(id: int, include_content: bool = True, include_journal: bool = False) -> dict:
     """
     Get full details of a source item by ID.
@@ -706,7 +713,7 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 async def list_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},
@@ -830,7 +837,7 @@ async def list_items(
 
 
 @core_mcp.tool()
-@visible_when(require_scopes("read"))
+@visible_when(require_scopes(SCOPE_READ))
 async def count_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},

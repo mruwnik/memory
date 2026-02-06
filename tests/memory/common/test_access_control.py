@@ -100,8 +100,8 @@ def test_has_admin_scope_with_star():
 
 
 def test_has_admin_scope_with_admin():
-    """User with 'admin' scope is superadmin."""
-    user = MockUser(scopes=["admin"])
+    """User with '*' scope is superadmin."""
+    user = MockUser(scopes=["*"])
     assert has_admin_scope(user) is True
 
 
@@ -128,7 +128,7 @@ def test_has_admin_scope_none_scopes():
 
 def test_user_can_access_superadmin():
     """Superadmins can access any content."""
-    user = MockUser(scopes=["admin"])
+    user = MockUser(scopes=["*"])
     item = MockSourceItem(project_id=None, sensitivity="confidential")
     assert user_can_access(user, item) is True
 
@@ -244,7 +244,7 @@ def test_user_can_access_multiple_projects():
 
 def test_user_can_create_superadmin():
     """Superadmins can create content at any sensitivity level."""
-    user = MockUser(scopes=["admin"])
+    user = MockUser(scopes=["*"])
 
     for sensitivity in ["basic", "internal", "confidential"]:
         assert user_can_create_in_project(user, 1, sensitivity) is True
@@ -296,7 +296,7 @@ def test_user_can_create_none_project_roles_denied():
 
 def test_build_access_filter_superadmin_returns_none():
     """Superadmins get no filter (None)."""
-    user = MockUser(scopes=["admin"])
+    user = MockUser(scopes=["*"])
     result = build_access_filter(user, {})
     assert result is None
 

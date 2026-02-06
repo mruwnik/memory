@@ -11,6 +11,7 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
+from memory.common.scopes import SCOPE_EMAIL_WRITE
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import UserSession
 from memory.common.email_sender import (
@@ -96,7 +97,7 @@ def _load_attachment(path: str) -> EmailAttachmentData | None:
 
 
 @email_mcp.tool()
-@visible_when(require_scopes("email"), has_send_accounts)
+@visible_when(require_scopes(SCOPE_EMAIL_WRITE), has_send_accounts)
 async def send(
     to: list[str],
     subject: str,
