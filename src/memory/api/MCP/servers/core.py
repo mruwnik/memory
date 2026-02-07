@@ -800,13 +800,7 @@ async def list_items(
 
         items = []
         for item in query.all():
-            preview = None
-            if item.content:
-                preview = (
-                    item.content[:200] + "..."
-                    if len(item.content) > 200
-                    else item.content
-                )
+            preview = item.preview_text
 
             item_dict = {
                 "id": item.id,

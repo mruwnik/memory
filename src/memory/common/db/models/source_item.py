@@ -43,6 +43,15 @@ import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
 from memory.common.access_control import SensitivityLevelLiteral as SensitivityLevel
 
+PREVIEW_MAX_LENGTH = 300
+
+
+def truncate_preview(text: str | None, limit: int = PREVIEW_MAX_LENGTH) -> str | None:
+    """Truncate text to a preview-friendly length, adding ellipsis if needed."""
+    if not text:
+        return None
+    return (text[:limit] + "...") if len(text) > limit else text
+
 if TYPE_CHECKING:
     from memory.common.db.models.journal import JournalEntry
     from memory.common.db.models.sources import Person
@@ -537,6 +546,11 @@ class SourceItem(Base):
         than attempting embedding and getting FAILED.
         """
         return True
+
+    @property
+    def preview_text(self) -> str | None:
+        """Short text preview for listings. Subclasses can override."""
+        return truncate_preview(self.content)
 
     @property
     def title(self) -> str | None:

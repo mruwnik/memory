@@ -1264,8 +1264,8 @@ async def test_list_items_has_more_flag(mock_make_session):
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.make_session")
-async def test_list_items_preview_truncation(mock_make_session):
-    """List items truncates long content in preview."""
+async def test_list_items_uses_preview_text_property(mock_make_session):
+    """List items passes through the model's preview_text property."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
@@ -1279,6 +1279,7 @@ async def test_list_items_preview_truncation(mock_make_session):
     mock_item.tags = []
     mock_item.inserted_at = None
     mock_item.content = "A" * 300  # Long content
+    mock_item.preview_text = "A" * 300 + "..."
     mock_item.as_payload.return_value = {}
 
     query_mock = mock_session.query.return_value
@@ -1291,9 +1292,8 @@ async def test_list_items_preview_truncation(mock_make_session):
 
     result = await list_items.fn()
 
-    # Preview should be truncated to 200 chars + "..."
-    assert len(result["items"][0]["preview"]) == 203
-    assert result["items"][0]["preview"].endswith("...")
+    # list_items should use the preview_text property from the model
+    assert result["items"][0]["preview"] == mock_item.preview_text
 
 
 @pytest.mark.asyncio

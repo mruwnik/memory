@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, PropertyMock
 from typing import Any, cast
 import pytest
 from PIL import Image
@@ -13,9 +13,15 @@ from memory.common.db.models.source_items import (
     BookSection,
     BlogPost,
     AgentObservation,
+    GitCommit,
     Note,
     Meeting,
+    DiscordMessage,
+    SlackMessage,
+    Photo,
+    Comic,
 )
+from memory.common.db.models.source_item import SourceItem, truncate_preview
 from memory.common.db.models import Person
 from tests.data.contents import SAMPLE_MARKDOWN
 
@@ -894,3 +900,215 @@ def test_meeting_as_payload_single_attendee():
 
     assert "people" in payload
     assert payload["people"] == [42]
+
+
+# ====== truncate_preview tests ======
+
+
+@pytest.mark.parametrize(
+    "text,limit,expected",
+    [
+        (None, 300, None),
+        ("", 300, None),
+        ("short text", 300, "short text"),
+        ("A" * 300, 300, "A" * 300),
+        ("A" * 301, 300, "A" * 300 + "..."),
+        ("A" * 500, 300, "A" * 300 + "..."),
+        ("hello", 3, "hel..."),
+    ],
+)
+def test_truncate_preview(text, limit, expected):
+    assert truncate_preview(text, limit=limit) == expected
+
+
+# ====== SourceItem.preview_text tests ======
+
+
+def test_source_item_preview_text_none_content():
+    item = SourceItem(sha256=b"test1", modality="test", content=None)
+    assert item.preview_text is None
+
+
+def test_source_item_preview_text_short_content():
+    item = SourceItem(sha256=b"test2", modality="test", content="Short content")
+    assert item.preview_text == "Short content"
+
+
+def test_source_item_preview_text_truncates_long_content():
+    long = "A" * 500
+    item = SourceItem(sha256=b"test3", modality="test", content=long)
+    assert item.preview_text == "A" * 300 + "..."
+
+
+# ====== GitCommit.preview_text tests ======
+
+
+def test_git_commit_preview_text_uses_diff_summary():
+    commit = GitCommit(sha256=b"gc1", modality="git", diff_summary="Added new feature", content="full diff here")
+    assert commit.preview_text == "Added new feature"
+
+
+def test_git_commit_preview_text_falls_back_to_content():
+    commit = GitCommit(sha256=b"gc2", modality="git", diff_summary=None, content="commit message")
+    assert commit.preview_text == "commit message"
+
+
+def test_git_commit_preview_text_truncates_long_content_fallback():
+    long_content = "D" * 500
+    commit = GitCommit(sha256=b"gc3", modality="git", diff_summary=None, content=long_content)
+    assert commit.preview_text == "D" * 300 + "..."
+
+
+def test_git_commit_preview_text_truncates_long_diff_summary():
+    long_summary = "S" * 500
+    commit = GitCommit(sha256=b"gc4", modality="git", diff_summary=long_summary, content="x")
+    assert commit.preview_text == "S" * 300 + "..."
+
+
+def test_git_commit_preview_text_none_both():
+    commit = GitCommit(sha256=b"gc5", modality="git", diff_summary=None, content=None)
+    assert commit.preview_text is None
+
+
+# ====== MailMessage.preview_text tests ======
+
+
+def test_mail_message_preview_text_falls_back_to_subject_on_exception():
+    msg = MailMessage(sha256=b"mm1", content="not valid email", subject="Test Subject")
+    # Force an exception from the body property
+    with patch.object(MailMessage, "body", new_callable=PropertyMock, side_effect=KeyError("body")):
+        assert msg.preview_text == "Test Subject"
+
+
+def test_mail_message_preview_text_falls_back_to_subject_when_no_body():
+    msg = MailMessage(sha256=b"mm2", content="valid", subject="My Subject")
+    with patch.object(MailMessage, "body", new_callable=PropertyMock, return_value=""):
+        assert msg.preview_text == "My Subject"
+
+
+def test_mail_message_preview_text_uses_body_when_available():
+    msg = MailMessage(sha256=b"mm3", content="valid", subject="My Subject")
+    body_text = "This is the parsed email body content."
+    with patch.object(MailMessage, "body", new_callable=PropertyMock, return_value=body_text):
+        assert msg.preview_text == body_text
+
+
+def test_mail_message_preview_text_truncates_long_body():
+    msg = MailMessage(sha256=b"mm4", content="valid", subject="My Subject")
+    long_body = "B" * 500
+    with patch.object(MailMessage, "body", new_callable=PropertyMock, return_value=long_body):
+        assert msg.preview_text == "B" * 300 + "..."
+
+
+# ====== Meeting.preview_text tests ======
+
+
+def test_meeting_preview_text_uses_summary():
+    meeting = Meeting(sha256=b"mt1", summary="Meeting summary", notes="Meeting notes", title="Standup")
+    assert meeting.preview_text == "Meeting summary"
+
+
+def test_meeting_preview_text_uses_notes_if_no_summary():
+    meeting = Meeting(sha256=b"mt2", summary=None, notes="Notes here", title="Standup")
+    assert meeting.preview_text == "Notes here"
+
+
+def test_meeting_preview_text_falls_back_to_title():
+    meeting = Meeting(sha256=b"mt3", summary=None, notes=None, title="My Meeting")
+    assert meeting.preview_text == "My Meeting"
+
+
+def test_meeting_preview_text_truncates_long_summary():
+    long_summary = "M" * 500
+    meeting = Meeting(sha256=b"mt4", summary=long_summary, title="Meeting")
+    assert meeting.preview_text == "M" * 300 + "..."
+
+
+# ====== EmailAttachment.preview_text tests ======
+
+
+def test_email_attachment_preview_text_returns_filename():
+    attachment = EmailAttachment(sha256=b"ea1", modality="email_attachment", filename="report.pdf")
+    assert attachment.preview_text == "report.pdf"
+
+
+def test_email_attachment_preview_text_none_when_no_filename():
+    attachment = EmailAttachment(sha256=b"ea2", modality="email_attachment", filename=None)
+    assert attachment.preview_text is None
+
+
+# ====== DiscordMessage.preview_text tests ======
+
+
+def test_discord_message_preview_text_returns_title():
+    msg = DiscordMessage(sha256=b"dm1", modality="discord", content="Hello world")
+    author_mock = Mock()
+    author_mock.username = "testuser"
+    msg.author = author_mock
+    assert msg.preview_text == "testuser: Hello world"
+
+
+def test_discord_message_preview_text_unknown_author():
+    msg = DiscordMessage(sha256=b"dm2", modality="discord", content="Some message")
+    msg.author = None
+    assert msg.preview_text == "unknown: Some message"
+
+
+# ====== SlackMessage.preview_text tests ======
+
+
+def test_slack_message_preview_text_returns_title():
+    msg = SlackMessage(sha256=b"sm1", modality="slack", content="Slack message content", author_name="alice")
+    assert msg.preview_text == "alice: Slack message content"
+
+
+def test_slack_message_preview_text_falls_back_to_author_id():
+    msg = SlackMessage(sha256=b"sm2", modality="slack", content="hello", author_name=None, author_id="U12345")
+    assert msg.preview_text == "U12345: hello"
+
+
+# ====== Photo.preview_text tests ======
+
+
+def test_photo_preview_text_with_all_metadata():
+    taken = datetime(2024, 6, 15, 10, 30, 0)
+    photo = Photo(sha256=b"ph1", modality="photo", filename="sunset.jpg", camera="Canon EOS R5", exif_taken_at=taken)
+    assert photo.preview_text == f"sunset.jpg | Canon EOS R5 | {taken}"
+
+
+def test_photo_preview_text_filename_only():
+    photo = Photo(sha256=b"ph2", modality="photo", filename="image.png", camera=None, exif_taken_at=None)
+    assert photo.preview_text == "image.png"
+
+
+def test_photo_preview_text_no_filename_defaults_to_photo():
+    photo = Photo(sha256=b"ph3", modality="photo", filename=None, camera=None, exif_taken_at=None)
+    assert photo.preview_text == "photo"
+
+
+def test_photo_preview_text_with_camera_no_date():
+    photo = Photo(sha256=b"ph4", modality="photo", filename="pic.jpg", camera="iPhone 15", exif_taken_at=None)
+    assert photo.preview_text == "pic.jpg | iPhone 15"
+
+
+# ====== Comic.preview_text tests ======
+
+
+def test_comic_preview_text_title_and_author():
+    comic = Comic(sha256=b"co1", modality="comic", title="XKCD #42", author="Randall Munroe")
+    assert comic.preview_text == "XKCD #42 by Randall Munroe"
+
+
+def test_comic_preview_text_title_only():
+    comic = Comic(sha256=b"co2", modality="comic", title="SMBC #100", author=None)
+    assert comic.preview_text == "SMBC #100"
+
+
+def test_comic_preview_text_no_title_falls_back_to_filename():
+    comic = Comic(sha256=b"co3", modality="comic", title=None, author=None, filename="comic_page.png")
+    assert comic.preview_text == "comic_page.png"
+
+
+def test_comic_preview_text_no_title_no_filename():
+    comic = Comic(sha256=b"co4", modality="comic", title=None, author=None, filename=None)
+    assert comic.preview_text is None

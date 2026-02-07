@@ -40,6 +40,7 @@ from memory.common.db.models.source_item import (
     SourceItemPayload,
     clean_filename,
     chunk_mixed,
+    truncate_preview,
 )
 if TYPE_CHECKING:
     from memory.common.db.models.discord import (
@@ -137,6 +138,17 @@ class MailMessage(SourceItem):
             folder=self.folder,  # type: ignore[arg-type]
             date=(self.sent_at and self.sent_at.isoformat() or None),
         )
+
+    @property
+    def preview_text(self) -> str | None:
+        """Preview using parsed email body instead of raw RFC822 content."""
+        try:
+            body = self.body
+        except (KeyError, ValueError, TypeError):
+            return truncate_preview(self.subject)
+        if not body:
+            return truncate_preview(self.subject)
+        return truncate_preview(body)
 
     @property
     def parsed_content(self) -> dict[str, Any]:
@@ -254,6 +266,11 @@ class EmailAttachment(SourceItem):
     __mapper_args__ = {
         "polymorphic_identity": "email_attachment",
     }
+
+    @property
+    def preview_text(self) -> str | None:
+        """Preview using filename since content may be binary."""
+        return self.filename
 
     def as_payload(self) -> EmailAttachmentPayload:
         return EmailAttachmentPayload(
@@ -383,6 +400,11 @@ class DiscordMessage(SourceItem):
     )
 
     @property
+    def preview_text(self) -> str | None:
+        """Include author name in preview."""
+        return truncate_preview(self.title)
+
+    @property
     def title(self) -> str:
         """Format message for display."""
         author_name = self.author.username if self.author else "unknown"
@@ -509,6 +531,11 @@ class SlackMessage(SourceItem):
     )
 
     @property
+    def preview_text(self) -> str | None:
+        """Include author name and prefer resolved_content."""
+        return truncate_preview(self.title)
+
+    @property
     def title(self) -> str:
         """Format message for display."""
         name = self.author_name or self.author_id or "unknown"
@@ -599,6 +626,11 @@ class GitCommit(SourceItem):
         Index("git_date_idx", "author_date"),
     )
 
+    @property
+    def preview_text(self) -> str | None:
+        """Use diff summary and commit message instead of raw content."""
+        return truncate_preview(self.diff_summary or self.content)
+
 
 class Photo(SourceItem):
     __tablename__ = "photo"
@@ -617,6 +649,16 @@ class Photo(SourceItem):
 
     # Add index
     __table_args__ = (Index("photo_taken_idx", "exif_taken_at"),)
+
+    @property
+    def preview_text(self) -> str | None:
+        """Use filename and metadata since content is an image."""
+        parts = [self.filename or "photo"]
+        if self.camera:
+            parts.append(self.camera)
+        if self.exif_taken_at:
+            parts.append(str(self.exif_taken_at))
+        return " | ".join(parts)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
@@ -659,6 +701,13 @@ class Comic(SourceItem):
     }
 
     __table_args__ = (Index("comic_author_idx", "author"),)
+
+    @property
+    def preview_text(self) -> str | None:
+        """Use title and author since content is an image."""
+        if self.title and self.author:
+            return f"{self.title} by {self.author}"
+        return self.title or self.filename
 
     def as_payload(self) -> ComicPayload:
         return ComicPayload(
@@ -1777,6 +1826,14 @@ class Meeting(SourceItem):
         if not kwargs.get("modality"):
             kwargs["modality"] = "meeting"
         super().__init__(**kwargs)
+
+    @property
+    def preview_text(self) -> str | None:
+        """Prefer summary/notes over raw transcript."""
+        text = self.summary or self.notes
+        if text:
+            return truncate_preview(text)
+        return truncate_preview(self.title)
 
     @property
     def attendees(self) -> list["Person"]:
