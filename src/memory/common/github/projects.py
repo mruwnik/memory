@@ -177,7 +177,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
         project_id: str,
         item_id: str,
         field_id: str,
-        value: str,
+        value: str | float,
         value_type: str = "singleSelectOptionId",
     ) -> bool:
         """Update a field value for a project item.
@@ -186,7 +186,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
             project_id: GraphQL node ID of the project
             item_id: GraphQL node ID of the project item
             field_id: GraphQL node ID of the field
-            value: The value to set
+            value: The value to set (str for most types, float for "number")
             value_type: Type of value - "singleSelectOptionId", "text", "number", "date"
 
         Returns:

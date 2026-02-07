@@ -889,7 +889,7 @@ def _set_project_field(
         try:
             num_value = float(field_value)
             success = client.update_project_field_value(
-                project_id, item_id, field_id, str(num_value), "number"
+                project_id, item_id, field_id, num_value, "number"
             )
         except ValueError:
             return f"Invalid number '{field_value}' for field '{field_name}'"

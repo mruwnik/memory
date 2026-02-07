@@ -7,6 +7,13 @@ description: Deploy the memory application to the remote server. Use when deploy
 
 The deployment script is at `tools/deploy.sh`. It manages the remote server `memory` (EC2 instance) at `/home/ec2-user/memory`.
 
+There are two deployments:
+
+* memory - my personal stuff
+* chris - Equistamp stuff
+
+The default is to use the `memory` version - to use the `chris` one, call with `DEPLOY_DIR=/home/ec2-user/chris`
+
 ## Commands
 
 ### Deploy (most common)

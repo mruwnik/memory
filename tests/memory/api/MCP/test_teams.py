@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.orm import selectinload
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
@@ -27,10 +28,11 @@ from memory.api.MCP.servers.teams import (
     ensure_discord_role,
     ensure_github_team,
     fetch,
-    find_or_create_person,
     list_all,
     make_slug,
     project_list_access,
+    resolve_person,
+    set_team_members,
     team_add_member,
     team_remove_member,
     upsert,
@@ -403,40 +405,178 @@ def test_resolve_guild_none(db_session):
     assert discord_client.resolve_guild(None, db_session) is None
 
 
-def test_find_or_create_person_creates_new(db_session):
-    """Test find_or_create_person creates a new person."""
+# =============================================================================
+# resolve_person() tests
+# =============================================================================
 
-    person = find_or_create_person(
-        db_session,
-        identifier="alice_chen",
-        display_name="Alice Chen",
-        contact_info={"github_username": "alicechen"},
+
+def test_resolve_person_by_id(db_session):
+    """resolve_person finds person by numeric ID."""
+    person = Person(identifier="by_id", display_name="By ID")
+    db_session.add(person)
+    db_session.flush()
+
+    assert resolve_person(db_session, person.id) == person
+    assert resolve_person(db_session, str(person.id)) == person
+
+
+def test_resolve_person_by_identifier(db_session):
+    """resolve_person finds person by exact identifier slug."""
+    person = Person(identifier="exact_slug", display_name="Exact Slug")
+    db_session.add(person)
+    db_session.flush()
+
+    assert resolve_person(db_session, "exact_slug") == person
+
+
+def test_resolve_person_by_display_name(db_session):
+    """resolve_person finds person by display_name (case-insensitive)."""
+    person = Person(identifier="display_match", display_name="Display Match")
+    db_session.add(person)
+    db_session.flush()
+
+    assert resolve_person(db_session, "Display Match") == person
+    assert resolve_person(db_session, "display match") == person
+
+
+def test_resolve_person_by_alias(db_session):
+    """resolve_person finds person by alias."""
+    person = Person(
+        identifier="alias_match", display_name="Full Name", aliases=["Nickname"]
     )
+    db_session.add(person)
+    db_session.flush()
 
-    assert person.identifier == "alice_chen"
-    assert person.display_name == "Alice Chen"
-    assert person.contact_info == {"github_username": "alicechen"}
-
-
-def test_find_or_create_person_finds_existing(db_session):
-    """Test find_or_create_person returns existing person."""
-
-    # Create first
-    person1 = find_or_create_person(db_session, "bob_smith", "Bob Smith")
-    db_session.commit()
-
-    # Should find existing
-    person2 = find_or_create_person(db_session, "bob_smith", "Robert Smith")
-
-    assert person1.id == person2.id
-    assert person2.display_name == "Bob Smith"  # Original name preserved
+    assert resolve_person(db_session, "Nickname") == person
 
 
-def test_find_or_create_person_normalizes_identifier(db_session):
-    """Test find_or_create_person normalizes identifiers."""
+def test_resolve_person_by_email(db_session):
+    """resolve_person finds person by email address."""
+    person = Person(
+        identifier="email_match",
+        display_name="Email Match",
+        contact_info={"email": "test@example.com"},
+    )
+    db_session.add(person)
+    db_session.flush()
 
-    person = find_or_create_person(db_session, "Alice Chen", "Alice Chen")
-    assert person.identifier == "alice_chen"
+    assert resolve_person(db_session, "test@example.com") == person
+
+
+def test_resolve_person_not_found(db_session):
+    """resolve_person returns None when no match."""
+    assert resolve_person(db_session, "nonexistent") is None
+
+
+def test_resolve_person_with_eager_load(db_session):
+    """resolve_person applies eager loading options."""
+    person = Person(identifier="eager_test", display_name="Eager Test")
+    db_session.add(person)
+    db_session.flush()
+
+    result = resolve_person(db_session, "Eager Test", eager_load=[
+        selectinload(Person.discord_accounts),
+    ])
+    assert result == person
+
+
+# =============================================================================
+# set_team_members() fuzzy matching tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_set_team_members_finds_by_display_name(db_session, admin_session):
+    """set_team_members matches members by display_name, not just identifier."""
+    team = Team(name="Test Team", slug="test-team")
+    db_session.add(team)
+    person = Person(identifier="alice_chen", display_name="Alice Chen")
+    db_session.add(person)
+    db_session.flush()
+
+    # Use display name (not identifier) - should match the existing person
+    result = await set_team_members(db_session, team, ["Alice Chen"])
+
+    assert result["added"] == ["alice_chen"]
+    assert result["created_people"] == []
+    assert person in team.members
+
+
+@pytest.mark.asyncio
+async def test_set_team_members_finds_by_alias(db_session, admin_session):
+    """set_team_members matches members by alias."""
+    team = Team(name="Test Team", slug="test-team")
+    db_session.add(team)
+    person = Person(
+        identifier="bob_smith", display_name="Robert Smith", aliases=["Bob Smith"]
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Use alias - should match the existing person
+    result = await set_team_members(db_session, team, ["Bob Smith"])
+
+    assert result["added"] == ["bob_smith"]
+    assert result["created_people"] == []
+    assert person in team.members
+
+
+@pytest.mark.asyncio
+async def test_set_team_members_finds_by_email(db_session, admin_session):
+    """set_team_members matches members by email."""
+    team = Team(name="Test Team", slug="test-team")
+    db_session.add(team)
+    person = Person(
+        identifier="carol_jones",
+        display_name="Carol Jones",
+        contact_info={"email": "carol@example.com"},
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Use email - should match the existing person
+    result = await set_team_members(db_session, team, ["carol@example.com"])
+
+    assert result["added"] == ["carol_jones"]
+    assert result["created_people"] == []
+    assert person in team.members
+
+
+@pytest.mark.asyncio
+async def test_set_team_members_no_duplicate_from_display_name(db_session, admin_session):
+    """set_team_members should not create a duplicate when given display_name of existing person."""
+    team = Team(name="Dedup Team", slug="dedup-team")
+    person = Person(identifier="dedup_person", display_name="Dedup Person")
+    db_session.add_all([team, person])
+    db_session.flush()
+
+    # Pass display_name — should find existing, not create a new "dedup_person" + "Dedup Person"
+    result = await set_team_members(db_session, team, ["Dedup Person"])
+
+    assert result["created_people"] == []
+    assert len(team.members) == 1
+    assert team.members[0].id == person.id
+
+    # Verify no duplicate Person was created
+    all_people = db_session.query(Person).filter(
+        Person.display_name == "Dedup Person"
+    ).all()
+    assert len(all_people) == 1
+
+
+@pytest.mark.asyncio
+async def test_set_team_members_dedup_identifier_and_display_name(db_session, admin_session):
+    """Both identifier and display_name in member list should resolve to same person."""
+    team = Team(name="Dedup Team 2", slug="dedup-team-2")
+    person = Person(identifier="same_person", display_name="Same Person")
+    db_session.add_all([team, person])
+    db_session.flush()
+
+    result = await set_team_members(db_session, team, ["same_person", "Same Person"])
+
+    assert len(team.members) == 1
+    assert team.members[0].id == person.id
+    assert result["created_people"] == []
 
 
 # =============================================================================
@@ -1780,6 +1920,66 @@ async def test_team_add_member_invalid_role(db_session, admin_session):
     assert "Invalid role" in result["error"]
 
 
+@pytest.mark.asyncio
+async def test_team_add_member_by_display_name(db_session, admin_session):
+    """team_add_member resolves person by display_name."""
+    team = Team(name="Add Fuzzy", slug="add-fuzzy")
+    person = Person(identifier="fuzzy_add", display_name="Fuzzy Add Person")
+    db_session.add_all([team, person])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(team_add_member)(
+            team="add-fuzzy",
+            person="Fuzzy Add Person",
+        )
+
+    assert result["success"] is True
+    assert result["person"] == "fuzzy_add"
+
+
+@pytest.mark.asyncio
+async def test_team_add_member_by_alias(db_session, admin_session):
+    """team_add_member resolves person by alias."""
+    team = Team(name="Add Alias", slug="add-alias")
+    person = Person(
+        identifier="alias_add", display_name="Full Name", aliases=["Ally"]
+    )
+    db_session.add_all([team, person])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(team_add_member)(
+            team="add-alias",
+            person="Ally",
+        )
+
+    assert result["success"] is True
+    assert result["person"] == "alias_add"
+
+
+@pytest.mark.asyncio
+async def test_team_remove_member_by_display_name(db_session, admin_session):
+    """team_remove_member resolves person by display_name."""
+    team = Team(name="Remove Fuzzy", slug="remove-fuzzy")
+    person = Person(identifier="fuzzy_rm", display_name="Fuzzy Remove Person")
+    db_session.add_all([team, person])
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=person.id, role="member")
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(team_remove_member)(
+            team="remove-fuzzy",
+            person="Fuzzy Remove Person",
+        )
+
+    assert result["success"] is True
+    assert result["person"] == "fuzzy_rm"
+
+
 # =============================================================================
 # TeamSyncInfo and PersonSyncInfo dataclass tests
 # =============================================================================
@@ -2179,6 +2379,45 @@ async def test_upsert_owner_not_found_warns(db_session, admin_session):
     assert result["success"] is True
     assert any("Owner not found" in w for w in result["warnings"])
     assert result["team"]["owner_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_owner_by_display_name(db_session, admin_session):
+    """Test setting owner using display_name instead of identifier."""
+    person = Person(identifier="display_owner", display_name="Display Owner")
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Owner Display Test",
+            owner="Display Owner",
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] == person.id
+    assert result["team"]["owner"]["identifier"] == "display_owner"
+
+
+@pytest.mark.asyncio
+async def test_upsert_owner_by_alias(db_session, admin_session):
+    """Test setting owner using an alias."""
+    person = Person(
+        identifier="alias_owner",
+        display_name="Alias Owner Full",
+        aliases=["AO"],
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(
+            name="Owner Alias Test",
+            owner="AO",
+        )
+
+    assert result["success"] is True
+    assert result["team"]["owner_id"] == person.id
 
 
 def test_upsert_team_record_owner_skip(db_session):

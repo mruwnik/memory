@@ -1,14 +1,16 @@
 """API endpoints for User management."""
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Literal, TYPE_CHECKING, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import get_session
-from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, Person, User
+from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
 from memory.common.db.models.users import hash_password, verify_password
 from memory.common.scopes import (
     SCOPE_ADMIN,
@@ -16,6 +18,10 @@ from memory.common.scopes import (
     validate_scopes,
 )
 from memory.api.auth import get_current_user, require_scope
+from memory.common.people import find_or_create_person
+
+if TYPE_CHECKING:
+    from memory.common.db.models import Person
 
 # Valid API key types for validation (derived from APIKeyType constants)
 VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
@@ -91,25 +97,35 @@ def has_admin_scope(user: User) -> bool:
 
 
 def link_person_to_user(db: Session, user: User) -> Person | None:
-    """Auto-link a Person to this User based on matching email in contact_info.
+    """Auto-link a Person to this User based on matching email or name.
 
-    Returns the linked Person if found, else None.
+    Uses find_or_create_person which checks email, name/alias, and identifier.
+    Only links Person records not already linked to another user.
+
+    When no existing Person matches, a new Person record is created so that
+    every user has a corresponding identity for team/project membership.
+    This is intentional -- see add_user.py for the CLI path which uses
+    create_if_missing=False (find-only, no auto-creation).
+
+    Returns the linked Person if found/created, else None.
     """
-    if not user.email:
+    if not user.email and not user.name:
         return None
 
-    email = user.email.strip().lower()
+    # Use email as the name fallback so make_identifier produces something
+    # meaningful (e.g. "alice_example_com") rather than an empty string.
+    name = user.name or (user.email.split("@")[0] if user.email else "")
+    if not name:
+        return None
 
-    # Find Person with matching email in contact_info
-    # PostgreSQL JSONB query: contact_info->>'email' ILIKE email
-    person = (
-        db.query(Person)
-        .filter(Person.contact_info["email"].astext.ilike(email))
-        .filter(Person.user_id.is_(None))  # Only link if not already linked
-        .first()
+    person, _ = find_or_create_person(
+        db,
+        name=name,
+        email=user.email,
+        create_if_missing=True,
     )
 
-    if person:
+    if person and person.user_id is None:
         person.user_id = user.id
         db.commit()
         return person

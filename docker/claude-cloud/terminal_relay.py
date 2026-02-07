@@ -110,9 +110,19 @@ def handle_capture_history(start: int, end: int) -> dict:
 
 def handle_send_keys(keys: str, literal: bool = True) -> dict:
     args = ["send-keys", "-t", TMUX_SESSION]
-    if literal:
+    # JSON \u001b decodes to real \x1b in Python, so this check is valid for
+    # clients that send escape sequences via JSON unicode escapes.
+    if literal and "\x1b" in keys:
+        # Escape bytes get consumed by send-keys -l. Use -H (hex) to send
+        # raw bytes directly — needed for mouse events and other escape sequences.
+        args.append("-H")
+        for b in keys.encode("utf-8"):
+            args.append(f"{b:02x}")
+    elif literal:
         args.append("-l")
-    args.append(keys)
+        args.append(keys)
+    else:
+        args.append(keys)
 
     result = tmux_run(*args)
     if result.returncode != 0:
@@ -141,6 +151,31 @@ def handle_resize(cols: int, rows: int) -> dict:
     return {"status": "ok"}
 
 
+def handle_mouse_scroll(direction: str) -> dict:
+    """Send a mouse scroll event to the tmux pane via raw bytes.
+
+    Constructs SGR mouse protocol bytes locally so escape characters
+    never need to travel over JSON/TCP.
+    """
+    if direction not in ("up", "down"):
+        log.warning("Unexpected scroll direction %r, defaulting to 'down'", direction)
+        direction = "down"
+    # SGR mouse: \x1b[<button;col;rowM
+    # button 64 = scroll up, 65 = scroll down
+    button = 64 if direction == "up" else 65
+    seq = f"\x1b[<{button};1;1M"
+    args = ["send-keys", "-H", "-t", TMUX_SESSION]
+    for b in seq.encode("utf-8"):
+        args.append(f"{b:02x}")
+
+    result = tmux_run(*args)
+    if result.returncode != 0:
+        if is_tmux_not_ready(result.stderr):
+            return {"status": "tmux_not_ready"}
+        return {"status": "error", "error": result.stderr.strip()}
+    return {"status": "ok"}
+
+
 def dispatch(request: dict) -> dict:
     action = request.get("action")
     if action == "ping":
@@ -162,6 +197,8 @@ def dispatch(request: dict) -> dict:
             request.get("start", -1000),
             request.get("end", -1),
         )
+    if action == "mouse_scroll":
+        return handle_mouse_scroll(request.get("direction", "down"))
     return {"status": "error", "error": f"unknown action: {action}"}
 
 

@@ -7,6 +7,13 @@ description: Run safe diagnostic commands on the remote memory server. Use for c
 
 The diagnostics script is at `tools/diagnose.sh`. It provides safe, read-only commands for inspecting the remote server `memory` at `/home/ec2-user/memory`.
 
+There are two deployments:
+
+* memory - my personal stuff
+* chris - Equistamp stuff
+
+The default is to use the `memory` version - to use the `chris` one, call with `DEPLOY_DIR=/home/ec2-user/chris`
+
 ## Commands
 
 ### Status (overview)

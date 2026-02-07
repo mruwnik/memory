@@ -4,6 +4,7 @@ import argparse
 import secrets
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import HumanUser, BotUser
+from memory.common.people import find_or_create_person
 
 
 if __name__ == "__main__":
@@ -46,3 +47,22 @@ if __name__ == "__main__":
 
         session.add(user)
         session.commit()
+        session.refresh(user)
+
+        # create_if_missing=False: CLI user creation only links to existing
+        # Person records (no auto-creation). The API path in users.py uses
+        # create_if_missing=True so that every registered user gets a Person.
+        person, _ = find_or_create_person(
+            session,
+            name=args.name,
+            email=args.email,
+            create_if_missing=False,
+        )
+        if person and person.user_id is None:
+            person.user_id = user.id
+            session.commit()
+            print(f"Auto-linked to person: {person.identifier} (id={person.id})")
+        elif person and person.user_id is not None:
+            print(f"Person {person.identifier} already linked to user {person.user_id}")
+        else:
+            print("No matching person record found for auto-linking")

@@ -3,6 +3,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
+const SCROLL_THROTTLE_MS = 100
+
 // Map xterm.js key sequences to tmux send-keys format
 function xtermToTmux(data: string): { keys: string; literal: boolean } {
   // Control characters
@@ -119,6 +121,24 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
       xtermRef.current = term
       fitAddonRef.current = fitAddon
 
+      // Scroll handler - send scroll events directly via WebSocket.
+      // Claude Code needs actual mouse scroll events (not Page Up/Down which
+      // it maps to input history). We send a typed message and the relay
+      // constructs the SGR mouse bytes server-side to avoid ESC byte issues.
+      let lastScrollTime = 0
+      const handleWheel = (e: WheelEvent) => {
+        e.preventDefault()
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+        const now = Date.now()
+        if (now - lastScrollTime < SCROLL_THROTTLE_MS) return
+        lastScrollTime = now
+        wsRef.current.send(JSON.stringify({
+          type: 'scroll',
+          direction: e.deltaY < 0 ? 'up' : 'down',
+        }))
+      }
+      terminalRef.current?.addEventListener('wheel', handleWheel, { passive: false })
+
       // Resize handler - fit terminal to container and tell tmux to match
       const handleResize = () => {
         fitAddon.fit()
@@ -130,6 +150,7 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
       setError(null)
 
       return () => {
+        terminalRef.current?.removeEventListener('wheel', handleWheel)
         window.removeEventListener('resize', handleResize)
         term.dispose()
         xtermRef.current = null

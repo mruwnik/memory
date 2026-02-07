@@ -275,6 +275,18 @@ async def input_handler_loop(
                         )
                 except RelayError as e:
                     await send_ws_json(websocket, "error", str(e))
+        elif msg_type == "scroll":
+            direction = message.get("direction", "down")
+            try:
+                result = await relay.mouse_scroll(direction)
+                if result["status"] != "ok":
+                    await send_ws_json(
+                        websocket,
+                        "error",
+                        result.get("error", "Failed to send scroll"),
+                    )
+            except RelayError as e:
+                await send_ws_json(websocket, "error", str(e))
         elif msg_type == "resize":
             cols = message.get("cols", 80)
             rows = message.get("rows", 24)

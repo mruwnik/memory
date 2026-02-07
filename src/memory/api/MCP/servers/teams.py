@@ -25,6 +25,7 @@ from memory.common.db.models import (
     Team,
     User,
 )
+from memory.common.people import find_or_create_person, find_person
 from memory.common.db.models.sources import (
     GithubRepo,
     team_members,
@@ -39,6 +40,37 @@ logger = logging.getLogger(__name__)
 teams_mcp = FastMCP("memory-teams")
 
 _UNSET = "__UNSET__"
+
+
+def resolve_person(
+    session: Session | scoped_session[Session],
+    identifier: str | int,
+    eager_load: list | None = None,
+) -> Person | None:
+    """Resolve a person by int ID or fuzzy name/email/alias/identifier.
+
+    Uses find_person from memory.common.people for fuzzy matching when
+    the identifier is not a numeric ID.
+    """
+    query = session.query(Person)
+    if eager_load:
+        for loader in eager_load:
+            query = query.options(loader)
+
+    if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
+        return query.filter(Person.id == int(identifier)).first()
+
+    # Try fuzzy match first (display_name, aliases, email, identifier slug)
+    person = find_person(session, str(identifier))
+    if not person:
+        return None
+
+    # Re-query to pick up eager-loaded relationships. SQLAlchemy can't
+    # retroactively apply selectinload/joinedload to an already-loaded
+    # instance, so a second query by PK is the simplest correct approach.
+    if eager_load:
+        return query.filter(Person.id == person.id).first()
+    return person
 
 
 # ============== Async-Safe Data Capture ==============
@@ -591,10 +623,7 @@ async def upsert(
         if owner is None:
             owner_id = None  # Explicitly clear
         elif owner is not _UNSET:
-            if isinstance(owner, int) or (isinstance(owner, str) and owner.isdigit()):
-                owner_person = session.query(Person).filter(Person.id == int(owner)).first()
-            else:
-                owner_person = session.query(Person).filter(Person.identifier == owner).first()
+            owner_person = resolve_person(session, owner)
             if owner_person:
                 owner_id = owner_person.id
             else:
@@ -693,32 +722,6 @@ async def fetch_or_create_github_team(
     return None
 
 
-def find_or_create_person(
-    session: Session | scoped_session[Session],
-    identifier: str,
-    display_name: str,
-    contact_info: dict[str, Any] | None = None,
-) -> Person:
-    """Find existing person by identifier or create new one."""
-    # Normalize identifier
-    normalized = re.sub(r"\s+", "_", identifier.lower().strip())
-    normalized = "".join(c for c in normalized if c.isalnum() or c == "_")
-
-    # Check for existing
-    existing = session.query(Person).filter(Person.identifier == normalized).first()
-    if existing:
-        return existing
-
-    # Create new
-    person = Person(
-        identifier=normalized,
-        display_name=display_name,
-        contact_info=contact_info or {},
-    )
-    session.add(person)
-    session.flush()
-    logger.info(f"Created person '{normalized}' for external user")
-    return person
 
 
 async def set_team_members(
@@ -731,19 +734,34 @@ async def set_team_members(
     Returns dict with added/removed counts and any warnings.
     """
     current_member_list = list(team.members)
-    current_members = {p.identifier for p in current_member_list}
     current_member_ids = {p.id for p in current_member_list}
-    target_members = set(member_identifiers)
 
-    to_add = target_members - current_members
-    to_remove = current_members - target_members
-
+    # Resolve target identifiers to Person records (using fuzzy matching)
+    target_people: dict[int, Person] = {}  # person_id -> Person
     result: dict[str, Any] = {
         "added": [],
         "removed": [],
         "created_people": [],
         "warnings": [],
     }
+    for identifier in member_identifiers:
+        person, was_created = find_or_create_person(
+            session, name=identifier, create_if_missing=True
+        )
+        if not person:
+            result["warnings"].append(f"Could not find or create person for '{identifier}'")
+            continue
+        if was_created:
+            result["created_people"].append(identifier)
+        else:
+            logger.info(
+                "Fuzzy matched '%s' -> person '%s' (id=%s)",
+                identifier, person.identifier, person.id,
+            )
+        target_people[person.id] = person
+
+    to_add_ids = set(target_people) - current_member_ids
+    to_remove_ids = current_member_ids - set(target_people)
 
     # Capture sync info upfront (before any DB changes that might affect relationships)
     team_info = TeamSyncInfo.from_team(team)
@@ -760,30 +778,20 @@ async def set_team_members(
         if user and user.id and team.github_org:
             github_client = get_github_client_for_org(session, team.github_org, user.id)
 
-    # Remove members no longer in list
-    for identifier in to_remove:
-        person = session.query(Person).filter(Person.identifier == identifier).first()
-        if person and person.id in current_member_ids:
+    # Remove members no longer in target list
+    for person in current_member_list:
+        if person.id in to_remove_ids:
             pending_syncs.append((PersonSyncInfo.from_person(person), False))
             team.members.remove(person)
-            result["removed"].append(identifier)
+            result["removed"].append(person.identifier)
 
     # Add new members
-    for identifier in to_add:
-        person = (
-            session.query(Person).filter(Person.identifier == identifier).first()
-            or session.query(Person).filter(Person.display_name.ilike(identifier)).first()
-        )
-
-        if not person:
-            person = find_or_create_person(session, identifier, identifier)
-            result["created_people"].append(identifier)
-
-        if person.id not in current_member_ids:
-            team.members.append(person)
-            current_member_ids.add(person.id)
-            pending_syncs.append((PersonSyncInfo.from_person(person), True))
-            result["added"].append(identifier)
+    for person_id in to_add_ids:
+        person = target_people[person_id]
+        team.members.append(person)
+        current_member_ids.add(person.id)
+        pending_syncs.append((PersonSyncInfo.from_person(person), True))
+        result["added"].append(person.identifier)
 
     session.flush()
 
@@ -794,8 +802,8 @@ async def set_team_members(
         )
 
     # Warning for clearing all members
-    if not target_members and current_members:
-        result["warnings"].append(f"Removed all {len(to_remove)} members from team")
+    if not target_people and current_member_list:
+        result["warnings"].append(f"Removed all {len(to_remove_ids)} members from team")
 
     return result
 
@@ -964,16 +972,10 @@ async def team_add_member(
             return {"error": f"Team not found: {team}"}
 
         # Find person
-        if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
-            person_obj = session.query(Person).options(
-                selectinload(Person.discord_accounts),
-                selectinload(Person.github_accounts),
-            ).filter(Person.id == int(person)).first()
-        else:
-            person_obj = session.query(Person).options(
-                selectinload(Person.discord_accounts),
-                selectinload(Person.github_accounts),
-            ).filter(Person.identifier == person).first()
+        person_obj = resolve_person(session, person, eager_load=[
+            selectinload(Person.discord_accounts),
+            selectinload(Person.github_accounts),
+        ])
 
         if not person_obj:
             return {"error": f"Person not found: {person}"}
@@ -1060,16 +1062,10 @@ async def team_remove_member(
             return {"error": f"Team not found: {team}"}
 
         # Find person
-        if isinstance(person, int) or (isinstance(person, str) and person.isdigit()):
-            person_obj = session.query(Person).options(
-                selectinload(Person.discord_accounts),
-                selectinload(Person.github_accounts),
-            ).filter(Person.id == int(person)).first()
-        else:
-            person_obj = session.query(Person).options(
-                selectinload(Person.discord_accounts),
-                selectinload(Person.github_accounts),
-            ).filter(Person.identifier == person).first()
+        person_obj = resolve_person(session, person, eager_load=[
+            selectinload(Person.discord_accounts),
+            selectinload(Person.github_accounts),
+        ])
 
         if not person_obj:
             return {"error": f"Person not found: {person}"}
