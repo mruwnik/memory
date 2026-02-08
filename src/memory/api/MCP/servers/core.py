@@ -549,6 +549,18 @@ def fetch_file(filename: str) -> dict:
         raise FileNotFoundError(f"File not found: {filename}")
 
     mime_type = extract.get_mime_type(path)
+
+    # Text files: return raw content without chunking to preserve formatting
+    if extract.is_text_file(path):
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            text = path.read_text(errors="replace")
+        return {
+            "content": [{"type": "text", "mime_type": mime_type, "data": text}]
+        }
+
+    # Non-text files: use the extraction pipeline
     chunks = extract.extract_data_chunks(mime_type, path, skip_summary=True)
 
     def serialize_chunk(

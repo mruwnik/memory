@@ -40,17 +40,23 @@ def yield_word_chunks(
         yield current
 
 
-def yield_spans(text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS) -> Iterable[str]:
+def yield_spans(
+    text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS
+) -> Iterable[tuple[str, bool]]:
     """
-    Yield text spans in priority order: paragraphs, sentences, words.
+    Yield (text, is_paragraph_start) spans in priority order: paragraphs, sentences, words.
     Each span is guaranteed to be under max_tokens.
+
+    The is_paragraph_start flag indicates whether this span begins a new paragraph,
+    allowing callers to preserve paragraph boundaries (\\n\\n) vs intra-paragraph
+    spacing (single space).
 
     Args:
         text: The text to split
         max_tokens: Maximum tokens per chunk
 
     Yields:
-        Spans of text that fit within token limits
+        Tuples of (span_text, is_paragraph_start)
     """
     # Return early for empty text
     if not text.strip():
@@ -61,19 +67,22 @@ def yield_spans(text: str, max_tokens: int = DEFAULT_CHUNK_TOKENS) -> Iterable[s
             continue
 
         if tokens.approx_token_count(paragraph) <= max_tokens:
-            yield paragraph
+            yield paragraph, True
             continue
 
+        is_first = True
         for sentence in _SENT_SPLIT_RE.split(paragraph):
             if not sentence.strip():
                 continue
 
             if tokens.approx_token_count(sentence) <= max_tokens:
-                yield sentence
+                yield sentence, is_first
+                is_first = False
                 continue
 
             for chunk in yield_word_chunks(sentence, max_tokens):
-                yield chunk
+                yield chunk, is_first
+                is_first = False
 
 
 def chunk_text(
@@ -101,9 +110,10 @@ def chunk_text(
     overlap_chars = overlap * tokens.CHARS_PER_TOKEN
     current = ""
 
-    for span in yield_spans(text, max_tokens):
-        # Check if adding this span would exceed the limit
-        new_chunk = f"{current} {span}".strip() if current else span
+    for span, is_para_start in yield_spans(text, max_tokens):
+        # Use \n\n between paragraphs, space within a paragraph
+        sep = "\n\n" if is_para_start else " "
+        new_chunk = f"{current}{sep}{span}".strip() if current else span
         if tokens.approx_token_count(new_chunk) <= max_tokens:
             current = new_chunk
             continue

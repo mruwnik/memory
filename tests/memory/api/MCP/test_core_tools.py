@@ -572,41 +572,59 @@ async def test_search_observations_handles_null_created_at(
 
 
 @pytest.mark.parametrize(
-    "mime_type,expected_type",
-    [
-        ("text/plain", "text"),
-        ("text/html", "text"),
-        ("application/pdf", "text"),
-        ("image/jpeg", "image"),
-        ("image/png", "image"),
-    ],
+    "mime_type",
+    ["text/plain", "text/html", "text/markdown"],
 )
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
-def test_fetch_file_type_detection(
-    mock_settings, mock_paths, mock_extract, mime_type, expected_type
+def test_fetch_file_text_type_detection(
+    mock_settings, mock_paths, mock_extract, mime_type
 ):
-    """Fetch file correctly detects text vs image content."""
+    """Fetch file correctly returns text content for text file types."""
+    mock_settings.FILE_STORAGE_DIR = Path("/storage")
+    mock_path = MagicMock(spec=Path)
+    mock_path.exists.return_value = True
+    mock_path.read_text.return_value = "text content"
+    mock_paths.validate_path_within_directory.return_value = mock_path
+
+    mock_extract.get_mime_type.return_value = mime_type
+    mock_extract.is_text_file.return_value = True
+
+    result = fetch_file.fn(filename="test.txt")
+
+    assert len(result["content"]) == 1
+    assert result["content"][0]["type"] == "text"
+    assert result["content"][0]["mime_type"] == mime_type
+    assert result["content"][0]["data"] == "text content"
+
+
+@pytest.mark.parametrize(
+    "mime_type",
+    ["image/jpeg", "image/png"],
+)
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.paths")
+@patch("memory.api.MCP.servers.core.settings")
+def test_fetch_file_image_type_detection(
+    mock_settings, mock_paths, mock_extract, mime_type
+):
+    """Fetch file correctly returns image content for image file types."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = mime_type
-
-    if expected_type == "text":
-        chunk = extract.DataChunk(data=["text content"], mime_type=mime_type)
-    else:
-        img = Image.new("RGB", (10, 10))
-        chunk = extract.DataChunk(data=[img], mime_type=mime_type)
-
+    mock_extract.is_text_file.return_value = False
+    img = Image.new("RGB", (10, 10))
+    chunk = extract.DataChunk(data=[img], mime_type=mime_type)
     mock_extract.extract_data_chunks.return_value = [chunk]
 
-    result = fetch_file.fn(filename="test.txt")
+    result = fetch_file.fn(filename="test.png")
 
     assert len(result["content"]) == 1
-    assert result["content"][0]["type"] == expected_type
+    assert result["content"][0]["type"] == "image"
     assert result["content"][0]["mime_type"] == mime_type
 
 
@@ -614,20 +632,22 @@ def test_fetch_file_type_detection(
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
 def test_fetch_file_text_content(mock_settings, mock_paths, mock_extract):
-    """Fetch file returns text content as string."""
+    """Fetch file returns text content as string without chunking."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
+    mock_path.read_text.return_value = "Hello, world!"
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = "text/plain"
-    chunk = extract.DataChunk(data=["Hello, world!"], mime_type="text/plain")
-    mock_extract.extract_data_chunks.return_value = [chunk]
+    mock_extract.is_text_file.return_value = True
 
     result = fetch_file.fn(filename="test.txt")
 
     assert result["content"][0]["data"] == "Hello, world!"
     assert result["content"][0]["type"] == "text"
+    # Should NOT call extract_data_chunks for text files
+    mock_extract.extract_data_chunks.assert_not_called()
 
 
 @patch("memory.api.MCP.servers.core.extract")
@@ -641,6 +661,7 @@ def test_fetch_file_image_content_base64(mock_settings, mock_paths, mock_extract
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = "image/png"
+    mock_extract.is_text_file.return_value = False
     img = Image.new("RGB", (10, 10))
     chunk = extract.DataChunk(data=[img], mime_type="image/png")
     mock_extract.extract_data_chunks.return_value = [chunk]
@@ -660,18 +681,19 @@ def test_fetch_file_image_content_base64(mock_settings, mock_paths, mock_extract
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
 def test_fetch_file_multiple_chunks(mock_settings, mock_paths, mock_extract):
-    """Fetch file handles multiple data chunks."""
+    """Fetch file handles multiple data chunks for non-text files."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
     mock_paths.validate_path_within_directory.return_value = mock_path
 
-    mock_extract.get_mime_type.return_value = "text/plain"
+    mock_extract.get_mime_type.return_value = "application/pdf"
+    mock_extract.is_text_file.return_value = False
     chunk1 = extract.DataChunk(data=["chunk 1", "chunk 2"], mime_type="text/plain")
     chunk2 = extract.DataChunk(data=["chunk 3"], mime_type="text/plain")
     mock_extract.extract_data_chunks.return_value = [chunk1, chunk2]
 
-    result = fetch_file.fn(filename="test.txt")
+    result = fetch_file.fn(filename="test.pdf")
 
     assert len(result["content"]) == 3
     assert result["content"][0]["data"] == "chunk 1"
@@ -721,11 +743,11 @@ def test_fetch_file_strips_whitespace(mock_settings, mock_paths, mock_extract):
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
+    mock_path.read_text.return_value = "content"
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = "text/plain"
-    chunk = extract.DataChunk(data=["content"], mime_type="text/plain")
-    mock_extract.extract_data_chunks.return_value = [chunk]
+    mock_extract.is_text_file.return_value = True
 
     fetch_file.fn(filename="  test.txt  ")
 
@@ -737,18 +759,43 @@ def test_fetch_file_strips_whitespace(mock_settings, mock_paths, mock_extract):
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
+def test_fetch_file_unicode_decode_error(mock_settings, mock_paths, mock_extract):
+    """Fetch file handles UnicodeDecodeError with replacement characters."""
+    mock_settings.FILE_STORAGE_DIR = Path("/storage")
+    mock_path = MagicMock(spec=Path)
+    mock_path.exists.return_value = True
+    mock_path.read_text.side_effect = [
+        UnicodeDecodeError("utf-8", b"", 0, 1, "invalid"),
+        "fallback content",
+    ]
+    mock_paths.validate_path_within_directory.return_value = mock_path
+
+    mock_extract.get_mime_type.return_value = "text/plain"
+    mock_extract.is_text_file.return_value = True
+
+    result = fetch_file.fn(filename="test.txt")
+
+    assert result["content"][0]["data"] == "fallback content"
+    assert mock_path.read_text.call_count == 2
+    mock_path.read_text.assert_called_with(errors="replace")
+
+
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.paths")
+@patch("memory.api.MCP.servers.core.settings")
 def test_fetch_file_skip_summary(mock_settings, mock_paths, mock_extract):
-    """Fetch file calls extract with skip_summary=True."""
+    """Fetch file calls extract with skip_summary=True for non-text files."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
     mock_paths.validate_path_within_directory.return_value = mock_path
 
-    mock_extract.get_mime_type.return_value = "text/plain"
+    mock_extract.get_mime_type.return_value = "application/pdf"
+    mock_extract.is_text_file.return_value = False
     chunk = extract.DataChunk(data=["content"], mime_type="text/plain")
     mock_extract.extract_data_chunks.return_value = [chunk]
 
-    fetch_file.fn(filename="test.txt")
+    fetch_file.fn(filename="test.pdf")
 
     call_kwargs = mock_extract.extract_data_chunks.call_args[1]
     assert call_kwargs["skip_summary"] is True

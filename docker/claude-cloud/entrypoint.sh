@@ -76,8 +76,11 @@ setup_github_token() {
         [[ $(tail -c1 "$creds" | wc -l) -eq 0 ]] && echo >> "$creds"
     fi
 
-    # Git credentials for clone/push
-    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" >> "$creds"
+    # Git credentials for clone/push (skip if already present)
+    local entry="https://x-access-token:${GITHUB_TOKEN}@github.com"
+    if ! grep -qxF "$entry" "$creds" 2>/dev/null; then
+        echo "$entry" >> "$creds"
+    fi
     chmod 600 "$creds"
     git config --global credential.helper store
 

@@ -114,13 +114,14 @@ def test_yield_word_chunk_real_world_example():
 
 
 # Tests for yield_spans function
+# yield_spans now returns (text, is_paragraph_start) tuples
 @pytest.mark.parametrize(
     "text, expected",
     [
         ("", []),  # Empty text should yield nothing
         (
             "Simple paragraph",
-            ["Simple paragraph"],
+            [("Simple paragraph", True)],
         ),  # Single paragraph under token limit
         ("  ", []),  # Just whitespace
     ],
@@ -133,7 +134,11 @@ def test_yield_spans_basic_behavior(text, expected):
 def test_yield_spans_paragraphs():
     """Test splitting by paragraphs"""
     text = "Paragraph one.\n\nParagraph two.\n\nParagraph three."
-    expected = ["Paragraph one.", "Paragraph two.", "Paragraph three."]
+    expected = [
+        ("Paragraph one.", True),
+        ("Paragraph two.", True),
+        ("Paragraph three.", True),
+    ]
     assert list(yield_spans(text)) == expected
 
 
@@ -145,8 +150,8 @@ def test_yield_spans_sentences():
     sentence2 = "Another short sentence."  # ~24 chars
     text = f"{sentence1} {sentence2}"  # Combined exceeds 5 tokens
 
-    # Function should now preserve punctuation
-    expected = ["Short sentence one.", "Another short sentence."]
+    # First sentence is paragraph start, second is not
+    expected = [("Short sentence one.", True), ("Another short sentence.", False)]
     assert list(yield_spans(text, max_tokens)) == expected
 
 
@@ -155,13 +160,18 @@ def test_yield_spans_words():
     max_tokens = 3  # 12 chars with CHARS_PER_TOKEN = 4
     long_sentence = "This sentence has several words and needs word-level chunking."
 
-    assert list(yield_spans(long_sentence, max_tokens)) == [
+    result = list(yield_spans(long_sentence, max_tokens))
+    texts = [t for t, _ in result]
+    flags = [f for _, f in result]
+    assert texts == [
         "This sentence",
         "has several",
         "words and needs",
         "word-level",
         "chunking.",
     ]
+    # First span is paragraph start, rest are not
+    assert flags == [True, False, False, False, False]
 
 
 def test_yield_spans_complex_document():
@@ -174,7 +184,10 @@ def test_yield_spans_complex_document():
         "Final short paragraph."
     )
 
-    assert list(yield_spans(text, max_tokens)) == [
+    result = list(yield_spans(text, max_tokens))
+    texts = [t for t, _ in result]
+    flags = [f for _, f in result]
+    assert texts == [
         "Paragraph one with a short sentence.",
         "And another sentence that should be split.",
         "Paragraph two is also here.",
@@ -184,6 +197,8 @@ def test_yield_spans_complex_document():
         "splitting depending on the limit.",
         "Final short paragraph.",
     ]
+    # Each paragraph's first span is True, subsequent spans within same paragraph are False
+    assert flags == [True, False, True, False, False, False, False, True]
 
 
 def test_yield_spans_very_long_word():
@@ -191,25 +206,33 @@ def test_yield_spans_very_long_word():
     max_tokens = 2  # 8 chars with CHARS_PER_TOKEN = 4
     long_word = "supercalifragilisticexpialidocious"  # Much longer than 8 chars
 
-    assert list(yield_spans(long_word, max_tokens)) == [long_word]
+    assert list(yield_spans(long_word, max_tokens)) == [(long_word, True)]
 
 
 def test_yield_spans_with_punctuation():
     """Test sentence splitting with various punctuation"""
     text = "First sentence! Second sentence? Third sentence."
 
-    assert list(yield_spans(text, max_tokens=10)) == [
+    result = list(yield_spans(text, max_tokens=10))
+    texts = [t for t, _ in result]
+    flags = [f for _, f in result]
+    assert texts == [
         "First sentence!",
         "Second sentence?",
         "Third sentence.",
     ]
+    assert flags == [True, False, False]
 
 
 def test_yield_spans_edge_cases():
     """Test edge cases like empty paragraphs, single character paragraphs"""
     text = "\n\nA\n\n\n\nB\n\n"
 
-    assert list(yield_spans(text, max_tokens=10)) == ["A", "B"]
+    result = list(yield_spans(text, max_tokens=10))
+    texts = [t for t, _ in result]
+    flags = [f for _, f in result]
+    assert texts == ["A", "B"]
+    assert flags == [True, True]
 
 
 @pytest.mark.parametrize(
@@ -240,6 +263,7 @@ def test_chunk_text_multi_paragraph():
 def test_chunk_text_long_text():
     """Test chunking with long text that exceeds token limit"""
     # Create a long text that will need multiple chunks
+    # All sentences in a single paragraph - should be joined with spaces
     sentences = [f"This is sentence {i:02}." for i in range(50)]
     text = " ".join(sentences)
 
@@ -307,4 +331,25 @@ def test_chunk_text_very_long_sentences():
         "case and should be",
         "split into multiple",
         "chunks by the function.",
+    ]
+
+
+def test_chunk_text_preserves_paragraph_breaks():
+    """Test that chunk_text preserves \\n\\n between paragraphs within a chunk"""
+    text = "# Heading\n\nParagraph one.\n\n## Section Two\n\nParagraph two."
+    # With enough tokens, all paragraphs fit in one chunk with \n\n preserved
+    result = list(chunk_text(text, max_tokens=100))
+    assert result == [text]
+
+
+def test_chunk_text_paragraph_breaks_in_multi_chunk():
+    """Test that paragraph boundaries use \\n\\n while sentence boundaries use spaces"""
+    text = "Para one sentence A. Para one sentence B.\n\nPara two sentence C. Para two sentence D."
+
+    max_tokens = 12  # Enough for ~2 sentences
+    result = list(chunk_text(text, max_tokens=max_tokens, overlap=0))
+    # Each paragraph should fit in one chunk, with \n\n not used within paragraphs
+    assert result == [
+        "Para one sentence A. Para one sentence B.",
+        "Para two sentence C. Para two sentence D.",
     ]
