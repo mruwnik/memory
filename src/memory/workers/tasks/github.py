@@ -592,6 +592,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
 
 
 @app.task(name=SYNC_ALL_GITHUB_REPOS)
+@safe_task_execution
 def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active GitHub repos.
 

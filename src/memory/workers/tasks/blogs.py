@@ -150,6 +150,7 @@ def sync_article_feed(feed_id: int) -> dict:
 
 
 @app.task(name=SYNC_ALL_ARTICLE_FEEDS)
+@safe_task_execution
 def sync_all_article_feeds() -> list[dict]:
     """
     Trigger sync for all active ArticleFeeds.

@@ -113,19 +113,22 @@ def check_content_exists(
     return query.first()
 
 
-def create_content_hash(content: str, *additional_data: str) -> bytes:
+def create_content_hash(content: str | bytes, *additional_data: str) -> bytes:
     """
     Create SHA256 hash from content and optional additional data.
 
     Args:
-        content: Primary content to hash
+        content: Primary content to hash (str or bytes)
         *additional_data: Additional strings to include in the hash
 
     Returns:
         SHA256 hash digest as bytes
     """
-    hash_input = content + "".join(additional_data)
-    return hashlib.sha256(hash_input.encode()).digest()
+    if isinstance(content, bytes):
+        hash_input = content + "".join(additional_data).encode()
+    else:
+        hash_input = (content + "".join(additional_data)).encode()
+    return hashlib.sha256(hash_input).digest()
 
 
 def embed_source_item(source_item: SourceItem) -> int:
@@ -380,6 +383,26 @@ def extract_task_params(
     return {k: v for k, v in all_params.items() if k in param_names}
 
 
+def get_celery_task_name(func: Callable, args: tuple) -> str:
+    """Get the full Celery task name for metric recording.
+
+    Tries (in order):
+    1. celery.current_task.name - works for both bound and unbound tasks
+    2. self.name for bound tasks (first arg has .request attribute)
+    3. func.__name__ as fallback
+    """
+    from celery import current_task
+
+    if current_task and hasattr(current_task, "name") and current_task.name is not None:
+        return current_task.name
+
+    task_self = args[0] if args and hasattr(args[0], "request") else None
+    if task_self and hasattr(task_self, "name"):
+        return task_self.name
+
+    return func.__name__
+
+
 def safe_task_execution(
     func: Callable[..., Mapping[str, Any]],
 ) -> Callable[..., Mapping[str, Any]]:
@@ -418,11 +441,13 @@ def safe_task_execution(
     def wrapper(*args, **kwargs) -> Mapping[str, Any]:
         start_time = time.perf_counter()
         status = "success"
+        error_message = ""
 
         try:
             return func(*args, **kwargs)
         except Exception as e:
             status = "failure"
+            error_message = str(e)
             logger.error(f"Task {func.__name__} failed: {e}")
             traceback_str = traceback.format_exc()
             logger.error(traceback_str)
@@ -439,7 +464,7 @@ def safe_task_execution(
             if is_final_retry or task_self is None:
                 notify_task_failure(
                     task_name=func.__name__,
-                    error_message=str(e),
+                    error_message=error_message,
                     task_args=args[1:] if task_self else args,
                     task_kwargs=kwargs,
                     traceback_str=traceback_str,
@@ -450,6 +475,11 @@ def safe_task_execution(
         finally:
             duration_ms = (time.perf_counter() - start_time) * 1000
             labels = extract_task_params(func, args, kwargs)
+
+            # Include error info in labels for failed tasks (truncated to
+            # avoid bloating the metrics table with full stack traces)
+            if status == "failure" and error_message:
+                labels["error"] = error_message[:500]
 
             # Try to get queue name from Celery task
             task_self = args[0] if args and hasattr(args[0], "request") else None
@@ -462,13 +492,7 @@ def safe_task_execution(
                 if hasattr(request, "retries"):
                     labels["retry_count"] = request.retries
 
-            # Use the full Celery task name (e.g. memory.workers.tasks.email.sync_all_accounts)
-            # when available, so metric names match the beat schedule directly.
-            metric_name = (
-                task_self.name
-                if task_self and hasattr(task_self, "name")
-                else func.__name__
-            )
+            metric_name = get_celery_task_name(func, args)
 
             # Wrap metric recording to avoid masking original exceptions
             try:

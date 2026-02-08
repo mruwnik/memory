@@ -92,6 +92,9 @@ SESSIONS_STORAGE_DIR = pathlib.Path(
 SNAPSHOT_STORAGE_DIR = pathlib.Path(
     os.getenv("SNAPSHOT_STORAGE_DIR", FILE_STORAGE_DIR / "snapshots")
 )
+REPORT_STORAGE_DIR = pathlib.Path(
+    os.getenv("REPORT_STORAGE_DIR", FILE_STORAGE_DIR / "reports")
+)
 # Host path for snapshots (used by orchestrator which runs on host, not in container)
 # In Docker, FILE_STORAGE_DIR is /app/memory_files but host path may differ
 HOST_STORAGE_DIR = pathlib.Path(
@@ -104,6 +107,7 @@ PRIVATE_DIRS = [
     EMAIL_STORAGE_DIR,
     NOTES_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
+    REPORT_STORAGE_DIR,
 ]
 
 # Directories to backup - chunks excluded (derived data, can be regenerated)
@@ -116,6 +120,7 @@ storage_dirs = [
     NOTES_STORAGE_DIR,
     DISCORD_STORAGE_DIR,
     SLACK_STORAGE_DIR,
+    REPORT_STORAGE_DIR,
 ]
 
 # All storage directories (including non-backed-up ones)

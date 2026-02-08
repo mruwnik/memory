@@ -353,6 +353,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
 
 @app.task(name=SYNC_ALL_GOOGLE_ACCOUNTS)
+@safe_task_execution
 def sync_all_google_accounts(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active Google Drive folders."""
     with make_session() as session:

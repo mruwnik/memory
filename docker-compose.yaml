@@ -265,7 +265,7 @@ services:
     environment:
       <<: *worker-env
       INTERNAL_API_URL: "http://api:8000"
-      QUEUES: "backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,slack,verification"
+      QUEUES: "backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:
       - ./memory_files:/app/memory_files:rw

@@ -23,10 +23,13 @@ class MCPServer(str, Enum):
     GITHUB = "github"
     JOURNAL = "journal"
     META = "meta"
+    NOTES = "notes"
     ORGANIZER = "organizer"
     PEOPLE = "people"
     POLLING = "polling"
     PROJECTS = "projects"
+    REPORTS = "reports"
+    SCHEDULER = "scheduler"
     SLACK = "slack"
     TEAMS = "teams"
 
@@ -84,6 +87,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.meta import meta_mcp
 
             return meta_mcp
+        case MCPServer.NOTES:
+            from memory.api.MCP.servers.notes import notes_mcp
+
+            return notes_mcp
         case MCPServer.ORGANIZER:
             from memory.api.MCP.servers.organizer import organizer_mcp
 
@@ -100,6 +107,14 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.projects import projects_mcp
 
             return projects_mcp
+        case MCPServer.REPORTS:
+            from memory.api.MCP.servers.reports import reports_mcp
+
+            return reports_mcp
+        case MCPServer.SCHEDULER:
+            from memory.api.MCP.servers.scheduler import scheduler_mcp
+
+            return scheduler_mcp
         case MCPServer.SLACK:
             from memory.api.MCP.servers.slack import slack_mcp
 

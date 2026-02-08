@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, FrozenSet, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Query
@@ -61,8 +61,7 @@ class SourceItemLike(Protocol):
 
 logger = logging.getLogger(__name__)
 
-# Type alias for database columns and TypedDict fields
-SensitivityLevelLiteral = Literal["public", "basic", "internal", "confidential"]
+from memory.common.scopes import SensitivityLevelLiteral
 
 
 class SensitivityLevel(str, Enum):

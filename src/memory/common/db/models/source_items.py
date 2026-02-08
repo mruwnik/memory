@@ -33,7 +33,6 @@ from memory.common import settings
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
-
 from memory.common.db.models.base import Base
 from memory.common.db.models.source_item import (
     SourceItem,
@@ -1263,6 +1262,73 @@ class Note(SourceItem):
     @property
     def title(self) -> str | None:
         return self.subject
+
+
+class ReportPayload(SourceItemPayload):
+    report_title: Annotated[str | None, "Title of the report"]
+    report_format: Annotated[str, "Format: html or pdf"]
+
+
+class Report(SourceItem):
+    """A pre-rendered report (HTML or PDF) uploaded to the knowledge base."""
+
+    __tablename__ = "reports"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    report_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_format: Mapped[str] = mapped_column(Text, nullable=False)  # "html" or "pdf"
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "report",
+    }
+
+    __table_args__ = (
+        Index("report_title_idx", "report_title"),
+        Index("report_format_idx", "report_format"),
+    )
+
+    def as_payload(self) -> ReportPayload:
+        return ReportPayload(
+            **super().as_payload(),
+            report_title=self.report_title,
+            report_format=self.report_format,
+        )
+
+    @property
+    def title(self) -> str | None:
+        return self.report_title
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["report"]
+
+    def save_to_file(self, content: str | bytes | None = None) -> None:
+        if not self.filename:
+            return
+        path = settings.REPORT_STORAGE_DIR / self.filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if content is not None:
+            if isinstance(content, str):
+                path.write_text(content)
+            else:
+                path.write_bytes(content)
+        elif self.content:
+            path.write_text(self.content)
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        if self.report_format == "pdf":
+            if not self.filename:
+                return []
+            file_path = settings.REPORT_STORAGE_DIR / self.filename
+            if not file_path.exists():
+                return []
+            return extract.doc_to_images(file_path)
+
+        # HTML: worker already converted to markdown and extracted images
+        return chunk_mixed(self.content or "", self.images or [])
 
 
 class AgentObservationPayload(SourceItemPayload):

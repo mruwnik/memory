@@ -128,7 +128,7 @@ export const useMCP = () => {
   }, [apiCall])
 
   const listNotes = useCallback(async (path: string = "/") => {
-    return await mcpCall('core_note_files', { path })
+    return await mcpCall('notes_note_files', { path })
   }, [mcpCall])
 
   const fetchFile = useCallback(async (filename: string) => {
@@ -136,7 +136,7 @@ export const useMCP = () => {
   }, [mcpCall])
 
   const saveNote = useCallback(async (filename: string, content: string, subject?: string) => {
-    return await mcpCall('core_create_note', {
+    return await mcpCall('notes_upsert', {
       filename,
       content,
       subject: subject || filename.split('/').pop()?.replace('.md', '') || 'Note',

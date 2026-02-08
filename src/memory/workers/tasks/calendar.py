@@ -527,6 +527,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
 
 
 @app.task(name=SYNC_ALL_CALENDARS)
+@safe_task_execution
 def sync_all_calendars(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active calendar accounts."""
     with make_session() as session:

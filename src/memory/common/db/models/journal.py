@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, func, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from memory.common.access_control import has_admin_scope
 from memory.common.db.models.base import Base
 
 if TYPE_CHECKING:
@@ -83,6 +82,8 @@ class JournalEntry(Base):
 
 def user_can_access_journal_entry(user: Any, entry: JournalEntry) -> bool:
     """Check if user can access a journal entry."""
+    from memory.common.access_control import has_admin_scope
+
     if has_admin_scope(user):
         return True
     if entry.private:
@@ -95,6 +96,8 @@ def build_journal_access_filter(user: Any, user_id: int | None):
 
     Returns a filter clause that can be applied to JournalEntry queries.
     """
+    from memory.common.access_control import has_admin_scope
+
     if has_admin_scope(user):
         return True  # No filter needed
     return or_(

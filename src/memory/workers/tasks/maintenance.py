@@ -34,6 +34,7 @@ from memory.common.db.models import Chunk, CodingProject, Session, SourceItem
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
+    safe_task_execution,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,10 +69,12 @@ def clean_collection(collection: str) -> dict[str, int]:
 
 
 @app.task(name=CLEAN_ALL_COLLECTIONS)
+@safe_task_execution
 def clean_all_collections():
     logger.info("Cleaning all collections")
     for collection in collections.ALL_COLLECTIONS:
         clean_collection.delay(collection)  # type: ignore
+    return {"status": "dispatched", "collections": len(collections.ALL_COLLECTIONS)}
 
 
 @app.task(name=REINGEST_CHUNK)
@@ -196,6 +199,7 @@ def process_raw_item(item_id: int, item_type: str):
 
 
 @app.task(name=PROCESS_RAW_ITEMS)
+@safe_task_execution
 def process_raw_items(
     item_type: str | None = None,
     modality: str | None = None,
@@ -273,6 +277,7 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
 
 
 @app.task(name=REINGEST_MISSING_CHUNKS)
+@safe_task_execution
 def reingest_missing_chunks(
     batch_size: int = 1000,
     collection: str | None = None,
@@ -428,6 +433,7 @@ def update_metadata_for_source_items(item_type: str):
 
 
 @app.task(name=CLEANUP_EXPIRED_OAUTH_STATES)
+@safe_task_execution
 def cleanup_expired_oauth_states(max_age_hours: int = 1):
     """Clean up OAuth states that are older than max_age_hours.
 
@@ -490,6 +496,7 @@ def cleanup_expired_sessions():
 
 
 @app.task(name=CLEANUP_OLD_CLAUDE_SESSIONS)
+@safe_task_execution
 def cleanup_old_claude_sessions(max_age_days: int | None = None):
     """Clean up old coding sessions.
 

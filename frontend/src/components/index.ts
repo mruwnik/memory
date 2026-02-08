@@ -12,5 +12,6 @@ export { default as LoginPrompt } from './auth/LoginPrompt'
 export { default as AuthError } from './auth/AuthError'
 
 export { CeleryOverview } from './celery'
+export { ScheduledTasks } from './scheduled-tasks'
 
 // Note: Metrics, Telemetry, ClaudeSessions are lazy-loaded in App.tsx

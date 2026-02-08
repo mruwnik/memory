@@ -22,6 +22,7 @@ PEOPLE_ROOT = "memory.workers.tasks.people"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
 MEETINGS_ROOT = "memory.workers.tasks.meetings"
+REPORTS_ROOT = "memory.workers.tasks.reports"
 METRICS_ROOT = "memory.workers.tasks.metrics"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
@@ -105,6 +106,9 @@ SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
 REPROCESS_MEETING = f"{MEETINGS_ROOT}.reprocess_meeting"
 CLEANUP_STUCK_MEETINGS = f"{MEETINGS_ROOT}.cleanup_stuck_meetings"
+
+# Report tasks
+SYNC_REPORT = f"{REPORTS_ROOT}.sync_report"
 
 # Metrics tasks
 COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
@@ -216,6 +220,7 @@ app.conf.update(
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
+        f"{REPORTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-reports"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         f"{VERIFICATION_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"

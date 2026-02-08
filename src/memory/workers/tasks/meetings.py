@@ -578,6 +578,7 @@ STUCK_MEETING_TIMEOUT_HOURS = 1
 
 
 @app.task(name=CLEANUP_STUCK_MEETINGS)
+@safe_task_execution
 def cleanup_stuck_meetings() -> dict:
     """
     Reset meetings stuck in 'processing' status due to worker crashes.

@@ -41,7 +41,7 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
-from memory.common.access_control import SensitivityLevelLiteral as SensitivityLevel
+from memory.common.scopes import SensitivityLevelLiteral as SensitivityLevel
 
 PREVIEW_MAX_LENGTH = 300
 

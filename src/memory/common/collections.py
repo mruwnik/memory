@@ -100,6 +100,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": True,
     },
+    "report": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": True,
+    },
     # Observations
     "semantic": {
         "dimension": 1024,

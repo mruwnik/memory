@@ -10,7 +10,6 @@ from memory.api.auth import require_scope
 from memory.common.scopes import SCOPE_ADMIN
 from memory.common.celery_app import app as celery_app, build_beat_schedule
 from memory.common.db.connection import make_session
-from memory.common.db.models.jobs import JobStatus, PendingJob
 from memory.common.db.models.metrics import MetricEvent
 from memory.common.db.models.users import User
 
@@ -62,15 +61,10 @@ def batch_last_run_info(
     task_names: list[str],
     db,
 ) -> dict[str, tuple[datetime | None, str | None, float | None]]:
-    """Get the most recent MetricEvent for each task name in a single query.
-
-    Uses DISTINCT ON to pick the latest event per task name, avoiding N+1 queries.
-    """
+    """Get the most recent MetricEvent for each task name in a single query."""
     if not task_names:
         return {}
 
-    # Use a subquery to get the max timestamp per task name, then join back
-    # to get the full row. This is portable across PostgreSQL and SQLite.
     subq = (
         db.query(
             MetricEvent.name,
@@ -145,78 +139,29 @@ def get_beat_schedule(
             )
 
     # Sort: failed first, then by name
-    results.sort(key=lambda r: (r["last_status"] != "error", r["name"].lower()))
+    results.sort(key=lambda r: (r["last_status"] != "failure", r["name"].lower()))
     return results
 
 
-@router.get("/ingestion-summary")
-def get_ingestion_summary(
+@router.get("/task-activity")
+def get_task_activity(
     _user: User = require_scope(SCOPE_ADMIN),
+    hours: int = 24,
 ) -> dict:
-    """Return ingestion job summary grouped by type and recent failures."""
+    """Return task execution activity from MetricEvent in the last N hours."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
     with make_session() as db:
-        # Group by (job_type, status) with counts
+        # Per-task breakdown
         rows = (
             db.query(
-                PendingJob.job_type,
-                PendingJob.status,
-                func.count(PendingJob.id),
-            )
-            .group_by(PendingJob.job_type, PendingJob.status)
-            .all()
-        )
-
-        by_type: dict[str, dict[str, int]] = {}
-        for job_type, status, count in rows:
-            if job_type not in by_type:
-                by_type[job_type] = {
-                    "pending": 0,
-                    "processing": 0,
-                    "complete": 0,
-                    "failed": 0,
-                }
-            by_type[job_type][status] = count
-
-        type_list = [
-            {
-                "job_type": jt,
-                "pending": counts["pending"],
-                "processing": counts["processing"],
-                "complete": counts["complete"],
-                "failed": counts["failed"],
-                "total": sum(counts.values()),
-            }
-            for jt, counts in sorted(by_type.items())
-        ]
-
-        # Recent failures (last 10)
-        recent_failures = (
-            db.query(PendingJob)
-            .filter(PendingJob.status == JobStatus.FAILED.value)
-            .order_by(PendingJob.updated_at.desc())
-            .limit(10)
-            .all()
-        )
-        failures_list = [
-            {
-                "id": j.id,
-                "job_type": j.job_type,
-                "error_message": j.error_message,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-            }
-            for j in recent_failures
-        ]
-
-        # Task metrics from MetricEvent in last 24h
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        metric_rows = (
-            db.query(
+                MetricEvent.name,
                 func.count(MetricEvent.id).label("total"),
                 func.sum(
                     case((MetricEvent.status == "success", 1), else_=0)
                 ).label("success"),
                 func.sum(
-                    case((MetricEvent.status == "error", 1), else_=0)
+                    case((MetricEvent.status == "failure", 1), else_=0)
                 ).label("failure"),
                 func.avg(MetricEvent.duration_ms).label("avg_duration"),
             )
@@ -224,22 +169,67 @@ def get_ingestion_summary(
                 MetricEvent.metric_type == "task",
                 MetricEvent.timestamp >= cutoff,
             )
-            .first()
+            .group_by(MetricEvent.name)
+            .all()
         )
 
-        task_metrics = {
-            "total": metric_rows.total if metric_rows else 0,
-            "success": int(metric_rows.success or 0) if metric_rows else 0,
-            "failure": int(metric_rows.failure or 0) if metric_rows else 0,
+        by_task = [
+            {
+                "task": row.name,
+                "total": row.total,
+                "success": int(row.success or 0),
+                "failure": int(row.failure or 0),
+                "avg_duration_ms": round(row.avg_duration, 1) if row.avg_duration else None,
+            }
+            for row in rows
+        ]
+        # Sort: failures first, then by total descending
+        by_task.sort(key=lambda r: (-r["failure"], -r["total"]))
+
+        # Totals
+        tasks_with_duration = [r for r in by_task if r["avg_duration_ms"] is not None]
+        weighted_total = sum(r["total"] for r in tasks_with_duration)
+        totals = {
+            "total": sum(r["total"] for r in by_task),
+            "success": sum(r["success"] for r in by_task),
+            "failure": sum(r["failure"] for r in by_task),
             "avg_duration_ms": (
-                round(metric_rows.avg_duration, 1)
-                if metric_rows and metric_rows.avg_duration
+                round(
+                    sum(r["avg_duration_ms"] * r["total"] for r in tasks_with_duration)
+                    / weighted_total,
+                    1,
+                )
+                if tasks_with_duration and weighted_total > 0
                 else None
             ),
         }
 
+        # Recent failures from MetricEvent (last 10 task failures within the time window)
+        recent_failures = (
+            db.query(MetricEvent)
+            .filter(
+                MetricEvent.metric_type == "task",
+                MetricEvent.status == "failure",
+                MetricEvent.timestamp >= cutoff,
+            )
+            .order_by(MetricEvent.timestamp.desc())
+            .limit(10)
+            .all()
+        )
+        failures_list = [
+            {
+                "task": e.name,
+                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                "duration_ms": e.duration_ms,
+                "labels": e.labels,
+                "error": (e.labels or {}).get("error"),
+            }
+            for e in recent_failures
+        ]
+
     return {
-        "by_type": type_list,
+        "hours": hours,
+        "by_task": by_task,
+        "totals": totals,
         "recent_failures": failures_list,
-        "task_metrics": task_metrics,
     }

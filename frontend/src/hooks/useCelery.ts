@@ -11,33 +11,34 @@ export interface BeatScheduleEntry {
   last_duration_ms: number | null
 }
 
-export interface IngestionTypeSummary {
-  job_type: string
-  pending: number
-  processing: number
-  complete: number
-  failed: number
-  total: number
-}
-
-export interface RecentFailure {
-  id: number
-  job_type: string
-  error_message: string | null
-  updated_at: string | null
-}
-
-export interface TaskMetrics {
+export interface TaskActivityEntry {
+  task: string
   total: number
   success: number
   failure: number
   avg_duration_ms: number | null
 }
 
-export interface IngestionSummary {
-  by_type: IngestionTypeSummary[]
-  recent_failures: RecentFailure[]
-  task_metrics: TaskMetrics
+export interface TaskTotals {
+  total: number
+  success: number
+  failure: number
+  avg_duration_ms: number | null
+}
+
+export interface TaskFailure {
+  task: string
+  timestamp: string | null
+  duration_ms: number | null
+  labels: Record<string, unknown>
+  error: string | null
+}
+
+export interface TaskActivity {
+  hours: number
+  by_task: TaskActivityEntry[]
+  totals: TaskTotals
+  recent_failures: TaskFailure[]
 }
 
 export const useCelery = () => {
@@ -49,11 +50,11 @@ export const useCelery = () => {
     return response.json()
   }, [apiCall])
 
-  const getIngestionSummary = useCallback(async (): Promise<IngestionSummary> => {
-    const response = await apiCall('/api/celery/ingestion-summary')
-    if (!response.ok) throw new Error('Failed to fetch ingestion summary')
+  const getTaskActivity = useCallback(async (hours: number = 24): Promise<TaskActivity> => {
+    const response = await apiCall(`/api/celery/task-activity?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch task activity')
     return response.json()
   }, [apiCall])
 
-  return { getBeatSchedule, getIngestionSummary }
+  return { getBeatSchedule, getTaskActivity }
 }

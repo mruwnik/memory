@@ -21,6 +21,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import MetricEvent
+from memory.common.content_processing import safe_task_execution
 from memory.common.metrics import record_gauge
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def collect_open_files(process) -> int | None:
 
 
 @app.task(name=COLLECT_SYSTEM_METRICS)
+@safe_task_execution
 def collect_system_metrics() -> dict:
     """
     Collect system and process metrics.
@@ -108,6 +110,7 @@ def collect_system_metrics() -> dict:
 
 
 @app.task(name=CLEANUP_OLD_METRICS)
+@safe_task_execution
 def cleanup_old_metrics(retention_days: int = 30) -> dict:
     """
     Delete metric events older than retention_days.
@@ -151,6 +154,7 @@ def cleanup_old_metrics(retention_days: int = 30) -> dict:
 
 
 @app.task(name=REFRESH_METRIC_SUMMARIES)
+@safe_task_execution
 def refresh_metric_summaries() -> dict:
     """
     Refresh the metric_summaries materialized view.

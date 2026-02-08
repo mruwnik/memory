@@ -7,7 +7,7 @@ import logging
 import mimetypes
 import pathlib
 
-from fastapi import FastAPI, UploadFile, Request, HTTPException
+from fastapi import Depends, FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -18,10 +18,14 @@ from slowapi.middleware import SlowAPIMiddleware
 from sqladmin import Admin
 
 from memory.common import extract, paths, settings
-from memory.common.db.connection import get_engine
+from memory.common.access_control import get_user_project_roles, has_admin_scope, user_can_access
+from memory.common.db.connection import get_engine, get_session
+from memory.common.db.models import User
+from memory.common.db.models.source_items import Report
 from memory.api.admin import AdminAuth, setup_admin
 from memory.api.auth import (
     AuthenticationMiddleware,
+    get_current_user,
     router as auth_router,
 )
 from memory.api.google_drive import router as google_drive_router
@@ -223,6 +227,55 @@ async def serve_react_app(full_path: str):
     except HTTPException:
         pass  # Fall through to index.html for SPA routing
     return FileResponse(settings.STATIC_DIR / "index.html")
+
+
+@app.get("/reports/{path:path}")
+async def serve_report(
+    path: str,
+    download: bool = False,
+    user: User = Depends(get_current_user),
+    db=Depends(get_session),
+):
+    """Serve a report file with per-report access control and CSP sandboxing for HTML."""
+    file_path = validate_path_within_directory(settings.REPORT_STORAGE_DIR, path)
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    # Per-report access control - require a DB record for every served file
+    try:
+        filename = file_path.relative_to(settings.REPORT_STORAGE_DIR.resolve()).as_posix()
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report = db.query(Report).filter(Report.filename == filename).one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
+    if not user_can_access(user, report, project_roles):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    if download:
+        return FileResponse(
+            file_path,
+            media_type=mime_type,
+            filename=file_path.name,
+            content_disposition_type="attachment",
+        )
+
+    response = FileResponse(file_path, media_type=mime_type)
+
+    # CSP sandbox for HTML - prevents script execution in uploaded reports
+    if mime_type in ("text/html", "application/xhtml+xml"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; sandbox"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+    return response
 
 
 @app.get("/files/{path:path}")

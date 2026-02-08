@@ -16,7 +16,10 @@ Usage:
         print(f"{scope['value']}: {scope['label']}")
 """
 
-from typing import TypedDict
+from typing import Literal, TypedDict
+
+# Sensitivity levels for content access control
+SensitivityLevelLiteral = Literal["public", "basic", "internal", "confidential"]
 
 
 class ScopeInfo(TypedDict):
@@ -42,6 +45,8 @@ SCOPE_OBSERVE = "observe"
 SCOPE_OBSERVE_WRITE = "observe:write"
 SCOPE_NOTES = "notes"
 SCOPE_NOTES_WRITE = "notes:write"
+SCOPE_REPORTS = "reports"
+SCOPE_REPORTS_WRITE = "reports:write"
 
 # Integrations
 SCOPE_GITHUB = "github"
@@ -123,6 +128,18 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_NOTES_WRITE,
         "label": "Notes (write)",
         "description": "Create and manage notes",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_REPORTS,
+        "label": "Reports",
+        "description": "View reports",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_REPORTS_WRITE,
+        "label": "Reports (write)",
+        "description": "Create and manage reports",
         "category": "core",
     },
     # Integrations

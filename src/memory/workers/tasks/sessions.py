@@ -16,6 +16,7 @@ from memory.common import settings
 from memory.common.celery_app import app, SUMMARIZE_SESSION, SUMMARIZE_STALE_SESSIONS
 from memory.common.db.connection import make_session
 from memory.common.db.models import Session
+from memory.common.content_processing import safe_task_execution
 from memory.common.llms import create_provider, Message, MessageRole, LLMSettings
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,7 @@ def summarize_session(session_id: str) -> dict:
 
 
 @app.task(name=SUMMARIZE_STALE_SESSIONS)
+@safe_task_execution
 def summarize_stale_sessions() -> dict:
     """
     Find and summarize sessions that have been modified since their last summary.

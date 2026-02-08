@@ -137,10 +137,12 @@ def sync_xkcd() -> set[str]:
 
 
 @app.task(name=SYNC_ALL_COMICS)
+@safe_task_execution
 def sync_all_comics():
     """Synchronize all active comics."""
     sync_smbc.delay()  # type: ignore
     sync_xkcd.delay()  # type: ignore
+    return {"status": "dispatched", "sources": ["smbc", "xkcd"]}
 
 
 @app.task(name="memory.workers.tasks.comic.full_sync_comic")

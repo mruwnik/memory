@@ -406,6 +406,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
 
 
 @app.task(name=SYNC_ALL_ACCOUNTS)
+@safe_task_execution
 def sync_all_accounts() -> list[dict]:
     """
     Synchronize all active email accounts.

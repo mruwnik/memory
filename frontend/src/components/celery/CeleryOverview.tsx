@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   useCelery,
   BeatScheduleEntry,
-  IngestionSummary,
+  TaskActivity,
 } from '@/hooks/useCelery'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -29,23 +29,33 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
+function shortTaskName(fullName: string): string {
+  const parts = fullName.split('.')
+  return parts[parts.length - 1].replace(/_/g, ' ')
+}
+
+function successRate(success: number, total: number): string {
+  if (total === 0) return '-'
+  return `${Math.round((success / total) * 100)}%`
+}
+
 const CeleryOverview = () => {
-  const { getBeatSchedule, getIngestionSummary } = useCelery()
+  const { getBeatSchedule, getTaskActivity } = useCelery()
   const [schedule, setSchedule] = useState<BeatScheduleEntry[]>([])
-  const [ingestion, setIngestion] = useState<IngestionSummary | null>(null)
+  const [activity, setActivity] = useState<TaskActivity | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedFailure, setExpandedFailure] = useState<number | null>(null)
 
   useEffect(() => {
-    Promise.all([getBeatSchedule(), getIngestionSummary()])
-      .then(([sched, ing]) => {
+    Promise.all([getBeatSchedule(), getTaskActivity()])
+      .then(([sched, act]) => {
         setSchedule(sched)
-        setIngestion(ing)
+        setActivity(act)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [getBeatSchedule, getIngestionSummary])
+  }, [getBeatSchedule, getTaskActivity])
 
   if (loading) {
     return (
@@ -63,7 +73,7 @@ const CeleryOverview = () => {
     )
   }
 
-  const metrics = ingestion?.task_metrics
+  const totals = activity?.totals
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -79,24 +89,24 @@ const CeleryOverview = () => {
 
       <main className="flex-1 p-8 mx-auto w-full max-w-6xl space-y-8">
         {/* Task Metrics Summary Cards */}
-        {metrics && (
+        {totals && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white rounded-xl shadow-md p-6 text-center">
-              <div className="text-3xl font-bold text-slate-800">{metrics.total}</div>
-              <div className="text-sm text-gray-500 mt-1">Tasks (24h)</div>
+              <div className="text-3xl font-bold text-slate-800">{totals.total}</div>
+              <div className="text-sm text-gray-500 mt-1">Tasks ({activity?.hours || 24}h)</div>
             </div>
             <div className="bg-white rounded-xl shadow-md p-6 text-center">
-              <div className="text-3xl font-bold text-green-600">{metrics.success}</div>
+              <div className="text-3xl font-bold text-green-600">{totals.success}</div>
               <div className="text-sm text-gray-500 mt-1">Succeeded</div>
             </div>
             <div className="bg-white rounded-xl shadow-md p-6 text-center">
-              <div className="text-3xl font-bold text-red-600">{metrics.failure}</div>
+              <div className="text-3xl font-bold text-red-600">{totals.failure}</div>
               <div className="text-sm text-gray-500 mt-1">Failed</div>
             </div>
             <div className="bg-white rounded-xl shadow-md p-6 text-center">
               <div className="text-3xl font-bold text-slate-800">
-                {metrics.avg_duration_ms !== null
-                  ? formatDuration(metrics.avg_duration_ms)
+                {totals.avg_duration_ms !== null
+                  ? formatDuration(totals.avg_duration_ms)
                   : '-'}
               </div>
               <div className="text-sm text-gray-500 mt-1">Avg Duration</div>
@@ -157,46 +167,49 @@ const CeleryOverview = () => {
           </div>
         </section>
 
-        {/* Ingestion Summary */}
-        {ingestion && (
+        {/* Task Activity */}
+        {activity && (
           <section>
             <h2 className="text-slate-800 text-xl font-semibold mb-4">
-              Ingestion Jobs
+              Task Activity (last {activity.hours}h)
             </h2>
 
-            {ingestion.by_type.length > 0 && (
+            {activity.by_task.length > 0 && (
               <div className="bg-white rounded-xl shadow-md overflow-hidden mb-6">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600">Job Type</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Pending</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Processing</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Complete</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Failed</th>
+                      <th className="px-4 py-3 text-sm font-medium text-slate-600">Task</th>
                       <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Total</th>
+                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Success</th>
+                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Failed</th>
+                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Rate</th>
+                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Avg Duration</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {ingestion.by_type.map((row) => (
-                      <tr key={row.job_type} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-sm font-medium text-slate-800">
-                          {row.job_type}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right text-yellow-600">
-                          {row.pending || '-'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right text-blue-600">
-                          {row.processing || '-'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right text-green-600">
-                          {row.complete || '-'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right text-red-600">
-                          {row.failed || '-'}
+                    {activity.by_task.map((row) => (
+                      <tr key={row.task} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-sm">
+                          <div className="font-medium text-slate-800 capitalize">
+                            {shortTaskName(row.task)}
+                          </div>
+                          <div className="text-xs text-slate-400 font-mono">{row.task}</div>
                         </td>
                         <td className="px-4 py-3 text-sm text-right font-medium text-slate-800">
                           {row.total}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right text-green-600">
+                          {row.success}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right text-red-600">
+                          {row.failure || '-'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right text-slate-600">
+                          {successRate(row.success, row.total)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right text-slate-600">
+                          {formatDuration(row.avg_duration_ms)}
                         </td>
                       </tr>
                     ))}
@@ -205,39 +218,51 @@ const CeleryOverview = () => {
               </div>
             )}
 
-            {ingestion.recent_failures.length > 0 && (
+            {activity.recent_failures.length > 0 && (
               <div>
                 <h3 className="text-slate-700 text-lg font-medium mb-3">
                   Recent Failures
                 </h3>
                 <div className="space-y-2">
-                  {ingestion.recent_failures.map((failure) => (
+                  {activity.recent_failures.map((failure, idx) => (
                     <div
-                      key={failure.id}
+                      key={`${failure.task}-${failure.timestamp}`}
                       className="bg-white rounded-lg shadow-sm border border-red-100 p-4 cursor-pointer"
                       onClick={() =>
-                        setExpandedFailure(
-                          expandedFailure === failure.id ? null : failure.id
-                        )
+                        setExpandedFailure(expandedFailure === idx ? null : idx)
                       }
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
-                            {failure.job_type}
+                            {shortTaskName(failure.task)}
                           </span>
                           <span className="text-sm text-slate-500">
-                            {formatRelativeTime(failure.updated_at)}
+                            {formatRelativeTime(failure.timestamp)}
                           </span>
+                          {failure.duration_ms !== null && (
+                            <span className="text-xs text-slate-400">
+                              ({formatDuration(failure.duration_ms)})
+                            </span>
+                          )}
                         </div>
                         <span className="text-slate-400 text-sm">
-                          {expandedFailure === failure.id ? 'Hide' : 'Show'} details
+                          {expandedFailure === idx ? 'Hide' : 'Show'} details
                         </span>
                       </div>
-                      {expandedFailure === failure.id && failure.error_message && (
-                        <pre className="mt-3 p-3 bg-red-50 rounded text-xs text-red-800 overflow-x-auto whitespace-pre-wrap">
-                          {failure.error_message}
-                        </pre>
+                      {expandedFailure === idx && (
+                        <div className="mt-3 space-y-2">
+                          {failure.error && (
+                            <pre className="p-3 bg-red-50 rounded text-xs text-red-800 overflow-x-auto whitespace-pre-wrap">
+                              {failure.error}
+                            </pre>
+                          )}
+                          {failure.labels && Object.keys(failure.labels).length > 0 && (
+                            <pre className="p-3 bg-slate-50 rounded text-xs text-slate-600 overflow-x-auto whitespace-pre-wrap">
+                              {JSON.stringify(failure.labels, null, 2)}
+                            </pre>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

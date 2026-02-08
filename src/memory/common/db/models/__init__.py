@@ -26,6 +26,7 @@ from memory.common.db.models.source_items import (
     GoogleDoc,
     Task,
     CalendarEvent,
+    Report,
     MailMessagePayload,
     EmailAttachmentPayload,
     AgentObservationPayload,
@@ -39,6 +40,7 @@ from memory.common.db.models.source_items import (
     CalendarEventPayload,
     MeetingPayload,
     Meeting,
+    ReportPayload,
 )
 from memory.common.db.models.discord import (
     DiscordBot,
@@ -178,6 +180,7 @@ Payload = (
     | GoogleDocPayload
     | TaskPayload
     | CalendarEventPayload
+    | ReportPayload
 )
 
 __all__ = [
@@ -209,6 +212,8 @@ __all__ = [
     "CalendarEventPayload",
     "Meeting",
     "MeetingPayload",
+    "Report",
+    "ReportPayload",
     # Observations
     "ObservationContradiction",
     "ReactionPattern",
