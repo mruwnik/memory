@@ -233,6 +233,42 @@ def find_person(session: DBSession, identifier: str | None) -> Person | None:
     return session.query(Person).filter(Person.identifier == slug).first()
 
 
+def resolve_people(
+    session: DBSession,
+    identifiers: set[str] | list[str],
+    create_if_missing: bool = False,
+) -> list["Person"]:
+    """Resolve identifiers (emails, names, slugs) to Person records.
+
+    Args:
+        session: Database session for person lookup
+        identifiers: Collection of emails, names, or identifiers to look up
+        create_if_missing: If True, create Person records for unmatched identifiers
+
+    Returns:
+        Deduplicated list of resolved Person records
+    """
+    resolved: list[Person] = []
+    seen: set[int] = set()
+
+    for identifier in identifiers:
+        if not identifier:
+            continue
+
+        person = find_person(session, identifier)
+
+        if not person and create_if_missing:
+            email = identifier if "@" in identifier else None
+            name = identifier if "@" not in identifier else identifier.split("@")[0]
+            person, _ = find_or_create_person(session, name=name, email=email)
+
+        if person and person.id not in seen:
+            resolved.append(person)
+            seen.add(person.id)
+
+    return resolved
+
+
 def link_people(
     session: DBSession,
     source_item: "SourceItem",
@@ -271,6 +307,27 @@ def link_people(
             linked += 1
 
     return linked
+
+
+def reconcile_people(
+    session: DBSession,
+    source_item: "SourceItem",
+    identifiers: set[str] | list[str],
+    create_if_missing: bool = False,
+) -> None:
+    """Reconcile person associations to match the given identifiers.
+
+    Adds people for new identifiers and removes people no longer in the list.
+    Unlike link_people (which only adds), this sets the people list to exactly
+    match the resolved identifiers.
+
+    Args:
+        session: Database session for person lookup
+        source_item: The SourceItem to update associations for
+        identifiers: Collection of emails, names, or identifiers to look up
+        create_if_missing: If True, create Person records for unmatched identifiers
+    """
+    source_item.people = resolve_people(session, identifiers, create_if_missing)
 
 
 def link_slack_user_to_person(

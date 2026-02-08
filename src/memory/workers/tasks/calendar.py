@@ -23,7 +23,7 @@ from memory.common.content_processing import (
     process_content_item,
     safe_task_execution,
 )
-from memory.common.people import link_people
+from memory.common.people import link_people, reconcile_people
 
 logger = logging.getLogger(__name__)
 
@@ -426,9 +426,8 @@ def sync_calendar_event(
             )
 
         if existing:
-            # TODO(#49): Update person associations when attendees change.
-            # Currently, attendees are only linked on initial creation.
             _update_existing_event(existing, event_data)
+            reconcile_people(session, existing, event_data.get("attendees", []))
             session.commit()
             return create_task_result(existing, "updated")
 

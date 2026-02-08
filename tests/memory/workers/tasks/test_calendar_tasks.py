@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from memory.common.db.models import CalendarEvent
+from memory.common.db.models import CalendarEvent, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
 from memory.workers.tasks.calendar import (
@@ -688,3 +688,144 @@ def test_sync_all_calendars_force_full(mock_sync_account, caldav_account, db_ses
     mock_sync_account.delay.assert_called_once_with(
         caldav_account.id, force_full=True
     )
+
+
+# =============================================================================
+# Tests for person association reconciliation on event update (#49)
+# =============================================================================
+
+
+@pytest.fixture
+def alice(db_session) -> Person:
+    person = Person(
+        identifier="alice",
+        display_name="Alice",
+        contact_info={"email": "alice@example.com"},
+    )
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+@pytest.fixture
+def bob(db_session) -> Person:
+    person = Person(
+        identifier="bob",
+        display_name="Bob",
+        contact_info={"email": "bob@example.com"},
+    )
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+@pytest.fixture
+def charlie(db_session) -> Person:
+    person = Person(
+        identifier="charlie",
+        display_name="Charlie",
+        contact_info={"email": "charlie@example.com"},
+    )
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+def test_update_event_adds_new_person_associations(
+    mock_event_data, caldav_account, db_session, qdrant, alice, bob, charlie
+):
+    """Test that updating an event with new attendees adds person associations."""
+    # Create event with alice and bob
+    mock_event_data["attendees"] = ["alice@example.com", "bob@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"alice", "bob"}
+
+    # Update: add charlie
+    mock_event_data["attendees"] = [
+        "alice@example.com",
+        "bob@example.com",
+        "charlie@example.com",
+    ]
+    serialized = _serialize_event_data(mock_event_data)
+    result = calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    assert result["status"] == "updated"
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"alice", "bob", "charlie"}
+
+
+def test_update_event_removes_old_person_associations(
+    mock_event_data, caldav_account, db_session, qdrant, alice, bob
+):
+    """Test that updating an event with fewer attendees removes person associations."""
+    # Create event with alice and bob
+    mock_event_data["attendees"] = ["alice@example.com", "bob@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"alice", "bob"}
+
+    # Update: remove bob
+    mock_event_data["attendees"] = ["alice@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    result = calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    assert result["status"] == "updated"
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"alice"}
+
+
+def test_update_event_replaces_all_person_associations(
+    mock_event_data, caldav_account, db_session, qdrant, alice, bob, charlie
+):
+    """Test that updating attendees fully replaces the set."""
+    # Create event with alice
+    mock_event_data["attendees"] = ["alice@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"alice"}
+
+    # Update: completely different attendee list
+    mock_event_data["attendees"] = ["bob@example.com", "charlie@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    result = calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    assert result["status"] == "updated"
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert {p.identifier for p in event.people} == {"bob", "charlie"}
+
+
+def test_update_event_clears_all_person_associations(
+    mock_event_data, caldav_account, db_session, qdrant, alice, bob
+):
+    """Test that updating with no attendees clears all associations."""
+    # Create event with attendees
+    mock_event_data["attendees"] = ["alice@example.com", "bob@example.com"]
+    serialized = _serialize_event_data(mock_event_data)
+    calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert len(event.people) == 2
+
+    # Update: no attendees
+    mock_event_data["attendees"] = []
+    serialized = _serialize_event_data(mock_event_data)
+    result = calendar.sync_calendar_event(caldav_account.id, serialized)
+
+    assert result["status"] == "updated"
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
+    assert event.people == []

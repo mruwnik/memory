@@ -106,6 +106,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": True,
     },
+    "calendar": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": False,
+    },
     # Observations
     "semantic": {
         "dimension": 1024,

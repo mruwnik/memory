@@ -1,6 +1,6 @@
 """Add allow_scripts column to reports table for CSP control.
 
-Revision ID: 20260208_add_allow_scripts_to_reports
+Revision ID: 20260208_report_allow_scripts
 Revises: 20260208_add_reports
 Create Date: 2026-02-08
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "20260208_add_allow_scripts_to_reports"
+revision: str = "20260208_report_allow_scripts"
 down_revision: Union[str, None] = "20260208_add_reports"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
