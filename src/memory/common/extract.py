@@ -167,12 +167,27 @@ def docx_to_pdf(
         raise
 
 
+def extract_docx_text(docx_path: pathlib.Path) -> list[DataChunk]:
+    """Extract text from DOCX using pypandoc (no LaTeX needed)."""
+    text = pypandoc.convert_file(str(docx_path), format="docx", to="plain")
+    if not text or not text.strip():
+        return []
+    return extract_text(text)
+
+
 def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[DataChunk]:
-    """Extract content from DOCX by converting to PDF first, then processing"""
+    """Extract content from DOCX by converting to PDF first, then processing.
+
+    Falls back to plain text extraction if PDF conversion fails (e.g. LaTeX errors).
+    """
     with as_file(docx_path) as file_path:
-        pdf_path = docx_to_pdf(file_path)
-        logger.info(f"Extracted PDF from {file_path}")
-        return doc_to_images(pdf_path)
+        try:
+            pdf_path = docx_to_pdf(file_path)
+            logger.info(f"Extracted PDF from {file_path}")
+            return doc_to_images(pdf_path)
+        except Exception as e:
+            logger.warning(f"PDF conversion failed for {file_path}, falling back to text extraction: {e}")
+            return extract_docx_text(file_path)
 
 
 def extract_image(content: bytes | str | pathlib.Path) -> list[DataChunk]:

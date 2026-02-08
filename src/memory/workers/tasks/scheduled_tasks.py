@@ -493,11 +493,11 @@ def run_scheduled_tasks():
 
         # Dispatch new executions
         for execution_id in execution_ids:
-            execute_scheduled_task.delay(execution_id)
+            app.send_task(EXECUTE_SCHEDULED_TASK, args=[execution_id])
 
         # Re-dispatch stuck pending executions
         for stuck in stuck_pending:
-            execute_scheduled_task.delay(stuck.id)
+            app.send_task(EXECUTE_SCHEDULED_TASK, args=[stuck.id])
 
         return {
             "executions": execution_ids,

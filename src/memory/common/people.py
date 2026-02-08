@@ -9,7 +9,7 @@ records and optionally creating new ones. Used by:
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session, scoped_session
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Type alias for session types - scoped_session behaves like Session at runtime
-DBSession = Session | scoped_session[Session]
+DBSession: TypeAlias = Session | scoped_session[Session]
 
 
 def escape_like(s: str) -> str:

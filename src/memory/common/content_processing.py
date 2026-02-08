@@ -404,8 +404,8 @@ def get_celery_task_name(func: Callable, args: tuple) -> str:
 
 
 def safe_task_execution(
-    func: Callable[..., Mapping[str, Any]],
-) -> Callable[..., Mapping[str, Any]]:
+    func: Callable[..., Mapping[str, Any] | list[Any]],
+) -> Callable[..., Mapping[str, Any] | list[Any]]:
     """
     Decorator for safe task execution with comprehensive error handling and metrics.
 
@@ -438,7 +438,7 @@ def safe_task_execution(
     from functools import wraps
 
     @wraps(func)
-    def wrapper(*args, **kwargs) -> Mapping[str, Any]:
+    def wrapper(*args, **kwargs) -> Mapping[str, Any] | list[Any]:
         start_time = time.perf_counter()
         status = "success"
         error_message = ""

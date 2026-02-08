@@ -67,7 +67,8 @@ def source_columns(model: type, *columns: str):
 
 
 # Create admin views for all models
-class SourceItemAdmin(ModelView, model=SourceItem):
+class SourceItemAdmin(ModelView):
+    model = SourceItem
     column_list = source_columns(SourceItem)
     column_searchable_list = [
         "modality",
@@ -76,12 +77,14 @@ class SourceItemAdmin(ModelView, model=SourceItem):
     ]
 
 
-class ChunkAdmin(ModelView, model=Chunk):
+class ChunkAdmin(ModelView):
+    model = Chunk
     column_list = ["id", "source_id", "embedding_model", "created_at"]
     column_sortable_list = ["created_at"]
 
 
-class MailMessageAdmin(ModelView, model=MailMessage):
+class MailMessageAdmin(ModelView):
+    model = MailMessage
     column_list = source_columns(
         MailMessage,
         "subject",
@@ -102,7 +105,8 @@ class MailMessageAdmin(ModelView, model=MailMessage):
     ]
 
 
-class EmailAttachmentAdmin(ModelView, model=EmailAttachment):
+class EmailAttachmentAdmin(ModelView):
+    model = EmailAttachment
     column_list = source_columns(EmailAttachment, "filename", "mime_type", "size")
     column_searchable_list = [
         "filename",
@@ -111,14 +115,16 @@ class EmailAttachmentAdmin(ModelView, model=EmailAttachment):
     ]
 
 
-class BlogPostAdmin(ModelView, model=BlogPost):
+class BlogPostAdmin(ModelView):
+    model = BlogPost
     column_list = source_columns(
         BlogPost, "title", "author", "url", "published", "domain"
     )
     column_searchable_list = ["title", "author", "domain", "id", "url"]
 
 
-class ForumPostAdmin(ModelView, model=ForumPost):
+class ForumPostAdmin(ModelView):
+    model = ForumPost
     column_list = source_columns(
         ForumPost,
         "title",
@@ -133,16 +139,19 @@ class ForumPostAdmin(ModelView, model=ForumPost):
     column_searchable_list = ["title", "authors", "id"]
 
 
-class PhotoAdmin(ModelView, model=Photo):
+class PhotoAdmin(ModelView):
+    model = Photo
     column_list = source_columns(Photo, "exif_taken_at", "camera")
 
 
-class ComicAdmin(ModelView, model=Comic):
+class ComicAdmin(ModelView):
+    model = Comic
     column_list = source_columns(Comic, "title", "author", "published", "volume")
     column_searchable_list = ["title", "author", "id"]
 
 
-class BookSectionAdmin(ModelView, model=BookSection):
+class BookSectionAdmin(ModelView):
+    model = BookSection
     column_list = source_columns(
         BookSection,
         "section_title",
@@ -154,12 +163,14 @@ class BookSectionAdmin(ModelView, model=BookSection):
     column_searchable_list = ["section_title", "id"]
 
 
-class MiscDocAdmin(ModelView, model=MiscDoc):
+class MiscDocAdmin(ModelView):
+    model = MiscDoc
     column_list = source_columns(MiscDoc, "path")
     column_searchable_list = ["path", "id"]
 
 
-class BookAdmin(ModelView, model=Book):
+class BookAdmin(ModelView):
+    model = Book
     column_list = [
         "id",
         "title",
@@ -171,7 +182,8 @@ class BookAdmin(ModelView, model=Book):
     column_searchable_list = ["title", "author", "id"]
 
 
-class DiscordMessageAdmin(ModelView, model=DiscordMessage):
+class DiscordMessageAdmin(ModelView):
+    model = DiscordMessage
     column_list = [
         "id",
         "content",
@@ -182,7 +194,8 @@ class DiscordMessageAdmin(ModelView, model=DiscordMessage):
     column_sortable_list = ["sent_at"]
 
 
-class MCPServerAdmin(ModelView, model=MCPServer):
+class MCPServerAdmin(ModelView):
+    model = MCPServer
     column_list = [
         "id",
         "mcp_server_url",
@@ -212,7 +225,8 @@ class MCPServerAdmin(ModelView, model=MCPServer):
     ]
 
 
-class ArticleFeedAdmin(ModelView, model=ArticleFeed):
+class ArticleFeedAdmin(ModelView):
+    model = ArticleFeed
     column_list = [
         "id",
         "title",
@@ -226,7 +240,8 @@ class ArticleFeedAdmin(ModelView, model=ArticleFeed):
     column_searchable_list = ["title", "url", "id"]
 
 
-class EmailAccountAdmin(ModelView, model=EmailAccount):
+class EmailAccountAdmin(ModelView):
+    model = EmailAccount
     column_list = [
         "id",
         "name",
@@ -242,7 +257,8 @@ class EmailAccountAdmin(ModelView, model=EmailAccount):
     column_searchable_list = ["name", "email_address", "id"]
 
 
-class AgentObservationAdmin(ModelView, model=AgentObservation):
+class AgentObservationAdmin(ModelView):
+    model = AgentObservation
     column_list = [
         "id",
         "content",
@@ -257,7 +273,8 @@ class AgentObservationAdmin(ModelView, model=AgentObservation):
     column_sortable_list = ["inserted_at"]
 
 
-class NoteAdmin(ModelView, model=Note):
+class NoteAdmin(ModelView):
+    model = Note
     column_list = [
         "id",
         "subject",
@@ -272,7 +289,8 @@ class NoteAdmin(ModelView, model=Note):
     column_sortable_list = ["inserted_at"]
 
 
-class UserAdmin(ModelView, model=User):
+class UserAdmin(ModelView):
+    model = User
     column_list = [
         "id",
         "user_type",
@@ -284,7 +302,8 @@ class UserAdmin(ModelView, model=User):
     ]
 
 
-class DiscordUserAdmin(ModelView, model=DiscordUser):
+class DiscordUserAdmin(ModelView):
+    model = DiscordUser
     column_list = [
         "id",
         "username",
@@ -295,7 +314,8 @@ class DiscordUserAdmin(ModelView, model=DiscordUser):
     ]
 
 
-class DiscordServerAdmin(ModelView, model=DiscordServer):
+class DiscordServerAdmin(ModelView):
+    model = DiscordServer
     column_list = [
         "id",
         "name",
@@ -308,7 +328,8 @@ class DiscordServerAdmin(ModelView, model=DiscordServer):
     ]
 
 
-class DiscordChannelAdmin(ModelView, model=DiscordChannel):
+class DiscordChannelAdmin(ModelView):
+    model = DiscordChannel
     column_list = [
         "id",
         "name",
@@ -320,7 +341,8 @@ class DiscordChannelAdmin(ModelView, model=DiscordChannel):
     ]
 
 
-class DiscordBotAdmin(ModelView, model=DiscordBot):
+class DiscordBotAdmin(ModelView):
+    model = DiscordBot
     column_list = [
         "id",
         "name",
@@ -330,7 +352,8 @@ class DiscordBotAdmin(ModelView, model=DiscordBot):
     ]
 
 
-class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
+class ScheduledTaskAdmin(ModelView):
+    model = ScheduledTask
     column_list = [
         "id",
         "user",
@@ -347,7 +370,8 @@ class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
     column_sortable_list = ["next_scheduled_time", "created_at", "updated_at"]
 
 
-class TaskExecutionAdmin(ModelView, model=TaskExecution):
+class TaskExecutionAdmin(ModelView):
+    model = TaskExecution
     column_list = [
         "id",
         "task_id",
@@ -360,7 +384,8 @@ class TaskExecutionAdmin(ModelView, model=TaskExecution):
     column_sortable_list = ["scheduled_time", "started_at", "finished_at"]
 
 
-class GithubAccountAdmin(ModelView, model=GithubAccount):
+class GithubAccountAdmin(ModelView):
+    model = GithubAccount
     column_list = [
         "id",
         "name",
@@ -375,7 +400,8 @@ class GithubAccountAdmin(ModelView, model=GithubAccount):
     form_excluded_columns = ["repos", "access_token", "private_key"]
 
 
-class GithubRepoAdmin(ModelView, model=GithubRepo):
+class GithubRepoAdmin(ModelView):
+    model = GithubRepo
     column_list = [
         "id",
         "account",
@@ -397,7 +423,8 @@ class GithubRepoAdmin(ModelView, model=GithubRepo):
     column_searchable_list = ["owner", "name", "id"]
 
 
-class GithubItemAdmin(ModelView, model=GithubItem):
+class GithubItemAdmin(ModelView):
+    model = GithubItem
     column_list = source_columns(
         GithubItem,
         "kind",
@@ -414,7 +441,8 @@ class GithubItemAdmin(ModelView, model=GithubItem):
     column_sortable_list = ["github_updated_at", "created_at"]
 
 
-class GoogleDocAdmin(ModelView, model=GoogleDoc):
+class GoogleDocAdmin(ModelView):
+    model = GoogleDoc
     column_list = source_columns(
         GoogleDoc,
         "title",
@@ -428,7 +456,8 @@ class GoogleDocAdmin(ModelView, model=GoogleDoc):
     column_sortable_list = ["google_modified_at", "created_at"]
 
 
-class GoogleFolderAdmin(ModelView, model=GoogleFolder):
+class GoogleFolderAdmin(ModelView):
+    model = GoogleFolder
     column_list = source_columns(
         GoogleFolder, "folder_name", "folder_path", "account", "active"
     )
@@ -436,7 +465,8 @@ class GoogleFolderAdmin(ModelView, model=GoogleFolder):
     column_sortable_list = ["last_sync_at", "created_at"]
 
 
-class GoogleAccountAdmin(ModelView, model=GoogleAccount):
+class GoogleAccountAdmin(ModelView):
+    model = GoogleAccount
     column_list = [
         "id",
         "name",
@@ -450,7 +480,8 @@ class GoogleAccountAdmin(ModelView, model=GoogleAccount):
     column_sortable_list = ["last_sync_at", "created_at"]
 
 
-class MeetingAdmin(ModelView, model=Meeting):
+class MeetingAdmin(ModelView):
+    model = Meeting
     column_list = source_columns(
         Meeting,
         "title",
@@ -480,7 +511,8 @@ class MeetingAdmin(ModelView, model=Meeting):
     column_sortable_list = ["meeting_date", "duration_minutes", "created_at"]
 
 
-class CalendarEventAdmin(ModelView, model=CalendarEvent):
+class CalendarEventAdmin(ModelView):
+    model = CalendarEvent
     column_list = source_columns(
         CalendarEvent,
         "event_title",
@@ -502,7 +534,8 @@ class CalendarEventAdmin(ModelView, model=CalendarEvent):
     column_sortable_list = ["start_time", "end_time", "inserted_at"]
 
 
-class CalendarAccountAdmin(ModelView, model=CalendarAccount):
+class CalendarAccountAdmin(ModelView):
+    model = CalendarAccount
     column_list = [
         "id",
         "name",

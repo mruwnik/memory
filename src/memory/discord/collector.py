@@ -13,11 +13,22 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import discord
-from memory.common.db.connection import DBSession
+from discord import (
+    DMChannel,
+    GroupChannel,
+    Guild,
+    Intents,
+    Message,
+    MessageType,
+    RawReactionActionEvent,
+    TextChannel,
+    Thread,
+    VoiceChannel,
+    abc,
+)
 from discord.ext import commands
 
-from memory.common.db.connection import make_session
+from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
@@ -41,22 +52,22 @@ class BotInfo:
 logger = logging.getLogger(__name__)
 
 
-def get_channel_type(channel: discord.abc.Messageable) -> str:
+def get_channel_type(channel: abc.Messageable) -> str:
     """Determine the type of a Discord channel."""
-    if isinstance(channel, discord.DMChannel):
+    if isinstance(channel, DMChannel):
         return "dm"
-    if isinstance(channel, discord.GroupChannel):
+    if isinstance(channel, GroupChannel):
         return "group_dm"
-    if isinstance(channel, discord.Thread):
+    if isinstance(channel, Thread):
         return "thread"
-    if isinstance(channel, discord.VoiceChannel):
+    if isinstance(channel, VoiceChannel):
         return "voice"
-    if isinstance(channel, discord.TextChannel):
+    if isinstance(channel, TextChannel):
         return "text"
     return getattr(getattr(channel, "type", None), "name", "unknown")
 
 
-def ensure_server(session: DBSession, guild: discord.Guild) -> DiscordServer:
+def ensure_server(session: DBSession, guild: Guild) -> DiscordServer:
     """Ensure a Discord server record exists."""
     server = session.get(DiscordServer, guild.id)
     if server is None:
@@ -82,7 +93,7 @@ def ensure_server(session: DBSession, guild: discord.Guild) -> DiscordServer:
 
 def ensure_channel(
     session: DBSession,
-    channel: discord.abc.Messageable,
+    channel: abc.Messageable,
     guild_id: int | None,
 ) -> DiscordChannel:
     """Ensure a Discord channel record exists."""
@@ -114,7 +125,7 @@ def ensure_channel(
     return channel_model
 
 
-def ensure_user(session: DBSession, discord_user: discord.abc.User) -> DiscordUser:
+def ensure_user(session: DBSession, discord_user: abc.User) -> DiscordUser:
     """Ensure a Discord user record exists."""
     user = session.get(DiscordUser, discord_user.id)
     display_name = getattr(discord_user, "display_name", discord_user.name)
@@ -149,7 +160,7 @@ class MessageCollector(commands.Bot):
     """
 
     def __init__(self, bot_info: BotInfo, celery_app: Celery):
-        intents = discord.Intents.default()
+        intents = Intents.default()
         intents.message_content = True
         intents.members = True
         intents.guilds = True
@@ -200,7 +211,7 @@ class MessageCollector(commands.Bot):
             f"{channel_count} channels, {user_count} users"
         )
 
-    async def on_message(self, message: discord.Message) -> None:
+    async def on_message(self, message: Message) -> None:
         """Handle incoming messages (including our own for complete history)."""
         try:
             await self._process_message(message)
@@ -208,7 +219,7 @@ class MessageCollector(commands.Bot):
             logger.exception(f"Error processing message {message.id}")
 
     async def on_message_edit(
-        self, _before: discord.Message, after: discord.Message
+        self, _before: Message, after: Message
     ) -> None:
         """Handle message edits (including our own for complete history)."""
         try:
@@ -216,18 +227,18 @@ class MessageCollector(commands.Bot):
         except Exception:
             logger.exception(f"Error processing message edit {after.id}")
 
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+    async def on_raw_reaction_add(self, payload: RawReactionActionEvent) -> None:
         """Handle reaction additions."""
         await self._process_reaction_update(payload)
 
     async def on_raw_reaction_remove(
-        self, payload: discord.RawReactionActionEvent
+        self, payload: RawReactionActionEvent
     ) -> None:
         """Handle reaction removals."""
         await self._process_reaction_update(payload)
 
     async def _process_reaction_update(
-        self, payload: discord.RawReactionActionEvent
+        self, payload: RawReactionActionEvent
     ) -> None:
         """Fetch current reactions and queue update."""
         try:
@@ -265,7 +276,7 @@ class MessageCollector(commands.Bot):
             logger.exception(f"Error processing reaction update for {payload.message_id}")
 
     async def _process_message(
-        self, message: discord.Message, is_edit: bool = False
+        self, message: Message, is_edit: bool = False
     ) -> None:
         """Process a message - check collection settings and queue for storage."""
         with make_session() as session:
@@ -334,13 +345,13 @@ class MessageCollector(commands.Bot):
 
         logger.debug(f"Queued message {message.id} for processing")
 
-    def _get_message_type(self, message: discord.Message) -> str:
+    def _get_message_type(self, message: Message) -> str:
         """Determine the message type."""
         if message.reference:
             return "reply"
         if getattr(message, "thread", None):
             return "thread_starter"
-        if message.type != discord.MessageType.default:
+        if message.type != MessageType.default:
             return "system"
         return "default"
 

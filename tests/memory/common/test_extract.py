@@ -4,9 +4,12 @@ import pymupdf
 from PIL import Image
 import io
 import shutil
+from unittest.mock import patch
 from memory.common.extract import (
     as_file,
     extract_text,
+    extract_docx,
+    extract_docx_text,
     doc_to_images,
     extract_image,
     docx_to_pdf,
@@ -239,3 +242,38 @@ def test_docx_to_pdf_default_output():
 )
 def test_merge_metadata(dicts, expected):
     assert merge_metadata(*dicts) == expected
+
+
+def test_extract_docx_text():
+    """extract_docx_text extracts plain text from a DOCX without needing LaTeX."""
+    chunks = extract_docx_text(SAMPLE_DOCX)
+    assert len(chunks) >= 1
+    assert all(isinstance(c, DataChunk) for c in chunks)
+    # Should contain actual text content
+    text = " ".join(str(d) for c in chunks for d in c.data)
+    assert len(text) > 0
+
+
+def test_extract_docx_falls_back_on_pdf_failure():
+    """When PDF conversion fails, extract_docx falls back to text extraction."""
+    with patch(
+        "memory.common.extract.docx_to_pdf",
+        side_effect=RuntimeError("Pandoc died with exitcode 43"),
+    ):
+        chunks = extract_docx(SAMPLE_DOCX)
+
+    assert len(chunks) >= 1
+    assert all(isinstance(c, DataChunk) for c in chunks)
+    text = " ".join(str(d) for c in chunks for d in c.data)
+    assert len(text) > 0
+
+
+@pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
+def test_extract_docx_uses_pdf_when_available():
+    """When PDF conversion succeeds, extract_docx returns image chunks (from PDF)."""
+    chunks = extract_docx(SAMPLE_DOCX)
+    assert len(chunks) >= 1
+    # PDF path produces image chunks; each chunk's data contains PIL Images
+    assert any(
+        isinstance(d, Image.Image) for c in chunks for d in c.data
+    )
