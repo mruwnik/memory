@@ -310,7 +310,7 @@ def create_notification(
     subject: str,
     message: str,
     details_url: str | None,
-    scheduled_time: datetime,
+    scheduled_time: datetime | None,
     extra_data: dict[str, Any] | None = None,
 ) -> ScheduledTask:
     """Create a notification record in the database."""
@@ -407,10 +407,11 @@ async def notify_user(
             if scheduled_dt <= current_time_naive:
                 raise ValueError("Scheduled time must be in the future")
         else:
-            # Immediate: set scheduled_time to now
-            scheduled_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+            scheduled_dt = None
 
         # Create the notification record
+        # For immediate sends, next_scheduled_time is None so the beat
+        # scheduler won't also pick it up.
         notification = create_notification(
             session=session,
             user_id=user_id,
@@ -426,11 +427,12 @@ async def notify_user(
         # For immediate notifications, create execution in the same transaction
         # to avoid orphaned ScheduledTask records if execution creation fails
         execution_id = None
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if not scheduled_time:
             session.flush()  # Assign notification.id before referencing it
             execution = TaskExecution(
                 task_id=notification.id,
-                scheduled_time=scheduled_dt,
+                scheduled_time=now,
                 status="pending",
             )
             session.add(execution)
@@ -449,7 +451,7 @@ async def notify_user(
         "scheduled": bool(scheduled_time),
         "notification_id": notification_id,
         "channel_type": channel_type,
-        "scheduled_time": scheduled_dt.isoformat() if scheduled_time else None,
+        "scheduled_time": scheduled_dt.isoformat() if scheduled_dt else None,
     }
 
 
