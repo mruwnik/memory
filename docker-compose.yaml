@@ -264,7 +264,11 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      QUEUES: "backup,blogs,calendar,comic,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,slack,verification"
+      QUEUES: "backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,scheduler,slack,verification"
+      CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
+    volumes:
+      - ./memory_files:/app/memory_files:rw
+      - ${CUSTOM_TASKS_DIR:-./custom_tasks}:/app/custom_tasks:ro
 
   ingest-hub:
     <<: *worker-base
@@ -275,8 +279,10 @@ services:
       <<: *worker-env
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
+      CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:
       - ./memory_files:/app/memory_files:rw
+      - ${CUSTOM_TASKS_DIR:-./custom_tasks}:/app/custom_tasks:ro
     tmpfs:
       - /tmp
       - /var/tmp

@@ -123,3 +123,4 @@ if settings.LESSWRONG_SYNC_INTERVAL > 0:
         "task": SYNC_LESSWRONG,
         "schedule": settings.LESSWRONG_SYNC_INTERVAL,
     }
+

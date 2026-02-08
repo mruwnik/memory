@@ -354,3 +354,6 @@ def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[
 # Comma-separated list of server names to disable (e.g., "slack,forecast")
 # Valid names: books, core, discord, email, forecast, github, meta, organizer, people, polling, schedule, slack
 DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
+
+# Custom tasks directory for deployment-specific periodic tasks
+CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None

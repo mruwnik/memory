@@ -1,5 +1,7 @@
 from celery import Celery
+from celery.schedules import crontab
 from kombu.utils.url import safequote
+
 from memory.common import settings
 
 EMAIL_ROOT = "memory.workers.tasks.email"
@@ -121,6 +123,38 @@ SESSIONS_ROOT = "memory.workers.tasks.sessions"
 SUMMARIZE_SESSION = f"{SESSIONS_ROOT}.summarize_session"
 SUMMARIZE_STALE_SESSIONS = f"{SESSIONS_ROOT}.summarize_stale_sessions"
 
+# Custom tasks (deployment-specific, loaded from CUSTOM_TASKS_DIR)
+CUSTOM_TASKS_PREFIX = "custom_tasks"
+
+
+def custom_task_name(filename_stem: str, func_name: str = "run") -> str:
+    """Build a canonical Celery task name for a custom task file.
+
+    >>> custom_task_name("deadline_check")
+    'custom_tasks.deadline_check.run'
+    """
+    return f"{CUSTOM_TASKS_PREFIX}.{filename_stem}.{func_name}"
+
+
+def register_custom_beat(
+    filename_stem: str,
+    schedule: float | crontab,
+    func_name: str = "run",
+) -> str:
+    """Register a custom task in the Celery beat schedule.
+
+    Returns the task name for use with @app.task(name=...).
+
+    >>> name = register_custom_beat("deadline_check", crontab(hour=9, minute=0))
+    """
+    task_name = custom_task_name(filename_stem, func_name)
+    beat_key = f"custom-tasks-{filename_stem.replace('_', '-')}"
+    app.conf.beat_schedule[beat_key] = {
+        "task": task_name,
+        "schedule": schedule,
+    }
+    return task_name
+
 
 def get_broker_url() -> str:
     protocol = settings.CELERY_BROKER_TYPE
@@ -189,13 +223,22 @@ app.conf.update(
         f"{SESSIONS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
+        f"{CUSTOM_TASKS_PREFIX}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-custom"
+        },
     },
 )
 
 
 @app.on_after_configure.connect  # type: ignore[attr-defined]
-def ensure_qdrant_initialised(sender, **_):
+def setup_on_configure(sender, **_):
     from memory.common import qdrant
 
     qdrant.setup_qdrant()
-    # Note: load_servers() was removed as it's no longer needed
+
+
+# Load custom tasks at import time so they're registered before the worker starts.
+# This must be after app and conf are fully set up.
+from memory.workers.custom_task_loader import load_custom_tasks  # noqa: E402
+
+load_custom_tasks()
