@@ -344,8 +344,9 @@ launch_claude() {
     }
     trap cleanup TERM INT
 
-    # Start tmux detached
+    # Start tmux detached with mouse support (so scroll events reach Claude Code)
     tmux new-session -d -s claude -- "${cmd[@]}"
+    tmux set -t claude mouse on
     log "tmux session started"
 
     # Start terminal relay (fast path for screen capture/input)

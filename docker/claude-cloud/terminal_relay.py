@@ -151,29 +151,27 @@ def handle_resize(cols: int, rows: int) -> dict:
     return {"status": "ok"}
 
 
-def handle_mouse_scroll(direction: str) -> dict:
-    """Send a mouse scroll event to the tmux pane via raw bytes.
+def handle_capture_range(start: int, end: int) -> dict:
+    """Capture a range of pane lines with escape codes (colors).
 
-    Constructs SGR mouse protocol bytes locally so escape characters
-    never need to travel over JSON/TCP.
+    Uses the same coordinate system as tmux capture-pane -S/-E:
+        Negative = scrollback history (-1 = line just above visible area)
+        0 to (rows-1) = visible area
     """
-    if direction not in ("up", "down"):
-        log.warning("Unexpected scroll direction %r, defaulting to 'down'", direction)
-        direction = "down"
-    # SGR mouse: \x1b[<button;col;rowM
-    # button 64 = scroll up, 65 = scroll down
-    button = 64 if direction == "up" else 65
-    seq = f"\x1b[<{button};1;1M"
-    args = ["send-keys", "-H", "-t", TMUX_SESSION]
-    for b in seq.encode("utf-8"):
-        args.append(f"{b:02x}")
-
-    result = tmux_run(*args)
+    try:
+        start = int(start)
+        end = int(end)
+    except (TypeError, ValueError):
+        return {"status": "error", "error": f"start and end must be integers, got {start!r} and {end!r}"}
+    result = tmux_run(
+        "capture-pane", "-t", TMUX_SESSION, "-p", "-e",
+        "-S", str(start), "-E", str(end),
+    )
     if result.returncode != 0:
         if is_tmux_not_ready(result.stderr):
             return {"status": "tmux_not_ready"}
         return {"status": "error", "error": result.stderr.strip()}
-    return {"status": "ok"}
+    return {"status": "ok", "content": result.stdout}
 
 
 def dispatch(request: dict) -> dict:
@@ -197,8 +195,11 @@ def dispatch(request: dict) -> dict:
             request.get("start", -1000),
             request.get("end", -1),
         )
-    if action == "mouse_scroll":
-        return handle_mouse_scroll(request.get("direction", "down"))
+    if action == "capture_range":
+        return handle_capture_range(
+            request.get("start", 0),
+            request.get("end", -1),
+        )
     return {"status": "error", "error": f"unknown action: {action}"}
 
 

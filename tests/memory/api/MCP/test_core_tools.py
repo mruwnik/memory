@@ -22,6 +22,8 @@ from memory.api.MCP.servers.core import (
 )
 from memory.api.search.types import SearchFilters
 from memory.common import extract
+from memory.common.db.models.source_item import SourceItem
+from tests.conftest import mcp_auth_context
 
 
 # ====== search tests ======
@@ -908,7 +910,7 @@ async def test_fetch_returns_full_details(mock_make_session, mock_access_filter)
     mock_item.content = "Article content here"
     mock_item.as_payload.return_value = {"author": "Test Author"}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.first.return_value = mock_item
+    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
 
     result = await fetch.fn(id=123, include_content=True)
 
@@ -940,7 +942,7 @@ async def test_fetch_without_content(mock_make_session, mock_access_filter):
     mock_item.content = "Should not be included"
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.first.return_value = mock_item
+    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -955,7 +957,7 @@ async def test_fetch_not_found(mock_make_session, mock_access_filter):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_session.query.return_value.options.return_value.filter.return_value.first.return_value = None
+    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = []
 
     with pytest.raises(ValueError, match="Item 999 not found"):
         await fetch.fn(id=999)
@@ -980,7 +982,7 @@ async def test_fetch_handles_null_inserted_at(mock_make_session, mock_access_fil
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.first.return_value = mock_item
+    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -1017,10 +1019,14 @@ async def test_fetch_with_journal_entries(mock_make_session, mock_get_user, mock
     mock_entry2 = MagicMock()
     mock_entry2.as_payload.return_value = {"id": 2, "content": "Entry 2"}
 
+    mock_entry1.target_id = 123
+    mock_entry2.target_id = 123
+
     # Setup query chains
     item_query = MagicMock()
+    item_query.options.return_value = item_query
     item_query.filter.return_value = item_query
-    item_query.first.return_value = mock_item
+    item_query.all.return_value = [mock_item]
 
     journal_query = MagicMock()
     journal_query.filter.return_value = journal_query
@@ -1064,11 +1070,170 @@ async def test_fetch_without_journal_entries(mock_make_session, mock_access_filt
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.first.return_value = mock_item
+    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
 
     result = await fetch.fn(id=123, include_content=False)
 
     assert "journal_entries" not in result
+
+
+# ====== bulk fetch tests ======
+#
+# These tests use the real database (db_session fixture) and MCP auth context
+# rather than mocking internals, so they exercise the full fetch code path.
+
+
+@pytest.mark.asyncio
+async def test_fetch_rejects_both_id_and_ids():
+    """Fetch raises when both id and ids are provided."""
+    with pytest.raises(ValueError, match="Cannot provide both"):
+        await fetch.fn(id=1, ids=[2, 3])
+
+
+@pytest.mark.asyncio
+async def test_fetch_rejects_neither_id_nor_ids():
+    """Fetch raises when neither id nor ids are provided."""
+    with pytest.raises(ValueError, match="Must provide either"):
+        await fetch.fn()
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_max_200_limit():
+    """Fetch raises when ids list exceeds 200."""
+    with pytest.raises(ValueError, match="Cannot fetch more than 200"):
+        await fetch.fn(ids=list(range(201)))
+
+
+def make_source_item(db_session, n: int, **overrides) -> "SourceItem":
+    """Create and persist a SourceItem with embed_status=STORED for fetch tests."""
+    from tests.conftest import unique_sha256
+
+    defaults = dict(
+        modality="blog",
+        sha256=unique_sha256(f"bulk-fetch-{n}"),
+        content=f"Content {n}",
+        mime_type="text/html",
+        tags=[],
+        embed_status="STORED",
+    )
+    defaults.update(overrides)
+    item = SourceItem(**defaults)
+    db_session.add(item)
+    db_session.commit()
+    db_session.refresh(item)
+    return item
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_returns_list(db_session, admin_session):
+    """Bulk fetch returns a list of dicts, not a single dict."""
+    item_a = make_source_item(db_session, 1)
+    item_b = make_source_item(db_session, 2)
+
+    with mcp_auth_context(admin_session.id):
+        result = await fetch.fn(ids=[item_a.id, item_b.id])
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["id"] == item_a.id
+    assert result[1]["id"] == item_b.id
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_preserves_order(db_session, admin_session):
+    """Bulk fetch returns items in the same order as the input ids."""
+    items = [make_source_item(db_session, n) for n in range(3)]
+
+    # Request in reverse order
+    requested_ids = [items[2].id, items[0].id, items[1].id]
+    with mcp_auth_context(admin_session.id):
+        result = await fetch.fn(ids=requested_ids)
+
+    assert [r["id"] for r in result] == requested_ids
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_skips_missing_items(db_session, admin_session):
+    """Bulk fetch silently skips items not found in the database."""
+    item = make_source_item(db_session, 1)
+    missing_id = item.id + 9999
+
+    with mcp_auth_context(admin_session.id):
+        result = await fetch.fn(ids=[item.id, missing_id])
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["id"] == item.id
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_skips_inaccessible_items(db_session, user_session, admin_user):
+    """Bulk fetch filters out items the user cannot access.
+
+    Items without a project_id are only visible to superadmins, so a regular
+    user should not see them.  Items assigned to the user's project are visible.
+    """
+    from memory.common.db.models.sources import (
+        Person, Project, Team, team_members, project_teams,
+    )
+
+    # Create a project and team the regular user belongs to
+    team = Team(name="Test Team", slug="test-team-acl-bulk")
+    db_session.add(team)
+    db_session.flush()
+
+    project = Project(title="Test Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+
+    # Assign team to project
+    db_session.execute(
+        project_teams.insert().values(project_id=project.id, team_id=team.id)
+    )
+
+    # Link regular user to the team via Person
+    person = Person(
+        identifier="bulk-fetch-test-person",
+        display_name="Regular Person",
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=person.id, role="member",
+        )
+    )
+
+    # Link the regular user (from user_session) to the person
+    person.user_id = user_session.user_id
+    db_session.flush()
+
+    # Accessible item: belongs to the project
+    accessible_item = make_source_item(db_session, 1, project_id=project.id)
+    # Inaccessible item: no project_id (superadmin-only)
+    inaccessible_item = make_source_item(db_session, 2, project_id=None)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await fetch.fn(ids=[accessible_item.id, inaccessible_item.id])
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["id"] == accessible_item.id
+
+
+@pytest.mark.asyncio
+async def test_fetch_bulk_deduplicates_ids(db_session, admin_session):
+    """Bulk fetch deduplicates repeated IDs in the input."""
+    item = make_source_item(db_session, 1)
+
+    with mcp_auth_context(admin_session.id):
+        result = await fetch.fn(ids=[item.id, item.id, item.id])
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["id"] == item.id
 
 
 # ====== list_items tests ======

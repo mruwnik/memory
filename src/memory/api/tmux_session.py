@@ -33,6 +33,35 @@ SCREEN_FAST_DURATION = 3.0  # Stay fast for 3s after last keystroke
 SCREEN_BACKOFF_UNCHANGED_THRESHOLD = 4  # Start slowing after this many unchanged polls
 SCREEN_BACKOFF_MULTIPLIER = 1.5  # Multiply interval by this on each idle poll
 
+SCROLL_LINES = 3  # Lines per scroll wheel event
+
+
+async def send_live_screen(
+    websocket: WebSocket,
+    relay: RelayClient,
+    activity_state: dict,
+) -> bool:
+    """Capture the live screen and send it to the client with scrolled=0.
+
+    Returns True if the screen was successfully captured and sent.
+    """
+    result = await relay.capture_screen()
+    if result["status"] == "ok":
+        # Only reset scroll_offset after a successful capture,
+        # so the "jump to bottom" button stays visible if capture fails.
+        activity_state["scroll_offset"] = 0
+        screen = str(result["screen"])
+        cols = result.get("cols", 80)
+        rows = result.get("rows", 24)
+        await send_ws_json(
+            websocket, "screen", screen,
+            cols=cols, rows=rows, scrolled=0,
+        )
+        return True
+    error = result.get("error", result["status"])
+    await send_ws_json(websocket, "error", f"Failed to capture screen: {error}")
+    return False
+
 
 async def send_ws_json(
     websocket: WebSocket,
@@ -170,15 +199,29 @@ async def screen_capture_loop(
             screen = str(result["screen"])
             cols = result.get("cols", 80)
             rows = result.get("rows", 24)
+            history_size = result.get("history_size", 0)
+            activity_state["history_size"] = history_size
+            activity_state["terminal_rows"] = rows
 
-            # Only send if screen changed (avoid noise)
+            # Only send if screen changed and user isn't scrolled back
             if screen and screen != last_screen:
-                await send_ws_json(websocket, "screen", screen, cols=cols, rows=rows)
-                last_screen = screen
-                consecutive_unchanged = 0
-                interval = (
-                    SCREEN_FAST_INTERVAL if recently_active else SCREEN_NORMAL_INTERVAL
-                )
+                if activity_state.get("scroll_offset", 0) == 0:
+                    await send_ws_json(
+                        websocket, "screen", screen,
+                        cols=cols, rows=rows, scrolled=0,
+                    )
+                    # Only update last_screen when actually sent to client,
+                    # so the backoff timer doesn't reset while user is scrolled back
+                    last_screen = screen
+                    consecutive_unchanged = 0
+                    interval = (
+                        SCREEN_FAST_INTERVAL if recently_active else SCREEN_NORMAL_INTERVAL
+                    )
+                else:
+                    # Scrolled back: screen is changing but we're not sending it.
+                    # Use normal interval — no need to poll fast, but don't backoff
+                    # since we'll want a fresh screen when the user scrolls back to live.
+                    interval = SCREEN_NORMAL_INTERVAL
             else:
                 if recently_active:
                     interval = SCREEN_FAST_INTERVAL
@@ -260,6 +303,8 @@ async def input_handler_loop(
             keys = message.get("keys", "")
             literal = message.get("literal", True)
             if keys:
+                # Jump back to live view on any input
+                activity_state["scroll_offset"] = 0
                 # Record activity and wake up capture loop immediately
                 activity_state["last_input_time"] = asyncio.get_running_loop().time()
                 input_event = activity_state.get("input_event")
@@ -277,16 +322,47 @@ async def input_handler_loop(
                     await send_ws_json(websocket, "error", str(e))
         elif msg_type == "scroll":
             direction = message.get("direction", "down")
+            lines = max(1, min(message.get("lines", SCROLL_LINES), 200))
+            offset = activity_state.get("scroll_offset", 0)
+            max_history = activity_state.get("history_size") or 1000
+
+            if direction == "up":
+                offset = min(offset + lines, max_history)
+            else:
+                offset = max(0, offset - lines)
+
+            activity_state["scroll_offset"] = offset
+
+            if offset > 0:
+                rows = activity_state.get("terminal_rows", 24)
+                start = -offset
+                # end can go negative when offset >= rows, putting the entire
+                # window in scrollback.  When offset < rows the window straddles
+                # scrollback and the visible area (showing the lines the user
+                # would see if they scrolled up by `offset` lines in a real terminal).
+                # e.g. rows=24, offset=30 -> start=-30, end=-7 (pure scrollback)
+                #      rows=24, offset=3  -> start=-3,  end=20  (3 scrollback + 21 visible)
+                end = rows - 1 - offset
+                try:
+                    result = await relay.capture_range(start, end)
+                    if result["status"] == "ok":
+                        await send_ws_json(
+                            websocket, "screen", result["content"],
+                            scrolled=offset,
+                        )
+                except RelayError as e:
+                    await send_ws_json(websocket, "error", str(e))
+            else:
+                # Back to live view - send current screen immediately
+                try:
+                    await send_live_screen(websocket, relay, activity_state)
+                except RelayError as e:
+                    logger.debug("RelayError on scroll-to-live: %s", e)
+        elif msg_type == "scroll_to_bottom":
             try:
-                result = await relay.mouse_scroll(direction)
-                if result["status"] != "ok":
-                    await send_ws_json(
-                        websocket,
-                        "error",
-                        result.get("error", "Failed to send scroll"),
-                    )
+                await send_live_screen(websocket, relay, activity_state)
             except RelayError as e:
-                await send_ws_json(websocket, "error", str(e))
+                logger.debug("RelayError on scroll-to-bottom: %s", e)
         elif msg_type == "resize":
             cols = message.get("cols", 80)
             rows = message.get("rows", 24)

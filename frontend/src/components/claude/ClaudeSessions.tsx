@@ -25,6 +25,7 @@ interface ScreenMessage {
   timestamp: string
   cols?: number
   rows?: number
+  scrolled?: number
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -57,6 +58,7 @@ const ClaudeSessions = () => {
 
   // Screen streaming state
   const [screenContent, setScreenContent] = useState<string>('')
+  const [scrollOffset, setScrollOffset] = useState(0)
   const [wsConnected, setWsConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -194,6 +196,7 @@ const ClaudeSessions = () => {
         const msg: ScreenMessage = JSON.parse(event.data)
         if (msg.type === 'screen') {
           setScreenContent(msg.data)
+          setScrollOffset(msg.scrolled || 0)
         } else if (msg.type === 'error') {
           setWsError(msg.data)
         }
@@ -759,7 +762,7 @@ const ClaudeSessions = () => {
                   <XtermTerminal
                     wsRef={wsRef}
                     screenContent={screenContent}
-
+                    scrollOffset={scrollOffset}
                     connected={wsConnected}
                   />
                 </div>

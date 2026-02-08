@@ -408,7 +408,7 @@ class DiscordMessage(SourceItem):
     def title(self) -> str:
         """Format message for display."""
         author_name = self.author.username if self.author else "unknown"
-        return f"{author_name}: {self.content}"
+        return f"{author_name}: {self.content or ''}"
 
     @property
     def should_embed(self) -> bool:

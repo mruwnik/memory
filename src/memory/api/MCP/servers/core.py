@@ -6,6 +6,7 @@ import base64
 import logging
 import textwrap
 from datetime import datetime, timezone
+from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
@@ -577,18 +578,37 @@ def fetch_file(filename: str) -> dict:
 
 @core_mcp.tool()
 @visible_when(require_scopes(SCOPE_READ))
-async def fetch(id: int, include_content: bool = True, include_journal: bool = False) -> dict:
+async def fetch(
+    id: int | None = None,
+    ids: list[int] | None = None,
+    include_content: bool = True,
+    include_journal: bool = False,
+) -> dict | list[dict]:
     """
-    Get full details of a source item by ID.
+    Get full details of source item(s) by ID.
     Use after search to drill down into specific results.
 
     Args:
-        id: The source item ID (from search results)
+        id: Single source item ID (from search results)
+        ids: Multiple source item IDs for bulk fetch (max 200)
         include_content: Whether to include full content (default True)
         include_journal: Whether to include journal entries (default False)
 
-    Returns: Full item details including metadata, tags, and optionally content and journal entries.
+    Returns: Full item details (single dict if id, list of dicts if ids).
+
+    Access control behaviour differs by mode:
+        - Single id: raises ValueError if the item is not found or access is denied.
+        - Bulk ids: silently omits inaccessible/missing items and returns a shorter list.
     """
+    if id is not None and ids is not None:
+        raise ValueError("Cannot provide both 'id' and 'ids' — use one or the other")
+    if id is None and ids is None:
+        raise ValueError("Must provide either 'id' or 'ids'")
+
+    fetch_ids = list(dict.fromkeys(ids if ids is not None else [id]))  # dedup, preserving order
+    if len(fetch_ids) > 200:
+        raise ValueError(f"Cannot fetch more than 200 items at once (got {len(fetch_ids)})")
+
     # Get access filter and user info BEFORE opening session to avoid nested session issues
     access_filter = get_current_user_access_filter()
     user = get_mcp_current_user()
@@ -601,60 +621,69 @@ async def fetch(id: int, include_content: bool = True, include_journal: bool = F
 
     with make_session() as session:
         # Eager load 'people' relationship since as_payload() accesses it
-        item = (
+        items = (
             session.query(SourceItem)
             .options(selectinload(SourceItem.people))
             .filter(
-                SourceItem.id == id,
+                SourceItem.id.in_(fetch_ids),
                 SourceItem.embed_status == "STORED",
             )
-            .first()
+            .all()
         )
-        if not item:
-            raise ValueError(f"Item {id} not found or not yet indexed")
 
-        # Check access control
-        # access_filter is None for superadmins (they see everything)
+        # Apply access control
         if access_filter is not None:
-            # Need to check if user can access this item
             if user is None or user_id is None:
-                raise ValueError(f"Item {id} not found or access denied")
+                items = []
+            else:
+                items = [i for i in items if user_can_access(user, i, project_roles)]
 
-            if not user_can_access(user, item, project_roles):
-                raise ValueError(f"Item {id} not found or access denied")
-
-        result = {
-            "id": item.id,
-            "modality": item.modality,
-            "title": item.title,
-            "mime_type": item.mime_type,
-            "filename": item.filename,
-            "size": item.size,
-            "tags": item.tags,
-            "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
-            "metadata": item.as_payload(),
-        }
-
-        if include_content:
-            result["content"] = item.content
-
-        if include_journal:
+        # Bulk fetch journal entries in one query if requested
+        journal_by_item: dict[int, list[dict]] = {}
+        if include_journal and items:
+            item_ids = [i.id for i in items]
             journal_query = (
                 session.query(JournalEntry)
                 .filter(
                     JournalEntry.target_type == "source_item",
-                    JournalEntry.target_id == id,
+                    JournalEntry.target_id.in_(item_ids),
                 )
             )
-            # Apply access control for journal entries
             if user is not None:
                 journal_filter = build_journal_access_filter(user, user_id)
                 if journal_filter is not True:
                     journal_query = journal_query.filter(journal_filter)
-            journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
-            result["journal_entries"] = [e.as_payload() for e in journal_entries]
+            for entry in journal_query.order_by(JournalEntry.created_at.asc()).all():
+                journal_by_item.setdefault(entry.target_id, []).append(entry.as_payload())
 
-        return result
+        # Build result dicts indexed by item ID for order preservation
+        results_by_id: dict[int, dict] = {}
+        for item in items:
+            result: dict[str, Any] = {
+                "id": item.id,
+                "modality": item.modality,
+                "title": item.title,
+                "mime_type": item.mime_type,
+                "filename": item.filename,
+                "size": item.size,
+                "tags": item.tags,
+                "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
+                "metadata": item.as_payload(),
+            }
+            if include_content:
+                result["content"] = item.content
+            if include_journal:
+                result["journal_entries"] = journal_by_item.get(item.id, [])
+            results_by_id[item.id] = result
+
+        # Single-id mode: return dict (backward compatible)
+        if id is not None and ids is None:
+            if not results_by_id:
+                raise ValueError(f"Item {id} not found or not yet indexed")
+            return results_by_id[id]
+
+        # Return results in the same order as the input ids
+        return [results_by_id[i] for i in fetch_ids if i in results_by_id]
 
 
 def apply_access_control_to_query(query, access_filter: AccessFilter | None, session):

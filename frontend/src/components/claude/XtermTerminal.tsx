@@ -52,10 +52,11 @@ function xtermToTmux(data: string): { keys: string; literal: boolean } {
 interface XtermTerminalProps {
   wsRef: React.RefObject<WebSocket | null>
   screenContent: string
+  scrollOffset: number
   connected: boolean
 }
 
-export default function XtermTerminal({ wsRef, screenContent, connected }: XtermTerminalProps) {
+export default function XtermTerminal({ wsRef, screenContent, scrollOffset, connected }: XtermTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -121,23 +122,33 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
       xtermRef.current = term
       fitAddonRef.current = fitAddon
 
-      // Scroll handler - send scroll events directly via WebSocket.
-      // Claude Code needs actual mouse scroll events (not Page Up/Down which
-      // it maps to input history). We send a typed message and the relay
-      // constructs the SGR mouse bytes server-side to avoid ESC byte issues.
-      let lastScrollTime = 0
+      // Scroll handler - accumulate wheel delta during throttle window,
+      // then send one batched scroll message with the total line count.
+      let scrollAccumulator = 0
+      let scrollTimer: ReturnType<typeof setTimeout> | null = null
+      const flushScroll = () => {
+        scrollTimer = null
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          scrollAccumulator = 0
+          return
+        }
+        if (scrollAccumulator === 0) return
+        const direction = scrollAccumulator < 0 ? 'up' : 'down'
+        // Each 100px of wheel delta ≈ 3 lines
+        const lines = Math.max(1, Math.round(Math.abs(scrollAccumulator) / 30))
+        wsRef.current.send(JSON.stringify({ type: 'scroll', direction, lines }))
+        scrollAccumulator = 0
+      }
       const handleWheel = (e: WheelEvent) => {
         e.preventDefault()
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-        const now = Date.now()
-        if (now - lastScrollTime < SCROLL_THROTTLE_MS) return
-        lastScrollTime = now
-        wsRef.current.send(JSON.stringify({
-          type: 'scroll',
-          direction: e.deltaY < 0 ? 'up' : 'down',
-        }))
+        e.stopPropagation()
+        scrollAccumulator += e.deltaY
+        if (!scrollTimer) {
+          scrollTimer = setTimeout(flushScroll, SCROLL_THROTTLE_MS)
+        }
       }
-      terminalRef.current?.addEventListener('wheel', handleWheel, { passive: false })
+      // Use capture phase so we intercept before xterm.js's internal viewport
+      terminalRef.current?.addEventListener('wheel', handleWheel, { passive: false, capture: true })
 
       // Resize handler - fit terminal to container and tell tmux to match
       const handleResize = () => {
@@ -150,7 +161,7 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
       setError(null)
 
       return () => {
-        terminalRef.current?.removeEventListener('wheel', handleWheel)
+        terminalRef.current?.removeEventListener('wheel', handleWheel, { capture: true })
         window.removeEventListener('resize', handleResize)
         term.dispose()
         xtermRef.current = null
@@ -188,6 +199,13 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
     term.write(screenContent)
   }, [screenContent])
 
+  // Jump to bottom of scrollback — must be declared before the early return
+  // so hooks are always called in the same order (Rules of Hooks).
+  const jumpToBottom = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({ type: 'scroll_to_bottom' }))
+  }, [wsRef])
+
   // Show error fallback if terminal failed to initialize
   if (error) {
     return (
@@ -207,10 +225,26 @@ export default function XtermTerminal({ wsRef, screenContent, connected }: Xterm
   }
 
   return (
-    <div
-      ref={terminalRef}
-      className="w-full h-full min-h-[400px]"
-      style={{ backgroundColor: '#0f172a' }}
-    />
+    <div className="relative w-full h-full min-h-[400px]">
+      <div
+        ref={terminalRef}
+        className="w-full h-full"
+        style={{ backgroundColor: '#0f172a' }}
+      />
+      {scrollOffset > 0 && (
+        <button
+          onClick={jumpToBottom}
+          aria-label="Jump to bottom of terminal"
+          className={[
+            "absolute bottom-4 right-4",
+            "bg-slate-700/90 text-slate-200",
+            "px-3 py-1.5 rounded-md text-xs font-mono",
+            "hover:bg-slate-600 transition-colors",
+          ].join(" ")}
+        >
+          Scrolled {scrollOffset} lines — click to jump to bottom
+        </button>
+      )}
+    </div>
   )
 }

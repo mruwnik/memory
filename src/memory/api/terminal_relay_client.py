@@ -71,11 +71,12 @@ class RelayClient:
     async def resize(self, cols: int, rows: int) -> dict[str, Any]:
         return await self._request({"action": "resize", "cols": cols, "rows": rows})
 
-    async def mouse_scroll(self, direction: str = "down") -> dict[str, Any]:
-        return await self._request({"action": "mouse_scroll", "direction": direction})
-
     async def capture_history(self, start: int = -1000, end: int = -1) -> dict[str, Any]:
         return await self._request({"action": "capture_history", "start": start, "end": end})
+
+    async def capture_range(self, start: int, end: int) -> dict[str, Any]:
+        """Capture a line range with escape codes (for scrollback display)."""
+        return await self._request({"action": "capture_range", "start": start, "end": end})
 
     async def ping(self) -> bool:
         try:
