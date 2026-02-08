@@ -2,13 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useReports, type Report } from '@/hooks/useReports'
 import { styles, cx } from '../sources/styles'
-import { LoadingState, ErrorState, EmptyState, TagsInput } from '../sources/shared'
+import { LoadingState, ErrorState, EmptyState, TagsInput, ConfirmDialog } from '../sources/shared'
 import { formatRelativeTime } from '../sources/shared'
 
 type FormMode = 'html' | 'upload'
 
 const ReportsPage = () => {
-  const { listReports, createReport, uploadReport } = useReports()
+  const { listReports, createReport, uploadReport, deleteReport } = useReports()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [reports, setReports] = useState<Report[]>([])
@@ -25,6 +25,8 @@ const ReportsPage = () => {
   const [tags, setTags] = useState<string[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [queued, setQueued] = useState(false)
+  const [deletingReport, setDeletingReport] = useState<Report | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const refreshTimerRef = useRef<number>()
 
   // Cleanup refresh timer on unmount
@@ -97,6 +99,23 @@ const ReportsPage = () => {
 
   const handleSelectReport = (report: Report) => {
     setSearchParams({ id: String(report.id) })
+  }
+
+  const handleDelete = async () => {
+    if (!deletingReport) return
+    setDeleting(true)
+    try {
+      await deleteReport(deletingReport.id)
+      if (String(deletingReport.id) === selectedId) {
+        setSearchParams({})
+      }
+      setDeletingReport(null)
+      await loadReports()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete report')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const reportFormat = (report: Report): string =>
@@ -280,16 +299,25 @@ const ReportsPage = () => {
                 <h2 className="text-sm font-semibold text-slate-700 truncate">
                   {reportTitle(selectedReport)}
                 </h2>
-                {reportUrl(selectedReport) && reportFormat(selectedReport) === 'pdf' && (
-                  <a
-                    href={reportUrl(selectedReport)!}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={styles.btnPrimary}
+                <div className="flex items-center gap-2">
+                  {reportUrl(selectedReport) && reportFormat(selectedReport) === 'pdf' && (
+                    <a
+                      href={reportUrl(selectedReport)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={styles.btnPrimary}
+                    >
+                      Open PDF
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setDeletingReport(selectedReport)}
+                    disabled={deleting}
+                    className={styles.btnDanger}
                   >
-                    Open PDF
-                  </a>
-                )}
+                    Delete
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-hidden bg-white">
                 {reportUrl(selectedReport) ? (
@@ -329,6 +357,14 @@ const ReportsPage = () => {
           )}
         </div>
       </main>
+
+      {deletingReport && (
+        <ConfirmDialog
+          message={`Are you sure you want to delete "${reportTitle(deletingReport)}"?`}
+          onConfirm={handleDelete}
+          onCancel={() => setDeletingReport(null)}
+        />
+      )}
     </div>
   )
 }

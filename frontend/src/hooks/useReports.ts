@@ -61,5 +61,12 @@ export const useReports = () => {
     return response.json()
   }, [apiCall])
 
-  return { listReports, createReport, uploadReport }
+  const deleteReport = useCallback(async (reportId: number) => {
+    const result = await mcpCall('reports_delete', { report_id: reportId })
+    const data = result?.[0]
+    if (data?.error) throw new Error(data.error)
+    return data
+  }, [mcpCall])
+
+  return { listReports, createReport, uploadReport, deleteReport }
 }
