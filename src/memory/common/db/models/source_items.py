@@ -1280,6 +1280,7 @@ class Report(SourceItem):
     report_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_format: Mapped[str] = mapped_column(Text, nullable=False)  # "html" or "pdf"
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    allow_scripts: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     __mapper_args__ = {
         "polymorphic_identity": "report",

@@ -265,11 +265,24 @@ async def serve_report(
 
     response = FileResponse(file_path, media_type=mime_type)
 
-    # CSP sandbox for HTML - prevents script execution in uploaded reports
+    # CSP for HTML reports
     if mime_type in ("text/html", "application/xhtml+xml"):
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; sandbox"
-        )
+        # Check if report allows scripts (for system-generated interactive reports)
+        if report.allow_scripts:
+            # Relaxed CSP for trusted system-generated reports with JavaScript
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "style-src 'unsafe-inline'; "
+                "img-src data: blob:; "
+                "script-src 'unsafe-inline'; "
+                "connect-src 'self'; "
+                "sandbox allow-scripts allow-same-origin"
+            )
+        else:
+            # Strict CSP for user-uploaded reports - no scripts allowed
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; sandbox"
+            )
         response.headers["X-Content-Type-Options"] = "nosniff"
 
     return response
