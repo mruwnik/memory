@@ -213,6 +213,82 @@ docker-compose logs -f
 
 There's also `tools/diagnose.sh` that you can use for this.
 
+## Custom Tasks (Deployment-Specific)
+
+Add scheduled tasks specific to a deployment (deadline reports, activity digests, etc.) without committing them to the main repo. Custom tasks have full access to DB, Discord, GitHub, and all other infrastructure.
+
+### Setup
+
+1. Create a directory for your custom tasks anywhere on the host:
+   ```bash
+   mkdir /path/to/my/custom_tasks
+   ```
+
+2. Add to `.env`:
+   ```
+   CUSTOM_TASKS_DIR=/path/to/my/custom_tasks
+   ```
+
+3. Restart services (`docker compose up -d --build`).
+
+If `CUSTOM_TASKS_DIR` is not set, the feature is completely inert.
+
+### Writing a Task
+
+Each `.py` file in the directory is a self-contained Celery task. Files starting with `_` are ignored (use for templates or to disable a task).
+
+See `custom_tasks/_example.py` and `custom_tasks/_example_manual.py` for full annotated templates.
+
+**Periodic task** (runs on a schedule via Celery Beat):
+
+```python
+# my_custom_tasks/deadline_check.py
+from celery.schedules import crontab
+from memory.common.celery_app import app, register_custom_beat
+from memory.common.db.connection import make_session
+
+# register_custom_beat does two things:
+#   1. Builds the task name: "custom_tasks.deadline_check.run"
+#   2. Adds a Celery Beat schedule entry so it runs automatically
+# First arg must match this file's name (without .py).
+TASK_NAME = register_custom_beat(
+    "deadline_check",
+    crontab(hour=9, minute=0, day_of_week="mon-fri"),
+)
+
+@app.task(name=TASK_NAME)
+def run():
+    with make_session() as session:
+        ...
+    return {"status": "success"}
+```
+
+**Manual/on-demand task** (no schedule, triggered explicitly):
+
+```python
+# my_custom_tasks/generate_report.py
+from memory.common.celery_app import app, custom_task_name
+
+TASK_NAME = custom_task_name("generate_report")
+
+@app.task(name=TASK_NAME)
+def run():
+    ...
+```
+
+Trigger manually:
+```bash
+celery -A memory.workers.ingest call custom_tasks.generate_report.run
+```
+
+### How It Works
+
+1. At startup, `celery_app.py` calls `load_custom_tasks()` which scans `CUSTOM_TASKS_DIR`
+2. Each `.py` file (not starting with `_`) is imported via `importlib`
+3. Importing executes `@app.task` registration and any `register_custom_beat()` calls
+4. All custom tasks route to the `custom` queue (`memory-custom`)
+5. One broken file won't prevent others from loading — errors are logged per-file
+
 ## Contributing
 
 This is a personal knowledge base system. Feel free to fork and adapt for your own use cases.

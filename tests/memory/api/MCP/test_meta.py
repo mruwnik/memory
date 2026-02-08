@@ -31,6 +31,7 @@ from memory.common.markets import (
     _history_cache,
     _depth_cache,
 )
+from tests.conftest import mcp_auth_context
 
 
 # ====== get_metadata_schemas tests ======
@@ -124,175 +125,244 @@ async def test_get_current_time_iso_format():
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_returns_user_info(mock_make_session, mock_get_token):
+async def test_get_user_returns_user_info(db_session, admin_session):
     """Get user returns full user info with email accounts."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+    from memory.common.db.models import EmailAccount
 
-    mock_token = MagicMock()
-    mock_token.token = "test-token"
-    mock_token.scopes = ["read", "write"]
-    mock_token.client_id = "test-client"
-    mock_get_token.return_value = mock_token
+    email_acct = EmailAccount(
+        user_id=admin_session.user_id,
+        name="Work Email",
+        email_address="work@example.com",
+        account_type="imap",
+    )
+    db_session.add(email_acct)
+    db_session.commit()
 
-    mock_user = MagicMock()
-    mock_user.id = 123
-    mock_user.serialize.return_value = {
-        "id": 123,
-        "email": "test@example.com",
-        "name": "Test User",
-    }
-
-    mock_user_session = MagicMock()
-    mock_user_session.user = mock_user
-    mock_session.get.return_value = mock_user_session
-
-    mock_email_account = MagicMock()
-    mock_email_account.email_address = "work@example.com"
-    mock_email_account.name = "Work Email"
-    mock_email_account.account_type = "imap"
-
-    mock_session.query.return_value.filter.return_value.all.return_value = [
-        mock_email_account
-    ]
-
-    result = await get_user.fn()
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
 
     assert result["authenticated"] is True
     assert result["token_type"] == "Bearer"
-    assert result["scopes"] == ["read", "write"]
     assert result["client_id"] == "test-client"
-    assert result["user"]["id"] == 123
-    assert result["user"]["email"] == "test@example.com"
+    assert result["user"]["user_id"] == admin_session.user_id
+    assert result["user"]["email"] == "admin@example.com"
     assert len(result["user"]["email_accounts"]) == 1
     assert result["user"]["email_accounts"][0]["email_address"] == "work@example.com"
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_no_token(mock_make_session, mock_get_token):
+async def test_get_user_no_token(db_session):
     """Get user returns unauthenticated when no token."""
-    mock_get_token.return_value = None
-
+    # No mcp_auth_context → get_access_token() returns None
     result = await get_user.fn()
 
     assert result["authenticated"] is False
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_invalid_session(mock_make_session, mock_get_token):
+async def test_get_user_invalid_session(db_session):
     """Get user returns error when session not found."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_token = MagicMock()
-    mock_token.token = "invalid-token"
-    mock_get_token.return_value = mock_token
-
-    mock_session.get.return_value = None  # Session not found
-
-    result = await get_user.fn()
+    with mcp_auth_context("nonexistent-token"):
+        result = await get_user.fn()
 
     assert result["authenticated"] is False
     assert "error" in result
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_no_email_accounts(mock_make_session, mock_get_token):
-    """Get user works with no email accounts."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_token = MagicMock()
-    mock_token.token = "test-token"
-    mock_token.scopes = ["read"]
-    mock_token.client_id = "test-client"
-    mock_get_token.return_value = mock_token
-
-    mock_user = MagicMock()
-    mock_user.id = 123
-    mock_user.serialize.return_value = {
-        "id": 123,
-        "email": "test@example.com",
-    }
-
-    mock_user_session = MagicMock()
-    mock_user_session.user = mock_user
-    mock_session.get.return_value = mock_user_session
-
-    mock_session.query.return_value.filter.return_value.all.return_value = []
-
-    result = await get_user.fn()
+async def test_get_user_no_email_accounts_uses_fallback(db_session, admin_session):
+    """Get user falls back to user email when no EmailAccount records exist."""
+    # admin_user has email="admin@example.com" but no EmailAccount records
+    # The fallback should create a synthetic entry from user.email
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
 
     assert result["authenticated"] is True
-    assert result["user"]["email_accounts"] == []
+    assert len(result["user"]["email_accounts"]) == 1
+    assert result["user"]["email_accounts"][0]["account_type"] == "primary"
+    assert result["user"]["email_accounts"][0]["email_address"] == "admin@example.com"
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_returns_ssh_public_key(mock_make_session, mock_get_token):
+async def test_get_user_returns_ssh_public_key(db_session, admin_user, admin_session):
     """Get user returns the user's SSH public key as 'public_key'."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+    admin_user.ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+    db_session.commit()
 
-    mock_token = MagicMock()
-    mock_token.token = "test-token"
-    mock_token.scopes = ["read"]
-    mock_token.client_id = "test-client"
-    mock_get_token.return_value = mock_token
-
-    mock_user = MagicMock(spec=["id", "serialize", "ssh_public_key"])
-    mock_user.id = 123
-    mock_user.serialize.return_value = {"id": 123, "email": "test@example.com"}
-    mock_user.ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
-
-    mock_user_session = MagicMock()
-    mock_user_session.user = mock_user
-    mock_session.get.return_value = mock_user_session
-    mock_session.query.return_value.filter.return_value.all.return_value = []
-
-    result = await get_user.fn()
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
 
     assert result["authenticated"] is True
     assert result["public_key"] == "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
 
 
 @pytest.mark.asyncio
-@patch("memory.api.MCP.servers.meta.get_access_token")
-@patch("memory.api.MCP.servers.meta.make_session")
-async def test_get_user_returns_none_when_no_ssh_key(mock_make_session, mock_get_token):
+async def test_get_user_returns_none_when_no_ssh_key(db_session, admin_user, admin_session):
     """Get user returns None for public_key when user has no SSH key."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+    admin_user.ssh_public_key = None
+    db_session.commit()
 
-    mock_token = MagicMock()
-    mock_token.token = "test-token"
-    mock_token.scopes = ["read"]
-    mock_token.client_id = "test-client"
-    mock_get_token.return_value = mock_token
-
-    mock_user = MagicMock(spec=["id", "serialize", "ssh_public_key"])
-    mock_user.id = 123
-    mock_user.serialize.return_value = {"id": 123, "email": "test@example.com"}
-    mock_user.ssh_public_key = None
-
-    mock_user_session = MagicMock()
-    mock_user_session.user = mock_user
-    mock_session.get.return_value = mock_user_session
-    mock_session.query.return_value.filter.return_value.all.return_value = []
-
-    result = await get_user.fn()
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
 
     assert result["authenticated"] is True
     assert result["public_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_slack_credentials(db_session, admin_session):
+    """Get user includes Slack accounts from SlackUserCredentials."""
+    from memory.common.db.models.slack import SlackWorkspace, SlackUserCredentials
+
+    workspace = SlackWorkspace(id="W456WORK", name="Test Workspace")
+    db_session.add(workspace)
+    db_session.flush()
+
+    cred = SlackUserCredentials(
+        workspace_id="W456WORK",
+        user_id=admin_session.user_id,
+        slack_user_id="U123SLACK",
+    )
+    db_session.add(cred)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    assert result["user"]["slack_accounts"] == {"U123SLACK": "W456WORK"}
+
+
+@pytest.mark.asyncio
+async def test_get_user_person_discord_fallback(db_session, admin_user, admin_session):
+    """Get user enriches Discord accounts from linked Person when User has none."""
+    from memory.common.db.models import DiscordUser, Person
+
+    person = Person(
+        identifier="test_person",
+        display_name="Test Person",
+        contact_info={},
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Discord account linked to Person, NOT to User
+    discord_acct = DiscordUser(id=999, username="person_discord", person_id=person.id)
+    db_session.add(discord_acct)
+
+    # Link person to user
+    admin_user.person = person
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    # User.serialize() returns empty discord_accounts (none linked to user directly)
+    # so Person's discord accounts should be used as fallback
+    assert result["user"]["discord_accounts"] == {999: "person_discord"}
+
+
+@pytest.mark.asyncio
+async def test_get_user_person_slack_from_contact_info(db_session, admin_user, admin_session):
+    """Get user adds Slack from Person contact_info when no SlackUserCredentials."""
+    from memory.common.db.models import Person
+
+    person = Person(
+        identifier="slack_person",
+        display_name="Slack Person",
+        contact_info={
+            "slack": {
+                "W_TEAM1": {"user_id": "U_PERSON_SLACK"},
+            }
+        },
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    admin_user.person = person
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    assert result["user"]["slack_accounts"] == {"U_PERSON_SLACK": "W_TEAM1"}
+
+
+@pytest.mark.asyncio
+async def test_get_user_slack_credentials_take_precedence(db_session, admin_user, admin_session):
+    """SlackUserCredentials take precedence over Person contact_info Slack data."""
+    from memory.common.db.models import Person, SlackUserCredentials, SlackWorkspace
+
+    workspace = SlackWorkspace(id="W_CRED", name="Cred Workspace")
+    db_session.add(workspace)
+    db_session.flush()
+
+    cred = SlackUserCredentials(
+        workspace_id="W_CRED",
+        user_id=admin_session.user_id,
+        slack_user_id="U_CRED_SLACK",
+    )
+    db_session.add(cred)
+
+    person = Person(
+        identifier="slack_both",
+        display_name="Slack Both",
+        contact_info={
+            "slack": {
+                "W_PERSON": {"user_id": "U_PERSON_SLACK"},
+            }
+        },
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    admin_user.person = person
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    # Credentials should win; Person contact_info should NOT be merged in
+    assert result["user"]["slack_accounts"] == {"U_CRED_SLACK": "W_CRED"}
+
+
+@pytest.mark.asyncio
+async def test_get_user_person_via_discord_account(db_session, admin_user, admin_session):
+    """Get user discovers Person through user's discord_accounts when user.person is None."""
+    from memory.common.db.models import DiscordUser, Person
+
+    person = Person(
+        identifier="indirect_person",
+        display_name="Indirect Person",
+        contact_info={
+            "slack": {"W1": {"user_id": "U_FROM_PERSON"}}
+        },
+    )
+    db_session.add(person)
+    db_session.flush()
+
+    # Discord account linked to BOTH the user and the person
+    discord_acct = DiscordUser(
+        id=888,
+        username="shared_discord",
+        system_user_id=admin_user.id,
+        person_id=person.id,
+    )
+    db_session.add(discord_acct)
+    db_session.commit()
+
+    # admin_user.person is None — Person is discovered via discord_accounts
+    assert admin_user.person is None
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert result["authenticated"] is True
+    # Should have found Slack through Person discovered via discord account
+    assert result["user"]["slack_accounts"] == {"U_FROM_PERSON": "W1"}
 
 
 # ====== get_forecasts tests ======

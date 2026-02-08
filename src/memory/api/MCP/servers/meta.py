@@ -19,6 +19,7 @@ from memory.common.db.models import (
     APIKeyType,
     EmailAccount,
     ScheduledTask,
+    SlackUserCredentials,
     SourceItem,
     TaskExecution,
     UserSession,
@@ -92,6 +93,55 @@ def _get_current_user(session: DBSession) -> dict:
         }
         for a in email_accounts
     ]
+
+    # Add Slack accounts from credentials table
+    slack_credentials = (
+        session.query(SlackUserCredentials)
+        .filter(SlackUserCredentials.user_id == user_session.user.id)
+        .all()
+    )
+    user_info["slack_accounts"] = {
+        cred.slack_user_id: cred.workspace_id for cred in slack_credentials
+    }
+
+    # Enrich from linked Person record (via User.person or discord_accounts)
+    person = user_session.user.person
+    if not person:
+        for discord_acct in user_session.user.discord_accounts:
+            if not discord_acct.person:
+                continue
+            if not person:
+                person = discord_acct.person
+            elif discord_acct.person.id != person.id:
+                logger.warning(
+                    "User %s has discord accounts linked to multiple Person records; using first found",
+                    user_session.user.id,
+                )
+                break
+
+    if person:
+        # Add Discord from Person if not already on User
+        if not user_info.get("discord_accounts") and person.discord_accounts:
+            user_info["discord_accounts"] = {
+                acct.id: acct.username for acct in person.discord_accounts
+            }
+
+        # Add Slack from Person contact_info if no credentials found
+        if not slack_credentials and person.contact_info:
+            slack_info = person.contact_info.get("slack", {})
+            for workspace_id, workspace_data in slack_info.items():
+                if slack_user_id := workspace_data.get("user_id"):
+                    user_info["slack_accounts"][slack_user_id] = workspace_id
+
+    # Fall back to user's own email if no dedicated email accounts
+    if not email_accounts and user_session.user.email:
+        user_info["email_accounts"] = [
+            {
+                "email_address": user_session.user.email,
+                "name": user_session.user.name,
+                "account_type": "primary",
+            }
+        ]
 
     access_token = get_access_token()
     return {
@@ -377,6 +427,7 @@ async def notify_user(
         # to avoid orphaned ScheduledTask records if execution creation fails
         execution_id = None
         if not scheduled_time:
+            session.flush()  # Assign notification.id before referencing it
             execution = TaskExecution(
                 task_id=notification.id,
                 scheduled_time=scheduled_dt,

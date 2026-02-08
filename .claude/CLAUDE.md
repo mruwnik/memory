@@ -235,6 +235,31 @@ Key settings (see `src/memory/common/settings.py`):
 /home/ec2-user/memory/venv/bin/pytest
 ```
 
+### Test Fixtures (`tests/conftest.py`)
+
+Use the existing DB and MCP fixtures instead of mocking. They provide real database sessions with automatic cleanup:
+
+| Fixture | Description |
+|---------|-------------|
+| `db_session` | Real DB session, tables truncated after each test |
+| `admin_user` | `HumanUser` with `scopes=["*"]`, email `admin@example.com` |
+| `regular_user` | `HumanUser` with `scopes=["teams"]`, email `regular@example.com` |
+| `admin_session` | `UserSession` for `admin_user` (token: `"admin-session-token"`) |
+| `user_session` | `UserSession` for `regular_user` (token: `"test-session-token"`) |
+
+For MCP tool tests, use `mcp_auth_context` (a context manager, not a fixture) to set auth state:
+
+```python
+from tests.conftest import mcp_auth_context
+
+async def test_some_tool(db_session, admin_session):
+    with mcp_auth_context(admin_session.id):
+        result = await some_tool.fn(arg="value")
+    assert result["authenticated"] is True
+```
+
+Prefer these over `MagicMock`/`@patch` for testing MCP tools — they exercise the real auth and DB code paths.
+
 ## Access Control
 
 Content visibility is managed through a User → Person → Team → Project hierarchy.
