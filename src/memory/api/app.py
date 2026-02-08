@@ -15,14 +15,11 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from sqladmin import Admin
-
 from memory.common import extract, paths, settings
 from memory.common.access_control import get_user_project_roles, has_admin_scope, user_can_access
-from memory.common.db.connection import get_engine, get_session
+from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
-from memory.api.admin import AdminAuth, setup_admin
 from memory.api.auth import (
     AuthenticationMiddleware,
     get_current_user,
@@ -309,23 +306,6 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
     return extract.extract_data_chunks(content_type, await item.read())
 
 
-# SQLAdmin setup with authentication requiring admin scope
-engine = get_engine()
-_admin_secret_key = settings.SECRETS_ENCRYPTION_KEY
-if not _admin_secret_key:
-    import logging as _logging
-
-    _logging.getLogger(__name__).warning(
-        "SECRETS_ENCRYPTION_KEY not set - using insecure dev key for admin auth. "
-        "Set SECRETS_ENCRYPTION_KEY in production!"
-    )
-    _admin_secret_key = "dev-secret-key"
-admin = Admin(
-    app, engine, authentication_backend=AdminAuth(secret_key=_admin_secret_key)
-)
-
-# Setup admin views
-setup_admin(admin)
 app.include_router(auth_router)
 app.include_router(google_drive_router)
 app.include_router(email_accounts_router)
