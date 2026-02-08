@@ -98,6 +98,13 @@ export interface SpawnRequest {
   run_id?: string // Custom run ID for branch naming (defaults to session_id)
 }
 
+export interface ScheduleResponse {
+  task_id: string
+  cron_expression: string
+  next_scheduled_time: string
+  topic: string
+}
+
 export interface GithubRepoBasic {
   id: number
   owner: string
@@ -138,6 +145,27 @@ export const useClaude = () => {
     }
     return response.json()
   }, [apiCall])
+
+  const scheduleSession = useCallback(
+    async (request: { cron_expression: string; spawn_config: SpawnRequest }): Promise<ScheduleResponse> => {
+      const response = await apiCall('/claude/schedule', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+      if (!response.ok) {
+        let detail: string | undefined
+        try {
+          const error = await response.json()
+          detail = error.detail
+        } catch {
+          // Response body is not valid JSON (e.g., plain text 500 from proxy)
+        }
+        throw new Error(detail || `Failed to schedule session (HTTP ${response.status})`)
+      }
+      return response.json()
+    },
+    [apiCall]
+  )
 
   const killSession = useCallback(async (sessionId: string): Promise<void> => {
     const response = await apiCall(`/claude/${sessionId}`, { method: 'DELETE' })
@@ -237,6 +265,7 @@ export const useClaude = () => {
     listSessions,
     getSession,
     spawnSession,
+    scheduleSession,
     killSession,
     getAttachInfo,
     getOrchestratorStatus,

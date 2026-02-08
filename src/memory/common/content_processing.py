@@ -462,16 +462,24 @@ def safe_task_execution(
                 if hasattr(request, "retries"):
                     labels["retry_count"] = request.retries
 
+            # Use the full Celery task name (e.g. memory.workers.tasks.email.sync_all_accounts)
+            # when available, so metric names match the beat schedule directly.
+            metric_name = (
+                task_self.name
+                if task_self and hasattr(task_self, "name")
+                else func.__name__
+            )
+
             # Wrap metric recording to avoid masking original exceptions
             try:
                 record_metric(
                     metric_type="task",
-                    name=func.__name__,
+                    name=metric_name,
                     duration_ms=duration_ms,
                     status=status,
                     labels=labels,
                 )
             except Exception as metric_err:
-                logger.warning(f"Failed to record metric for {func.__name__}: {metric_err}")
+                logger.warning(f"Failed to record metric for {metric_name}: {metric_err}")
 
     return wrapper

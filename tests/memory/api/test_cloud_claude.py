@@ -9,6 +9,8 @@ from memory.api.cloud_claude import (
     make_session_id,
     user_owns_session,
 )
+from memory.common import settings
+from memory.common.db.models import ScheduledTask
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.users import HumanUser
 
@@ -139,3 +141,127 @@ def test_ssh_key_user_property_none(db_session):
         # Setting to None should work
         user.ssh_private_key = None
         assert user.ssh_private_key_encrypted is None
+
+
+# --- Schedule endpoint tests ---
+
+
+def test_schedule_request_invalid_cron(client, user):
+    """Test that invalid cron expression returns 400."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "not a cron",
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test prompt",
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "Invalid cron expression" in response.json()["detail"]
+
+
+def test_schedule_requires_initial_prompt(client, user):
+    """Test that missing initial_prompt returns 400."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 9 * * *",
+            "spawn_config": {
+                "environment_id": 1,
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "initial_prompt" in response.json()["detail"]
+
+
+def test_schedule_creates_scheduled_task(client, user, db_session):
+    """Test that a valid schedule request creates a ScheduledTask in the DB."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 9 * * *",
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "Review the latest changes and create a summary",
+            },
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["cron_expression"] == "0 9 * * *"
+    assert data["task_id"]
+    assert data["next_scheduled_time"]
+    assert "Review the latest changes" in data["topic"]
+
+    # Verify it's in the database
+    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
+    assert task is not None
+    assert task.task_type == "claude_session"
+    assert task.enabled is True
+    assert task.data["spawn_config"]["environment_id"] == 1
+    assert task.data["spawn_config"]["initial_prompt"] == "Review the latest changes and create a summary"
+
+
+def test_schedule_rejects_too_frequent_cron(client, user):
+    """Test that cron expressions with intervals below the minimum are rejected."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "* * * * *",  # every minute
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test prompt",
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "Cron interval too short" in response.json()["detail"]
+
+
+def test_schedule_rejects_over_per_user_limit(client, user, db_session):
+    """Test that exceeding the per-user scheduled task limit is rejected."""
+    # Create MAX_SCHEDULED_TASKS_PER_USER tasks to fill the quota
+    for i in range(settings.MAX_SCHEDULED_TASKS_PER_USER):
+        task = ScheduledTask(
+            user_id=user.id,
+            task_type="claude_session",
+            topic=f"Task {i}",
+            data={"spawn_config": {"environment_id": 1, "initial_prompt": f"prompt {i}"}},
+            cron_expression="0 9 * * *",
+            enabled=True,
+        )
+        db_session.add(task)
+    db_session.commit()
+
+    # The next schedule attempt should be rejected
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 9 * * *",
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "one too many",
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "Maximum" in response.json()["detail"]
+
+
+def test_schedule_rejects_six_field_cron(client, user):
+    """Test that 6-field cron expressions (with seconds) are rejected."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 0 9 * * *",  # 6 fields
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test prompt",
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "5-field" in response.json()["detail"]

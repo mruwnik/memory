@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
@@ -760,3 +761,146 @@ def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_se
 
     # Verify the execution was re-dispatched (delay called with its ID)
     mock_delay.assert_called_with(stuck_pending.id)
+
+
+# --- Claude session spawning tests ---
+
+
+@pytest.fixture
+def claude_session_task(db_session, sample_user):
+    """Create a scheduled task for Claude session spawning."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Daily review",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "Review the latest changes",
+            }
+        },
+        cron_expression="0 9 * * *",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+    return task
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_success(mock_post, claude_session_task, db_session):
+    """Test successful spawning of a Claude session via API."""
+    # Mock the API response
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    result = scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session)
+
+    assert result == "u1-e1-abc123"
+    mock_post.assert_called_once()
+    url_arg = mock_post.call_args.args[0]
+    assert "/claude/spawn" in url_arg
+    assert "Authorization" in mock_post.call_args.kwargs.get("headers", {})
+
+
+def test_spawn_claude_session_missing_config(db_session, sample_user):
+    """Test that missing spawn_config raises ValueError."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="No config",
+        data={},
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Missing spawn_config"):
+        scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_run_id_suffixed(mock_post, db_session, sample_user):
+    """Test that run_id gets a timestamp suffix appended."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Daily review",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test",
+                "run_id": "daily-review",
+            }
+        },
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+    posted_json = mock_post.call_args.kwargs["json"]
+    assert posted_json["run_id"].startswith("daily-review-")
+    # Should have YYYYMMDD-HHMMSS suffix
+    assert re.match(r"daily-review-\d{8}-\d{6}", posted_json["run_id"])
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_does_not_mutate_task_data(mock_post, db_session, sample_user):
+    """Test that spawn_claude_session doesn't mutate task.data in place.
+
+    The original run_id in the task's data must remain unchanged so that
+    subsequent cron executions don't accumulate timestamp suffixes.
+    """
+    original_run_id = "daily-review"
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Daily review",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test",
+                "run_id": original_run_id,
+            }
+        },
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+    # The original task data must NOT have been mutated
+    assert task.data["spawn_config"]["run_id"] == original_run_id
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_api_failure(mock_post, claude_session_task, db_session):
+    """Test that API failure raises ValueError."""
+    mock_response = Mock()
+    mock_response.ok = False
+    mock_response.status_code = 503
+    mock_response.text = "Orchestrator unavailable"
+    mock_post.return_value = mock_response
+
+    with pytest.raises(ValueError, match="API returned 503"):
+        scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session)

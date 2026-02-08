@@ -227,6 +227,7 @@ MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
+INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)
 HTTPS = boolean_env("HTTPS", False)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
@@ -240,6 +241,10 @@ API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
 API_RATE_LIMIT_SEARCH = os.getenv("API_RATE_LIMIT_SEARCH", "30/minute")
 # Auth endpoints have stricter limits to prevent brute force
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+
+# Claude scheduled tasks limits
+MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
+MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 
 REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False)
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)

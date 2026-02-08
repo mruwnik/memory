@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
@@ -227,6 +227,16 @@ const AuthWrapper = () => {
       <Route path="/ui/claude" element={
         isAuthenticated ? (
           <Suspense fallback={<Loading />}><ClaudeSessions /></Suspense>
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/celery" element={
+        isAuthenticated && hasScope('admin') ? (
+          <CeleryOverview />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
         ) : (
           <Navigate to="/ui/login" replace />
         )

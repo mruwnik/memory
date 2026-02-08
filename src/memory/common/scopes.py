@@ -67,6 +67,7 @@ SCOPE_PEOPLE_WRITE = "people:write"
 SCOPE_POLLING = "polling"
 SCOPE_POLLING_WRITE = "polling:write"
 SCOPE_SCHEDULE = "schedule"
+SCOPE_SCHEDULE_WRITE = "schedule:write"
 SCOPE_TEAMS = "teams"
 SCOPE_TEAMS_WRITE = "teams:write"
 SCOPE_PROJECTS = "projects"
@@ -238,7 +239,13 @@ VALID_SCOPES: list[ScopeInfo] = [
     {
         "value": SCOPE_SCHEDULE,
         "label": "Schedule",
-        "description": "Schedule messages and reminders",
+        "description": "View scheduled tasks and reminders",
+        "category": "organization",
+    },
+    {
+        "value": SCOPE_SCHEDULE_WRITE,
+        "label": "Schedule (write)",
+        "description": "Create and manage scheduled tasks",
         "category": "organization",
     },
     {

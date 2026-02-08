@@ -7,10 +7,15 @@ Supports multiple task types: notification (Discord/Slack/Email), claude_session
 
 import asyncio
 import concurrent.futures
+import copy
 import logging
+import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, NoReturn
+from typing import Any
+
+import requests
 
 from memory.common import discord as discord_utils
 from memory.common.celery_app import (
@@ -19,8 +24,9 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.content_processing import safe_task_execution
+from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, EmailAccount, ScheduledTask, TaskExecution
+from memory.common.db.models import DiscordBot, EmailAccount, ScheduledTask, TaskExecution, UserSession
 from memory.common.db.models.scheduled_tasks import (
     ExecutionStatus,
     TaskType,
@@ -231,35 +237,88 @@ def send_notification(params: NotificationParams) -> bool:
     return False
 
 
-def spawn_claude_session(task: ScheduledTask) -> NoReturn:
+def sanitize_slug(text: str, max_length: int = 30) -> str:
+    """Sanitize text for use in git branch names and run IDs.
+
+    Keeps only alphanumeric characters and hyphens, collapses runs of hyphens,
+    and strips leading/trailing hyphens.
     """
-    Spawn a Claude Code session for a task.
+    slug = re.sub(r"[^a-z0-9-]", "-", text.lower())
+    slug = re.sub(r"-{2,}", "-", slug)
+    return slug[:max_length].strip("-")
 
-    IMPORTANT: This feature is not yet implemented and will raise NotImplementedError.
-    The 'claude_session' task type is reserved for future use when we add the ability
-    to spawn autonomous Claude sessions on a schedule (e.g., for daily reports,
-    scheduled code reviews, or recurring analysis tasks).
 
-    The TaskType.CLAUDE_SESSION enum value exists to:
-    1. Reserve the task_type value in the database schema
-    2. Allow early validation of task creation
-    3. Provide a clear error message when users try to use this feature
+@contextmanager
+def session_token(db, user_id: int):
+    """Create a short-lived session token that is cleaned up on exit.
 
-    Implementation requirements (for future):
-    - Integration with Claude Code CLI or API
-    - Secure session management
-    - Resource limits and quotas
-    - Output capture and storage
+    Usage::
+
+        with session_token(db_session, user_id) as token:
+            requests.post(url, headers={"Authorization": f"Bearer {token}"})
+
+    The token row is deleted in the ``finally`` block regardless of success or
+    failure, so there are no orphaned session rows.
+    """
+    user_session = UserSession(
+        user_id=user_id,
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5),
+    )
+    db.add(user_session)
+    db.commit()
+    token = user_session.id
+    try:
+        yield token
+    finally:
+        db.query(UserSession).filter(UserSession.id == token).delete()
+        db.commit()
+
+
+def spawn_claude_session(task: ScheduledTask, db) -> str:
+    """Spawn a Claude Code session by calling the API's /claude/spawn endpoint.
+
+    The worker cannot talk to the orchestrator socket directly (only the API
+    container has it), so we create a short-lived session token and POST to the
+    internal API URL.
+
+    Args:
+        task: The ScheduledTask containing spawn_config in its data.
+        db: SQLAlchemy session for creating/cleaning up the auth token.
+
+    Returns the session_id of the spawned container.
     """
     data = task.data or {}
-    logger.warning(
-        f"Claude session spawning requested for task {task.id} with config: {data}. "
-        "This feature is not yet implemented."
-    )
-    raise NotImplementedError(
-        "Claude session spawning is not yet implemented. "
-        "Please use 'notification' task type instead, or wait for this feature to be available."
-    )
+    spawn_config = copy.deepcopy(data.get("spawn_config"))
+    if not spawn_config:
+        raise ValueError("Missing spawn_config in task data")
+
+    # Auto-suffix run_id with execution timestamp to avoid branch conflicts
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    if spawn_config.get("run_id"):
+        spawn_config["run_id"] = f"{spawn_config['run_id']}-{now_str}"
+    else:
+        raw = task.topic or f"task-{str(task.id)[:8]}"
+        slug = sanitize_slug(raw)
+        spawn_config["run_id"] = f"{slug}-{now_str}"
+
+    # NOTE: INTERNAL_API_URL should only point to container-internal or
+    # localhost addresses. The session token is sent over HTTP (not HTTPS).
+    # Pointing this at an external hostname would leak the token in transit.
+    url = f"{settings.INTERNAL_API_URL}/claude/spawn"
+
+    with session_token(db, task.user_id) as token:
+        resp = requests.post(
+            url,
+            json=spawn_config,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        if not resp.ok:
+            raise ValueError(f"API returned {resp.status_code}: {resp.text}")
+        session_id = resp.json().get("session_id")
+
+    logger.info(f"Spawned Claude session {session_id} for task {task.id}")
+    return session_id
 
 
 @app.task(bind=True, name=EXECUTE_SCHEDULED_TASK)
@@ -314,7 +373,7 @@ def execute_scheduled_task(self, execution_id: str):
                     error_message = "Failed to send notification"
 
             elif task_type == TaskType.CLAUDE_SESSION:
-                session_id = spawn_claude_session(task)
+                session_id = spawn_claude_session(task, session)
                 final_status = ExecutionStatus.COMPLETED
                 execution_data = {"session_id": session_id}
 

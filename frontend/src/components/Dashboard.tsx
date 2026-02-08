@@ -119,6 +119,13 @@ const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
                             <p className="text-gray-600 text-base">View API and worker container logs</p>
                         </Link>
 
+                        {hasScope('admin') && (
+                            <Link to="/ui/celery" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">Celery Tasks</h3>
+                                <p className="text-gray-600 text-base">Beat schedule status and ingestion overview</p>
+                            </Link>
+                        )}
+
                         <Link to="/ui/sources?tab=secrets" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
                             <h3 className="text-slate-800 text-xl mb-2 font-semibold">Secrets</h3>
                             <p className="text-gray-600 text-base">Manage encrypted API keys and tokens</p>

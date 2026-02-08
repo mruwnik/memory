@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, getLogStreamUrl } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, getLogStreamUrl } from '../../hooks/useClaude'
 import XtermTerminal from './XtermTerminal'
 
 const COMMON_TOOLS = [
@@ -40,6 +40,7 @@ const ClaudeSessions = () => {
     listSessions,
     killSession,
     spawnSession,
+    scheduleSession,
     getAttachInfo,
     getOrchestratorStatus,
     listSnapshots,
@@ -94,6 +95,9 @@ const ClaudeSessions = () => {
   })
   const [initialPrompt, setInitialPrompt] = useState<string>('')
   const [runId, setRunId] = useState<string>('')
+  const [cronExpression, setCronExpression] = useState<string>('')
+  const [scheduling, setScheduling] = useState(false)
+  const [scheduleSuccess, setScheduleSuccess] = useState<ScheduleResponse | null>(null)
 
   // Load data
   const loadSessions = useCallback(async () => {
@@ -291,6 +295,22 @@ const ClaudeSessions = () => {
     }
   }
 
+  const buildSpawnConfig = () => {
+    const customEnv = parseEnvText(customEnvText)
+    return {
+      snapshot_id: selectedConfig?.type === 'snapshot' ? selectedConfig.id : undefined,
+      environment_id: selectedConfig?.type === 'environment' ? selectedConfig.id : undefined,
+      repo_url: selectedRepoUrl || undefined,
+      github_token: githubToken || undefined,
+      github_token_write: githubTokenWrite || undefined,
+      use_happy: useHappy || undefined,
+      allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
+      custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
+      initial_prompt: initialPrompt || undefined,
+      run_id: runId || undefined,
+    }
+  }
+
   const handleSpawnSession = async () => {
     if (!selectedConfig) {
       setError('Please select a snapshot or environment')
@@ -298,21 +318,7 @@ const ClaudeSessions = () => {
     }
     setSpawning(true)
     try {
-      // Parse custom environment variables
-      const customEnv = parseEnvText(customEnvText)
-
-      const newSession = await spawnSession({
-        snapshot_id: selectedConfig.type === 'snapshot' ? selectedConfig.id : undefined,
-        environment_id: selectedConfig.type === 'environment' ? selectedConfig.id : undefined,
-        repo_url: selectedRepoUrl || undefined,
-        github_token: githubToken || undefined,
-        github_token_write: githubTokenWrite || undefined,
-        use_happy: useHappy || undefined,
-        allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
-        custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
-        initial_prompt: initialPrompt || undefined,
-        run_id: runId || undefined,
-      })
+      const newSession = await spawnSession(buildSpawnConfig())
       await loadSessions()
       setSelectedSession(newSession)
       setShowNewSession(false)
@@ -325,6 +331,34 @@ const ClaudeSessions = () => {
       setError(e instanceof Error ? e.message : 'Failed to spawn session')
     } finally {
       setSpawning(false)
+    }
+  }
+
+  const handleScheduleSession = async () => {
+    if (!selectedConfig) {
+      setError('Please select a snapshot or environment')
+      return
+    }
+    if (!initialPrompt) {
+      setError('Scheduled sessions require an initial prompt')
+      return
+    }
+    setScheduling(true)
+    setScheduleSuccess(null)
+    try {
+      const result = await scheduleSession({
+        cron_expression: cronExpression,
+        spawn_config: buildSpawnConfig(),
+      })
+      setScheduleSuccess(result)
+      // Reset form
+      setInitialPrompt('')
+      setRunId('')
+      setCronExpression('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to schedule session')
+    } finally {
+      setScheduling(false)
     }
   }
 
@@ -660,14 +694,97 @@ const ClaudeSessions = () => {
                     </p>
                   </div>
 
+                  {/* Cron Schedule */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Schedule (optional)
+                    </label>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={cronExpression}
+                        onChange={(e) => setCronExpression(e.target.value)}
+                        placeholder="0 9 * * *"
+                        className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 mb-2">
+                      Standard 5-field cron: minute hour day-of-month month day-of-week
+                    </p>
+                    <div className="flex gap-2 mb-2">
+                      {[
+                        { label: 'Daily 9am', value: '0 9 * * *' },
+                        { label: 'Weekdays 9am', value: '0 9 * * 1-5' },
+                        { label: 'Weekly Mon', value: '0 9 * * 1' },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setCronExpression(preset.value)}
+                          className={`text-xs px-2 py-1 rounded border ${
+                            cronExpression === preset.value
+                              ? 'bg-primary/10 border-primary text-primary'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                      {cronExpression && (
+                        <button
+                          type="button"
+                          onClick={() => setCronExpression('')}
+                          className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    {cronExpression && !initialPrompt && (
+                      <p className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded mb-1">
+                        An initial prompt is required for scheduled sessions.
+                      </p>
+                    )}
+                    {cronExpression && (
+                      <p className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
+                        This will create a recurring schedule, not start a session now.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Schedule success message */}
+                  {scheduleSuccess && (
+                    <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg">
+                      <p className="font-medium">Schedule created</p>
+                      <p className="text-sm mt-1">
+                        Task ID: <code className="bg-green-100 px-1 rounded">{scheduleSuccess.task_id}</code>
+                      </p>
+                      <p className="text-sm mt-1">
+                        Next run: {new Date(scheduleSuccess.next_scheduled_time).toLocaleString()}
+                      </p>
+                      <button
+                        onClick={() => setScheduleSuccess(null)}
+                        className="text-sm text-green-700 hover:underline mt-2"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+
                   {/* Actions */}
                   <div className="flex gap-3">
                     <button
-                      onClick={handleSpawnSession}
-                      disabled={spawning || !selectedConfig}
+                      onClick={cronExpression ? handleScheduleSession : handleSpawnSession}
+                      disabled={spawning || scheduling || !selectedConfig}
                       className="bg-primary text-white py-2 px-6 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:bg-slate-300 disabled:cursor-not-allowed"
                     >
-                      {spawning ? 'Starting...' : 'Start Session'}
+                      {spawning
+                        ? 'Starting...'
+                        : scheduling
+                          ? 'Scheduling...'
+                          : cronExpression
+                            ? 'Schedule Recurring Session'
+                            : 'Start Session'}
                     </button>
                     <button
                       onClick={() => setShowNewSession(false)}

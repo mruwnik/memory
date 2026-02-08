@@ -11,4 +11,6 @@ export { ConfigSources, Snapshots } from './snapshots'
 export { default as LoginPrompt } from './auth/LoginPrompt'
 export { default as AuthError } from './auth/AuthError'
 
+export { CeleryOverview } from './celery'
+
 // Note: Metrics, Telemetry, ClaudeSessions are lazy-loaded in App.tsx
