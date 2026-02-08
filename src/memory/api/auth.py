@@ -72,9 +72,16 @@ def get_bearer_token(request: Request) -> str | None:
 
 
 def get_token(request: Request) -> str | None:
-    """Get token from request"""
-    return get_bearer_token(request) or request.cookies.get(
-        settings.SESSION_COOKIE_NAME
+    """Get token from request.
+
+    Checks in order: Authorization Bearer header, session cookie, access_token cookie.
+    The access_token cookie fallback supports iframe embeds (e.g. report viewer)
+    which can't set Authorization headers.
+    """
+    return (
+        get_bearer_token(request)
+        or request.cookies.get(settings.SESSION_COOKIE_NAME)
+        or request.cookies.get("access_token")
     )
 
 

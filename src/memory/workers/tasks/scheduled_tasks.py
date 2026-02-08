@@ -292,6 +292,10 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
     if not spawn_config:
         raise ValueError("Missing spawn_config in task data")
 
+    # initial_prompt is stored in task.message, inject it for the spawn API
+    if task.message:
+        spawn_config["initial_prompt"] = task.message
+
     # Auto-suffix run_id with execution timestamp to avoid branch conflicts
     now_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     if spawn_config.get("run_id"):

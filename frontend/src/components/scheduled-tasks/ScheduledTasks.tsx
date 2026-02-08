@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody } from '@/hooks/useScheduledTasks'
+import { useClaude, Environment } from '@/hooks/useClaude'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session'
@@ -79,6 +80,65 @@ function formatDuration(start: string | null, end: string | null): string {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
+// --- Data Display ---
+
+const DataField = ({ label, value }: { label: string; value: string }) => (
+  <span className="inline-flex items-center gap-1 text-xs bg-slate-50 border border-slate-200 rounded px-2 py-0.5">
+    <span className="text-slate-400">{label}</span>
+    <span className="text-slate-700 font-mono">{value}</span>
+  </span>
+)
+
+const TaskDataFields = ({ task }: { task: ScheduledTask }) => {
+  const data = task.data
+  if (!data || Object.keys(data).length === 0) return null
+
+  if (task.task_type === 'claude_session') {
+    const config = data.spawn_config as Record<string, unknown> | undefined
+    if (!config) return null
+
+    const fields: { label: string; value: string }[] = []
+    if (config.environment_id) fields.push({ label: 'env', value: String(config.environment_id) })
+    if (config.snapshot_id) fields.push({ label: 'snapshot', value: String(config.snapshot_id) })
+    if (config.repo_url) fields.push({ label: 'repo', value: String(config.repo_url).replace(/^https?:\/\/github\.com\//, '') })
+    if (config.run_id) fields.push({ label: 'run', value: String(config.run_id) })
+    if (config.use_happy) fields.push({ label: 'runner', value: 'happy' })
+    if (config.allowed_tools) {
+      const tools = config.allowed_tools as string[]
+      fields.push({ label: 'tools', value: tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ') })
+    }
+
+    const prompt = config.initial_prompt as string | undefined
+    const showPrompt = prompt && prompt.length > 100
+
+    return (
+      <>
+        {showPrompt && (
+          <p className="text-sm text-slate-600 mt-1 line-clamp-3" title={prompt}>{prompt}</p>
+        )}
+        {fields.length > 0 && (
+          <div className="flex gap-2 mt-2 flex-wrap">
+            {fields.map(f => <DataField key={f.label} label={f.label} value={f.value} />)}
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // Notification tasks: show extra data fields
+  const fields: { label: string; value: string }[] = []
+  if (data.subject) fields.push({ label: 'subject', value: String(data.subject) })
+  if (data.from_address) fields.push({ label: 'from', value: String(data.from_address) })
+  if (data.discord_bot_id) fields.push({ label: 'bot', value: String(data.discord_bot_id) })
+
+  if (fields.length === 0) return null
+  return (
+    <div className="flex gap-2 mt-2 flex-wrap">
+      {fields.map(f => <DataField key={f.label} label={f.label} value={f.value} />)}
+    </div>
+  )
+}
+
 // --- Edit Form ---
 
 interface EditFormProps {
@@ -89,12 +149,39 @@ interface EditFormProps {
   error: string | null
 }
 
+const inputClass = "w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+const labelClass = "block text-xs font-medium text-slate-500 mb-1"
+
 const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   const [topic, setTopic] = useState(task.topic || '')
   const [cronExpr, setCronExpr] = useState(task.cron_expression || '')
-  const [message, setMessage] = useState(task.message || '')
   const [channel, setChannel] = useState(task.notification_channel || '')
   const [target, setTarget] = useState(task.notification_target || '')
+
+  const isClaude = task.task_type === 'claude_session'
+  const config = isClaude ? ((task.data?.spawn_config as Record<string, unknown>) || {}) : {}
+
+  const [message, setMessage] = useState(task.message || '')
+
+  // Spawn config fields (claude_session only)
+  const [envId, setEnvId] = useState<number | null>((config.environment_id as number) ?? null)
+  const [repoUrl, setRepoUrl] = useState((config.repo_url as string) || '')
+  const [allowedTools, setAllowedTools] = useState(
+    Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
+  )
+  const [useHappy, setUseHappy] = useState(!!config.use_happy)
+  const [runId, setRunId] = useState((config.run_id as string) || '')
+  const [customEnvText, setCustomEnvText] = useState(
+    config.custom_env ? Object.entries(config.custom_env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n') : ''
+  )
+
+  // Load environments for dropdown
+  const { listEnvironments } = useClaude()
+  const [environments, setEnvironments] = useState<Environment[]>([])
+  useEffect(() => {
+    if (!isClaude) return
+    listEnvironments().then(setEnvironments).catch(() => {})
+  }, [isClaude, listEnvironments])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -102,10 +189,43 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
     if (topic !== (task.topic || '')) updates.topic = topic
     if (cronExpr !== (task.cron_expression || '')) updates.cron_expression = cronExpr
     if (message !== (task.message || '')) updates.message = message
-    if (task.task_type === 'notification') {
+
+    if (isClaude) {
+      const configUpdates: Record<string, unknown> = {}
+      const origRepo = (config.repo_url as string) || ''
+      const origTools = Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
+      const origHappy = !!config.use_happy
+      const origRunId = (config.run_id as string) || ''
+      const origEnvId = (config.environment_id as number) ?? null
+      const origEnvText = config.custom_env
+        ? Object.entries(config.custom_env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n')
+        : ''
+
+      if (envId !== origEnvId) configUpdates.environment_id = envId
+      if (repoUrl !== origRepo) configUpdates.repo_url = repoUrl || null
+      if (allowedTools !== origTools) {
+        const tools = allowedTools.split(',').map(t => t.trim()).filter(Boolean)
+        configUpdates.allowed_tools = tools.length > 0 ? tools : null
+      }
+      if (useHappy !== origHappy) configUpdates.use_happy = useHappy || null
+      if (runId !== origRunId) configUpdates.run_id = runId || null
+      if (customEnvText !== origEnvText) {
+        const envObj: Record<string, string> = {}
+        for (const line of customEnvText.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          const eqIdx = trimmed.indexOf('=')
+          if (eqIdx > 0) envObj[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1)
+        }
+        configUpdates.custom_env = Object.keys(envObj).length > 0 ? envObj : null
+      }
+
+      if (Object.keys(configUpdates).length > 0) updates.spawn_config = configUpdates
+    } else {
       if (channel !== (task.notification_channel || '')) updates.notification_channel = channel
       if (target !== (task.notification_target || '')) updates.notification_target = target
     }
+
     if (Object.keys(updates).length === 0) {
       onCancel()
       return
@@ -116,43 +236,105 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div>
-        <label className="block text-xs font-medium text-slate-500 mb-1">Topic</label>
-        <input
-          type="text"
-          value={topic}
-          onChange={e => setTopic(e.target.value)}
-          className="w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-        />
+        <label className={labelClass}>Topic</label>
+        <input type="text" value={topic} onChange={e => setTopic(e.target.value)} className={inputClass} />
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-500 mb-1">Cron Expression</label>
+        <label className={labelClass}>Cron Expression</label>
         <input
           type="text"
           value={cronExpr}
           onChange={e => setCronExpr(e.target.value)}
           placeholder="0 9 * * *"
-          className="w-full px-3 py-1.5 border border-slate-200 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+          className={`${inputClass} font-mono`}
         />
         <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-500 mb-1">Message</label>
-        <textarea
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-          rows={3}
-          className="w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-        />
+        <label className={labelClass}>{isClaude ? 'Initial Prompt' : 'Message'}</label>
+        <textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} className={inputClass} />
       </div>
+
+      {isClaude && (
+        <>
+          <div className="border-t border-slate-200 pt-3 mt-3">
+            <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
+          </div>
+          <div>
+            <label className={labelClass}>Environment</label>
+            <select
+              value={envId ?? ''}
+              onChange={e => setEnvId(e.target.value ? Number(e.target.value) : null)}
+              className={inputClass}
+            >
+              <option value="">Select environment...</option>
+              {environments.map(env => (
+                <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className={labelClass}>Repo URL</label>
+              <input
+                type="text"
+                value={repoUrl}
+                onChange={e => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/org/repo"
+                className={inputClass}
+              />
+            </div>
+            <div className="flex-1">
+              <label className={labelClass}>Run ID</label>
+              <input
+                type="text"
+                value={runId}
+                onChange={e => setRunId(e.target.value)}
+                placeholder="custom-branch-name"
+                className={inputClass}
+              />
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>Allowed Tools</label>
+            <input
+              type="text"
+              value={allowedTools}
+              onChange={e => setAllowedTools(e.target.value)}
+              placeholder="Bash, Read, Write, Edit, Grep, Glob"
+              className={inputClass}
+            />
+            <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
+          </div>
+          <div>
+            <label className={labelClass}>Environment Variables</label>
+            <textarea
+              value={customEnvText}
+              onChange={e => setCustomEnvText(e.target.value)}
+              rows={3}
+              placeholder={"KEY=value\nANOTHER_KEY=value"}
+              className={`${inputClass} font-mono`}
+            />
+            <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id={`happy-${task.id}`}
+              checked={useHappy}
+              onChange={e => setUseHappy(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <label htmlFor={`happy-${task.id}`} className="text-xs text-slate-600">Use Happy runner</label>
+          </div>
+        </>
+      )}
+
       {task.task_type === 'notification' && (
         <div className="flex gap-3">
           <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Channel</label>
-            <select
-              value={channel}
-              onChange={e => setChannel(e.target.value)}
-              className="w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-            >
+            <label className={labelClass}>Channel</label>
+            <select value={channel} onChange={e => setChannel(e.target.value)} className={inputClass}>
               <option value="">Select...</option>
               {CHANNELS.map(c => (
                 <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
@@ -160,13 +342,13 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
             </select>
           </div>
           <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Target</label>
+            <label className={labelClass}>Target</label>
             <input
               type="text"
               value={target}
               onChange={e => setTarget(e.target.value)}
               placeholder="channel or email"
-              className="w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              className={inputClass}
             />
           </div>
         </div>
@@ -220,18 +402,33 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
 
   return (
     <div className="mt-2 space-y-1">
-      {executions.map(ex => (
-        <div key={ex.id} className="flex items-center gap-3 text-xs text-slate-600 py-1 border-t border-slate-100">
-          <span className="text-slate-400 w-20 shrink-0">{formatRelativeTime(ex.scheduled_time)}</span>
-          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${EXECUTION_STATUS_COLORS[ex.status] || 'bg-slate-100 text-slate-600'}`}>
-            {ex.status}
-          </span>
-          <span className="text-slate-400">{formatDuration(ex.started_at, ex.finished_at)}</span>
-          {ex.error_message && (
-            <span className="text-red-500 truncate flex-1" title={ex.error_message}>{ex.error_message}</span>
-          )}
-        </div>
-      ))}
+      {executions.map(ex => {
+        const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined
+        return (
+          <div key={ex.id} className="border-t border-slate-100 py-1">
+            <div className="flex items-center gap-3 text-xs text-slate-600">
+              <span className="text-slate-400 w-20 shrink-0">{formatRelativeTime(ex.scheduled_time)}</span>
+              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${EXECUTION_STATUS_COLORS[ex.status] || 'bg-slate-100 text-slate-600'}`}>
+                {ex.status}
+              </span>
+              <span className="text-slate-400">{formatDuration(ex.started_at, ex.finished_at)}</span>
+              {sessionId && (
+                <span className="font-mono text-slate-500" title={sessionId}>
+                  session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}
+                </span>
+              )}
+              {ex.error_message && (
+                <span className="text-red-500 truncate flex-1" title={ex.error_message}>{ex.error_message}</span>
+              )}
+            </div>
+            {ex.response && (
+              <p className="text-xs text-slate-500 mt-0.5 ml-[calc(5rem+0.75rem)] line-clamp-2" title={ex.response}>
+                {ex.response}
+              </p>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -316,6 +513,8 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
               {task.message && (
                 <p className="text-sm text-slate-600 mt-1 line-clamp-2">{task.message}</p>
               )}
+
+              <TaskDataFields task={task} />
 
               <div className="flex gap-4 mt-2 text-xs text-slate-400 flex-wrap">
                 <span>Next: {formatFutureTime(task.next_scheduled_time)}</span>

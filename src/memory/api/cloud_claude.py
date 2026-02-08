@@ -421,14 +421,20 @@ async def schedule_session(
                     detail=f"Secret '{token_value}' not found for {token_field}",
                 ) from e
 
-    topic = request.spawn_config.initial_prompt[:100]
+    prompt = request.spawn_config.initial_prompt
+    topic = prompt[:100]
     next_time = compute_next_cron(request.cron_expression)
+
+    # Store initial_prompt in the message field (not in spawn_config)
+    spawn_data = request.spawn_config.model_dump(exclude_none=True)
+    spawn_data.pop("initial_prompt", None)
 
     task = ScheduledTask(
         user_id=user.id,
         task_type=TaskType.CLAUDE_SESSION,
         topic=topic,
-        data={"spawn_config": request.spawn_config.model_dump(exclude_none=True)},
+        message=prompt,
+        data={"spawn_config": spawn_data},
         cron_expression=request.cron_expression,
         next_scheduled_time=next_time,
         enabled=True,

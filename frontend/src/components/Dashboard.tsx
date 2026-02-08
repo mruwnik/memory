@@ -41,6 +41,11 @@ const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
                             <p className="text-gray-600 text-base">Browse and view your notes</p>
                         </Link>
 
+                        <Link to="/ui/reports" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Reports</h3>
+                            <p className="text-gray-600 text-base">View and create rich HTML and PDF reports</p>
+                        </Link>
+
                         <Link to="/ui/people" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
                             <h3 className="text-slate-800 text-xl mb-2 font-semibold">People</h3>
                             <p className="text-gray-600 text-base">Track and manage people you know</p>

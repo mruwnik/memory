@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
@@ -161,6 +161,14 @@ const AuthWrapper = () => {
       <Route path="/ui/notes" element={
         isAuthenticated ? (
           <NotesPage />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/reports" element={
+        isAuthenticated ? (
+          <ReportsPage />
         ) : (
           <Navigate to="/ui/login" replace />
         )

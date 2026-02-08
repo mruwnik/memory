@@ -37,6 +37,7 @@ export interface UpdateTaskBody {
   message?: string
   notification_channel?: string
   notification_target?: string
+  spawn_config?: Record<string, unknown>
 }
 
 export const useScheduledTasks = () => {

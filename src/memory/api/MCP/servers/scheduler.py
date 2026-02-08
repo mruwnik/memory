@@ -70,6 +70,13 @@ async def list_all(
         return [task.serialize() for task in tasks]
 
 
+SPAWN_CONFIG_FIELDS = {
+    "allowed_tools", "repo_url", "custom_env",
+    "use_happy", "run_id", "environment_id", "snapshot_id",
+    "github_token", "github_token_write",
+}
+
+
 @scheduler_mcp.tool()
 @visible_when(require_scopes(SCOPE_SCHEDULE_WRITE))
 async def upsert(
@@ -80,6 +87,7 @@ async def upsert(
     message: str | None = None,
     notification_channel: str | None = None,
     notification_target: str | None = None,
+    spawn_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Update a scheduled task's fields.
@@ -92,6 +100,11 @@ async def upsert(
         message: Message content
         notification_channel: Notification channel (discord, slack, email)
         notification_target: Target for notifications
+        spawn_config: Partial spawn config to merge (claude_session tasks only).
+            Supported keys: allowed_tools, repo_url, custom_env, use_happy,
+            run_id, environment_id, snapshot_id, github_token,
+            github_token_write. Set a key to null to remove it.
+            Note: initial_prompt is stored in the message field, not spawn_config.
     """
     user_id = get_authenticated_user_id()
 
@@ -126,6 +139,23 @@ async def upsert(
             task.notification_channel = notification_channel
         if notification_target is not None:
             task.notification_target = notification_target
+
+        if spawn_config is not None:
+            if task.task_type != "claude_session":
+                raise ValueError("spawn_config can only be set on claude_session tasks")
+            unknown = set(spawn_config.keys()) - SPAWN_CONFIG_FIELDS
+            if unknown:
+                raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
+
+            data = dict(task.data or {})
+            existing = dict(data.get("spawn_config") or {})
+            for key, value in spawn_config.items():
+                if value is None:
+                    existing.pop(key, None)
+                else:
+                    existing[key] = value
+            data["spawn_config"] = existing
+            task.data = data
 
         session.commit()
         return task.serialize()

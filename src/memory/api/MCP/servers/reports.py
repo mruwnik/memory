@@ -28,6 +28,7 @@ async def upsert(
     title: str,
     content: str,
     tags: list[str] | None = None,
+    filename: str | None = None,
 ) -> dict:
     """
     Create or update a report from HTML content.
@@ -38,6 +39,8 @@ async def upsert(
         title: Title of the report
         content: Report content (HTML string)
         tags: Organization tags for filtering and discovery
+        filename: Stable filename for upsert (e.g. "my_report.html").
+                  If omitted, one is generated from the content hash + title.
     """
     tags = tags or []
     logger.info("MCP: upserting report: %s", title)
@@ -48,10 +51,13 @@ async def upsert(
     if not user or user_id is None:
         return {"error": "Authentication required to create reports"}
 
-    # Generate filename from content hash + title
-    content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-    safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip()[:50]
-    filename = f"{content_hash}_{safe_title}.html"
+    # Use caller-supplied filename or generate from content hash + title
+    if not filename:
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+        safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip()[:50]
+        filename = f"{content_hash}_{safe_title}.html"
+    elif not filename.endswith(".html"):
+        filename = f"{filename}.html"
 
     # Access check on existing report with same filename, and capture its ID
     # for the worker to re-verify ownership (mitigates TOCTOU race).
