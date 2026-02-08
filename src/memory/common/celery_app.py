@@ -1,8 +1,15 @@
+import json
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
 from kombu.utils.url import safequote
 
 from memory.common import settings
+
+logger = logging.getLogger(__name__)
+
+REDIS_BEAT_SCHEDULE_KEY = "memory:custom-beat-schedule"
 
 EMAIL_ROOT = "memory.workers.tasks.email"
 FORUMS_ROOT = "memory.workers.tasks.forums"
@@ -158,6 +165,69 @@ def register_custom_beat(
         "schedule": schedule,
     }
     return task_name
+
+
+def format_schedule(schedule) -> str:
+    """Convert a Celery schedule object to a human-readable string."""
+    if isinstance(schedule, crontab):
+        try:
+            minute = str(schedule._orig_minute)
+            hour = str(schedule._orig_hour)
+            dow = str(schedule._orig_day_of_week)
+        except AttributeError:
+            return str(schedule)
+
+        if hour == "*" and minute == "*":
+            return "Every minute"
+        if hour == "*":
+            return f"Every hour at :{minute.zfill(2)}"
+        if dow != "*":
+            return f"{dow} at {hour}:{minute.zfill(2)}"
+        if minute == "0":
+            return f"Daily at {hour}:00"
+        return f"Daily at {hour}:{minute.zfill(2)}"
+
+    if isinstance(schedule, (int, float)):
+        seconds = int(schedule)
+        if seconds < 60:
+            return f"Every {seconds}s"
+        if seconds < 3600:
+            return f"Every {seconds // 60}m"
+        hours = seconds / 3600
+        if hours == int(hours):
+            return f"Every {int(hours)}h"
+        return f"Every {hours:.1f}h"
+
+    if hasattr(schedule, "total_seconds"):
+        return format_schedule(int(schedule.total_seconds()))
+
+    return str(schedule)
+
+
+def publish_custom_schedule_to_redis() -> None:
+    """Write custom beat schedule entries to Redis for the API to read.
+
+    Called after load_custom_tasks(). Stores pre-formatted schedule display
+    strings so the API doesn't need to import custom task files.
+    """
+    custom_entries = {}
+    for key, entry in (app.conf.beat_schedule or {}).items():
+        custom_entries[key] = {
+            "task": entry.get("task", ""),
+            "schedule_display": format_schedule(entry.get("schedule")),
+        }
+
+    if not custom_entries:
+        return
+
+    try:
+        import redis
+
+        r = redis.from_url(settings.REDIS_URL)
+        r.set(REDIS_BEAT_SCHEDULE_KEY, json.dumps(custom_entries))
+        logger.info("Published %d custom beat entries to Redis", len(custom_entries))
+    except Exception:
+        logger.exception("Failed to publish custom beat schedule to Redis")
 
 
 def get_broker_url() -> str:
@@ -343,4 +413,6 @@ def setup_on_configure(sender, **_):
 # This must be after app and conf are fully set up.
 from memory.workers.custom_task_loader import load_custom_tasks  # noqa: E402
 
-load_custom_tasks()
+loaded = load_custom_tasks()
+if loaded:
+    publish_custom_schedule_to_redis()

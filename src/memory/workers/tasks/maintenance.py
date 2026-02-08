@@ -253,7 +253,7 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
     client = qdrant.get_qdrant_client()
     by_collection = defaultdict(list)
     for chunk in batch:
-        by_collection[chunk.source.modality].append(chunk)
+        by_collection[chunk.collection_name].append(chunk)
 
     stats = {}
     for collection, chunks in by_collection.items():
@@ -290,8 +290,7 @@ def reingest_missing_chunks(
     with make_session() as session:
         query = session.query(Chunk).filter(Chunk.checked_at < since)
         if collection:
-            # Chunk.source is a backref relationship
-            query = query.filter(Chunk.source.has(SourceItem.modality == collection))  # type: ignore[union-attr]
+            query = query.filter(Chunk.collection_name == collection)
         total_count = query.count()
 
         logger.info(

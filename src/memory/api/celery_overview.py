@@ -1,60 +1,40 @@
 """API endpoints for Celery task overview - beat schedule and ingestion summary."""
 
+import json
+import logging
 from datetime import datetime, timedelta, timezone
 
-from celery.schedules import crontab
+import redis
 from fastapi import APIRouter
 from sqlalchemy import func, case
 
 from memory.api.auth import require_scope
+from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN
-from memory.common.celery_app import app as celery_app, build_beat_schedule
+from memory.common.celery_app import (
+    REDIS_BEAT_SCHEDULE_KEY,
+    build_beat_schedule,
+    format_schedule,
+)
 from memory.common.db.connection import make_session
 from memory.common.db.models.metrics import MetricEvent
 from memory.common.db.models.users import User
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/celery", tags=["celery"])
 
 
-def format_schedule(schedule) -> str:
-    """Convert a Celery schedule object to a human-readable string."""
-    if isinstance(schedule, crontab):
-        # These are internal celery attrs; no public API exists for this.
-        # Fall back to str(schedule) if celery changes internals.
-        try:
-            minute = str(schedule._orig_minute)
-            hour = str(schedule._orig_hour)
-            dow = str(schedule._orig_day_of_week)
-        except AttributeError:
-            return str(schedule)
-
-        if hour == "*" and minute == "*":
-            return "Every minute"
-        if hour == "*":
-            return f"Every hour at :{minute.zfill(2)}"
-        if dow != "*":
-            return f"{dow} at {hour}:{minute.zfill(2)}"
-        if minute == "0":
-            return f"Daily at {hour}:00"
-        return f"Daily at {hour}:{minute.zfill(2)}"
-
-    if isinstance(schedule, (int, float)):
-        seconds = int(schedule)
-        if seconds < 60:
-            return f"Every {seconds}s"
-        if seconds < 3600:
-            mins = seconds // 60
-            return f"Every {mins}m"
-        hours = seconds / 3600
-        if hours == int(hours):
-            return f"Every {int(hours)}h"
-        return f"Every {hours:.1f}h"
-
-    # timedelta or schedule with .total_seconds()
-    if hasattr(schedule, "total_seconds"):
-        return format_schedule(int(schedule.total_seconds()))
-
-    return str(schedule)
+def load_custom_schedule_from_redis() -> dict[str, dict]:
+    """Read custom beat schedule entries published by the worker/ingest-hub."""
+    try:
+        r = redis.from_url(settings.REDIS_URL)
+        raw = r.get(REDIS_BEAT_SCHEDULE_KEY)
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        logger.exception("Failed to read custom beat schedule from Redis")
+    return {}
 
 
 def batch_last_run_info(
@@ -101,21 +81,21 @@ def get_beat_schedule(
 ) -> list[dict]:
     """Return the Celery beat schedule with last run info for each task.
 
-    Uses build_beat_schedule() to get the canonical schedule definition
-    rather than app.conf.beat_schedule, which is only populated in the
-    worker/beat process (not the API server).
-    Custom tasks registered via register_custom_beat are also included
-    from app.conf.beat_schedule if present.
+    Static tasks come from build_beat_schedule(). Custom tasks (deployment-
+    specific) are read from Redis, where the worker/ingest-hub publishes them
+    at startup.
     """
     schedule = build_beat_schedule()
-    # Merge in any custom tasks that were registered dynamically
-    for key, entry in (celery_app.conf.beat_schedule or {}).items():
-        if key not in schedule:
-            schedule[key] = entry
+
+    # Merge custom tasks from Redis (published by ingest-hub/worker)
+    custom_entries = load_custom_schedule_from_redis()
+
     results = []
 
     with make_session() as db:
+        # Collect all task names for batch last-run lookup
         task_names = [entry.get("task", "") for entry in schedule.values()]
+        task_names += [entry.get("task", "") for entry in custom_entries.values()]
         last_runs = batch_last_run_info(task_names, db)
 
         for key, entry in schedule.items():
@@ -132,6 +112,27 @@ def get_beat_schedule(
                     "name": key.replace("-", " ").title(),
                     "task": task_name,
                     "schedule_display": format_schedule(sched) if sched else "Unknown",
+                    "last_run": last_run.isoformat() if last_run else None,
+                    "last_status": last_status,
+                    "last_duration_ms": last_duration,
+                }
+            )
+
+        for key, entry in custom_entries.items():
+            if key in schedule:
+                continue
+            task_name = entry.get("task", "")
+
+            last_run, last_status, last_duration = last_runs.get(
+                task_name, (None, None, None)
+            )
+
+            results.append(
+                {
+                    "key": key,
+                    "name": key.replace("-", " ").title(),
+                    "task": task_name,
+                    "schedule_display": entry.get("schedule_display", "Unknown"),
                     "last_run": last_run.isoformat() if last_run else None,
                     "last_status": last_status,
                     "last_duration_ms": last_duration,

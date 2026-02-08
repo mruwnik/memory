@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
   useCelery,
   BeatScheduleEntry,
   TaskActivity,
+  TaskActivityEntry,
 } from '@/hooks/useCelery'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -39,6 +40,73 @@ function successRate(success: number, total: number): string {
   return `${Math.round((success / total) * 100)}%`
 }
 
+type SortDir = 'asc' | 'desc'
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  return (
+    <span className={`ml-1 inline-block ${active ? 'text-slate-800' : 'text-slate-300'}`}>
+      {active ? (dir === 'asc' ? '\u25B2' : '\u25BC') : '\u25B4'}
+    </span>
+  )
+}
+
+function useSortable<T>(items: T[], defaultKey: keyof T & string, defaultDir: SortDir = 'asc') {
+  const [sortKey, setSortKey] = useState<keyof T & string>(defaultKey)
+  const [sortDir, setSortDir] = useState<SortDir>(defaultDir)
+
+  const toggle = (key: keyof T & string) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const sorted = useMemo(() => {
+    const copy = [...items]
+    copy.sort((a, b) => {
+      const av = a[sortKey]
+      const bv = b[sortKey]
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (av < bv) return sortDir === 'asc' ? -1 : 1
+      if (av > bv) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    return copy
+  }, [items, sortKey, sortDir])
+
+  return { sorted, sortKey, sortDir, toggle }
+}
+
+function SortHeader<T>({
+  label,
+  column,
+  sortKey,
+  sortDir,
+  toggle,
+  className,
+}: {
+  label: string
+  column: keyof T & string
+  sortKey: string
+  sortDir: SortDir
+  toggle: (key: keyof T & string) => void
+  className?: string
+}) {
+  return (
+    <th
+      className={`px-4 py-3 text-sm font-medium text-slate-600 cursor-pointer select-none hover:text-slate-800 ${className || ''}`}
+      onClick={() => toggle(column)}
+    >
+      {label}
+      <SortIcon active={sortKey === column} dir={sortDir} />
+    </th>
+  )
+}
+
 const CeleryOverview = () => {
   const { getBeatSchedule, getTaskActivity } = useCelery()
   const [schedule, setSchedule] = useState<BeatScheduleEntry[]>([])
@@ -46,6 +114,13 @@ const CeleryOverview = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedFailure, setExpandedFailure] = useState<number | null>(null)
+
+  const beatSort = useSortable<BeatScheduleEntry>(schedule, 'name')
+  const activitySort = useSortable<TaskActivityEntry>(
+    activity?.by_task || [],
+    'failure',
+    'desc',
+  )
 
   useEffect(() => {
     Promise.all([getBeatSchedule(), getTaskActivity()])
@@ -123,15 +198,15 @@ const CeleryOverview = () => {
             <table className="w-full text-left">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th className="px-4 py-3 text-sm font-medium text-slate-600">Name</th>
-                  <th className="px-4 py-3 text-sm font-medium text-slate-600">Schedule</th>
-                  <th className="px-4 py-3 text-sm font-medium text-slate-600">Last Run</th>
-                  <th className="px-4 py-3 text-sm font-medium text-slate-600">Status</th>
-                  <th className="px-4 py-3 text-sm font-medium text-slate-600">Duration</th>
+                  <SortHeader<BeatScheduleEntry> label="Name" column="name" {...beatSort} />
+                  <SortHeader<BeatScheduleEntry> label="Schedule" column="schedule_display" {...beatSort} />
+                  <SortHeader<BeatScheduleEntry> label="Last Run" column="last_run" {...beatSort} />
+                  <SortHeader<BeatScheduleEntry> label="Status" column="last_status" {...beatSort} />
+                  <SortHeader<BeatScheduleEntry> label="Duration" column="last_duration_ms" {...beatSort} />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {schedule.map((entry) => (
+                {beatSort.sorted.map((entry) => (
                   <tr key={entry.key} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm">
                       <div className="font-medium text-slate-800">{entry.name}</div>
@@ -179,16 +254,16 @@ const CeleryOverview = () => {
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600">Task</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Total</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Success</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Failed</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Rate</th>
-                      <th className="px-4 py-3 text-sm font-medium text-slate-600 text-right">Avg Duration</th>
+                      <SortHeader<TaskActivityEntry> label="Task" column="task" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Total" column="total" className="text-right" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Success" column="success" className="text-right" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Failed" column="failure" className="text-right" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Rate" column="success" className="text-right" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Avg Duration" column="avg_duration_ms" className="text-right" {...activitySort} />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {activity.by_task.map((row) => (
+                    {activitySort.sorted.map((row) => (
                       <tr key={row.task} className="hover:bg-slate-50">
                         <td className="px-4 py-3 text-sm">
                           <div className="font-medium text-slate-800 capitalize">

@@ -184,7 +184,7 @@ def sync_note(
 
         if not note:
             note = Note(
-                modality="note",
+                modality="text",
                 mime_type="text/markdown",
             )
         else:
