@@ -1018,6 +1018,12 @@ async def create_repo_project(
             private=private,
         )
         if not repo_obj:
+            if create_repo:
+                return {
+                    "error": f"Failed to create repository '{repo_path}' on GitHub. "
+                    "Check that the GitHub account has permission to create repositories in the org.",
+                    "project": None,
+                }
             return {
                 "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
                 "project": None,
@@ -1175,6 +1181,12 @@ async def create_milestone_project(
             private=private,
         )
         if not repo_obj:
+            if create_repo:
+                return {
+                    "error": f"Failed to create repository '{repo_path}' on GitHub. "
+                    "Check that the GitHub account has permission to create repositories in the org.",
+                    "project": None,
+                }
             return {
                 "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
                 "project": None,
