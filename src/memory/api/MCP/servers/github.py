@@ -89,7 +89,7 @@ async def list_entities(
     project_field: dict[str, str] | None = None,
     updated_since: str | None = None,
     updated_before: str | None = None,
-    has_due_date: bool | None = None,
+    deadline_before: str | None = None,
     include_closed: bool = False,
     limit: int = 50,
     order_by: str = "updated",
@@ -104,6 +104,7 @@ async def list_entities(
             repo: Filter by repository path (e.g., "owner/name") - for issues/milestones
             owner: Filter by owner/org login - for projects/teams
             state: Filter by state (open/closed for issues/milestones)
+            deadline_before: ISO date - only items with deadlines on or before this date (issues/milestones)
             limit: Maximum results (default 50, max 200)
 
         Issue-specific params:
@@ -117,9 +118,6 @@ async def list_entities(
             updated_since: ISO date - only issues updated after this time
             updated_before: ISO date - only issues updated before this
             order_by: Sort order: "updated", "created", or "number"
-
-        Milestone-specific params:
-            has_due_date: If True, only milestones with due dates; if False, only without
 
         Project-specific params:
             include_closed: Include closed projects (default: False)
@@ -144,6 +142,7 @@ async def list_entities(
             project_field=project_field,
             updated_since=updated_since,
             updated_before=updated_before,
+            deadline_before=deadline_before,
             limit=limit,
             order_by=order_by,
         )
@@ -151,7 +150,7 @@ async def list_entities(
         return list_milestones(
             repo=repo,
             state=state,
-            has_due_date=has_due_date,
+            deadline_before=deadline_before,
             limit=limit,
         )
     elif type == "project":

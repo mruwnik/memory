@@ -118,6 +118,7 @@ def list_issues(
     project_field: dict[str, str] | None = None,
     updated_since: str | None = None,
     updated_before: str | None = None,
+    deadline_before: str | None = None,
     limit: int = 50,
     order_by: str = "updated",
 ) -> list[dict]:
@@ -161,6 +162,19 @@ def list_issues(
         if updated_before:
             before_dt = datetime.fromisoformat(updated_before.replace("Z", "+00:00"))
             query = query.filter(GithubItem.github_updated_at <= before_dt)
+        if deadline_before:
+            from sqlalchemy import or_, cast, Date
+            deadline_dt = datetime.fromisoformat(deadline_before.replace("Z", "+00:00")).date()
+            # Include items where either:
+            # 1. Project field "EquiStamp.Due Date" <= deadline_before
+            # 2. Milestone due_on <= deadline_before
+            query = query.outerjoin(GithubItem.milestone_rel)
+            query = query.filter(
+                or_(
+                    cast(GithubItem.project_fields["EquiStamp.Due Date"].astext, Date) <= deadline_dt,
+                    Project.due_on <= deadline_dt
+                )
+            )
 
         if order_by == "created":
             query = query.order_by(desc(GithubItem.created_at))
@@ -178,7 +192,7 @@ def list_issues(
 def list_milestones(
     repo: str | None = None,
     state: str | None = None,
-    has_due_date: bool | None = None,
+    deadline_before: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
     """List GitHub milestones with filtering options."""
@@ -199,10 +213,10 @@ def list_milestones(
         if state:
             query = query.filter(Project.state == state)
 
-        if has_due_date is True:
+        if deadline_before:
+            deadline_dt = datetime.fromisoformat(deadline_before.replace("Z", "+00:00")).date()
             query = query.filter(Project.due_on.isnot(None))
-        elif has_due_date is False:
-            query = query.filter(Project.due_on.is_(None))
+            query = query.filter(Project.due_on <= deadline_dt)
 
         query = query.order_by(
             desc(Project.due_on.isnot(None)),
