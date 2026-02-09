@@ -292,6 +292,7 @@ async def upload_report(
     title: str = Form(default=""),
     tags: str = Form(default=""),
     project_id: int | None = Form(default=None),
+    allow_scripts: bool = Form(default=False),
     user: User = Depends(get_current_user),
     db: DBSession = Depends(get_session),
 ) -> UploadResponse:
@@ -347,6 +348,7 @@ async def upload_report(
                 "report_format": report_format,
                 "project_id": project_id,
                 "creator_id": user.id,
+                "allow_scripts": allow_scripts,
             },
             user_id=user.id,
         )

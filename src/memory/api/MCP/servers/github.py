@@ -459,7 +459,7 @@ async def remove_team_member(
 @visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def comment_on_issue(
     repo: str,
-    number: int,
+    number: int | str,
     body: str,
 ) -> dict:
     """
@@ -473,6 +473,7 @@ async def comment_on_issue(
     Returns:
         Dict with comment details including id, url, body, author, created_at
     """
+    number = int(number)
     logger.info(f"github_comment_on_issue: repo={repo}, number={number}")
 
     parts = repo.split("/")

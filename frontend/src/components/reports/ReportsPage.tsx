@@ -23,10 +23,17 @@ const ReportsPage = () => {
   const [title, setTitle] = useState('')
   const [htmlContent, setHtmlContent] = useState('')
   const [tags, setTags] = useState<string[]>([])
+  const [allowScripts, setAllowScripts] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [queued, setQueued] = useState(false)
   const [deletingReport, setDeletingReport] = useState<Report | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editTags, setEditTags] = useState<string[]>([])
+  const [editAllowScripts, setEditAllowScripts] = useState(false)
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
   const refreshTimerRef = useRef<number>()
 
   // Cleanup refresh timer on unmount
@@ -61,6 +68,7 @@ const ReportsPage = () => {
     setTitle('')
     setHtmlContent('')
     setTags([])
+    setAllowScripts(false)
     setFile(null)
     setFormError(null)
   }
@@ -75,13 +83,13 @@ const ReportsPage = () => {
           setFormError('Title and content are required')
           return
         }
-        await createReport(title.trim(), htmlContent, tags.length ? tags : undefined)
+        await createReport(title.trim(), htmlContent, tags.length ? tags : undefined, undefined, allowScripts || undefined)
       } else {
         if (!file) {
           setFormError('Please select a file')
           return
         }
-        await uploadReport(file, title.trim() || undefined, tags.length ? tags.join(',') : undefined)
+        await uploadReport(file, title.trim() || undefined, tags.length ? tags.join(',') : undefined, allowScripts || undefined)
       }
       setShowForm(false)
       resetForm()
@@ -98,6 +106,7 @@ const ReportsPage = () => {
   }
 
   const handleSelectReport = (report: Report) => {
+    setEditing(false)
     setSearchParams({ id: String(report.id) })
   }
 
@@ -115,6 +124,45 @@ const ReportsPage = () => {
       setError(e instanceof Error ? e.message : 'Failed to delete report')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const startEditing = (report: Report) => {
+    setEditing(true)
+    setEditTitle(reportTitle(report))
+    setEditTags(report.tags || [])
+    setEditAllowScripts(report.metadata?.allow_scripts ?? false)
+    setEditError(null)
+  }
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedReport?.filename) return
+    setEditSubmitting(true)
+    setEditError(null)
+    try {
+      // Fetch the current file content so we can upsert with updated metadata
+      const url = reportUrl(selectedReport)
+      if (!url) throw new Error('Report file not available')
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error('Failed to fetch report content')
+      const content = await resp.text()
+      await createReport(
+        editTitle.trim(),
+        content,
+        editTags.length ? editTags : undefined,
+        selectedReport.filename,
+        editAllowScripts || undefined,
+      )
+      setEditing(false)
+      setQueued(true)
+      refreshTimerRef.current = window.setTimeout(() => {
+        loadReports().finally(() => setQueued(false))
+      }, 1000)
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Edit failed')
+    } finally {
+      setEditSubmitting(false)
     }
   }
 
@@ -217,6 +265,16 @@ const ReportsPage = () => {
                   <TagsInput tags={tags} onChange={setTags} />
                 </div>
 
+                <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowScripts}
+                    onChange={e => setAllowScripts(e.target.checked)}
+                    className="rounded border-slate-300"
+                  />
+                  Allow scripts
+                </label>
+
                 {formError && <div className={styles.formError}>{formError}</div>}
 
                 <div className={styles.formActions}>
@@ -310,6 +368,14 @@ const ReportsPage = () => {
                       Open PDF
                     </a>
                   )}
+                  {reportFormat(selectedReport) === 'html' && (
+                    <button
+                      onClick={() => startEditing(selectedReport)}
+                      className={styles.btnPrimary}
+                    >
+                      Edit
+                    </button>
+                  )}
                   <button
                     onClick={() => setDeletingReport(selectedReport)}
                     disabled={deleting}
@@ -319,6 +385,43 @@ const ReportsPage = () => {
                   </button>
                 </div>
               </div>
+              {editing && (
+                <div className="px-6 py-3 border-b border-slate-200 bg-slate-50">
+                  <form onSubmit={handleEditSubmit} className="space-y-3">
+                    <div className={styles.formGroup}>
+                      <label className={styles.formLabel}>Title</label>
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={e => setEditTitle(e.target.value)}
+                        className={styles.formInput}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.formLabel}>Tags</label>
+                      <TagsInput tags={editTags} onChange={setEditTags} />
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editAllowScripts}
+                        onChange={e => setEditAllowScripts(e.target.checked)}
+                        className="rounded border-slate-300"
+                      />
+                      Allow scripts
+                    </label>
+                    {editError && <div className={styles.formError}>{editError}</div>}
+                    <div className="flex items-center gap-2">
+                      <button type="submit" disabled={editSubmitting} className={styles.btnSubmit}>
+                        {editSubmitting ? 'Saving...' : 'Save Changes'}
+                      </button>
+                      <button type="button" onClick={() => setEditing(false)} className={styles.btnDanger}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
               <div className="flex-1 overflow-hidden bg-white">
                 {reportUrl(selectedReport) ? (
                   reportFormat(selectedReport) === 'pdf' ? (
@@ -338,7 +441,7 @@ const ReportsPage = () => {
                   ) : (
                     <iframe
                       src={reportUrl(selectedReport)!}
-                      sandbox="allow-same-origin"
+                      sandbox={selectedReport.metadata?.allow_scripts ? "allow-same-origin allow-scripts" : "allow-same-origin"}
                       className="w-full h-full border-none"
                       title={reportTitle(selectedReport)}
                     />

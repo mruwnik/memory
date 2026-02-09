@@ -1267,6 +1267,7 @@ class Note(SourceItem):
 class ReportPayload(SourceItemPayload):
     report_title: Annotated[str | None, "Title of the report"]
     report_format: Annotated[str, "Format: html or pdf"]
+    allow_scripts: Annotated[bool, "Whether scripts are allowed in the report"]
 
 
 class Report(SourceItem):
@@ -1296,6 +1297,7 @@ class Report(SourceItem):
             **super().as_payload(),
             report_title=self.report_title,
             report_format=self.report_format,
+            allow_scripts=self.allow_scripts,
         )
 
     @property

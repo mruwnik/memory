@@ -30,6 +30,7 @@ async def upsert(
     content: str,
     tags: list[str] | None = None,
     filename: str | None = None,
+    allow_scripts: bool = False,
 ) -> dict:
     """
     Create or update a report from HTML content.
@@ -84,6 +85,7 @@ async def upsert(
             "tags": tags,
             "creator_id": user_id,
             "existing_report_id": existing_report_id,
+            "allow_scripts": allow_scripts,
         },
     )
 
