@@ -134,6 +134,70 @@ For Claude Desktop or other MCP clients, add to your configuration:
 
 When connected via MCP, AI assistants have access to tools organized by domain (core, teams, projects, etc.). Use `tools/list` on the MCP server to see all available tools. Access control is enforced based on the authenticated user's team memberships and roles.
 
+## MCP Client Library for HTML Reports
+
+For creating interactive HTML reports that can call MCP tools, use the included JavaScript client library. This provides a simple API for making authenticated MCP calls from browser-based reports.
+
+### Usage
+
+Include the library in your HTML report:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <title>My Report</title>
+  <script src="/ui/mcp-client.js"></script>
+</head>
+<body>
+  <h1>Interactive Report</h1>
+  <div id="results"></div>
+
+  <script>
+    // Fetch people and display
+    MCP.people.list({ limit: 10 })
+      .then(people => {
+        const list = people.map(p => p.display_name).join(', ');
+        document.getElementById('results').innerHTML = `People: ${list}`;
+      })
+      .catch(error => {
+        console.error('Error:', error);
+      });
+  </script>
+</body>
+</html>
+```
+
+### Available Methods
+
+**All MCP tools should be supported** with convenient shortcuts organized by category, e.g.:
+
+```javascript
+MCP.meta.getUser()
+```
+
+If you want to do a manual call, you can do it like this:
+
+```javascript
+// Generic call for any method
+MCP.call('method_name', { params })
+
+// Batch multiple calls in parallel
+MCP.batch([
+  { method: 'people_list_all', params: { limit: 10 } },
+  { method: 'github_list_entities', params: { type: 'issue', limit: 5 } }
+]).then(([people, issues]) => {
+  console.log('Got both:', people, issues);
+});
+```
+
+### Requirements
+
+- Reports must have `allow_scripts=True` in the database (set via the UI or API when creating the report)
+- The library uses the `access_token` cookie for authentication
+- All MCP calls are made to `/mcp/{method}` endpoints
+
 ## Content Ingestion
 
 ### Via Workers
