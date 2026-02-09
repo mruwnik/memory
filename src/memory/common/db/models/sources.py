@@ -475,6 +475,7 @@ class Project(Base):
     due_on: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    doc_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Hierarchical projects
     parent_id: Mapped[int | None] = mapped_column(

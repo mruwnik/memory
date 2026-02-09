@@ -9,6 +9,7 @@ clients that expect certain keys.
 import logging
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
+from urllib.parse import urlparse
 
 from fastmcp import FastMCP
 from sqlalchemy import func
@@ -42,8 +43,30 @@ logger = logging.getLogger(__name__)
 
 projects_mcp = FastMCP("memory-projects")
 
+# Sentinel for "not provided" on string fields (doc_url). We use a string sentinel
+# here because MCP tool parameters are JSON -- object sentinels aren't viable.
+# Numeric fields (owner_id) use 0 as their sentinel instead because their domain is
+# positive integers, and 0 is unambiguous. The two conventions coexist intentionally;
+# unifying them would add complexity without benefit.
+_UNSET = "__UNSET__"
+
 
 # ============== Validation Helpers ==============
+
+ALLOWED_DOC_URL_SCHEMES = {"http", "https"}
+
+
+def validate_doc_url(url: str) -> str | None:
+    """Validate a doc_url has a safe scheme. Returns error message or None."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return f"Invalid doc_url: {url!r}"
+    if parsed.scheme not in ALLOWED_DOC_URL_SCHEMES:
+        return f"doc_url must use http or https scheme, got: {parsed.scheme!r}"
+    if not parsed.netloc:
+        return f"doc_url must include a host, got: {url!r}"
+    return None
 
 
 def validate_teams_for_project(
@@ -353,6 +376,7 @@ def project_to_dict(
         "description": project.description,
         "state": project.state,
         "due_on": project.due_on.isoformat() if project.due_on else None,
+        "doc_url": project.doc_url,
         "repo_path": repo_path,
         "github_id": project.github_id,
         "number": project.number,
@@ -407,6 +431,7 @@ def _build_tree(projects: list[Project]) -> list[dict[str, Any]]:
                 "title": p.title,
                 "description": p.description,
                 "state": p.state,
+                "doc_url": p.doc_url,
                 "repo_path": f"{p.repo.owner}/{p.repo.name}" if p.repo else None,
                 "parent_id": p.parent_id,
                 "children": build_subtree(cast(int, p.id)),
@@ -614,10 +639,10 @@ async def upsert(
     state: Literal["open", "closed"] | None = None,
     parent_id: int | None = None,
     clear_parent: bool = False,
-    owner_id: int | None = None,
-    clear_owner: bool = False,
+    owner_id: int | str | None = _UNSET,
     due_on: str | None = None,
     clear_due_on: bool = False,
+    doc_url: str | None = _UNSET,
     repo: str | None = None,
     milestone: str | None = None,
     create_repo: bool = False,
@@ -649,10 +674,11 @@ async def upsert(
         state: Project state ('open' or 'closed')
         parent_id: Optional parent project ID for hierarchy
         clear_parent: If true, removes the parent (sets to NULL)
-        owner_id: Person ID to assign as project owner
-        clear_owner: If true, removes the owner (sets to NULL)
+        owner_id: Person ID to assign as project owner. Set to null to clear.
         due_on: Project due date in ISO 8601 format (e.g., "2024-12-31T23:59:59Z")
         clear_due_on: If true, removes the due date (sets to NULL)
+        doc_url: URL to the project's documentation (e.g., Google Doc, Notion page, wiki).
+                 Set to null to clear.
         repo: GitHub repo path (e.g., "owner/name").
         milestone: GitHub milestone title. Used with repo to create a milestone-level
                    project. Created on GitHub if it doesn't exist.
@@ -707,6 +733,25 @@ async def upsert(
                     f"MCP: No existing project found for repo={repo}, milestone={milestone}"
                 )
 
+        # Resolve owner_id: _UNSET = skip, None = clear, int = set
+        resolved_owner_id: int | None = 0  # 0 = skip (don't change)
+        if owner_id is None:
+            resolved_owner_id = None  # Explicitly clear
+        elif owner_id is not _UNSET:
+            try:
+                resolved_owner_id = int(owner_id)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                return {"error": f"owner_id must be an integer, got: {owner_id!r}", "project": None}
+
+        # Resolve doc_url: _UNSET = skip, None = clear, str = set
+        resolved_doc_url: str | None = _UNSET  # type: ignore[assignment]
+        if doc_url is not _UNSET:
+            if doc_url is not None:
+                error = validate_doc_url(doc_url)
+                if error:
+                    return {"error": error, "project": None}
+            resolved_doc_url = doc_url
+
         # UPDATE path
         if project_id is not None:
             return await update_project(
@@ -719,11 +764,15 @@ async def upsert(
                 state,
                 parent_id,
                 clear_parent,
-                owner_id,
-                clear_owner,
+                resolved_owner_id,
                 due_on,
                 clear_due_on,
+                resolved_doc_url,
             )
+
+        # For create paths, convert sentinel to None (new projects don't need "skip")
+        create_owner_id = None if resolved_owner_id == 0 else resolved_owner_id
+        create_doc_url = None if resolved_doc_url is _UNSET else resolved_doc_url
 
         # Repo-level or milestone-level project path
         if repo is not None:
@@ -738,8 +787,9 @@ async def upsert(
                     description,
                     parent_id,
                     title,
-                    owner_id=owner_id,
+                    owner_id=create_owner_id,
                     due_on=due_on,
+                    doc_url=create_doc_url,
                     create_repo=create_repo,
                     private=private,
                 )
@@ -754,8 +804,9 @@ async def upsert(
                     state or "open",
                     parent_id,
                     title,
-                    owner_id=owner_id,
+                    owner_id=create_owner_id,
                     due_on=due_on,
+                    doc_url=create_doc_url,
                     create_repo=create_repo,
                     private=private,
                 )
@@ -774,8 +825,9 @@ async def upsert(
             description,
             state or "open",
             parent_id,
-            owner_id=owner_id,
+            owner_id=create_owner_id,
             due_on=due_on,
+            doc_url=create_doc_url,
         )
 
 
@@ -819,6 +871,7 @@ async def create_standalone_project(
     parent_id: int | None,
     owner_id: int | None = None,
     due_on: str | None = None,
+    doc_url: str | None = None,
 ) -> dict:
     """Create a new standalone project."""
     logger.info(f"MCP: Creating project: {title}")
@@ -856,6 +909,7 @@ async def create_standalone_project(
         parent_id=parent_id,
         owner_id=owner_id,
         due_on=due_on_dt,
+        doc_url=doc_url,
     )
     if error:
         return error
@@ -946,6 +1000,7 @@ async def create_repo_project(
     title_override: str | None,
     owner_id: int | None = None,
     due_on: str | None = None,
+    doc_url: str | None = None,
     create_repo: bool = False,
     private: bool = True,
 ) -> dict:
@@ -1071,6 +1126,7 @@ async def create_repo_project(
         parent_id=parent_id,
         owner_id=owner_id,
         due_on=due_on_dt,
+        doc_url=doc_url,
     )
     if error:
         return error
@@ -1107,6 +1163,7 @@ async def create_milestone_project(
     title_override: str | None,
     owner_id: int | None = None,
     due_on: str | None = None,
+    doc_url: str | None = None,
     create_repo: bool = False,
     private: bool = True,
 ) -> dict:
@@ -1259,6 +1316,7 @@ async def create_milestone_project(
         due_on=effective_due_on,
         parent_id=parent_id,
         owner_id=owner_id,
+        doc_url=doc_url,
     )
     if error:
         return error
@@ -1294,12 +1352,17 @@ async def update_project(
     state: str | None,
     parent_id: int | None,
     clear_parent: bool,
-    owner_id: int | None = None,
-    clear_owner: bool = False,
+    owner_id: int | None = 0,
     due_on: str | None = None,
     clear_due_on: bool = False,
+    doc_url: str | None = _UNSET,  # type: ignore[assignment]
 ) -> dict:
-    """Update an existing project."""
+    """Update an existing project.
+
+    Args:
+        owner_id: 0 = skip (don't change), None = clear, positive int = set.
+        doc_url: _UNSET = skip (don't change), None = clear, str = set.
+    """
     # Fetch project with access check
     query = filter_projects_query(
         session, user, session.query(Project).filter(Project.id == project_id)
@@ -1339,8 +1402,8 @@ async def update_project(
             if not current:
                 break
 
-    # Validate owner if changing
-    if owner_id is not None:
+    # Validate owner if changing (0 = skip)
+    if owner_id not in (0, None):
         _, error = validate_owner(session, owner_id)
         if error:
             return error
@@ -1412,10 +1475,10 @@ async def update_project(
     elif parent_id is not None:
         project.parent_id = parent_id
 
-    # Owner can be updated for both standalone and GitHub-backed projects
-    if clear_owner:
+    # Owner: 0 = skip, None = clear, int = set
+    if owner_id is None:
         project.owner_id = None
-    elif owner_id is not None:
+    elif owner_id != 0:
         project.owner_id = owner_id
 
     # Due date can be updated for both standalone and GitHub-backed projects
@@ -1423,6 +1486,14 @@ async def update_project(
         project.due_on = None
     elif due_on_dt is not None:
         project.due_on = due_on_dt
+
+    # Doc URL: _UNSET = skip, None = clear, str = set
+    if doc_url is not _UNSET:
+        if doc_url is not None:
+            error = validate_doc_url(doc_url)
+            if error:
+                return {"error": error, "project": None}
+        project.doc_url = doc_url
 
     if is_standalone:
         if title is not None:

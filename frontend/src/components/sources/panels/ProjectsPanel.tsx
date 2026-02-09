@@ -379,7 +379,6 @@ export const ProjectsPanel = () => {
   const handleChangeOwner = useCallback(async (projectId: number, ownerId: number | null) => {
     const result = await updateProject(projectId, {
       owner_id: ownerId,
-      clear_owner: ownerId === null,
     })
     // Update local state instead of reloading everything
     if (result.success) {
@@ -679,6 +678,7 @@ const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, on
           children_count: node.children.length,
           owner_id: null,
           due_on: null,
+          doc_url: node.doc_url,
         }
         const hasChildren = node.children.length > 0
         const isCollapsed = collapsedNodes.has(node.id)
@@ -1055,6 +1055,24 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
               )}
             </p>
           )}
+          {/* Doc link - only shown when a doc URL exists and has a safe scheme */}
+          {project.doc_url && /^https?:\/\//.test(project.doc_url) && (
+            <div className="flex items-center gap-2 mt-1">
+              <a
+                href={project.doc_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                onClick={e => e.stopPropagation()}
+                title={project.doc_url}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Doc
+              </a>
+            </div>
+          )}
           {/* Owner and due date info - always show owner */}
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
             <span className="relative">
@@ -1207,6 +1225,7 @@ const ProjectFormModal = ({
     team_ids: [] as number[],  // For new projects
     owner_id: project?.owner_id || null as number | null,
     due_on: project?.due_on ? project.due_on.split('T')[0] : '',  // Convert to date input format
+    doc_url: project?.doc_url || '',
   })
 
   const [submitting, setSubmitting] = useState(false)
@@ -1253,14 +1272,14 @@ const ProjectFormModal = ({
 
       const data: ProjectCreate | ProjectUpdate = isEditing
         ? {
-            // For GitHub-backed, only allow parent_id, owner_id, and due_on changes
+            // For GitHub-backed, only allow parent_id, owner_id, due_on, doc_url changes
             ...(isGithubBacked
               ? {
                   parent_id: formData.parent_id,
                   owner_id: formData.owner_id,
-                  clear_owner: formData.owner_id === null && project?.owner_id !== null,
                   due_on: dueOnISO,
                   clear_due_on: !formData.due_on && !!project?.due_on,
+                  doc_url: formData.doc_url || null,
                 }
               : {
                   title: formData.title || undefined,
@@ -1268,9 +1287,9 @@ const ProjectFormModal = ({
                   state: formData.state,
                   parent_id: formData.parent_id,
                   owner_id: formData.owner_id,
-                  clear_owner: formData.owner_id === null && project?.owner_id !== null,
                   due_on: dueOnISO,
                   clear_due_on: !formData.due_on && !!project?.due_on,
+                  doc_url: formData.doc_url || null,
                 }),
           }
         : {
@@ -1281,6 +1300,7 @@ const ProjectFormModal = ({
             parent_id: formData.parent_id,
             owner_id: formData.owner_id,
             due_on: dueOnISO,
+            doc_url: formData.doc_url || null,
           }
 
       await onSubmit(data)
@@ -1306,7 +1326,7 @@ const ProjectFormModal = ({
 
         {isEditing && isGithubBacked && (
           <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-sm mb-4">
-            This project is synced from GitHub. Only parent can be changed here.
+            This project is synced from GitHub. Only parent, owner, due date, and doc URL can be changed here.
             Edit title/description/state in GitHub.
           </div>
         )}
@@ -1404,6 +1424,20 @@ const ProjectFormModal = ({
           />
           <p className={styles.formHint}>
             Optional deadline for this project.
+          </p>
+        </div>
+
+        <div className={styles.formGroup}>
+          <label className={styles.formLabel}>Doc URL</label>
+          <input
+            type="url"
+            value={formData.doc_url}
+            onChange={e => setFormData({ ...formData, doc_url: e.target.value })}
+            placeholder="https://docs.google.com/..."
+            className={styles.formInput}
+          />
+          <p className={styles.formHint}>
+            Link to project documentation (Google Doc, Notion, wiki, etc.)
           </p>
         </div>
 
