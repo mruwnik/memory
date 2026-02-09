@@ -274,7 +274,7 @@ async def serve_report(
                 "default-src 'none'; "
                 "style-src 'unsafe-inline'; "
                 "img-src data: blob:; "
-                "script-src 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "connect-src 'self'; "
                 "sandbox allow-scripts allow-same-origin"
             )
