@@ -23,7 +23,7 @@ from memory.common.db.connection import make_session
 # It returns the task name string, which you pass to @app.task(name=...).
 TASK_NAME = register_custom_beat(
     "_example",                                     # filename stem (must match this file)
-    crontab(hour=9, minute=0, day_of_week="mon-fri"),  # when to run
+    crontab(hour="9", minute="0", day_of_week="mon-fri"),  # when to run
 )
 
 

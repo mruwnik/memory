@@ -390,7 +390,7 @@ def get_cached_available_repos(
         cache_key = get_available_repos_cache_key(account_id, include_archived)
         cached = r.get(cache_key)
         if cached:
-            return json.loads(cached)
+            return json.loads(cast(bytes, cached))
     except Exception as e:
         logger.warning(f"Failed to read from cache: {e}")
     return None

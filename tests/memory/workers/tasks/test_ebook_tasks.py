@@ -269,8 +269,8 @@ def test_sync_book_qdrant_failure(mock_parse, mock_ebook, db_session, tmp_path):
     # So let's just verify that the function completes without raising an exception
     with patch.object(ebook, "push_to_qdrant", side_effect=Exception("Qdrant failed")):
         result = ebook.sync_book(str(book_file))
-        assert result["status"] == "error"
-        assert result["error"] == "Qdrant failed"
+        assert result.get("status") == "error"
+        assert result.get("error") == "Qdrant failed"
         assert "traceback" in result
 
 

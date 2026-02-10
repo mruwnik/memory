@@ -779,7 +779,8 @@ def merge_user_links(session: DBSession, primary: Person, secondaries: list[Pers
         .all()
     )
     for acct in discord_accounts:
-        candidate_user_ids.append(acct.system_user_id)
+        if acct.system_user_id is not None:
+            candidate_user_ids.append(acct.system_user_id)
 
     # Deduplicate while preserving order (primary's existing link first)
     seen: set[int] = set()

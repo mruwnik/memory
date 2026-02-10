@@ -602,6 +602,7 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     db_session.commit()
 
     old_next_time = task.next_scheduled_time
+    assert old_next_time is not None
 
     mock_task = Mock()
     mock_task.id = "task-123"
@@ -682,6 +683,7 @@ def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, s
     # Verify the stale execution was marked as failed
     db_session.refresh(stale_execution)
     assert stale_execution.status == "failed"
+    assert stale_execution.error_message is not None
     assert "stale" in stale_execution.error_message.lower()
     assert stale_execution.finished_at is not None
 
@@ -890,6 +892,7 @@ def test_spawn_claude_session_does_not_mutate_task_data(mock_post, db_session, s
     scheduled_tasks.spawn_claude_session(task, db=db_session)
 
     # The original task data must NOT have been mutated
+    assert task.data is not None
     assert task.data["spawn_config"]["run_id"] == original_run_id
 
 

@@ -12,7 +12,6 @@ import inspect
 import time
 import traceback
 import logging
-from collections.abc import Mapping
 from typing import Any, Callable, Sequence, TypeVar, cast
 
 from sqlalchemy import or_
@@ -394,7 +393,7 @@ def get_celery_task_name(func: Callable, args: tuple) -> str:
     from celery import current_task
 
     if current_task and hasattr(current_task, "name") and current_task.name is not None:
-        return current_task.name
+        return cast(str, current_task.name)
 
     task_self = args[0] if args and hasattr(args[0], "request") else None
     if task_self and hasattr(task_self, "name"):
@@ -403,9 +402,12 @@ def get_celery_task_name(func: Callable, args: tuple) -> str:
     return func.__name__
 
 
+_R = TypeVar("_R")
+
+
 def safe_task_execution(
-    func: Callable[..., Mapping[str, Any] | list[Any]],
-) -> Callable[..., Mapping[str, Any] | list[Any]]:
+    func: Callable[..., _R],
+) -> Callable[..., _R]:
     """
     Decorator for safe task execution with comprehensive error handling and metrics.
 
@@ -438,7 +440,7 @@ def safe_task_execution(
     from functools import wraps
 
     @wraps(func)
-    def wrapper(*args, **kwargs) -> Mapping[str, Any] | list[Any]:
+    def wrapper(*args, **kwargs) -> _R:
         start_time = time.perf_counter()
         status = "success"
         error_message = ""

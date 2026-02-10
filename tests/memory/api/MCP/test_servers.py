@@ -27,10 +27,13 @@ def test_all_servers_in_enum():
         "github",
         "journal",
         "meta",
+        "notes",
         "organizer",
         "people",
         "polling",
         "projects",
+        "reports",
+        "scheduler",
         "slack",
         "teams",
     }

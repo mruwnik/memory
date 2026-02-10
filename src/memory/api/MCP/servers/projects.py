@@ -283,6 +283,11 @@ def sync_milestone_due_date(
     )
     client = GithubClient(credentials)
     try:
+        if project.number is None:
+            return {
+                "error": "Project has no milestone number",
+                "project": None,
+            }
         result = client.update_milestone(
             owner=github_repo.owner,
             repo=github_repo.name,

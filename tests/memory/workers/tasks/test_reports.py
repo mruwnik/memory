@@ -56,6 +56,7 @@ def test_sync_report_html_content(mock_make_session, tmp_path):
     assert report.report_format == "html"
     assert report.mime_type == "text/html"
     assert report.tags == ["test"]
+    assert isinstance(result, dict)
     assert result["status"] == "processed"
 
 
@@ -76,6 +77,7 @@ def test_sync_report_file_upload(mock_make_session, tmp_path):
     report = mock_make_session.query(Report).filter_by(report_title="Uploaded Report").first()
     assert report is not None
     assert report.filename == "uploaded.html"
+    assert isinstance(result, dict)
     assert result["status"] == "processed"
 
 
@@ -85,7 +87,7 @@ def test_sync_report_pdf(mock_make_session, tmp_path):
     pdf_file.write_bytes(b"fake pdf content")
 
     with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        result = reports.sync_report(
+        reports.sync_report(
             file_path=str(pdf_file),
             title="PDF Report",
             report_format="pdf",
@@ -119,6 +121,8 @@ def test_sync_report_dedup(mock_make_session, tmp_path):
             report_format="html",
         )
 
+    assert isinstance(result1, dict)
+    assert isinstance(result2, dict)
     assert result1["status"] == "processed"
     assert result2["status"] == "already_exists"
 

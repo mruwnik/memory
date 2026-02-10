@@ -1775,8 +1775,8 @@ def github_milestone_project(db_session):
     db_session.commit()
 
     # Attach session_id to the project so tests can use it for auth
-    project._test_session_id = session.id
-    project._test_repo = repo
+    project._test_session_id = session.id  # type: ignore[attr-defined]
+    project._test_repo = repo  # type: ignore[attr-defined]
 
     return project
 

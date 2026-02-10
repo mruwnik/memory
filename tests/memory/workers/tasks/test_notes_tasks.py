@@ -506,7 +506,7 @@ def test_sync_notes_handles_file_read_errors(mock_sync_note, mock_make_session):
 
     # Should catch the error and return error status
     assert result["status"] == "error"
-    assert "File read error" in result["error"]
+    assert "File read error" in str(result.get("error", ""))
 
 
 @patch("memory.workers.tasks.notes.git_command")

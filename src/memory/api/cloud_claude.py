@@ -444,7 +444,7 @@ async def schedule_session(
 
     return ScheduleResponse(
         task_id=task.id,
-        cron_expression=task.cron_expression,
+        cron_expression=request.cron_expression,
         next_scheduled_time=next_time.isoformat(),
         topic=topic,
     )

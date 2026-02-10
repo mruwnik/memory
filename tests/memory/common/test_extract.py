@@ -6,6 +6,7 @@ import io
 import shutil
 from unittest.mock import patch
 from memory.common.extract import (
+    HAS_PANDOC,
     as_file,
     extract_text,
     extract_docx,
@@ -113,6 +114,7 @@ def test_extract_image_with_str():
         extract_image("test")
 
 
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
 @pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
 def test_docx_to_pdf(tmp_path):
     output_path = tmp_path / "output.pdf"
@@ -127,6 +129,7 @@ def test_docx_to_pdf(tmp_path):
         assert pdf.page_count > 0
 
 
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
 @pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
 def test_docx_to_pdf_default_output():
     # Test with default output path
@@ -244,6 +247,7 @@ def test_merge_metadata(dicts, expected):
     assert merge_metadata(*dicts) == expected
 
 
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
 def test_extract_docx_text():
     """extract_docx_text extracts plain text from a DOCX without needing LaTeX."""
     chunks = extract_docx_text(SAMPLE_DOCX)
@@ -254,6 +258,7 @@ def test_extract_docx_text():
     assert len(text) > 0
 
 
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
 def test_extract_docx_falls_back_on_pdf_failure():
     """When PDF conversion fails, extract_docx falls back to text extraction."""
     with patch(
@@ -268,6 +273,7 @@ def test_extract_docx_falls_back_on_pdf_failure():
     assert len(text) > 0
 
 
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
 @pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
 def test_extract_docx_uses_pdf_when_available():
     """When PDF conversion succeeds, extract_docx returns image chunks (from PDF)."""
