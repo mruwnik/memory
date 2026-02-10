@@ -10,8 +10,16 @@ from typing import Any, Generator, Sequence, cast
 from memory.common import chunker, summarizer
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
-import pypandoc
 from PIL import Image
+
+try:
+    import pypandoc
+
+    pypandoc.get_pandoc_version()
+    HAS_PANDOC = True
+except (ImportError, OSError):
+    pypandoc = None  # type: ignore[assignment]
+    HAS_PANDOC = False
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +151,8 @@ def docx_to_pdf(
     output_path: pathlib.Path | None = None,
 ) -> pathlib.Path:
     """Convert DOCX to PDF using pypandoc"""
+    if not HAS_PANDOC or pypandoc is None:
+        raise RuntimeError("pandoc is not installed — cannot convert DOCX to PDF")
     if output_path is None:
         output_path = docx_path.with_suffix(".pdf")
 
@@ -169,6 +179,8 @@ def docx_to_pdf(
 
 def extract_docx_text(docx_path: pathlib.Path) -> list[DataChunk]:
     """Extract text from DOCX using pypandoc (no LaTeX needed)."""
+    if not HAS_PANDOC or pypandoc is None:
+        raise RuntimeError("pandoc is not installed — cannot extract DOCX text")
     text = pypandoc.convert_file(str(docx_path), format="docx", to="plain")
     if not text or not text.strip():
         return []
