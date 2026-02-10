@@ -85,7 +85,7 @@ def test_sync_report_pdf(mock_make_session, tmp_path):
     pdf_file.write_bytes(b"fake pdf content")
 
     with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        result = reports.sync_report(
+        reports.sync_report(
             file_path=str(pdf_file),
             title="PDF Report",
             report_format="pdf",

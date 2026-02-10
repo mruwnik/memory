@@ -1,8 +1,10 @@
-"""Tests for MCP core server functions."""
+"""Tests for MCP notes server functions."""
 # pyright: reportFunctionMemberAccess=false
 
 import pytest
 from unittest.mock import patch, MagicMock
+
+from memory.api.MCP.servers.notes import note_files, upsert
 
 
 @pytest.fixture
@@ -16,7 +18,7 @@ def mock_notes_dir(tmp_path):
 @pytest.fixture
 def mock_settings(mock_notes_dir):
     """Mock settings with temporary notes directory."""
-    with patch("memory.api.MCP.servers.core.settings") as mock:
+    with patch("memory.api.MCP.servers.notes.settings") as mock:
         mock.NOTES_STORAGE_DIR = mock_notes_dir
         mock.CELERY_QUEUE_PREFIX = "test"
         yield mock
@@ -25,7 +27,7 @@ def mock_settings(mock_notes_dir):
 @pytest.fixture
 def mock_celery():
     """Mock celery app to prevent actual task dispatch."""
-    with patch("memory.api.MCP.servers.core.celery_app") as mock:
+    with patch("memory.api.MCP.servers.notes.celery_app") as mock:
         task = MagicMock()
         task.id = "test-task-id"
         mock.send_task.return_value = task
@@ -41,15 +43,13 @@ def mock_celery():
         "subdir/../../../etc/passwd",
     ],
 )
-async def test_create_note_blocks_path_traversal(
+async def test_upsert_blocks_path_traversal(
     mock_settings, mock_celery, malicious_filename
 ):
-    """Blocks path traversal attempts in create_note."""
-    from memory.api.MCP.servers.core import create_note
-
-    # Access underlying function via .fn since create_note is a FunctionTool
+    """Blocks path traversal attempts in upsert."""
+    # Access underlying function via .fn since upsert is a FunctionTool
     with pytest.raises(ValueError, match="Invalid filename"):
-        await create_note.fn(
+        await upsert.fn(
             subject="Test Note",
             content="Test content",
             filename=malicious_filename,
@@ -60,13 +60,11 @@ async def test_create_note_blocks_path_traversal(
 
 
 @pytest.mark.asyncio
-async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, mock_notes_dir):
+async def test_upsert_handles_absolute_paths(mock_settings, mock_celery, mock_notes_dir):
     """Absolute paths are converted to relative paths within notes dir."""
-    from memory.api.MCP.servers.core import create_note
-
     # /etc/passwd becomes etc/passwd inside notes dir - this is correct behavior
     # The path validator strips leading slashes
-    result = await create_note.fn(
+    result = await upsert.fn(
         subject="Test Note",
         content="Test content",
         filename="/subdir/note.md",  # Becomes subdir/note.md
@@ -77,13 +75,11 @@ async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, mo
 
 
 @pytest.mark.asyncio
-async def test_create_note_allows_valid_filename(mock_settings, mock_celery, mock_notes_dir):
-    """Allows valid filenames in create_note."""
-    from memory.api.MCP.servers.core import create_note
-
-    # No file creation needed - create_note validates path containment
+async def test_upsert_allows_valid_filename(mock_settings, mock_celery, mock_notes_dir):
+    """Allows valid filenames in upsert."""
+    # No file creation needed - upsert validates path containment
     # but doesn't require the file to exist (it's creating a new file)
-    result = await create_note.fn(
+    result = await upsert.fn(
         subject="Test Note",
         content="Test content",
         filename="valid_note.md",
@@ -95,15 +91,13 @@ async def test_create_note_allows_valid_filename(mock_settings, mock_celery, moc
 
 
 @pytest.mark.asyncio
-async def test_create_note_allows_nested_valid_filename(
+async def test_upsert_allows_nested_valid_filename(
     mock_settings, mock_celery, mock_notes_dir
 ):
-    """Allows nested valid filenames in create_note."""
-    from memory.api.MCP.servers.core import create_note
-
-    # No file/directory creation needed - create_note validates path containment
+    """Allows nested valid filenames in upsert."""
+    # No file/directory creation needed - upsert validates path containment
     # but doesn't require the file to exist (it's creating a new file)
-    result = await create_note.fn(
+    result = await upsert.fn(
         subject="Project Ideas",
         content="Ideas content",
         filename="projects/ideas.md",
@@ -114,11 +108,9 @@ async def test_create_note_allows_nested_valid_filename(
 
 
 @pytest.mark.asyncio
-async def test_create_note_without_filename(mock_settings, mock_celery):
-    """Allows create_note without filename (filename is optional)."""
-    from memory.api.MCP.servers.core import create_note
-
-    result = await create_note.fn(
+async def test_upsert_without_filename(mock_settings, mock_celery):
+    """Allows upsert without filename (filename is optional)."""
+    result = await upsert.fn(
         subject="Test Note",
         content="Test content",
     )
@@ -137,8 +129,6 @@ async def test_create_note_without_filename(mock_settings, mock_celery):
 )
 async def test_note_files_blocks_path_traversal(mock_settings, malicious_path):
     """Blocks path traversal attempts in note_files."""
-    from memory.api.MCP.servers.core import note_files
-
     # Access underlying function via .fn since note_files is a FunctionTool
     with pytest.raises(ValueError, match="Invalid path"):
         await note_files.fn(path=malicious_path)
@@ -147,8 +137,6 @@ async def test_note_files_blocks_path_traversal(mock_settings, malicious_path):
 @pytest.mark.asyncio
 async def test_note_files_handles_absolute_paths(mock_settings, mock_notes_dir):
     """Absolute paths are converted to relative paths within notes dir."""
-    from memory.api.MCP.servers.core import note_files
-
     # Create a test file
     (mock_notes_dir / "note.md").write_text("content")
 
@@ -162,8 +150,6 @@ async def test_note_files_handles_absolute_paths(mock_settings, mock_notes_dir):
 @pytest.mark.asyncio
 async def test_note_files_lists_markdown_files(mock_settings, mock_notes_dir):
     """Lists markdown files in the notes directory."""
-    from memory.api.MCP.servers.core import note_files
-
     # Create some test files
     (mock_notes_dir / "note1.md").write_text("content1")
     (mock_notes_dir / "note2.md").write_text("content2")

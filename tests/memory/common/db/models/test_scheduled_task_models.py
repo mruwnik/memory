@@ -1,5 +1,4 @@
 # tests/memory/common/db/models/test_scheduled_tasks.py
-import pytest
 from datetime import datetime, timezone
 
 from memory.common.db.models.scheduled_tasks import (
@@ -99,7 +98,6 @@ def test_cascade_delete(db_session, sample_user):
     )
     db_session.add(task)
     db_session.commit()
-    task_id = task.id
 
     execution = TaskExecution(
         task_id=task.id,

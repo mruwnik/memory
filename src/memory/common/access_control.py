@@ -61,7 +61,6 @@ class SourceItemLike(Protocol):
 
 logger = logging.getLogger(__name__)
 
-from memory.common.scopes import SensitivityLevelLiteral
 
 
 class SensitivityLevel(str, Enum):

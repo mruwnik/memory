@@ -1,6 +1,5 @@
 """Tests for the Report model."""
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 from memory.common.db.models import Report
