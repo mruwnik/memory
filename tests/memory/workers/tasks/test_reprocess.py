@@ -1,6 +1,7 @@
 """Tests for meeting reingest (unified ingest/reingest flow)."""
 
 import uuid
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -157,7 +158,7 @@ def test_reprocess_meeting_success(db_session, qdrant, meeting_with_chunks):
 
     assert result["status"] == "success"
     assert result["meeting_id"] == meeting.id
-    assert result["summary_length"] > 0
+    assert cast(int, result["summary_length"]) > 0
     assert result["tasks_created"] == 1
     mock_delete.assert_called_once()
     mock_llm.assert_called_once()

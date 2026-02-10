@@ -83,7 +83,7 @@ def send_via_discord(params: NotificationParams) -> bool:
         with make_session() as session:
             bot = (
                 session.query(DiscordBot)
-                .filter(DiscordBot.user_id == params.user_id)
+                .filter(DiscordBot.authorized_users.any(id=params.user_id))
                 .first()
             )
             if bot:

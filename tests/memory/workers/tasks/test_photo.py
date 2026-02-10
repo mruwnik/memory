@@ -637,8 +637,8 @@ def test_reprocess_photo_not_found(mock_make_session, mock_job_utils, mock_prepa
 
     result = photo.reprocess_photo(999)
 
-    assert result["status"] == "error"
-    assert "not found" in result["error"]
+    assert result.get("status") == "error"
+    assert "not found" in str(result.get("error", ""))
 
 
 @patch("memory.workers.tasks.photo.prepare_photo_for_reingest")

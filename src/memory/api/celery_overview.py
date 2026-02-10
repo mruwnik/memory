@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import redis
 from fastapi import APIRouter
@@ -31,7 +32,7 @@ def load_custom_schedule_from_redis() -> dict[str, dict]:
         r = redis.from_url(settings.REDIS_URL)
         raw = r.get(REDIS_BEAT_SCHEDULE_KEY)
         if raw:
-            return json.loads(raw)
+            return json.loads(cast(bytes, raw))
     except Exception:
         logger.exception("Failed to read custom beat schedule from Redis")
     return {}
