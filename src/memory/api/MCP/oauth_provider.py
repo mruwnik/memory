@@ -32,6 +32,7 @@ from memory.common.db.models.users import (
     OAuthToken as TokenBase,
 )
 from memory.api.auth import lookup_api_key, handle_api_key_use
+from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,6 @@ def token_id(token: str) -> str:
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
-
-from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
 BASE_SCOPES = [SCOPE_READ]

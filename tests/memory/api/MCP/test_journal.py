@@ -1,13 +1,11 @@
 """Tests for Journal MCP tools."""
 
-from datetime import datetime, timedelta
-
 import pytest
 
 from memory.api.MCP.servers.journal import add, list_all
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
-from memory.common.db.models import JournalEntry, SourceItem, HumanUser, UserSession, Person, Team
+from memory.common.db.models import JournalEntry, SourceItem, Person, Team
 from memory.common.db.models.sources import Project, team_members, project_teams
 from tests.conftest import mcp_auth_context
 

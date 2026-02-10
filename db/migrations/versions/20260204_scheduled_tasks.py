@@ -4,8 +4,6 @@ Revision ID: 20260204_scheduled_tasks
 Revises: 20260204_env_clone_source
 Create Date: 2026-02-04
 """
-import uuid
-
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql

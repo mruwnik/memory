@@ -1,7 +1,5 @@
 """Tests for JournalEntry model."""
 
-import pytest
-
 from memory.common.content_processing import create_content_hash
 from memory.common.db.models import JournalEntry, SourceItem, user_can_access_journal_entry
 
