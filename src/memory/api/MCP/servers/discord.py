@@ -697,7 +697,16 @@ def resolve_channel_id(
         ValueError: If neither is provided or channel_name not found
     """
     if channel_id is not None:
-        return _to_snowflake(channel_id)
+        # If it's a string that's not numeric, treat it as a channel name
+        if isinstance(channel_id, str):
+            try:
+                return int(channel_id)
+            except ValueError:
+                channel_name = channel_id
+                channel_id = None
+
+        if channel_id is not None:
+            return _to_snowflake(channel_id)
 
     if channel_name is None:
         raise ValueError("Must specify either channel_id or channel_name")
@@ -1045,7 +1054,10 @@ async def attach_teams_to_channel(
         "warnings": [],
     }
 
-    # Make channel private first (deny @everyone)
+    # Note: bot is granted access at channel creation time in the collector,
+    # bypassing Discord's role hierarchy restriction. No need to grant here.
+
+    # Make channel private (deny @everyone)
     private_result = await asyncio.to_thread(
         discord_client.make_channel_private,
         bot_id,
@@ -1190,7 +1202,7 @@ async def upsert_channel(
         channel_id = int(channel_result["channel"]["id"])
 
         # Handle teams/permissions
-        if teams:
+        if teams is not None:
             teams_result = await attach_teams_to_channel(
                 session, channel_id, teams, resolved_guild_id, resolved_bot_id
             )

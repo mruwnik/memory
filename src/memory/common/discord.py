@@ -322,7 +322,13 @@ def set_channel_permission(
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Failed to set permissions for channel {channel_id}: {e}")
+        body = ""
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                body = e.response.text
+            except Exception:
+                pass
+        logger.error(f"Failed to set permissions for channel {channel_id}: {e} body={body}")
         return None
 
 

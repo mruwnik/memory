@@ -215,12 +215,15 @@ def get_role_or_404(guild: Guild, role_id: int) -> Role:
     return role
 
 
-def get_member_or_404(guild: Guild, user_id: int) -> Member:
-    """Get member or raise 404."""
+async def get_member_or_404(guild: Guild, user_id: int) -> Member:
+    """Get member from cache or fetch from API, raise 404 if not found."""
     member = guild.get_member(user_id)
-    if not member:
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except (NotFound, DiscordHTTPException):
         raise HTTPException(status_code=404, detail=f"User {user_id} not found in guild")
-    return member
 
 
 @asynccontextmanager
@@ -467,7 +470,7 @@ async def list_role_members(guild_id: str, role_id: str, bot_id: int) -> dict[st
 
     members = [
         {
-            "id": member.id,
+            "id": str(member.id),
             "username": member.name,
             "display_name": member.display_name,
             "joined_at": member.joined_at.isoformat() if member.joined_at else None,
@@ -486,7 +489,7 @@ async def add_role_member(request: RoleMemberRequest) -> dict[str, Any]:
     role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
     user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
     role = get_role_or_404(guild, role_id)
-    member = get_member_or_404(guild, user_id)
+    member = await get_member_or_404(guild, user_id)
 
     async with discord_api_errors("manage this role"):
         await member.add_roles(role, reason="Added via MCP")
@@ -502,7 +505,7 @@ async def remove_role_member(request: RoleMemberRequest) -> dict[str, Any]:
     role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
     user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
     role = get_role_or_404(guild, role_id)
-    member = get_member_or_404(guild, user_id)
+    member = await get_member_or_404(guild, user_id)
 
     async with discord_api_errors("manage this role"):
         await member.remove_roles(role, reason="Removed via MCP")
@@ -590,7 +593,7 @@ async def set_channel_permission(request: ChannelPermissionRequest) -> dict[str,
     if role_id:
         target = get_role_or_404(channel.guild, role_id)
     elif user_id:
-        target = get_member_or_404(channel.guild, user_id)
+        target = await get_member_or_404(channel.guild, user_id)
     else:
         raise HTTPException(status_code=400, detail="Must specify role_id or user_id")
 
@@ -689,6 +692,17 @@ async def create_channel(request: CreateChannelRequest) -> dict[str, Any]:
         if source_channel and isinstance(source_channel, abc.GuildChannel):
             overwrites = dict(source_channel.overwrites)
 
+    # Always include the bot so it doesn't get locked out of private channels.
+    # Only basic perms — management comes from the server-level role.
+    bot_member = guild.me
+    if bot_member:
+        overwrites = overwrites or {}
+        overwrites[bot_member] = PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+        )
+
     async with discord_api_errors("create channels"):
         kwargs: dict[str, Any] = {
             "name": request.name,
@@ -702,7 +716,7 @@ async def create_channel(request: CreateChannelRequest) -> dict[str, Any]:
         return {
             "success": True,
             "channel": {
-                "id": channel.id,
+                "id": str(channel.id),
                 "name": channel.name,
                 "category": category.name if category else None,
             },
@@ -724,7 +738,7 @@ async def create_category(request: CreateCategoryRequest) -> dict[str, Any]:
         return {
             "success": True,
             "category": {
-                "id": category.id,
+                "id": str(category.id),
                 "name": category.name,
             },
         }
@@ -793,7 +807,7 @@ async def delete_channel(request: DeleteChannelRequest) -> dict[str, Any]:
         return {
             "success": True,
             "deleted": {
-                "id": channel_id,
+                "id": str(channel_id),
                 "name": channel_name,
                 "type": channel_type,
             },

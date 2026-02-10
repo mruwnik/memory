@@ -16,6 +16,7 @@ from memory.common.db.models import (
     APIKey,
     APIKeyType,
     EmailAccount,
+    GithubAccount,
     ScheduledTask,
     SlackUserCredentials,
     SourceItem,
@@ -102,6 +103,16 @@ def _get_current_user(session: DBSession) -> dict:
         cred.slack_user_id: cred.workspace_id for cred in slack_credentials
     }
 
+    # Add GitHub accounts
+    github_accounts = (
+        session.query(GithubAccount)
+        .filter(GithubAccount.user_id == user_session.user.id)
+        .all()
+    )
+    user_info["github_accounts"] = [
+        {"name": a.name, "auth_type": a.auth_type} for a in github_accounts
+    ]
+
     # Enrich from linked Person record (via User.person or discord_accounts)
     person = user_session.user.person
     if not person:
@@ -130,6 +141,16 @@ def _get_current_user(session: DBSession) -> dict:
             for workspace_id, workspace_data in slack_info.items():
                 if slack_user_id := workspace_data.get("user_id"):
                     user_info["slack_accounts"][slack_user_id] = workspace_id
+
+        # Add GitHub from Person if no GithubAccount credentials found
+        if not github_accounts and person.github_accounts:
+            user_info["github_accounts"] = [
+                {"username": acct.username, "id": acct.id} for acct in person.github_accounts
+            ]
+        elif not github_accounts and person.contact_info:
+            github_username = person.contact_info.get("github") or person.contact_info.get("github_username")
+            if github_username:
+                user_info["github_accounts"] = [{"username": github_username}]
 
     # Fall back to user's own email if no dedicated email accounts
     if not email_accounts and user_session.user.email:
