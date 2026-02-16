@@ -293,10 +293,15 @@ async def upload_report(
     tags: str = Form(default=""),
     project_id: int | None = Form(default=None),
     allow_scripts: bool = Form(default=False),
+    allowed_connect_urls: str = Form(default=""),
     user: User = Depends(get_current_user),
     db: DBSession = Depends(get_session),
 ) -> UploadResponse:
-    """Upload an HTML or PDF report for indexing."""
+    """Upload an HTML or PDF report for indexing.
+
+    Args:
+        allowed_connect_urls: Comma-separated list of external URLs allowed for CSP connect-src
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -335,6 +340,11 @@ async def upload_report(
     logger.info(f"Saved report to {file_path}")
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    url_list = (
+        [u.strip() for u in allowed_connect_urls.split(",") if u.strip()]
+        if allowed_connect_urls
+        else None
+    )
 
     try:
         result = dispatch_job(
@@ -349,6 +359,7 @@ async def upload_report(
                 "project_id": project_id,
                 "creator_id": user.id,
                 "allow_scripts": allow_scripts,
+                "allowed_connect_urls": url_list,
             },
             user_id=user.id,
         )

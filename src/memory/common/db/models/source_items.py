@@ -1268,6 +1268,7 @@ class ReportPayload(SourceItemPayload):
     report_title: Annotated[str | None, "Title of the report"]
     report_format: Annotated[str, "Format: html or pdf"]
     allow_scripts: Annotated[bool, "Whether scripts are allowed in the report"]
+    allowed_connect_urls: Annotated[list[str] | None, "External URLs allowed in CSP connect-src"]
 
 
 class Report(SourceItem):
@@ -1282,6 +1283,7 @@ class Report(SourceItem):
     report_format: Mapped[str] = mapped_column(Text, nullable=False)  # "html" or "pdf"
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     allow_scripts: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    allowed_connect_urls: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "report",
@@ -1298,6 +1300,7 @@ class Report(SourceItem):
             report_title=self.report_title,
             report_format=self.report_format,
             allow_scripts=self.allow_scripts,
+            allowed_connect_urls=self.allowed_connect_urls,
         )
 
     @property

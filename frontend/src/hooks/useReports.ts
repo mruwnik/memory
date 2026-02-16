@@ -16,6 +16,7 @@ export interface Report {
     report_title?: string | null
     report_format?: string
     allow_scripts?: boolean
+    allowed_connect_urls?: string[] | null
     [key: string]: any
   } | null
 }
@@ -40,18 +41,39 @@ export const useReports = () => {
   }, [mcpCall])
 
   const createReport = useCallback(async (
-    title: string, content: string, tags?: string[], filename?: string, allow_scripts?: boolean
+    title: string,
+    content: string,
+    tags?: string[],
+    filename?: string,
+    allow_scripts?: boolean,
+    allowed_connect_urls?: string[]
   ) => {
-    const result = await mcpCall('reports_upsert', { title, content, tags, filename, allow_scripts })
+    const result = await mcpCall('reports_upsert', {
+      title,
+      content,
+      tags,
+      filename,
+      allow_scripts,
+      allowed_connect_urls,
+    })
     return result?.[0]
   }, [mcpCall])
 
-  const uploadReport = useCallback(async (file: File, title?: string, tags?: string, allow_scripts?: boolean) => {
+  const uploadReport = useCallback(async (
+    file: File,
+    title?: string,
+    tags?: string,
+    allow_scripts?: boolean,
+    allowed_connect_urls?: string[]
+  ) => {
     const formData = new FormData()
     formData.append('file', file)
     if (title) formData.append('title', title)
     if (tags) formData.append('tags', tags)
     if (allow_scripts) formData.append('allow_scripts', 'true')
+    if (allowed_connect_urls?.length) {
+      formData.append('allowed_connect_urls', allowed_connect_urls.join(','))
+    }
     const response = await apiCall('/reports/upload', {
       method: 'POST',
       body: formData,

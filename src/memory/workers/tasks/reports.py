@@ -50,6 +50,7 @@ def sync_report(
     creator_id: int | None = None,
     existing_report_id: int | None = None,
     allow_scripts: bool = False,
+    allowed_connect_urls: list[str] | None = None,
 ):
     tags = tags or []
     filename = pathlib.Path(file_path).name
@@ -81,6 +82,7 @@ def sync_report(
     mime_type = "text/html" if report_format == "html" else "application/pdf"
 
     with make_session() as session:
+        # For new reports, check for duplicates
         existing = check_content_exists(session, Report, sha256=sha256)
         if existing:
             logger.info(f"Report already exists: {existing.id}")
@@ -114,6 +116,7 @@ def sync_report(
         report.sha256 = sha256  # type: ignore
         report.size = content_size  # type: ignore
         report.allow_scripts = allow_scripts  # type: ignore
+        report.allowed_connect_urls = allowed_connect_urls  # type: ignore
 
         # Store processed markdown content and images for chunking
         # (same pattern as BlogPost: content = searchable markdown)

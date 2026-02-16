@@ -24,6 +24,7 @@ const ReportsPage = () => {
   const [htmlContent, setHtmlContent] = useState('')
   const [tags, setTags] = useState<string[]>([])
   const [allowScripts, setAllowScripts] = useState(false)
+  const [allowedConnectUrls, setAllowedConnectUrls] = useState<string[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [queued, setQueued] = useState(false)
   const [deletingReport, setDeletingReport] = useState<Report | null>(null)
@@ -32,6 +33,7 @@ const ReportsPage = () => {
   const [editTitle, setEditTitle] = useState('')
   const [editTags, setEditTags] = useState<string[]>([])
   const [editAllowScripts, setEditAllowScripts] = useState(false)
+  const [editAllowedConnectUrls, setEditAllowedConnectUrls] = useState<string[]>([])
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const refreshTimerRef = useRef<number>()
@@ -69,6 +71,7 @@ const ReportsPage = () => {
     setHtmlContent('')
     setTags([])
     setAllowScripts(false)
+    setAllowedConnectUrls([])
     setFile(null)
     setFormError(null)
   }
@@ -83,13 +86,26 @@ const ReportsPage = () => {
           setFormError('Title and content are required')
           return
         }
-        await createReport(title.trim(), htmlContent, tags.length ? tags : undefined, undefined, allowScripts || undefined)
+        await createReport(
+          title.trim(),
+          htmlContent,
+          tags.length ? tags : undefined,
+          undefined,
+          allowScripts || undefined,
+          allowedConnectUrls  // Always send the array, even if empty
+        )
       } else {
         if (!file) {
           setFormError('Please select a file')
           return
         }
-        await uploadReport(file, title.trim() || undefined, tags.length ? tags.join(',') : undefined, allowScripts || undefined)
+        await uploadReport(
+          file,
+          title.trim() || undefined,
+          tags.length ? tags.join(',') : undefined,
+          allowScripts || undefined,
+          allowedConnectUrls  // Always send the array, even if empty
+        )
       }
       setShowForm(false)
       resetForm()
@@ -132,6 +148,7 @@ const ReportsPage = () => {
     setEditTitle(reportTitle(report))
     setEditTags(report.tags || [])
     setEditAllowScripts(report.metadata?.allow_scripts ?? false)
+    setEditAllowedConnectUrls(report.metadata?.allowed_connect_urls || [])
     setEditError(null)
   }
 
@@ -153,6 +170,7 @@ const ReportsPage = () => {
         editTags.length ? editTags : undefined,
         selectedReport.filename,
         editAllowScripts || undefined,
+        editAllowedConnectUrls  // Always send the array, even if empty
       )
       setEditing(false)
       setQueued(true)
@@ -274,6 +292,23 @@ const ReportsPage = () => {
                   />
                   Allow scripts
                 </label>
+
+                {allowScripts && (
+                  <div className={styles.formGroup}>
+                    <label className={styles.formLabel}>
+                      Allowed External URLs
+                      <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
+                    </label>
+                    <TagsInput
+                      tags={allowedConnectUrls}
+                      onChange={setAllowedConnectUrls}
+                      placeholder="https://example.com/api/"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      External URLs this report can connect to (e.g., for calling external MCP servers)
+                    </p>
+                  </div>
+                )}
 
                 {formError && <div className={styles.formError}>{formError}</div>}
 
@@ -410,6 +445,22 @@ const ReportsPage = () => {
                       />
                       Allow scripts
                     </label>
+                    {editAllowScripts && (
+                      <div className={styles.formGroup}>
+                        <label className={styles.formLabel}>
+                          Allowed External URLs
+                          <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
+                        </label>
+                        <TagsInput
+                          tags={editAllowedConnectUrls}
+                          onChange={setEditAllowedConnectUrls}
+                          placeholder="https://example.com/api/"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">
+                          External URLs this report can connect to
+                        </p>
+                      </div>
+                    )}
                     {editError && <div className={styles.formError}>{editError}</div>}
                     <div className="flex items-center gap-2">
                       <button type="submit" disabled={editSubmitting} className={styles.btnSubmit}>

@@ -49,13 +49,19 @@
   }
 
   // Make MCP call
-  async function call(method, params = {}) {
+  async function call(method, params = {}, options = {}) {
     const accessToken = getCookie('access_token');
     if (!accessToken) {
       throw new Error('Not authenticated - no access_token cookie found');
     }
 
-    const response = await fetch(`/mcp/${method}`, {
+    // Support external MCP servers via serverUrl option
+    const serverUrl = options.serverUrl || `/mcp/${method}`;
+    const fullUrl = serverUrl.startsWith('http')
+      ? serverUrl  // External server - use full URL
+      : serverUrl; // Local server - relative URL
+
+    const response = await fetch(fullUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -100,9 +106,15 @@
     );
   }
 
+  // Call external MCP server
+  async function callExternal(serverUrl, method, params = {}) {
+    return call(method, params, { serverUrl });
+  }
+
   // Export MCP namespace
   window.MCP = {
     call,  // Generic method - supports ALL MCP tools
+    callExternal, // Call external MCP servers
     batch, // Batch multiple calls in parallel
 
     // Books
@@ -263,5 +275,5 @@
     },
   };
 
-  console.log('MCP Client loaded. 87 tools available via MCP namespace.');
+  console.log('MCP Client loaded. Use MCP.call() for local tools or MCP.callExternal(serverUrl, method, params) for external MCP servers.');
 })(window);

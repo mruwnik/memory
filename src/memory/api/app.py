@@ -269,13 +269,19 @@ async def serve_report(
     if mime_type in ("text/html", "application/xhtml+xml"):
         # Check if report allows scripts (for system-generated interactive reports)
         if report.allow_scripts:
+            # Build connect-src directive with allowed external URLs
+            connect_sources = ["'self'"]
+            if report.allowed_connect_urls:
+                connect_sources.extend(report.allowed_connect_urls)
+            connect_src = " ".join(connect_sources)
+
             # Relaxed CSP for trusted system-generated reports with JavaScript
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; "
                 "style-src 'unsafe-inline'; "
                 "img-src data: blob:; "
                 "script-src 'self' 'unsafe-inline'; "
-                "connect-src 'self'; "
+                f"connect-src {connect_src}; "
                 "sandbox allow-scripts allow-same-origin"
             )
         else:

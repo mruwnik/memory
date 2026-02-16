@@ -31,6 +31,7 @@ async def upsert(
     tags: list[str] | None = None,
     filename: str | None = None,
     allow_scripts: bool = False,
+    allowed_connect_urls: list[str] | None = None,
 ) -> dict:
     """
     Create or update a report from HTML content.
@@ -43,6 +44,8 @@ async def upsert(
         tags: Organization tags for filtering and discovery
         filename: Stable filename for upsert (e.g. "my_report.html").
                   If omitted, one is generated from the content hash + title.
+        allow_scripts: Whether to allow JavaScript in the report (default False)
+        allowed_connect_urls: External URLs allowed in CSP connect-src (for calling external APIs)
     """
     tags = tags or []
     logger.info("MCP: upserting report: %s", title)
@@ -61,8 +64,7 @@ async def upsert(
     elif not filename.endswith(".html"):
         filename = f"{filename}.html"
 
-    # Access check on existing report with same filename, and capture its ID
-    # for the worker to re-verify ownership (mitigates TOCTOU race).
+    # Access check and metadata update for existing reports
     existing_report_id: int | None = None
     with make_session() as session:
         existing = session.query(Report).filter(Report.filename == filename).one_or_none()
@@ -72,8 +74,20 @@ async def upsert(
                 return {"error": "Cannot overwrite this report - access denied"}
             existing_report_id = existing.id
 
+            # Update metadata directly for existing reports (only if provided)
+            if title is not None:
+                existing.report_title = title
+            if allow_scripts is not None:
+                existing.allow_scripts = allow_scripts
+            if allowed_connect_urls is not None:
+                existing.allowed_connect_urls = allowed_connect_urls
+            if tags is not None:
+                existing.tags = tags
+            session.commit()
+
     file_path = settings.REPORT_STORAGE_DIR / filename
 
+    # Dispatch to worker for content processing
     task = celery_app.send_task(
         SYNC_REPORT,
         queue=f"{settings.CELERY_QUEUE_PREFIX}-reports",
@@ -86,6 +100,7 @@ async def upsert(
             "creator_id": user_id,
             "existing_report_id": existing_report_id,
             "allow_scripts": allow_scripts,
+            "allowed_connect_urls": allowed_connect_urls,
         },
     )
 
