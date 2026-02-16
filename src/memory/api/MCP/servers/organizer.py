@@ -43,7 +43,7 @@ async def upcoming(
                    Defaults to now if not provided.
         end_date: ISO format end date. Defaults to start_date + days if not provided.
         days: Number of days from start_date if end_date not specified (default 7, max 365)
-        limit: Maximum number of events to return (default 50, max 200)
+        limit: Maximum number of events to return (default 50, max 1000)
         user_ids: If provided, only return events from calendars owned by these users.
                   Admin-only feature for viewing other users' calendars.
 
@@ -51,7 +51,7 @@ async def upcoming(
              location, calendar_name, recurrence_rule. Sorted by start_time.
     """
     days = min(max(days, 1), 365)
-    limit = min(max(limit, 1), 200)
+    limit = min(max(limit, 1), 1000)
 
     range_start, range_end = parse_date_range(start_date, end_date, days)
 
