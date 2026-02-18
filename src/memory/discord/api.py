@@ -231,9 +231,11 @@ async def discord_api_errors(action: str = "perform action"):
     """Context manager for Discord API error handling."""
     try:
         yield
-    except Forbidden:
-        raise HTTPException(status_code=403, detail=f"Bot lacks permission to {action}")
+    except Forbidden as e:
+        logger.error("Discord Forbidden while trying to %s: %s (code=%s)", action, e.text, e.code)
+        raise HTTPException(status_code=403, detail=f"Bot lacks permission to {action}: {e.text}")
     except DiscordHTTPException as e:
+        logger.error("Discord HTTP error while trying to %s: %s (code=%s, status=%s)", action, e.text, e.code, e.status)
         raise HTTPException(status_code=500, detail=str(e))
 
 

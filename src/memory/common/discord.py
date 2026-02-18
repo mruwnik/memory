@@ -396,7 +396,13 @@ def create_channel(
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Failed to create channel {name}: {e}")
+        body = ""
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                body = e.response.text
+            except Exception:
+                pass
+        logger.error("Failed to create channel %s: %s body=%s", name, e, body)
         return None
 
 

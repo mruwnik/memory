@@ -106,9 +106,110 @@
     );
   }
 
-  // Call external MCP server
+  // MCP session cache for external servers
+  const mcpSessions = {};
+
+  // Initialize MCP session for external server
+  async function initializeMcpSession(serverUrl) {
+    const accessToken = getCookie('access_token');
+    if (!accessToken) {
+      throw new Error('Not authenticated - no access_token cookie found');
+    }
+
+    console.log('[MCP] Initializing session for:', serverUrl);
+
+    const response = await fetch(serverUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: {
+            name: 'memory-mcp-client',
+            version: '1.0.0'
+          }
+        }
+      })
+    });
+
+    console.log('[MCP] Initialize response status:', response.status);
+    console.log('[MCP] Response headers:', Array.from(response.headers.entries()));
+
+    if (!response.ok) {
+      throw new Error(`MCP initialize failed: ${response.status}`);
+    }
+
+    // Extract session ID from response header
+    const sessionId = response.headers.get('mcp-session-id');
+    console.log('[MCP] Session ID from header:', sessionId);
+
+    if (!sessionId) {
+      console.error('[MCP] Available headers:', Array.from(response.headers.keys()));
+      throw new Error('MCP server did not return session ID');
+    }
+
+    console.log('[MCP] Session initialized successfully:', sessionId);
+    return sessionId;
+  }
+
+  // Call external MCP server (with session management)
   async function callExternal(serverUrl, method, params = {}) {
-    return call(method, params, { serverUrl });
+    // Get or create session for this server
+    if (!mcpSessions[serverUrl]) {
+      mcpSessions[serverUrl] = await initializeMcpSession(serverUrl);
+    }
+
+    const accessToken = getCookie('access_token');
+    const response = await fetch(serverUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        'Authorization': `Bearer ${accessToken}`,
+        'Mcp-Session-Id': mcpSessions[serverUrl]
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: { name: method, arguments: params }
+      })
+    });
+
+    if (!response.ok) {
+      // Session might have expired, try reinitializing once
+      if (response.status === 400 || response.status === 401) {
+        delete mcpSessions[serverUrl];
+        return callExternal(serverUrl, method, params); // Retry with new session
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    const data = contentType && contentType.includes('text/event-stream')
+      ? await parseSSE(response)
+      : await response.json();
+
+    if (data?.result?.isError) {
+      const errorMsg = data.result.content[0]?.text || 'MCP call failed';
+      throw new Error(errorMsg);
+    }
+
+    // Extract the actual result from MCP response format
+    const result = data?.result?.content.map(item => {
+      try { return JSON.parse(item.text); }
+      catch { return item.text; }
+    })[0];
+
+    return result;
   }
 
   // Export MCP namespace
