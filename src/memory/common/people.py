@@ -152,43 +152,34 @@ def find_or_create_person(
 ) -> tuple[Person | None, bool]:
     """Find existing person or optionally create new one.
 
-    Note: Person is now a thin identity record - no SourceItem fields needed.
-
-    Matching order:
-    1. By email (if provided)
-    2. By name/alias
-    3. By identifier
+    Uses find_person for lookup, with an extra email check if provided
+    separately from the name. Falls back to creating a new Person.
 
     Args:
         session: Database session
-        name: Display name for the person
+        name: Display name or identifier for the person
         email: Optional email for matching/creation
         create_if_missing: If True, create a new Person when no match found
 
     Returns:
         Tuple of (Person or None, was_created)
     """
-    # Try email first if provided
+    # Try email first if provided as a separate param
     if email:
         person = find_person_by_email(session, email)
         if person:
             return person, False
 
-    # Try name/alias match
-    person = find_person_by_name(session, name)
+    # Use the standard lookup chain (name/alias → direct identifier → slugified)
+    person = find_person(session, name)
     if person:
         return person, False
-
-    # Check if identifier already exists
-    identifier = make_identifier(name)
-    existing = session.query(Person).filter(Person.identifier == identifier).first()
-    if existing:
-        return existing, False
 
     if not create_if_missing:
         return None, False
 
     # Create new person (thin identity record)
+    identifier = make_identifier(name)
     person = Person(
         identifier=identifier,
         display_name=name,
@@ -228,7 +219,12 @@ def find_person(session: DBSession, identifier: str | None) -> Person | None:
     if person := find_person_by_name(session, identifier):
         return person
 
-    # Try identifier slug lookup
+    # Try direct identifier match first (handles hyphens, etc.)
+    result = session.query(Person).filter(Person.identifier == identifier.lower().strip()).first()
+    if result:
+        return result
+
+    # Try slugified identifier as fallback
     slug = make_identifier(identifier)
     return session.query(Person).filter(Person.identifier == slug).first()
 
