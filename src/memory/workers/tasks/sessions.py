@@ -152,6 +152,17 @@ def summarize_session(session_id: str) -> dict:
             logger.info(f"Session {session_id} has no transcript")
             return {"status": "skipped", "message": "No transcript"}
 
+        # Check if summary is already fresh (avoids redundant LLM calls
+        # when multiple tasks are queued for the same session)
+        transcript_file = settings.SESSIONS_STORAGE_DIR / session.transcript_path
+        if session.summary_updated_at and transcript_file.exists():
+            file_mtime = datetime.fromtimestamp(
+                transcript_file.stat().st_mtime, tz=timezone.utc
+            )
+            if session.summary_updated_at >= file_mtime:
+                logger.info(f"Session {session_id} summary is already fresh, skipping")
+                return {"status": "skipped", "message": "Summary already fresh"}
+
         # Extract conversation and generate summary
         conversation = extract_conversation_text(session.transcript_path)
         if not conversation:

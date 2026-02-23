@@ -305,6 +305,64 @@ def test_sync_comic_no_published_date(
     assert saved_comic.published is None
 
 
+@pytest.mark.parametrize(
+    "date_input, expected_year",
+    [
+        ("2024-01-15T12:00:00Z", 2024),
+        ("2024-01-15", 2024),
+        ("January 15, 2024", 2024),
+    ],
+)
+@patch("memory.workers.tasks.comic.requests.get")
+def test_sync_comic_string_published_date(
+    mock_get, mock_image_response, db_session, qdrant, date_input, expected_year
+):
+    """Test comic sync with published_date as string (as returned by parsers)."""
+    mock_get.return_value = mock_image_response
+
+    comic.sync_comic(
+        url=f"https://example.com/comic/{date_input}",
+        image_url="https://example.com/image.png",
+        title="Test Comic",
+        author="https://example.com",
+        published_date=date_input,
+    )
+
+    saved_comic = (
+        db_session.query(Comic)
+        .filter(Comic.url == f"https://example.com/comic/{date_input}")
+        .first()
+    )
+    assert saved_comic is not None
+    assert saved_comic.published is not None
+    assert isinstance(saved_comic.published, datetime)
+    assert saved_comic.published.year == expected_year
+
+
+@patch("memory.workers.tasks.comic.requests.get")
+def test_sync_comic_empty_string_published_date(
+    mock_get, mock_image_response, db_session, qdrant
+):
+    """Test comic sync with empty string published_date (SMBC returns '' when missing)."""
+    mock_get.return_value = mock_image_response
+
+    comic.sync_comic(
+        url="https://example.com/comic/empty",
+        image_url="https://example.com/image.png",
+        title="Test Comic",
+        author="https://example.com",
+        published_date="",
+    )
+
+    saved_comic = (
+        db_session.query(Comic)
+        .filter(Comic.url == "https://example.com/comic/empty")
+        .first()
+    )
+    assert saved_comic is not None
+    assert saved_comic.published is None
+
+
 @patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_special_characters_in_title(
     mock_get, mock_image_response, db_session, qdrant

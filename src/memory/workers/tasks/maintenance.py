@@ -6,7 +6,7 @@ from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import select
-from sqlalchemy.orm import contains_eager, selectinload
+from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
 from memory.common import collections, embedding, extract, qdrant, settings
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
@@ -83,30 +83,47 @@ def reingest_chunk(chunk_id: str, collection: str):
     with make_session() as session:
         chunk = session.get(Chunk, chunk_id)
         if not chunk:
-            logger.error(f"Chunk {chunk_id} not found")
+            logger.warning(f"Chunk {chunk_id} not found, nothing to reingest")
             return
 
         if collection not in collections.ALL_COLLECTIONS:
             raise ValueError(f"Unsupported collection {collection}")
 
-        data = [extract.DataChunk(data=chunk.data)]
-        if collection in collections.MULTIMODAL_COLLECTIONS:
-            vector = embedding.embed_mixed(data)[0]
-        elif collection in collections.TEXT_COLLECTIONS:
-            vector = embedding.embed_text(data)[0]
-        else:
-            raise ValueError(f"Unsupported data type for collection {collection}")
+        # Load the source item with full polymorphic subclass columns
+        # (plain lazy load can fail with deferred column errors for subclasses like GithubItem)
+        poly = with_polymorphic(SourceItem, "*")
+        source = session.query(poly).filter(SourceItem.id == chunk.source_id).first()
+        if not source:
+            logger.warning(
+                f"Source item {chunk.source_id} not found for chunk {chunk_id}, deleting orphaned chunk"
+            )
+            session.delete(chunk)
+            session.commit()
+            return
 
-        client = qdrant.get_qdrant_client()
-        qdrant.upsert_vectors(
-            client,
-            collection,
-            [chunk_id],
-            [vector],
-            [dict(chunk.source.as_payload())],
-        )
-        chunk.checked_at = datetime.now()
-        session.commit()
+        try:
+            data = [extract.DataChunk(data=chunk.data)]
+            if collection in collections.MULTIMODAL_COLLECTIONS:
+                vector = embedding.embed_mixed(data)[0]
+            elif collection in collections.TEXT_COLLECTIONS:
+                vector = embedding.embed_text(data)[0]
+            else:
+                raise ValueError(f"Unsupported data type for collection {collection}")
+
+            client = qdrant.get_qdrant_client()
+            qdrant.upsert_vectors(
+                client,
+                collection,
+                [chunk_id],
+                [vector],
+                [dict(source.as_payload())],
+            )
+        except Exception:
+            logger.exception(f"Failed to reingest chunk {chunk_id}")
+        finally:
+            # Always update checked_at so broken chunks don't loop forever
+            chunk.checked_at = datetime.now()
+            session.commit()
 
 
 def get_item_class(item_type: str) -> type[SourceItem]:
@@ -262,10 +279,11 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
         )
 
         for chunk in chunks:
+            # Always update checked_at so the same chunk isn't re-dispatched
+            # on the next hourly run while it's still waiting in the queue.
+            chunk.checked_at = datetime.now()
             if str(chunk.id) in missing:
                 reingest_chunk.delay(str(chunk.id), collection)  # type: ignore
-            else:
-                chunk.checked_at = datetime.now()
 
         stats[collection] = {
             "missing": len(missing),

@@ -2,6 +2,8 @@ import logging
 from datetime import datetime
 from typing import Callable, cast
 
+from dateutil import parser as dateutil_parser
+
 import feedparser
 import requests
 
@@ -79,10 +81,12 @@ def sync_comic(
     image_url: str,
     title: str,
     author: str,
-    published_date: datetime | None = None,
+    published_date: datetime | str | None = None,
 ):
     """Synchronize a comic from a URL."""
     logger.info(f"syncing comic {url}")
+    if isinstance(published_date, str) and published_date:
+        published_date = dateutil_parser.parse(published_date)
     with make_session() as session:
         existing_comic = check_content_exists(session, Comic, url=url)
         if existing_comic:

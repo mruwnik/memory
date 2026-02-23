@@ -297,7 +297,7 @@ def vectorize_email(email: MailMessage):
     chunks = embedding.embed_source_item(email)
     email.chunks = chunks
     if chunks:
-        vector_ids = [cast(str, c.id) for c in chunks]
+        vector_ids = [str(c.id) for c in chunks]
         vectors = [c.vector for c in chunks]
         metadata = [c.item_metadata for c in chunks]
         qdrant.upsert_vectors(
@@ -391,14 +391,14 @@ def extract_vector_deletion_info(email: MailMessage) -> dict:
     session is still active.
     """
     info = {
-        "email_chunk_ids": [cast(str, c.id) for c in email.chunks] if email.chunks else [],
+        "email_chunk_ids": [str(c.id) for c in email.chunks] if email.chunks else [],
         "email_modality": cast(str, email.modality),
         "attachments": [],
     }
     for attachment in email.attachments:
         if attachment.chunks:
             info["attachments"].append({
-                "chunk_ids": [cast(str, c.id) for c in attachment.chunks],
+                "chunk_ids": [str(c.id) for c in attachment.chunks],
                 "modality": cast(str, attachment.modality),
             })
     return info
