@@ -251,7 +251,7 @@ def test_sync_lesswrong_with_existing_posts(
     mock_fetch, mock_lesswrong_post, db_session
 ):
     """Test sync when some posts already exist."""
-    # Create existing forum post
+    # Create existing forum post with old karma values
     existing_post = ForumPost(
         url="https://www.lesswrong.com/posts/test123/test-post",
         title="Existing Post",
@@ -262,6 +262,8 @@ def test_sync_lesswrong_with_existing_posts(
         mime_type="text/markdown",
         size=100,
         authors=["Test Author"],
+        karma=10,
+        votes=3,
     )
     db_session.add(existing_post)
     db_session.commit()
@@ -279,10 +281,16 @@ def test_sync_lesswrong_with_existing_posts(
         result = forums.sync_lesswrong(max_items=100)
 
         assert result["posts_num"] == 2
-        assert result["new_posts"] == 1  # Only one new post
+        assert result["new_posts"] == 1
+        assert result["updated_posts"] == 1
 
         # Verify sync_lesswrong_post was only called for the new post
         mock_sync_post.delay.assert_called_once_with(new_post, [])
+
+    # Verify existing post had its karma updated
+    db_session.refresh(existing_post)
+    assert existing_post.karma == 25  # Updated from mock_lesswrong_post
+    assert existing_post.votes == 10
 
 
 @patch("memory.workers.tasks.forums.fetch_lesswrong_posts")
@@ -396,28 +404,155 @@ def test_sync_lesswrong_fetch_error(mock_fetch, db_session):
     """Test sync when fetch_lesswrong_posts raises an exception."""
     mock_fetch.side_effect = Exception("API error")
 
-    # The safe_task_execution decorator should catch this
-    result = forums.sync_lesswrong()
-
-    assert result["status"] == "error"
-    assert "API error" in result["error"]
+    with pytest.raises(Exception, match="API error"):
+        forums.sync_lesswrong()
 
 
 def test_sync_lesswrong_post_error_handling(db_session):
-    """Test error handling in sync_lesswrong_post."""
-    # Create invalid post data that will cause an error
+    """Test error handling in sync_lesswrong_post with missing fields."""
     invalid_post = {
         "title": "Test",
         "url": "invalid-url",
         "content": "test content",
-        # Missing required fields
+        # Missing required fields like 'tags'
     }
 
-    # The safe_task_execution decorator should catch this
-    result = forums.sync_lesswrong_post(invalid_post)
+    with pytest.raises(KeyError):
+        forums.sync_lesswrong_post(invalid_post)
 
-    assert result["status"] == "error"
-    assert "error" in result
+
+def test_update_engagement_metrics_updates_changed_fields(db_session):
+    """Test that update_engagement_metrics updates karma/votes/score/comments."""
+    existing = ForumPost(
+        url="https://www.lesswrong.com/posts/test/metrics-test",
+        title="Metrics Test",
+        content="Test content",
+        sha256=b"test_hash" + bytes(24),
+        modality="forum",
+        tags=[],
+        mime_type="text/markdown",
+        size=100,
+        karma=10,
+        votes=5,
+        score=12,
+        comments=3,
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    post = LessWrongPost(
+        title="Metrics Test",
+        url="https://www.lesswrong.com/posts/test/metrics-test",
+        description="",
+        content="Test content",
+        authors=[],
+        published_at=None,
+        guid=None,
+        karma=150,
+        votes=40,
+        score=180,
+        comments=25,
+        words=100,
+        tags=[],
+        af=False,
+        extended_score=200,
+    )
+
+    changed = forums.update_engagement_metrics(existing, post)
+    assert changed is True
+    assert existing.karma == 150
+    assert existing.votes == 40
+    assert existing.score == 180
+    assert existing.comments == 25
+
+
+def test_update_engagement_metrics_no_change(db_session):
+    """Test that update_engagement_metrics returns False when nothing changed."""
+    existing = ForumPost(
+        url="https://www.lesswrong.com/posts/test/no-change",
+        title="No Change",
+        content="Test content",
+        sha256=b"test_hash_nc" + bytes(20),
+        modality="forum",
+        tags=[],
+        mime_type="text/markdown",
+        size=100,
+        karma=25,
+        votes=10,
+        score=25,
+        comments=5,
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    post = LessWrongPost(
+        title="No Change",
+        url="https://www.lesswrong.com/posts/test/no-change",
+        description="",
+        content="Test content",
+        authors=[],
+        published_at=None,
+        guid=None,
+        karma=25,
+        votes=10,
+        score=25,
+        comments=5,
+        words=100,
+        tags=[],
+        af=False,
+        extended_score=30,
+    )
+
+    changed = forums.update_engagement_metrics(existing, post)
+    assert changed is False
+
+
+@patch("memory.workers.tasks.forums.fetch_lesswrong_posts")
+def test_sync_lesswrong_no_update_when_metrics_unchanged(
+    mock_fetch, db_session
+):
+    """Test sync doesn't count posts as updated when metrics haven't changed."""
+    existing_post = ForumPost(
+        url="https://www.lesswrong.com/posts/test/unchanged",
+        title="Unchanged",
+        content="Test content",
+        sha256=b"unchanged_hash" + bytes(18),
+        modality="forum",
+        tags=[],
+        mime_type="text/markdown",
+        size=100,
+        karma=25,
+        votes=10,
+        score=25,
+        comments=5,
+    )
+    db_session.add(existing_post)
+    db_session.commit()
+
+    post = LessWrongPost(
+        title="Unchanged",
+        url="https://www.lesswrong.com/posts/test/unchanged",
+        description="",
+        content="Test content",
+        authors=[],
+        published_at=None,
+        guid=None,
+        karma=25,
+        votes=10,
+        score=25,
+        comments=5,
+        words=100,
+        tags=[],
+        af=False,
+        extended_score=30,
+    )
+    mock_fetch.return_value = [post]
+
+    result = forums.sync_lesswrong(max_items=100)
+
+    assert result["posts_num"] == 1
+    assert result["new_posts"] == 0
+    assert result["updated_posts"] == 0
 
 
 @pytest.mark.parametrize(

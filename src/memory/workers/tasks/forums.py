@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 import logging
-
 from memory.parsers.lesswrong import fetch_lesswrong_posts, LessWrongPost
 from memory.common.db.connection import make_session
 from memory.common.db.models import ForumPost
@@ -14,6 +13,21 @@ from memory.common.content_processing import (
 )
 
 logger = logging.getLogger(__name__)
+
+ENGAGEMENT_FIELDS = ("karma", "votes", "score", "comments")
+
+
+def update_engagement_metrics(
+    existing: ForumPost, post: LessWrongPost
+) -> bool:
+    """Update karma/votes/score/comments on an existing post. Returns True if changed."""
+    changed = False
+    for field in ENGAGEMENT_FIELDS:
+        new_val = post.get(field)
+        if new_val is not None and getattr(existing, field) != new_val:
+            setattr(existing, field, new_val)
+            changed = True
+    return changed
 
 
 @app.task(name=SYNC_LESSWRONG_POST)
@@ -80,10 +94,14 @@ def sync_lesswrong(
         af=af,
     )
 
-    posts_num, new_posts = 0, 0
+    posts_num, new_posts, updated_posts = 0, 0, 0
     with make_session() as session:
         for post in posts:
-            if not check_content_exists(session, ForumPost, url=post["url"]):
+            existing = check_content_exists(session, ForumPost, url=post["url"])
+            if existing:
+                if update_engagement_metrics(existing, post):
+                    updated_posts += 1
+            else:
                 new_posts += 1
                 sync_lesswrong_post.delay(post, tags)  # type: ignore[attr-defined]
 
@@ -91,9 +109,14 @@ def sync_lesswrong(
                 break
             posts_num += 1
 
+        if updated_posts:
+            session.commit()
+            logger.info(f"Updated engagement metrics for {updated_posts} existing posts")
+
     return {
         "posts_num": posts_num,
         "new_posts": new_posts,
+        "updated_posts": updated_posts,
         "since": since,
         "min_karma": min_karma,
         "max_items": max_items,
