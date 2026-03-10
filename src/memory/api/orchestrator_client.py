@@ -1,27 +1,31 @@
-"""Async client for communicating with the Claude Session Orchestrator.
+"""Async HTTP client for the Claude Session Orchestrator.
 
-The orchestrator manages Claude containers via a Unix socket. This client
-provides a clean interface for the Memory API to create/list/stop sessions.
+The orchestrator manages Claude containers and volumes via a REST API
+served over a Unix socket. This client wraps the HTTP endpoints into
+a clean interface for the Memory API.
 
-Communication is done over Unix socket with JSON messages.
+See: compose/orchestrator/API.md for the full endpoint reference.
 """
 
 import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_SOCKET = os.environ.get(
     "ORCHESTRATOR_SOCKET", "/var/run/claude-sessions/orchestrator.sock"
 )
-MEMORY_STACK = os.environ.get("MEMORY_STACK", "dev")
 
-# Timeout for socket operations in seconds
-SOCKET_TIMEOUT = 30
+# Timeout for HTTP operations in seconds
+HTTP_TIMEOUT = 30
+
+# Log directory on host where orchestrator writes session logs
+LOG_DIR = Path("/var/log/claude-sessions")
 
 
 class OrchestratorError(Exception):
@@ -30,269 +34,393 @@ class OrchestratorError(Exception):
 
 @dataclass
 class SessionInfo:
-    """Information about a Claude session."""
+    """Information about a Claude session container."""
 
     session_id: str
-    container_id: str | None = None
     container_name: str | None = None
     status: str | None = None
-    memory_stack: str | None = None
-    network: str | None = None
-    environment_id: int | None = None  # Tracks which environment this session uses
+    image: str | None = None
+    memory: str | None = None
+    cpus: int | None = None
+    relay: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class HealthInfo:
+    """Orchestrator health and resource usage."""
+
+    status: str
+    containers: dict[str, int] = field(default_factory=dict)
+    memory: dict[str, int] = field(default_factory=dict)
+    cpus: dict[str, int] = field(default_factory=dict)
+
+
+async def http_request(
+    socket_path: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = HTTP_TIMEOUT,
+) -> tuple[int, dict[str, Any]]:
+    """Make an HTTP/1.1 request over a Unix socket.
+
+    Returns (status_code, parsed_json_body).
+    """
+    if not os.path.exists(socket_path):
+        raise OrchestratorError(
+            f"Orchestrator socket not found: {socket_path}. "
+            "Is the orchestrator running?"
+        )
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(socket_path),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        raise OrchestratorError("Timeout connecting to orchestrator")
+    except OSError as e:
+        raise OrchestratorError(f"Failed to connect to orchestrator: {e}")
+
+    try:
+        body_bytes = json.dumps(body).encode() if body else b""
+
+        request_lines = [
+            f"{method} {path} HTTP/1.1",
+            "Host: localhost",
+            "Connection: close",
+        ]
+        if body_bytes:
+            request_lines.append("Content-Type: application/json")
+            request_lines.append(f"Content-Length: {len(body_bytes)}")
+
+        request_str = "\r\n".join(request_lines) + "\r\n\r\n"
+        writer.write(request_str.encode() + body_bytes)
+        await writer.drain()
+
+        # Read full response (Connection: close means server closes when done)
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunk = await asyncio.wait_for(reader.read(65536), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise OrchestratorError("Timeout reading from orchestrator")
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        if not chunks:
+            raise OrchestratorError("Empty response from orchestrator")
+
+        data = b"".join(chunks)
+
+        # Split headers and body
+        separator = data.find(b"\r\n\r\n")
+        if separator == -1:
+            raise OrchestratorError("Malformed HTTP response: no header/body separator")
+
+        header_bytes = data[:separator]
+        body_data = data[separator + 4 :]
+
+        # Parse status code from first line
+        status_line = header_bytes.split(b"\r\n", 1)[0].decode()
+        parts = status_line.split(" ", 2)
+        if len(parts) < 2:
+            raise OrchestratorError(f"Malformed status line: {status_line}")
+        status_code = int(parts[1])
+
+        parsed_body = json.loads(body_data) if body_data.strip() else {}
+        return status_code, parsed_body
+
+    except json.JSONDecodeError as e:
+        raise OrchestratorError(f"Invalid JSON response: {e}")
+    except OrchestratorError:
+        raise
+    except Exception as e:
+        raise OrchestratorError(f"HTTP request failed: {e}")
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 class OrchestratorClient:
-    """Async client for the Claude Session Orchestrator."""
+    """Async HTTP client for the Claude Session Orchestrator."""
 
-    def __init__(
-        self,
-        socket_path: str = ORCHESTRATOR_SOCKET,
-        memory_stack: str = MEMORY_STACK,
-    ):
+    def __init__(self, socket_path: str = ORCHESTRATOR_SOCKET):
         self.socket_path = socket_path
-        self.memory_stack = memory_stack
 
-    async def _call(self, action: str, **kwargs: Any) -> dict[str, Any]:
-        """Make an async request to the orchestrator."""
-        if not os.path.exists(self.socket_path):
-            raise OrchestratorError(
-                f"Orchestrator socket not found: {self.socket_path}. "
-                "Is the orchestrator running?"
-            )
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+    ) -> tuple[int, Any]:
+        """Make an HTTP request, raising OrchestratorError on 5xx."""
+        status, data = await http_request(self.socket_path, method, path, body)
+        if status >= 500:
+            detail = data.get("detail", f"Server error {status}") if isinstance(data, dict) else f"Server error {status}"
+            raise OrchestratorError(detail)
+        return status, data
 
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(self.socket_path),
-                timeout=SOCKET_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            raise OrchestratorError("Timeout connecting to orchestrator")
-        except OSError as e:
-            raise OrchestratorError(f"Failed to connect to orchestrator: {e}")
-
-        try:
-            request = {"action": action, **kwargs}
-            writer.write(json.dumps(request).encode())
-            await writer.drain()
-
-            # Read response
-            chunks: list[bytes] = []
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        reader.read(65536),
-                        timeout=SOCKET_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    raise OrchestratorError("Timeout reading from orchestrator")
-
-                if not chunk:
-                    break
-                chunks.append(chunk)
-
-                # Try to parse - if successful, we're done
-                try:
-                    return json.loads(b"".join(chunks).decode())
-                except json.JSONDecodeError:
-                    continue
-
-            if not chunks:
-                raise OrchestratorError("Empty response from orchestrator")
-
-            return json.loads(b"".join(chunks).decode())
-
-        except json.JSONDecodeError as e:
-            raise OrchestratorError(f"Invalid JSON response: {e}")
-        finally:
-            writer.close()
-            await writer.wait_closed()
+    # -------------------------------------------------------------------------
+    # Health
+    # -------------------------------------------------------------------------
 
     async def ping(self) -> bool:
         """Check if orchestrator is responsive."""
         try:
-            response = await self._call("ping")
-            return response.get("status") == "pong"
+            status, data = await self._request("GET", "/health")
+            return status == 200 and data.get("status") == "ok"
         except OrchestratorError:
             return False
 
-    async def create_session(
+    async def health(self) -> HealthInfo:
+        """Get orchestrator health and resource usage."""
+        status, data = await self._request("GET", "/health")
+        if status != 200:
+            raise OrchestratorError(data.get("detail", "Health check failed"))
+        return HealthInfo(
+            status=data["status"],
+            containers=data.get("containers", {}),
+            memory=data.get("memory", {}),
+            cpus=data.get("cpus", {}),
+        )
+
+    # -------------------------------------------------------------------------
+    # Containers
+    # -------------------------------------------------------------------------
+
+    async def create_container(
         self,
         session_id: str,
         *,
-        image: str = "claude-cloud:latest",
-        memory_stack: str | None = None,
+        image: str | None = None,
+        volume: str | None = None,
         env: dict[str, str] | None = None,
-        git_repo_url: str | None = None,
-        ssh_private_key: str | None = None,
-        github_token: str | None = None,
-        github_token_write: str | None = None,
-        snapshot_path: str | None = None,
-        environment_volume: str | None = None,
+        memory: str | None = None,
+        cpus: int | None = None,
+        networks: list[str] | None = None,
     ) -> SessionInfo:
-        """Create a new Claude session container.
+        """Create a new session container.
 
-        Note: SYSTEM_ID and other custom env vars should be passed via the `env` dict.
-
-        Args:
-            environment_volume: If set, mounts this Docker volume at /home/claude
-                               instead of extracting snapshot. Mutually exclusive
-                               with snapshot_path.
+        Idempotent: returns existing container if already running.
+        Raises OrchestratorError on resource limit exceeded (409) or other errors.
         """
-        response = await self._call(
-            "create",
-            session_id=session_id,
-            image=image,
-            memory_stack=memory_stack or self.memory_stack,
-            env=env or {},
-            git_repo_url=git_repo_url,
-            ssh_private_key=ssh_private_key,
-            github_token=github_token,
-            github_token_write=github_token_write,
-            snapshot_path=snapshot_path,
-            environment_volume=environment_volume,
-        )
+        body: dict[str, Any] = {"id": session_id}
+        if image is not None:
+            body["image"] = image
+        if volume is not None:
+            body["volume"] = volume
+        if env:
+            body["env"] = env
+        if memory is not None:
+            body["memory"] = memory
+        if cpus is not None:
+            body["cpus"] = cpus
+        if networks:
+            body["networks"] = networks
 
-        if response.get("status") == "error":
-            raise OrchestratorError(response.get("error", "Unknown error"))
+        status, data = await self._request("POST", "/containers", body)
 
-        return SessionInfo(
-            session_id=response["session_id"],
-            container_id=response.get("container_id"),
-            container_name=response.get("container_name"),
-            status=response.get("status"),
-            network=response.get("network"),
-        )
-
-    async def stop_session(self, session_id: str) -> bool:
-        """Stop and remove a Claude session."""
-        response = await self._call("stop", session_id=session_id)
-        return response.get("status") == "stopped"
-
-    async def list_sessions(
-        self, memory_stack: Literal["dev", "prod"] | None = None
-    ) -> list[SessionInfo]:
-        """List all Claude sessions, optionally filtered by memory stack."""
-        response = await self._call("list")
-
-        sessions = []
-        for s in response.get("sessions", []):
-            # Filter by memory stack if specified
-            if memory_stack and s.get("memory_stack") != memory_stack:
-                continue
-            sessions.append(
-                SessionInfo(
-                    session_id=s["session_id"],
-                    container_id=s.get("container_id"),
-                    container_name=s.get("container_name"),
-                    status=s.get("status"),
-                    memory_stack=s.get("memory_stack"),
-                )
+        if status == 409:
+            raise OrchestratorError(
+                data.get("detail", "Resource limit exceeded")
             )
-        return sessions
-
-    async def get_session(self, session_id: str) -> SessionInfo | None:
-        """Get details of a specific session."""
-        response = await self._call("get", session_id=session_id)
-
-        if response.get("status") == "not_found":
-            return None
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Container creation failed ({status})")
+            )
 
         return SessionInfo(
-            session_id=response["session_id"],
-            container_id=response.get("container_id"),
-            container_name=response.get("container_name"),
-            status=response.get("status"),
-            memory_stack=response.get("memory_stack"),
+            session_id=data["id"],
+            container_name=data.get("container_name"),
+            status=data.get("status"),
+            image=data.get("image"),
+            memory=data.get("memory"),
+            cpus=data.get("cpus"),
+            relay=data.get("relay", {}),
         )
 
-    async def get_attach_info(self, session_id: str) -> dict[str, str] | None:
-        """Get commands needed to attach to a session."""
-        response = await self._call("attach_info", session_id=session_id)
+    async def list_containers(self) -> list[SessionInfo]:
+        """List all managed session containers."""
+        status, data = await self._request("GET", "/containers")
+        if status != 200:
+            raise OrchestratorError(
+                data.get("detail", "Failed to list containers")
+            )
 
-        if response.get("status") == "not_found":
+        return [
+            SessionInfo(
+                session_id=c["id"],
+                container_name=c.get("container_name"),
+                status=c.get("status"),
+                image=c.get("image"),
+                memory=c.get("memory"),
+                cpus=c.get("cpus"),
+                relay=c.get("relay", {}),
+            )
+            for c in data
+        ]
+
+    async def get_container(self, session_id: str) -> SessionInfo | None:
+        """Get details of a specific container. Returns None if not found."""
+        status, data = await self._request("GET", f"/containers/{session_id}")
+        if status == 404:
             return None
+        if status != 200:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to get container ({status})")
+            )
 
-        return {
-            "attach_cmd": response.get("attach_cmd", ""),
-            "exec_cmd": response.get("exec_cmd", ""),
-        }
+        return SessionInfo(
+            session_id=data["id"],
+            container_name=data.get("container_name"),
+            status=data.get("status"),
+            image=data.get("image"),
+            memory=data.get("memory"),
+            cpus=data.get("cpus"),
+            relay=data.get("relay", {}),
+        )
 
-    async def get_logs(self, session_id: str, tail: int = 100) -> dict[str, str] | None:
-        """Get logs for a session (from persistent file or container)."""
-        response = await self._call("logs", session_id=session_id, tail=tail)
+    async def delete_container(self, session_id: str) -> bool:
+        """Kill and remove a container. Returns True if removed, False if not found."""
+        status, data = await self._request(
+            "DELETE", f"/containers/{session_id}"
+        )
+        if status == 404:
+            return False
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to delete container ({status})")
+            )
+        return True
 
-        if response.get("status") == "not_found":
-            return None
-
-        return {
-            "session_id": response.get("session_id", session_id),
-            "source": response.get("source", "unknown"),
-            "logs": response.get("logs", ""),
-        }
+    async def cleanup_dead_containers(self) -> list[str]:
+        """Remove all exited/dead containers. Returns list of removed IDs."""
+        status, data = await self._request("POST", "/cleanup")
+        if status != 200:
+            raise OrchestratorError(
+                data.get("detail", "Cleanup failed")
+            )
+        return data.get("removed", [])
 
     # -------------------------------------------------------------------------
-    # Environment Volume Management
+    # Volumes
     # -------------------------------------------------------------------------
 
-    async def create_environment_volume(self, volume_name: str) -> dict[str, Any]:
-        """Create a Docker named volume for a persistent environment.
+    async def list_volumes(self) -> list[dict[str, str]]:
+        """List all Docker volumes."""
+        status, data = await self._request("GET", "/volumes")
+        if status != 200:
+            raise OrchestratorError(
+                data.get("detail", "Failed to list volumes")
+            )
+        return data
 
-        Returns:
-            Dict with status: "created" | "error"
-        """
-        return await self._call("create_environment_volume", volume_name=volume_name)
+    async def create_volume(self, name: str) -> dict[str, str]:
+        """Create a Docker volume."""
+        status, data = await self._request("POST", "/volumes", {"name": name})
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to create volume ({status})")
+            )
+        return data
 
-    async def delete_environment_volume(self, volume_name: str) -> dict[str, Any]:
-        """Delete an environment volume.
+    async def delete_volume(self, name: str) -> bool:
+        """Delete a Docker volume. Returns True if removed, False if not found."""
+        status, data = await self._request("DELETE", f"/volumes/{name}")
+        if status == 404:
+            return False
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to delete volume ({status})")
+            )
+        return True
 
-        Returns:
-            Dict with status: "deleted" | "not_found" | "error"
-        """
-        return await self._call("delete_environment_volume", volume_name=volume_name)
-
-    async def initialize_environment(
-        self, volume_name: str, snapshot_path: str
-    ) -> dict[str, Any]:
-        """Create a volume and initialize it from a snapshot.
-
-        Returns:
-            Dict with status: "initialized" | "error"
-        """
-        return await self._call(
-            "initialize_environment",
-            volume_name=volume_name,
-            snapshot_path=snapshot_path,
+    async def init_volume(
+        self, name: str, snapshot_path: str
+    ) -> dict[str, str]:
+        """Initialize a volume from a tar.gz snapshot."""
+        status, data = await self._request(
+            "POST",
+            f"/volumes/{name}/init",
+            {"snapshot_path": snapshot_path},
         )
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to initialize volume ({status})")
+            )
+        return data
 
-    async def reset_environment_volume(
-        self, volume_name: str, snapshot_path: str | None = None
-    ) -> dict[str, Any]:
-        """Reset an environment volume by deleting and recreating it.
-
-        If snapshot_path is provided, reinitializes from that snapshot.
-
-        Returns:
-            Dict with status: "created" | "initialized" | "error"
-        """
-        return await self._call(
-            "reset_environment_volume",
-            volume_name=volume_name,
-            snapshot_path=snapshot_path,
+    async def clone_volume(self, name: str, dest: str) -> dict[str, str]:
+        """Clone a volume by copying all data to a new destination volume."""
+        status, data = await self._request(
+            "POST",
+            f"/volumes/{name}/clone",
+            {"dest": dest},
         )
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to clone volume ({status})")
+            )
+        return data
 
-    async def clone_environment_volume(
-        self, source_volume: str, dest_volume: str
-    ) -> dict[str, Any]:
-        """Clone an environment volume by copying all data to a new volume.
-
-        Returns:
-            Dict with status: "cloned" | "error"
-        """
-        return await self._call(
-            "clone_environment_volume",
-            source_volume=source_volume,
-            dest_volume=dest_volume,
+    async def reset_volume(
+        self, name: str, snapshot_path: str | None = None
+    ) -> dict[str, str]:
+        """Delete and recreate a volume, optionally reinitializing from snapshot."""
+        body: dict[str, str] = {}
+        if snapshot_path:
+            body["snapshot_path"] = snapshot_path
+        status, data = await self._request(
+            "POST", f"/volumes/{name}/reset", body
         )
+        if status >= 400:
+            raise OrchestratorError(
+                data.get("detail", f"Failed to reset volume ({status})")
+            )
+        return data
+
+    # -------------------------------------------------------------------------
+    # Convenience: combined operations
+    # -------------------------------------------------------------------------
+
+    async def create_initialized_volume(
+        self, name: str, snapshot_path: str
+    ) -> dict[str, str]:
+        """Create a volume and initialize it from a snapshot (two-step)."""
+        await self.create_volume(name)
+        return await self.init_volume(name, snapshot_path)
+
+    # -------------------------------------------------------------------------
+    # Logs (read from host filesystem, not orchestrator API)
+    # -------------------------------------------------------------------------
+
+    async def get_logs(
+        self, session_id: str, tail: int = 100
+    ) -> dict[str, str] | None:
+        """Read session logs from the host log directory.
+
+        The orchestrator writes logs to LOG_DIR/{session_id}.log.
+        Returns None if no logs are available.
+        """
+        log_file = LOG_DIR / f"{session_id}.log"
+        if not log_file.exists():
+            return None
+
+        try:
+            content = await asyncio.to_thread(log_file.read_text)
+            if tail > 0:
+                lines = content.splitlines()
+                content = "\n".join(lines[-tail:])
+            return {
+                "session_id": session_id,
+                "source": "file",
+                "logs": content,
+            }
+        except OSError as e:
+            logger.warning(f"Failed to read log file {log_file}: {e}")
+            return None
 
 
 # Singleton client instance

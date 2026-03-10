@@ -2,11 +2,11 @@
 
 Spawn, list, and kill Claude Code containers.
 
-Sessions are managed by the Claude Session Orchestrator, a systemd service
-that handles container lifecycle and networking. Communication is via Unix socket.
+Sessions are managed by the Claude Session Orchestrator, which provides a
+REST API over Unix socket for container and volume lifecycle management.
 
 Session IDs are prefixed with user_id to enable authorization filtering:
-  session_id = f"u{user_id}-{random_hex}"
+  session_id = f"u{user_id}-{source}-{random_hex}"
 """
 
 import asyncio
@@ -14,7 +14,6 @@ import logging
 import re
 import secrets
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -46,9 +45,6 @@ from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, Sch
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.api.claude_environments import mark_environment_used
 from memory.common.db.models.secrets import extract as extract_secret
-
-# Log directory on host where orchestrator writes session logs
-LOG_DIR = Path("/var/log/claude-sessions")
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +169,6 @@ class SessionInfo(BaseModel):
     """Info about a running Claude session."""
 
     session_id: str
-    container_id: str | None = None
     container_name: str | None = None
     status: str | None = None
     environment_id: int | None = None  # Extracted from session_id for filtering
@@ -184,17 +179,26 @@ class OrchestratorStatus(BaseModel):
 
     available: bool
     socket_path: str | None = None
+    containers: dict | None = None
+    memory: dict | None = None
+    cpus: dict | None = None
 
 
 @router.get("/status")
 async def orchestrator_status() -> OrchestratorStatus:
-    """Check orchestrator availability."""
+    """Check orchestrator availability and resource usage."""
     client = get_orchestrator_client()
-    available = await client.ping()
-    return OrchestratorStatus(
-        available=available,
-        socket_path=client.socket_path if available else None,
-    )
+    try:
+        health = await client.health()
+        return OrchestratorStatus(
+            available=True,
+            socket_path=client.socket_path,
+            containers=health.containers,
+            memory=health.memory,
+            cpus=health.cpus,
+        )
+    except OrchestratorError:
+        return OrchestratorStatus(available=False)
 
 
 @router.post("/spawn")
@@ -207,6 +211,11 @@ async def spawn_session(
 
     Must provide either snapshot_id OR environment_id (mutually exclusive).
 
+    For snapshot-based sessions, creates a temporary volume, initializes it
+    from the snapshot, then creates the container with that volume.
+
+    For environment-based sessions, uses the existing persistent volume.
+
     Returns:
         SessionInfo with session_id that can be used to find/kill the container.
         The container_name will be `claude-{session_id}`.
@@ -214,13 +223,12 @@ async def spawn_session(
     # Note: mutual exclusivity of snapshot_id/environment_id is validated by
     # SpawnRequest.check_source_mutual_exclusivity (returns 422 on violation)
 
-    # Variables for orchestrator call
     host_snapshot_path: str | None = None
-    environment_volume: str | None = None
+    volume_name: str | None = None
     environment: ClaudeEnvironment | None = None
 
     if request.snapshot_id:
-        # Static snapshot mode: extract fresh each time
+        # Static snapshot mode: extract fresh each time into a new volume
         snapshot = (
             db.query(ClaudeConfigSnapshot)
             .filter(
@@ -237,7 +245,6 @@ async def spawn_session(
             raise HTTPException(status_code=500, detail="Snapshot file not found")
 
         # Orchestrator runs on host, needs host path (not container path)
-        # Container: /app/memory_files/... -> Host: <HOST_STORAGE_DIR>/...
         relative_path = snapshot_path.relative_to(settings.FILE_STORAGE_DIR)
         host_snapshot_path = str(settings.HOST_STORAGE_DIR / relative_path)
 
@@ -254,7 +261,7 @@ async def spawn_session(
         if not environment:
             raise HTTPException(status_code=404, detail="Environment not found")
 
-        environment_volume = environment.volume_name
+        volume_name = environment.volume_name
 
     session_id = make_session_id(
         user.id,
@@ -266,7 +273,7 @@ async def spawn_session(
     # Use Happy image and executable if requested
     if request.use_happy:
         image = "claude-cloud-happy:latest"
-        env = {"CLAUDE_EXECUTABLE": "happy claude --happy-starting-mode remote"}
+        env: dict[str, str] = {"CLAUDE_EXECUTABLE": "happy claude --happy-starting-mode remote"}
     else:
         image = "claude-cloud:latest"
         env = {}
@@ -284,25 +291,21 @@ async def spawn_session(
         env["CLAUDE_INITIAL_PROMPT"] = request.initial_prompt
 
     # Set run ID for branch naming (used by entrypoint to create claude/<run_id> branch)
-    # Default to session_id if not provided
     env["CLAUDE_RUN_ID"] = request.run_id or session_id
 
     # Add custom environment variables (with validation)
     if request.custom_env:
         for key, value in request.custom_env.items():
-            # Validate key format (standard env var naming)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid env var name '{key}': must start with letter/underscore, contain only alphanumeric/underscore",
                 )
-            # Check for reserved names
             if key in RESERVED_ENV_VARS:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot override reserved env var '{key}'",
                 )
-            # Validate value (no null bytes)
             if "\x00" in value:
                 raise HTTPException(
                     status_code=400,
@@ -310,27 +313,31 @@ async def spawn_session(
                 )
             env[key] = value
 
-    # Resolve github tokens: either literal PATs or secret names
-    github_token = None
+    # Inject secrets as env vars (previously handled by old orchestrator)
+    if user.ssh_private_key:
+        env["SSH_PRIVATE_KEY"] = user.ssh_private_key
     if request.github_token:
-        github_token = extract_secret(db, user.id, request.github_token)
-
-    github_token_write = None
+        env["GITHUB_TOKEN"] = extract_secret(db, user.id, request.github_token)
     if request.github_token_write:
-        github_token_write = extract_secret(db, user.id, request.github_token_write)
+        env["GITHUB_TOKEN_WRITE"] = extract_secret(db, user.id, request.github_token_write)
+    if request.repo_url:
+        env["GIT_REPO_URL"] = request.repo_url
+
+    # Determine Docker network for communication with Memory API
+    networks = [f"memory-{settings.MEMORY_STACK}"]
 
     try:
-        result = await client.create_session(
-            session_id=session_id,
-            snapshot_path=host_snapshot_path,
-            environment_volume=environment_volume,
-            memory_stack=settings.MEMORY_STACK,
-            ssh_private_key=user.ssh_private_key,
-            github_token=github_token,
-            github_token_write=github_token_write,
-            git_repo_url=request.repo_url,
+        # For snapshot-based sessions, create a temporary volume and init from snapshot
+        if host_snapshot_path:
+            volume_name = f"claude-snap-{session_id}"
+            await client.create_initialized_volume(volume_name, host_snapshot_path)
+
+        result = await client.create_container(
+            session_id,
             image=image,
+            volume=volume_name,
             env=env,
+            networks=networks,
         )
     except OrchestratorError as e:
         logger.error(f"Failed to create session: {e}")
@@ -342,7 +349,6 @@ async def spawn_session(
 
     return SessionInfo(
         session_id=result.session_id,
-        container_id=result.container_id,
         container_name=result.container_name,
         status=result.status,
         environment_id=request.environment_id,
@@ -458,22 +464,21 @@ async def list_sessions(
     client = get_orchestrator_client()
 
     try:
-        sessions = await client.list_sessions()
+        containers = await client.list_containers()
     except OrchestratorError as e:
         logger.error(f"Failed to list sessions: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
-    # Filter to only sessions owned by this user, extract environment_id from session_id
+    # Filter to only sessions owned by this user
     return [
         SessionInfo(
-            session_id=s.session_id,
-            container_id=s.container_id,
-            container_name=s.container_name,
-            status=s.status,
-            environment_id=get_environment_id_from_session(s.session_id),
+            session_id=c.session_id,
+            container_name=c.container_name,
+            status=c.status,
+            environment_id=get_environment_id_from_session(c.session_id),
         )
-        for s in sessions
-        if user_owns_session(user, s.session_id)
+        for c in containers
+        if user_owns_session(user, c.session_id)
     ]
 
 
@@ -483,27 +488,25 @@ async def get_session_info(
     user: User = Depends(get_current_user),
 ) -> SessionInfo:
     """Get details of a specific Claude session owned by the current user."""
-    # Authorization: verify session belongs to user
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
     client = get_orchestrator_client()
 
     try:
-        session = await client.get_session(session_id)
+        container = await client.get_container(session_id)
     except OrchestratorError as e:
         logger.error(f"Failed to get session: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
-    if session is None:
+    if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
     return SessionInfo(
-        session_id=session.session_id,
-        container_id=session.container_id,
-        container_name=session.container_name,
-        status=session.status,
-        environment_id=get_environment_id_from_session(session.session_id),
+        session_id=container.session_id,
+        container_name=container.container_name,
+        status=container.status,
+        environment_id=get_environment_id_from_session(container.session_id),
     )
 
 
@@ -513,14 +516,13 @@ async def kill_session(
     user: User = Depends(get_current_user),
 ) -> dict:
     """Kill a Claude session owned by the current user."""
-    # Authorization: verify session belongs to user
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
     client = get_orchestrator_client()
 
     try:
-        success = await client.stop_session(session_id)
+        success = await client.delete_container(session_id)
     except OrchestratorError as e:
         logger.error(f"Failed to stop session: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
@@ -542,22 +544,26 @@ async def get_attach_commands(
     - attach_cmd: docker attach (connects to main process)
     - exec_cmd: docker exec -it bash (new shell in container)
     """
-    # Authorization: verify session belongs to user
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Verify the container exists
     client = get_orchestrator_client()
-
     try:
-        info = await client.get_attach_info(session_id)
+        container = await client.get_container(session_id)
     except OrchestratorError as e:
-        logger.error(f"Failed to get attach info: {e}")
+        logger.error(f"Failed to get session for attach: {e}")
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
-    if info is None:
+    if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return info
+    # Construct attach commands from the container name
+    container_name = container.container_name or f"claude-{session_id}"
+    return {
+        "attach_cmd": f"docker attach {container_name}",
+        "exec_cmd": f"docker exec -it {container_name} bash",
+    }
 
 
 @router.get("/{session_id}/logs")
@@ -568,7 +574,8 @@ async def get_session_logs(
 ) -> dict:
     """Get logs for a Claude session.
 
-    Logs are persisted even after container exit, enabling debugging of
+    Reads logs from the host log directory where the orchestrator persists them.
+    Logs are available even after container exit, enabling debugging of
     containers that crash immediately.
 
     Args:
@@ -577,20 +584,14 @@ async def get_session_logs(
 
     Returns:
         - session_id: The session ID
-        - source: "file" (persisted) or "container" (live)
+        - source: "file"
         - logs: The log content
     """
-    # Authorization: verify session belongs to user
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
     client = get_orchestrator_client()
-
-    try:
-        result = await client.get_logs(session_id, tail=tail)
-    except OrchestratorError as e:
-        logger.error(f"Failed to get logs: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
+    result = await client.get_logs(session_id, tail=tail)
 
     if result is None:
         raise HTTPException(status_code=404, detail="No logs available")

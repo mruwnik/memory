@@ -168,33 +168,14 @@ async def create_environment(
     client = get_orchestrator_client()
     try:
         if source_env:
-            # Clone volume from another environment
-            response = await client.clone_environment_volume(
-                source_volume=source_env.volume_name,
-                dest_volume=env.volume_name,
-            )
+            # Clone source volume to the new environment's volume
+            await client.clone_volume(source_env.volume_name, env.volume_name)
         elif snapshot_path:
-            # Initialize volume from snapshot
-            response = await client.initialize_environment(
-                volume_name=env.volume_name,
-                snapshot_path=snapshot_path,
-            )
+            # Create volume and initialize from snapshot
+            await client.create_initialized_volume(env.volume_name, snapshot_path)
         else:
             # Create empty volume
-            response = await client.create_environment_volume(
-                volume_name=env.volume_name,
-            )
-
-        if response.get("status") == "error":
-            # Note: If the Docker volume was partially created before the error,
-            # it may be orphaned. The orchestrator's initialize_environment cleans
-            # up on failure, but network issues could still leave orphaned volumes.
-            # These can be cleaned up with: docker volume ls --filter label=managed-by=claude-orchestrator
-            db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to create volume: {response.get('error')}",
-            )
+            await client.create_volume(env.volume_name)
     except OrchestratorError as e:
         db.rollback()
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
@@ -261,12 +242,9 @@ async def delete_environment(
     # Delete the Docker volume
     client = get_orchestrator_client()
     try:
-        response = await client.delete_environment_volume(
-            volume_name=env.volume_name,
-        )
-        # Log but don't fail if volume already gone
-        if response.get("status") == "error":
-            logger.warning(f"Failed to delete volume {env.volume_name}: {response}")
+        deleted = await client.delete_volume(env.volume_name)
+        if not deleted:
+            logger.warning(f"Volume {env.volume_name} not found (may already be deleted)")
     except OrchestratorError as e:
         logger.warning(f"Orchestrator error deleting volume: {e}")
 
@@ -318,18 +296,10 @@ async def reset_environment(
     else:
         env.initialized_from_snapshot_id = None
 
-    # Reset the volume via orchestrator
+    # Reset the volume via orchestrator (delete + recreate + optionally init)
     client = get_orchestrator_client()
     try:
-        response = await client.reset_environment_volume(
-            volume_name=env.volume_name,
-            snapshot_path=snapshot_path,
-        )
-        if response.get("status") == "error":
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to reset volume: {response.get('error')}",
-            )
+        await client.reset_volume(env.volume_name, snapshot_path=snapshot_path)
     except OrchestratorError as e:
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
