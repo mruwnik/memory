@@ -278,6 +278,7 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
     environment:
       <<: *worker-env
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
