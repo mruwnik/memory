@@ -234,7 +234,7 @@ services:
     volumes:
       - ./memory_files:/app/memory_files:rw
       # Socket for Claude session orchestrator
-      - /var/run/claude-sessions:/var/run/claude-sessions:ro
+      - /var/run/claude-sessions:/var/run/claude-sessions:ro,z
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s
