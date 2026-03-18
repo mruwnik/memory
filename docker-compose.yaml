@@ -68,7 +68,6 @@ x-worker-base: &worker-base
   tmpfs:
     - /tmp
     - /var/tmp
-    - /home/kb/.ssh:uid=1000,gid=1000,mode=700
   cap_drop: [ALL]
   volumes:
     - ./memory_files:/app/memory_files:rw

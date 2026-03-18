@@ -4,18 +4,20 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
+    bubblewrap \
+    ca-certificates \
     curl \
     git \
     jq \
     openssl \
+    openssh-client \
+    openjdk-21-jdk-headless \
     python3 \
     python3-pip \
-    openssh-client \
-    ca-certificates \
-    tmux \
-    openjdk-21-jdk-headless \
     rlwrap \
+    socat \
     sqlite3 \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20.x
@@ -23,6 +25,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/bin/python
+
+# Install Claude Code sandbox runtime (provides seccomp BPF filter)
+RUN npm install -g @anthropic-ai/sandbox-runtime@0.0.42
 
 # Install Clojure (needed to build differ)
 RUN curl -fsSL https://download.clojure.org/install/linux-install-1.11.1.1435.sh | bash

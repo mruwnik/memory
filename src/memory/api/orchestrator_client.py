@@ -82,6 +82,7 @@ async def http_request(
     except OSError as e:
         raise OrchestratorError(f"Failed to connect to orchestrator: {e}")
 
+    body_data = b""
     try:
         body_bytes = json.dumps(body).encode() if body else b""
 
@@ -133,10 +134,16 @@ async def http_request(
         return status_code, parsed_body
 
     except json.JSONDecodeError as e:
+        raw = body_data[:500].decode("utf-8", errors="replace") if body_data else "(empty)"
+        logger.error(
+            "Orchestrator %s %s returned non-JSON body: %s",
+            method, path, raw,
+        )
         raise OrchestratorError(f"Invalid JSON response: {e}")
     except OrchestratorError:
         raise
     except Exception as e:
+        logger.error("Orchestrator %s %s failed: %s", method, path, e)
         raise OrchestratorError(f"HTTP request failed: {e}")
     finally:
         writer.close()
@@ -157,9 +164,15 @@ class OrchestratorClient:
     ) -> tuple[int, Any]:
         """Make an HTTP request, raising OrchestratorError on 5xx."""
         status, data = await http_request(self.socket_path, method, path, body)
+        log_detail = data.get("detail", data) if isinstance(data, dict) else data
+        if status == 404:
+            logger.debug("Orchestrator %s %s -> 404: %s", method, path, log_detail)
+        elif 400 <= status < 500:
+            logger.warning("Orchestrator %s %s -> %s: %s", method, path, status, log_detail)
         if status >= 500:
-            detail = data.get("detail", f"Server error {status}") if isinstance(data, dict) else f"Server error {status}"
-            raise OrchestratorError(detail)
+            error_detail = data.get("detail", f"Server error {status}") if isinstance(data, dict) else f"Server error {status}"
+            logger.error("Orchestrator %s %s -> %s: %s", method, path, status, error_detail)
+            raise OrchestratorError(error_detail)
         return status, data
 
     # -------------------------------------------------------------------------

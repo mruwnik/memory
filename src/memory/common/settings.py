@@ -1,6 +1,8 @@
 import logging
 import os
 import pathlib
+from urllib.parse import quote
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,7 +34,7 @@ DB_NAME = os.getenv("DB_NAME", "kb")
 def make_db_url(
     user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT, db=DB_NAME
 ):
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+    return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}/{db}"
 
 
 DB_URL = os.getenv("DATABASE_URL", make_db_url())
@@ -43,7 +45,7 @@ REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_DB = os.getenv("REDIS_DB", "0")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None  # Treat empty string as None
 if REDIS_PASSWORD:
-    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+    REDIS_URL = f"redis://:{quote(REDIS_PASSWORD, safe='')}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 

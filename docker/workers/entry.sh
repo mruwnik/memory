@@ -2,15 +2,32 @@
 set -euo pipefail
 
 # SSH Setup for git operations
-if [ -f /run/secrets/ssh_private_key ]; then
+if [ -r /run/secrets/ssh_private_key ]; then
     echo "Setting up SSH keys for git operations..."
-    mkdir -p ~/.ssh
-    cp /run/secrets/ssh_private_key ~/.ssh/id_rsa
-    cp /run/secrets/ssh_public_key ~/.ssh/id_rsa.pub
-    cp /run/secrets/ssh_known_hosts ~/.ssh/known_hosts
-    chmod 700 ~/.ssh
-    chmod 600 ~/.ssh/id_rsa
-    chmod 644 ~/.ssh/id_rsa.pub ~/.ssh/known_hosts
+    perms=$(stat -c %a /run/secrets/ssh_private_key 2>/dev/null || stat -f %Lp /run/secrets/ssh_private_key)
+    if [ "$perms" = "600" ] || [ "$perms" = "400" ]; then
+        # Podman bind-mount — use key directly
+        SSH_KEY=/run/secrets/ssh_private_key
+        if [ -r /run/secrets/ssh_known_hosts ]; then
+            SSH_HOSTS=/run/secrets/ssh_known_hosts
+        fi
+    else
+        # Docker 0444 secrets — copy to /tmp with correct perms
+        SSH_KEY=$(mktemp /tmp/ssh_key.XXXXXX)
+        cp /run/secrets/ssh_private_key "$SSH_KEY"
+        chmod 600 "$SSH_KEY"
+        if [ -r /run/secrets/ssh_known_hosts ]; then
+            SSH_HOSTS=$(mktemp /tmp/ssh_hosts.XXXXXX)
+            cp /run/secrets/ssh_known_hosts "$SSH_HOSTS"
+        fi
+        trap 'rm -f "$SSH_KEY" "${SSH_HOSTS:-}" 2>/dev/null' EXIT
+    fi
+    if [ -n "${SSH_HOSTS:-}" ]; then
+        export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o UserKnownHostsFile=$SSH_HOSTS -o StrictHostKeyChecking=yes"
+    else
+        echo "Warning: ssh_known_hosts not found, using StrictHostKeyChecking=accept-new"
+        export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new"
+    fi
     echo "SSH keys configured successfully"
 fi
 

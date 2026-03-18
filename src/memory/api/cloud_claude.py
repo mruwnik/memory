@@ -324,7 +324,7 @@ async def spawn_session(
         env["GIT_REPO_URL"] = request.repo_url
 
     # Determine Docker network for communication with Memory API
-    networks = [f"memory-{settings.MEMORY_STACK}"]
+    networks = [f"memory-api-{settings.MEMORY_STACK}"]
 
     try:
         # For snapshot-based sessions, create a temporary volume and init from snapshot
