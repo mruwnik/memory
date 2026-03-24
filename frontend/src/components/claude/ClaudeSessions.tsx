@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, getLogStreamUrl } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import XtermTerminal from './XtermTerminal'
 
 const COMMON_TOOLS = [
@@ -865,6 +865,27 @@ const ClaudeSessions = () => {
                   />
                 </div>
               </div>
+
+              {/* Differ code review panel */}
+              {selectedSession?.differ && (
+                <details className="mt-4 bg-white rounded-lg border border-slate-200">
+                  <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    Code Review (Differ)
+                  </summary>
+                  <div className="border-t border-slate-200">
+                    <iframe
+                      src={getDifferUrl(selectedSession.session_id)}
+                      className="w-full border-0 rounded-b-lg"
+                      style={{ height: '70vh', minHeight: '500px' }}
+                      title="Differ Code Review"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    />
+                  </div>
+                </details>
+              )}
             </div>
           ) : (
             // Empty state

@@ -43,6 +43,7 @@ class SessionInfo:
     memory: str | None = None
     cpus: int | None = None
     relay: dict[str, Any] = field(default_factory=dict)
+    differ: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -252,6 +253,7 @@ class OrchestratorClient:
             memory=data.get("memory"),
             cpus=data.get("cpus"),
             relay=data.get("relay", {}),
+            differ=data.get("differ", {}),
         )
 
     async def list_containers(self) -> list[SessionInfo]:
@@ -271,6 +273,7 @@ class OrchestratorClient:
                 memory=c.get("memory"),
                 cpus=c.get("cpus"),
                 relay=c.get("relay", {}),
+                differ=c.get("differ", {}),
             )
             for c in data
         ]
@@ -293,6 +296,7 @@ class OrchestratorClient:
             memory=data.get("memory"),
             cpus=data.get("cpus"),
             relay=data.get("relay", {}),
+            differ=data.get("differ", {}),
         )
 
     async def delete_container(self, session_id: str) -> bool:

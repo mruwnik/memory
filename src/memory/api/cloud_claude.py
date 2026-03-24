@@ -14,15 +14,21 @@ import logging
 import re
 import secrets
 from datetime import datetime
+from typing import Any
+from urllib.parse import urlencode
 
+import httpx
+import websockets
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Request,
     WebSocket,
     WebSocketDisconnect,
     Query,
 )
+from fastapi.responses import StreamingResponse
 from croniter import croniter
 from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session as DBSession
@@ -30,6 +36,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.api.auth import get_current_user, get_user_from_token, require_scope
 from memory.common.scopes import SCOPE_SCHEDULE_WRITE
 from memory.api.orchestrator_client import (
+    ORCHESTRATOR_SOCKET,
     OrchestratorError,
     get_orchestrator_client,
 )
@@ -173,6 +180,7 @@ class SessionInfo(BaseModel):
     container_name: str | None = None
     status: str | None = None
     environment_id: int | None = None  # Extracted from session_id for filtering
+    differ: dict[str, Any] | None = None  # Differ server connection info (host, port)
 
 
 class OrchestratorStatus(BaseModel):
@@ -351,6 +359,7 @@ async def spawn_session(
         container_name=result.container_name,
         status=result.status,
         environment_id=request.environment_id,
+        differ=result.differ or None,
     )
 
 
@@ -475,6 +484,7 @@ async def list_sessions(
             container_name=c.container_name,
             status=c.status,
             environment_id=get_environment_id_from_session(c.session_id),
+            differ=c.differ or None,
         )
         for c in containers
         if user_owns_session(user, c.session_id)
@@ -506,6 +516,7 @@ async def get_session_info(
         container_name=container.container_name,
         status=container.status,
         environment_id=get_environment_id_from_session(container.session_id),
+        differ=container.differ or None,
     )
 
 
@@ -596,6 +607,255 @@ async def get_session_logs(
         raise HTTPException(status_code=404, detail="No logs available")
 
     return result
+
+
+# --- Differ proxy ---
+
+# Headers that should not be forwarded between client and upstream
+HOP_BY_HOP_HEADERS = frozenset({
+    "host", "connection", "transfer-encoding", "keep-alive",
+    "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
+})
+
+
+def rewrite_html_for_proxy(html: bytes, proxy_prefix: str) -> bytes:
+    """Rewrite HTML so the SPA resolves all URLs through the proxy.
+
+    1. Convert absolute paths in HTML attributes to relative so <base> applies.
+    2. Inject a <base href> tag so relative URLs resolve through the proxy.
+    3. Inject a JS shim that patches fetch() and EventSource to rewrite
+       absolute paths through the proxy — this covers runtime API calls
+       that <base href> can't reach.
+    """
+    base_href = proxy_prefix.rstrip("/") + "/"
+
+    # Convert absolute paths to relative FIRST (before injecting base tag,
+    # otherwise the regex would strip the / from the base tag's href too):
+    #   href="/css/style.css" → href="css/style.css"
+    #   src="/js/main.js"     → src="js/main.js"
+    html = re.sub(rb'((?:href|src|action)=")/', rb'\1', html, flags=re.IGNORECASE)
+
+    # Build the shim + base tag to inject after <head>
+    shim = f"""\
+<base href="{base_href}">
+<script>
+(function() {{
+  var pfx = "{proxy_prefix}";
+  var _fetch = window.fetch;
+  window.fetch = function(url, opts) {{
+    if (typeof url === "string" && url.startsWith("/")) url = pfx + url;
+    return _fetch.call(this, url, opts);
+  }};
+  var _ES = window.EventSource;
+  window.EventSource = function(url, opts) {{
+    if (typeof url === "string" && url.startsWith("/")) url = pfx + url;
+    return new _ES(url, opts);
+  }};
+  window.EventSource.prototype = _ES.prototype;
+  window.EventSource.CONNECTING = _ES.CONNECTING;
+  window.EventSource.OPEN = _ES.OPEN;
+  window.EventSource.CLOSED = _ES.CLOSED;
+}})();
+</script>""".encode()
+
+    for marker in [b"<head>", b"<HEAD>"]:
+        if marker in html:
+            html = html.replace(marker, marker + shim, 1)
+            break
+    else:
+        html, _ = re.subn(
+            rb"(<head[^>]*>)", rb"\1" + shim, html, count=1, flags=re.IGNORECASE,
+        )
+
+    return html
+
+
+@router.api_route(
+    "/{session_id}/differ/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def proxy_differ(
+    session_id: str,
+    path: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """Reverse-proxy HTTP requests to the differ server inside a container.
+
+    Streams responses so SSE (text/event-stream) works transparently.
+    Injects a <base href> tag into HTML responses so the differ SPA
+    resolves relative URLs through this proxy.
+    """
+    if not is_valid_session_id(session_id):
+        raise HTTPException(status_code=404, detail="Invalid session ID format")
+    if not user_owns_session(user, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{path}"
+    query_string = str(request.url.query)
+    if query_string:
+        upstream_url += f"?{query_string}"
+
+    # Forward headers, stripping hop-by-hop
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS
+    }
+
+    body = await request.body()
+
+    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    client = httpx.AsyncClient(transport=transport, timeout=120.0)
+
+    try:
+        upstream_resp = await client.send(
+            client.build_request(
+                method=request.method,
+                url=upstream_url,
+                headers=headers,
+                content=body if body else None,
+            ),
+            stream=True,
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Cannot reach differ server")
+    except Exception:
+        await client.aclose()
+        raise
+
+    content_type = upstream_resp.headers.get("content-type", "")
+    is_streaming = "text/event-stream" in content_type
+
+    # Filter response headers
+    resp_headers = {
+        k: v for k, v in upstream_resp.headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS
+        and k.lower() != "content-encoding"
+        and k.lower() != "content-length"
+    }
+
+    if is_streaming:
+        # SSE: stream chunks directly so events arrive in real-time.
+        # The client and response are closed in the generator's finally block,
+        # since they must outlive this function for streaming to work.
+        async def stream_sse():
+            try:
+                async for chunk in upstream_resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream_resp.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            stream_sse(),
+            status_code=upstream_resp.status_code,
+            headers=resp_headers,
+            media_type="text/event-stream",
+        )
+
+    # Non-streaming: buffer the response so we can modify HTML
+    try:
+        content = await upstream_resp.aread()
+    finally:
+        await upstream_resp.aclose()
+        await client.aclose()
+
+    # Rewrite HTML so the differ SPA resolves URLs through this proxy path
+    if "text/html" in content_type:
+        proxy_prefix = f"/claude/{session_id}/differ"
+        content = rewrite_html_for_proxy(content, proxy_prefix)
+
+    return StreamingResponse(
+        iter([content]),
+        status_code=upstream_resp.status_code,
+        headers=resp_headers,
+        media_type=content_type.split(";")[0] if content_type else None,
+    )
+
+
+@router.websocket("/{session_id}/differ/{path:path}")
+async def proxy_differ_ws(
+    websocket: WebSocket,
+    session_id: str,
+    path: str,
+    token: str = Query(default=""),
+):
+    """WebSocket proxy to the differ server inside a container.
+
+    Relays frames bidirectionally between the client and the differ server
+    through the orchestrator's WebSocket proxy.
+    """
+    if not is_valid_session_id(session_id):
+        await websocket.close(code=4004, reason="Invalid session ID format")
+        return
+
+    # Authenticate
+    with make_session() as db:
+        user = get_user_from_token(token, db) if token else None
+        if not user or not user_owns_session(user, session_id):
+            await websocket.close(code=4004, reason="Session not found")
+            return
+
+    await websocket.accept()
+
+    # Connect to orchestrator's WebSocket proxy via Unix socket
+    orch_url = f"ws://orchestrator/containers/{session_id}/differ/{path}"
+    # Forward query params (excluding the auth token) to upstream
+    qs_parts = [
+        (k, v) for k, v in websocket.query_params.multi_items()
+        if k != "token"
+    ]
+    if qs_parts:
+        orch_url += "?" + urlencode(qs_parts)
+    try:
+        async with websockets.unix_connect(
+            ORCHESTRATOR_SOCKET, orch_url
+        ) as upstream:
+
+            async def client_to_upstream():
+                try:
+                    while True:
+                        msg = await websocket.receive()
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                        if "text" in msg:
+                            await upstream.send(msg["text"])
+                        elif "bytes" in msg:
+                            await upstream.send(msg["bytes"])
+                except WebSocketDisconnect:
+                    pass
+
+            async def upstream_to_client():
+                try:
+                    async for message in upstream:
+                        if isinstance(message, str):
+                            await websocket.send_text(message)
+                        else:
+                            await websocket.send_bytes(message)
+                except Exception:
+                    pass
+
+            _, pending = await asyncio.wait(
+                [
+                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(upstream_to_client()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+    except Exception as e:
+        logger.warning(f"Differ WebSocket proxy error for {session_id}: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # --- WebSocket log streaming helpers ---

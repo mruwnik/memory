@@ -19,6 +19,12 @@ const getAuthToken = (): string | null => {
 // Note: Token in query param is necessary because WebSocket doesn't support
 // custom headers during handshake. The token may be logged in browser history
 // and server logs. Session tokens have limited lifetime (SESSION_VALID_FOR days).
+// Build URL for the differ proxy (HTTP)
+export const getDifferUrl = (sessionId: string, path: string = ''): string => {
+  const baseUrl = SERVER_URL || window.location.origin
+  return `${baseUrl}/claude/${sessionId}/differ/${path}`
+}
+
 export const getLogStreamUrl = (sessionId: string): string | null => {
   const token = getAuthToken()
   if (!token) return null
@@ -29,12 +35,18 @@ export const getLogStreamUrl = (sessionId: string): string | null => {
   return `${wsUrl}/claude/${sessionId}/logs/stream?token=${encodeURIComponent(token)}`
 }
 
+export interface DifferInfo {
+  host: string
+  port: number
+}
+
 export interface ClaudeSession {
   session_id: string
   container_id: string | null
   container_name: string | null
   status: string | null
   environment_id: number | null
+  differ: DifferInfo | null
 }
 
 export interface Snapshot {
