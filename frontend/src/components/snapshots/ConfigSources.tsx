@@ -9,7 +9,6 @@ interface SnapshotSummary {
   hooks: string[]
   commands: string[]
   mcp_servers: string[]
-  has_happy?: boolean
 }
 
 type Tab = 'environments' | 'snapshots'
@@ -352,11 +351,6 @@ const ConfigSources = () => {
                                 }`}
                               >
                                 {snapshot.subscription_type}
-                              </span>
-                            )}
-                            {summary?.has_happy && (
-                              <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
-                                Happy
                               </span>
                             )}
                             <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">

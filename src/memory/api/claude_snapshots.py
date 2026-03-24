@@ -144,15 +144,6 @@ def extract_mcp_servers_from_tar(tar: tarfile.TarFile) -> list[str]:
         return []
 
 
-def extract_happy_config_from_tar(tar: tarfile.TarFile) -> bool:
-    """Check if tarball contains Happy config (access.key)."""
-    try:
-        member = tar.getmember(".happy/access.key")
-        return is_safe_tar_member(member)
-    except KeyError:
-        return False
-
-
 def extract_credentials_from_tar(tar: tarfile.TarFile) -> dict[str, str | None]:
     """Extract Claude account info from .claude/.credentials.json in tarball."""
     info: dict[str, str | None] = {
@@ -195,7 +186,6 @@ def extract_snapshot_summary(content: bytes) -> dict[str, Any]:
         "hooks": [],
         "commands": [],
         "mcp_servers": [],
-        "has_happy": False,
     }
 
     try:
@@ -203,7 +193,6 @@ def extract_snapshot_summary(content: bytes) -> dict[str, Any]:
             folders = extract_folders_from_tar(tar)
             summary.update(folders)
             summary["mcp_servers"] = extract_mcp_servers_from_tar(tar)
-            summary["has_happy"] = extract_happy_config_from_tar(tar)
     except tarfile.TarError:
         pass
 

@@ -75,7 +75,6 @@ const ClaudeSessions = () => {
   type ConfigSelection = { type: 'snapshot'; id: number } | { type: 'environment'; id: number } | null
   const [selectedConfig, setSelectedConfig] = useState<ConfigSelection>(null)
   const [selectedRepoUrl, setSelectedRepoUrl] = useState<string>('')
-  const [useHappy, setUseHappy] = useState<boolean>(false)
   const [enablePlaywright, setEnablePlaywright] = useState<boolean>(false)
   const [allowedTools, setAllowedTools] = useState<string[]>(() => {
     try {
@@ -304,7 +303,6 @@ const ClaudeSessions = () => {
       repo_url: selectedRepoUrl || undefined,
       github_token: githubToken || undefined,
       github_token_write: githubTokenWrite || undefined,
-      use_happy: useHappy || undefined,
       enable_playwright: enablePlaywright || undefined,
       allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
       custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
@@ -326,7 +324,6 @@ const ClaudeSessions = () => {
       setShowNewSession(false)
       // Reset form
       setSelectedRepoUrl('')
-      setUseHappy(false)
       setInitialPrompt('')
       setRunId('')
     } catch (e) {
@@ -374,22 +371,6 @@ const ClaudeSessions = () => {
   const getStatusColor = (status: string | null) => {
     if (!status) return 'bg-slate-100 text-slate-600'
     return STATUS_COLORS[status.toLowerCase()] || 'bg-slate-100 text-slate-600'
-  }
-
-  // Check if Happy option should be shown
-  // - Environments: always show (user is responsible for ensuring Happy works)
-  // - Snapshots: only show if has_happy detected in snapshot summary
-  const selectedConfigHasHappy = (): boolean => {
-    if (!selectedConfig) return false
-    if (selectedConfig.type === 'environment') return true
-    const snapshot = snapshots.find((s) => s.id === selectedConfig.id)
-    if (!snapshot?.summary) return false
-    try {
-      const summary = JSON.parse(snapshot.summary)
-      return summary.has_happy === true
-    } catch {
-      return false
-    }
   }
 
   if (loading) {
@@ -621,23 +602,6 @@ const ClaudeSessions = () => {
                       Write token for differ (push, PR creation). Cached in localStorage.
                     </p>
                   </div>
-
-                  {/* Happy toggle - only show if snapshot has Happy config */}
-                  {selectedConfigHasHappy() && (
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        id="use-happy"
-                        checked={useHappy}
-                        onChange={(e) => setUseHappy(e.target.checked)}
-                        className="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary"
-                      />
-                      <label htmlFor="use-happy" className="text-sm font-medium text-slate-700">
-                        Run with Happy
-                      </label>
-                      <span className="text-xs text-slate-500">(mobile access via Happy app)</span>
-                    </div>
-                  )}
 
                   {/* Playwright toggle */}
                   <div className="flex items-center gap-3">

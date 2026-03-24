@@ -132,7 +132,6 @@ class SpawnRequest(BaseModel):
     repo_url: str | None = None  # Git remote URL to set up in workspace
     github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
     github_token_write: str | None = None  # Write token for differ (push, PR creation)
-    use_happy: bool = False  # Run with Happy instead of Claude CLI
     enable_playwright: bool = False  # Enable Playwright MCP server in container
     allowed_tools: list[str] | None = (
         None  # Tools to pre-approve (no permission prompts)
@@ -272,15 +271,9 @@ async def spawn_session(
     )
     client = get_orchestrator_client()
 
-    # Use Happy image and executable if requested
-    if request.use_happy:
-        image = "claude-cloud-happy:latest"
-        env: dict[str, str] = {"CLAUDE_EXECUTABLE": "happy claude --happy-starting-mode remote"}
-    else:
-        image = "claude-cloud:latest"
-        env = {}
+    image = "claude-cloud:latest"
+    env: dict[str, str] = {}
 
-    # Always set SYSTEM_ID for Happy machineId (used by entrypoint)
     env["SYSTEM_ID"] = settings.APP_NAME
 
     # Add allowed tools to environment (validated against allowlist)

@@ -72,7 +72,7 @@ async def list_all(
 
 SPAWN_CONFIG_FIELDS = {
     "allowed_tools", "repo_url", "custom_env",
-    "use_happy", "enable_playwright", "run_id", "environment_id", "snapshot_id",
+    "enable_playwright", "run_id", "environment_id", "snapshot_id",
     "github_token", "github_token_write",
 }
 
@@ -101,7 +101,7 @@ async def upsert(
         notification_channel: Notification channel (discord, slack, email)
         notification_target: Target for notifications
         spawn_config: Partial spawn config to merge (claude_session tasks only).
-            Supported keys: allowed_tools, repo_url, custom_env, use_happy,
+            Supported keys: allowed_tools, repo_url, custom_env, enable_playwright,
             run_id, environment_id, snapshot_id, github_token,
             github_token_write. Set a key to null to remove it.
             Note: initial_prompt is stored in the message field, not spawn_config.

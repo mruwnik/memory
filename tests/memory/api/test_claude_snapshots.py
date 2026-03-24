@@ -150,7 +150,6 @@ def test_extract_snapshot_summary_empty_tarball():
         "hooks": [],
         "commands": [],
         "mcp_servers": [],
-        "has_happy": False,
     }
 
 
@@ -211,7 +210,6 @@ def test_extract_snapshot_summary_handles_invalid_tarball():
         "hooks": [],
         "commands": [],
         "mcp_servers": [],
-        "has_happy": False,
     }
 
 
