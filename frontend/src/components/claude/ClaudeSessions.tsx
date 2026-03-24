@@ -76,6 +76,7 @@ const ClaudeSessions = () => {
   const [selectedConfig, setSelectedConfig] = useState<ConfigSelection>(null)
   const [selectedRepoUrl, setSelectedRepoUrl] = useState<string>('')
   const [useHappy, setUseHappy] = useState<boolean>(false)
+  const [enablePlaywright, setEnablePlaywright] = useState<boolean>(false)
   const [allowedTools, setAllowedTools] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(ALLOWED_TOOLS_STORAGE_KEY)
@@ -304,6 +305,7 @@ const ClaudeSessions = () => {
       github_token: githubToken || undefined,
       github_token_write: githubTokenWrite || undefined,
       use_happy: useHappy || undefined,
+      enable_playwright: enablePlaywright || undefined,
       allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
       custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
       initial_prompt: initialPrompt || undefined,
@@ -636,6 +638,21 @@ const ClaudeSessions = () => {
                       <span className="text-xs text-slate-500">(mobile access via Happy app)</span>
                     </div>
                   )}
+
+                  {/* Playwright toggle */}
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="enable-playwright"
+                      checked={enablePlaywright}
+                      onChange={(e) => setEnablePlaywright(e.target.checked)}
+                      className="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary"
+                    />
+                    <label htmlFor="enable-playwright" className="text-sm font-medium text-slate-700">
+                      Enable Playwright
+                    </label>
+                    <span className="text-xs text-slate-500">(headless browser automation via MCP)</span>
+                  </div>
 
                   {/* Pre-approved Tools */}
                   <div>

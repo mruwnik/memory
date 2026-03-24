@@ -103,6 +103,7 @@ const TaskDataFields = ({ task }: { task: ScheduledTask }) => {
     if (config.repo_url) fields.push({ label: 'repo', value: String(config.repo_url).replace(/^https?:\/\/github\.com\//, '') })
     if (config.run_id) fields.push({ label: 'run', value: String(config.run_id) })
     if (config.use_happy) fields.push({ label: 'runner', value: 'happy' })
+    if (config.enable_playwright) fields.push({ label: 'playwright', value: 'enabled' })
     if (config.allowed_tools) {
       const tools = config.allowed_tools as string[]
       fields.push({ label: 'tools', value: tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ') })
@@ -170,6 +171,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
     Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
   )
   const [useHappy, setUseHappy] = useState(!!config.use_happy)
+  const [enablePlaywright, setEnablePlaywright] = useState(!!config.enable_playwright)
   const [runId, setRunId] = useState((config.run_id as string) || '')
   const [customEnvText, setCustomEnvText] = useState(
     config.custom_env ? Object.entries(config.custom_env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n') : ''
@@ -195,6 +197,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
       const origRepo = (config.repo_url as string) || ''
       const origTools = Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
       const origHappy = !!config.use_happy
+      const origPlaywright = !!config.enable_playwright
       const origRunId = (config.run_id as string) || ''
       const origEnvId = (config.environment_id as number) ?? null
       const origEnvText = config.custom_env
@@ -208,6 +211,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
         configUpdates.allowed_tools = tools.length > 0 ? tools : null
       }
       if (useHappy !== origHappy) configUpdates.use_happy = useHappy || null
+      if (enablePlaywright !== origPlaywright) configUpdates.enable_playwright = enablePlaywright || null
       if (runId !== origRunId) configUpdates.run_id = runId || null
       if (customEnvText !== origEnvText) {
         const envObj: Record<string, string> = {}
@@ -326,6 +330,16 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
               className="rounded border-slate-300"
             />
             <label htmlFor={`happy-${task.id}`} className="text-xs text-slate-600">Use Happy runner</label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id={`playwright-${task.id}`}
+              checked={enablePlaywright}
+              onChange={e => setEnablePlaywright(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <label htmlFor={`playwright-${task.id}`} className="text-xs text-slate-600">Enable Playwright</label>
           </div>
         </>
       )}

@@ -92,6 +92,7 @@ export interface SpawnRequest {
   github_token?: string
   github_token_write?: string
   use_happy?: boolean
+  enable_playwright?: boolean
   allowed_tools?: string[]
   custom_env?: Record<string, string>
   initial_prompt?: string
