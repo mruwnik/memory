@@ -72,7 +72,7 @@ async def list_all(
 
 SPAWN_CONFIG_FIELDS = {
     "allowed_tools", "repo_url", "custom_env",
-    "use_happy", "run_id", "environment_id", "snapshot_id",
+    "use_happy", "enable_playwright", "run_id", "environment_id", "snapshot_id",
     "github_token", "github_token_write",
 }
 

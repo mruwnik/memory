@@ -897,6 +897,37 @@ def test_spawn_claude_session_does_not_mutate_task_data(mock_post, db_session, s
 
 
 @patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_passes_enable_playwright(mock_post, db_session, sample_user):
+    """Test that enable_playwright is passed through to the spawn API call."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Playwright session",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test with playwright",
+                "enable_playwright": True,
+            }
+        },
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+    posted_json = mock_post.call_args.kwargs["json"]
+    assert posted_json["enable_playwright"] is True
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
 def test_spawn_claude_session_api_failure(mock_post, claude_session_task, db_session):
     """Test that API failure raises ValueError."""
     mock_response = Mock()

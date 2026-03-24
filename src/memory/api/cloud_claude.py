@@ -62,6 +62,7 @@ RESERVED_ENV_VARS = {
     "GITHUB_TOKEN",
     "GITHUB_TOKEN_WRITE",
     "GIT_REPO_URL",
+    "ENABLE_PLAYWRIGHT",
     "SYSTEM_ID",
     "HOME",
     "PATH",
@@ -132,6 +133,7 @@ class SpawnRequest(BaseModel):
     github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
     github_token_write: str | None = None  # Write token for differ (push, PR creation)
     use_happy: bool = False  # Run with Happy instead of Claude CLI
+    enable_playwright: bool = False  # Enable Playwright MCP server in container
     allowed_tools: list[str] | None = (
         None  # Tools to pre-approve (no permission prompts)
     )
@@ -289,6 +291,10 @@ async def spawn_session(
     # Add initial prompt if provided
     if request.initial_prompt:
         env["CLAUDE_INITIAL_PROMPT"] = request.initial_prompt
+
+    # Enable Playwright MCP server if requested
+    if request.enable_playwright:
+        env["ENABLE_PLAYWRIGHT"] = "1"
 
     # Set run ID for branch naming (used by entrypoint to create claude/<run_id> branch)
     env["CLAUDE_RUN_ID"] = request.run_id or session_id

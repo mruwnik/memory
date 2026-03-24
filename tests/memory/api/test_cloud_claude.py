@@ -251,6 +251,54 @@ def test_schedule_rejects_over_per_user_limit(client, user, db_session):
     assert "Maximum" in response.json()["detail"]
 
 
+def test_schedule_stores_enable_playwright_in_spawn_config(client, user, db_session):
+    """Test that enable_playwright is stored in the scheduled task's spawn_config."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 9 * * *",
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "Run playwright tests",
+                "enable_playwright": True,
+            },
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
+    assert task is not None
+    assert task.data["spawn_config"]["enable_playwright"] is True
+
+
+def test_schedule_enable_playwright_defaults_false(client, user, db_session):
+    """Test that enable_playwright defaults to False when not specified."""
+    response = client.post(
+        "/claude/schedule",
+        json={
+            "cron_expression": "0 9 * * *",
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "Normal session",
+            },
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
+    assert task is not None
+    assert task.data["spawn_config"].get("enable_playwright") is False
+
+
+def test_spawn_request_enable_playwright_cannot_be_set_via_custom_env():
+    """Test that ENABLE_PLAYWRIGHT is in the reserved env vars list."""
+    from memory.api.cloud_claude import RESERVED_ENV_VARS
+
+    assert "ENABLE_PLAYWRIGHT" in RESERVED_ENV_VARS
+
+
 def test_schedule_rejects_six_field_cron(client, user):
     """Test that 6-field cron expressions (with seconds) are rejected."""
     response = client.post(
