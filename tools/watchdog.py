@@ -13,14 +13,14 @@ independent of the Celery worker so it can detect worker failures.
 import json
 import logging
 import os
+import pathlib
 import socket
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from http.client import HTTPConnection, HTTPSConnection
-from urllib.parse import urlparse
+from http.client import HTTPConnection
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +38,9 @@ DISCORD_WEBHOOK_URL = os.getenv("WATCHDOG_DISCORD_WEBHOOK_URL", "")
 HEALTHCHECK_PING_URL = os.getenv("HEALTHCHECK_PING_URL", "")
 COMPOSE_PROJECT = os.getenv("COMPOSE_PROJECT_NAME", "memory")
 DOCKER_SOCKET = os.getenv("DOCKER_SOCKET", "/var/run/docker.sock")
+DOCKER_TIMEOUT = int(os.getenv("WATCHDOG_DOCKER_TIMEOUT", "30"))
+ALIVE_FILE = "/tmp/watchdog-alive"
+MAX_DISCORD_MESSAGE_LENGTH = 1900  # Discord limit is 2000, leave margin
 
 # Services to monitor - these should always be running
 EXPECTED_SERVICES = {
@@ -70,6 +73,7 @@ class DockerSocketConnection(HTTPConnection):
 
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(DOCKER_TIMEOUT)
         self.sock.connect(self.socket_path)
 
 
@@ -222,11 +226,10 @@ def run_check() -> None:
         if service not in EXPECTED_SERVICES:
             continue
 
-        if status in ("unhealthy", "stopped"):
+        if status in ("unhealthy", "stopped", "starting"):
             now_unhealthy.add(service)
-            if should_alert(service):
+            if status != "starting" and should_alert(service):
                 problems.append((service, status, detail))
-                last_alert_time[service] = time.time()
         elif service in previously_unhealthy:
             recovered.append(service)
 
@@ -237,9 +240,11 @@ def run_check() -> None:
         for service, status, detail in problems:
             emoji = "🔴" if status == "stopped" else "🟡"
             lines.append(f"{emoji} **{service}**: {status} — {detail}")
-        message = "\n".join(lines)
+        message = "\n".join(lines)[:MAX_DISCORD_MESSAGE_LENGTH]
         logger.warning(message)
-        send_discord_alert(message)
+        if send_discord_alert(message):
+            for service, _, _ in problems:
+                last_alert_time[service] = time.time()
 
     # Send recovery alerts
     if recovered:
@@ -247,7 +252,7 @@ def run_check() -> None:
         lines = [f"**Container Recovery** ({timestamp})"]
         for service in recovered:
             lines.append(f"🟢 **{service}** is healthy again")
-        message = "\n".join(lines)
+        message = "\n".join(lines)[:MAX_DISCORD_MESSAGE_LENGTH]
         logger.info(message)
         send_discord_alert(message)
 
@@ -258,6 +263,12 @@ def run_check() -> None:
         ping_healthcheck("/fail")
     else:
         ping_healthcheck()
+
+    # Touch alive file for watchdog's own healthcheck
+    try:
+        pathlib.Path(ALIVE_FILE).touch()
+    except OSError:
+        pass
 
     # Log summary
     healthy_count = sum(

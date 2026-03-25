@@ -323,8 +323,10 @@ services:
       HEALTHCHECK_PING_URL: "${HEALTHCHECK_PING_URL:-}"
       COMPOSE_PROJECT_NAME: "${COMPOSE_PROJECT_NAME:-memory}"
     entrypoint: ["python", "/app/watchdog.py"]
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "test $$(( $(date +%s) - $(stat -c %Y /proc/1/fd/1 2>/dev/null || echo 0) )) -lt 300"]
+      test: ["CMD-SHELL", "test -f /tmp/watchdog-alive && test $$(( $(date +%s) - $(stat -c %Y /tmp/watchdog-alive) )) -lt 300"]
       interval: 60s
       timeout: 5s
       retries: 3
