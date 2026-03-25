@@ -693,7 +693,13 @@ async def proxy_differ(
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{path}"
+    # Extract the differ subpath from the raw URL to preserve double slashes
+    # (FastAPI's {path:path} parameter normalizes // to /)
+    prefix = f"/claude/{session_id}/differ/"
+    raw_path = request.scope.get("path", "")
+    differ_path = raw_path.split(prefix, 1)[1] if prefix in raw_path else path
+
+    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{differ_path}"
     query_string = str(request.url.query)
     if query_string:
         upstream_url += f"?{query_string}"
