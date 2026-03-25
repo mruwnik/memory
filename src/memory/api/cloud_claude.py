@@ -693,7 +693,14 @@ async def proxy_differ(
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{path}"
+    # Extract the differ subpath from raw_path (bytes) to preserve
+    # percent-encoding — scope["path"] decodes %2F to /, which breaks
+    # differ endpoints that embed filesystem paths in URL segments.
+    prefix = f"/claude/{session_id}/differ/".encode()
+    raw_path = request.scope.get("raw_path", b"")
+    differ_path = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
+
+    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{differ_path}"
     query_string = str(request.url.query)
     if query_string:
         upstream_url += f"?{query_string}"
@@ -811,8 +818,13 @@ async def proxy_differ_ws(
 
     await websocket.accept()
 
+    # Extract subpath from raw_path to preserve percent-encoding (see proxy_differ)
+    prefix = f"/claude/{session_id}/differ/".encode()
+    raw_path = websocket.scope.get("raw_path", b"")
+    ws_subpath = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
+
     # Connect to orchestrator's WebSocket proxy via Unix socket
-    orch_url = f"ws://orchestrator/containers/{session_id}/differ/{path}"
+    orch_url = f"ws://orchestrator/containers/{session_id}/differ/{ws_subpath}"
     # Forward query params (excluding the auth token) to upstream
     qs_parts = [
         (k, v) for k, v in websocket.query_params.multi_items()
