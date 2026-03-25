@@ -17,6 +17,7 @@ secrets:
   ssh_private_key: { file: ./secrets/ssh_private_key }
   ssh_public_key: { file: ./secrets/ssh_public_key }
   ssh_known_hosts: { file: ./secrets/ssh_known_hosts }
+  secrets_encryption_key: { file: ./secrets/secrets_encryption_key.txt }
 
 # --------------------------------------------------------------------- volumes
 volumes:
@@ -52,6 +53,7 @@ x-worker-base: &worker-base
     QDRANT_URL: http://qdrant:6333
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
     ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+    SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
     VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
     DISCORD_COLLECTOR_PORT: 8003
@@ -63,6 +65,7 @@ x-worker-base: &worker-base
       ssh_private_key,
       ssh_public_key,
       ssh_known_hosts,
+      secrets_encryption_key,
     ]
   read_only: true
   tmpfs:
@@ -116,9 +119,10 @@ services:
         condition: service_healthy
     environment:
       <<: *env
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets: [postgres_password]
+    secrets: [postgres_password, secrets_encryption_key]
     volumes:
       - ./db:/app/db:ro
 
@@ -218,7 +222,8 @@ services:
       ENABLE_BM25_SEARCH: true
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
       SLACK_REDIRECT_URI: ${SLACK_REDIRECT_URI:-https://memory.equistamp.io/slack/callback}
@@ -229,7 +234,7 @@ services:
       ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
       MEMORY_STACK: ${MEMORY_STACK:-prod}
       HOST_STORAGE_DIR: ${PWD}/memory_files
-    secrets: [postgres_password, openai_key, anthropic_key]
+    secrets: [postgres_password, openai_key, anthropic_key, secrets_encryption_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
       # Socket for Claude session orchestrator
@@ -277,7 +282,7 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
     environment:
       <<: *worker-env
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}

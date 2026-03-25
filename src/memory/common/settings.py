@@ -19,12 +19,16 @@ def boolean_env(key: str, default: bool = False) -> bool:
     return os.getenv(key, "0").lower() in ("1", "true", "yes")
 
 
+def secret_env(key: str, default: str = "") -> str:
+    """Read a secret from a file (KEY_FILE) or env var (KEY), with file taking priority."""
+    if file_path := os.getenv(f"{key}_FILE"):
+        return pathlib.Path(file_path).read_text().strip()
+    return os.getenv(key, default)
+
+
 # Database settings
 DB_USER = os.getenv("DB_USER", "kb")
-if password_file := os.getenv("POSTGRES_PASSWORD_FILE"):
-    DB_PASSWORD = pathlib.Path(password_file).read_text().strip()
-else:
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "kb")
+DB_PASSWORD = secret_env("POSTGRES_PASSWORD") or secret_env("DB_PASSWORD", "kb")
 
 DB_HOST = os.getenv("DB_HOST", "postgres")
 DB_PORT = os.getenv("DB_PORT", "5432")
@@ -193,15 +197,8 @@ OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
 
 
 # LLM settings
-if openai_key_file := os.getenv("OPENAI_API_KEY_FILE"):
-    OPENAI_API_KEY = pathlib.Path(openai_key_file).read_text().strip()
-else:
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-if anthropic_key_file := os.getenv("ANTHROPIC_API_KEY_FILE"):
-    ANTHROPIC_API_KEY = pathlib.Path(anthropic_key_file).read_text().strip()
-else:
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_API_KEY = secret_env("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = secret_env("ANTHROPIC_API_KEY")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-4-5")
 RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", 200000))
@@ -298,7 +295,7 @@ SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 300))  # seconds (5 m
 S3_BACKUP_BUCKET = os.getenv("S3_BACKUP_BUCKET", "equistamp-memory-backup")
 S3_BACKUP_PREFIX = os.getenv("S3_BACKUP_PREFIX", "Daniel")
 S3_BACKUP_REGION = os.getenv("S3_BACKUP_REGION", "eu-central-1")
-BACKUP_ENCRYPTION_KEY = os.getenv("BACKUP_ENCRYPTION_KEY", "")
+BACKUP_ENCRYPTION_KEY = secret_env("BACKUP_ENCRYPTION_KEY")
 S3_BACKUP_ENABLED = boolean_env("S3_BACKUP_ENABLED", bool(BACKUP_ENCRYPTION_KEY))
 S3_BACKUP_INTERVAL = int(
     os.getenv("S3_BACKUP_INTERVAL", 60 * 60 * 24)
@@ -340,7 +337,7 @@ SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 30))
 # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
 # This should be unique per deployment - if the same secret is used across
 # deployments, encrypted keys will be portable between them.
-SECRETS_ENCRYPTION_KEY = os.getenv("SECRETS_ENCRYPTION_KEY", "")
+SECRETS_ENCRYPTION_KEY = secret_env("SECRETS_ENCRYPTION_KEY")
 
 # Salt for secrets encryption key derivation
 # Must remain constant for a deployment to decrypt existing secrets

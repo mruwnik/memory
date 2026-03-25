@@ -649,7 +649,9 @@ def rewrite_html_for_proxy(html: bytes, proxy_prefix: str) -> bytes:
   var _ES = window.EventSource;
   window.EventSource = function(url, opts) {{
     if (typeof url === "string" && url.startsWith("/")) url = pfx + url;
-    return new _ES(url, opts);
+    var es = new _ES(url, opts);
+    es.onerror = function() {{ /* SSE proxy may not be available; suppress */ }};
+    return es;
   }};
   window.EventSource.prototype = _ES.prototype;
   window.EventSource.CONNECTING = _ES.CONNECTING;
@@ -760,6 +762,16 @@ async def proxy_differ(
     finally:
         await upstream_resp.aclose()
         await client.aclose()
+
+    # The differ returns its SPA HTML (200) for unknown paths as a catch-all.
+    # If an API/event/oauth path gets HTML back, it's a false 200 — return 404
+    # so the frontend JS gets a proper error instead of trying to JSON.parse HTML.
+    if "text/html" in content_type and path and not path.endswith(("/", ".html", ".htm")):
+        return StreamingResponse(
+            iter([b'{"error": "not found"}']),
+            status_code=404,
+            media_type="application/json",
+        )
 
     # Rewrite HTML so the differ SPA resolves URLs through this proxy path
     if "text/html" in content_type:
