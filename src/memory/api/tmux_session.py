@@ -374,15 +374,11 @@ async def input_handler_loop(
             pane = message.get("pane", "")
             if pane and client:
                 try:
-                    await client.relay_select_pane(session_id, pane)
-                    # Resize the new pane to match the terminal dimensions
+                    # Pass dimensions atomically with the pane switch
                     cols = activity_state.get("terminal_cols", 80)
                     rows = activity_state.get("terminal_rows", 24)
-                    try:
-                        await relay.resize(cols, rows)
-                    except RelayError:
-                        pass
-                    # Signal pane poll to refresh immediately (IDs change after swap)
+                    await client.relay_select_pane(session_id, pane, cols=cols, rows=rows)
+                    # Signal pane poll to refresh immediately (IDs shift after swap)
                     pane_event = activity_state.get("pane_event")
                     if pane_event:
                         pane_event.set()

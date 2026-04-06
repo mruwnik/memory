@@ -220,10 +220,10 @@ const ClaudeSessions = () => {
           // Pane list update from the pane polling loop
           setPaneCount(msg.pane_count || 1)
           if (msg.panes) {
-            // Sort by stable tmux pane ID (%0, %1, ...) for consistent chip order
+            // Sort by stable tmux pane ID (0, 1, 3, ...) for consistent chip order
             const sorted = [...msg.panes].sort((a, b) => {
-              const numA = parseInt(a.id.replace('%', ''), 10)
-              const numB = parseInt(b.id.replace('%', ''), 10)
+              const numA = parseInt(a.id, 10)
+              const numB = parseInt(b.id, 10)
               return numA - numB
             })
             setPanes(sorted)

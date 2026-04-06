@@ -415,10 +415,21 @@ class OrchestratorClient:
             )
         return data if isinstance(data, list) else data.get("panes", [])
 
-    async def relay_select_pane(self, session_id: str, pane: str) -> dict[str, Any]:
-        """Switch the active tmux pane."""
+    async def relay_select_pane(
+        self,
+        session_id: str,
+        pane: str,
+        cols: int | None = None,
+        rows: int | None = None,
+    ) -> dict[str, Any]:
+        """Switch the active tmux pane, optionally setting display dimensions."""
+        qs = f"pane={pane}"
+        if cols is not None:
+            qs += f"&cols={cols}"
+        if rows is not None:
+            qs += f"&rows={rows}"
         status, data = await self._request(
-            "POST", f"/containers/{session_id}/relay/select?pane={pane}"
+            "POST", f"/containers/{session_id}/relay/select?{qs}"
         )
         if status >= 400:
             raise OrchestratorError(
