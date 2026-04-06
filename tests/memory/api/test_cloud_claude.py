@@ -202,7 +202,9 @@ def test_schedule_creates_scheduled_task(client, user, db_session):
     assert task.task_type == "claude_session"
     assert task.enabled is True
     assert task.data["spawn_config"]["environment_id"] == 1
-    assert task.data["spawn_config"]["initial_prompt"] == "Review the latest changes and create a summary"
+    # initial_prompt is stored in task.message, not in spawn_config
+    assert "initial_prompt" not in task.data["spawn_config"]
+    assert task.message == "Review the latest changes and create a summary"
 
 
 def test_schedule_rejects_too_frequent_cron(client, user):

@@ -12,43 +12,29 @@ from memory.common.db.models import PendingJob, JobStatus, JobType, User, HumanU
 
 
 @pytest.fixture
-def non_admin_client(app_client, db_session, user):
-    """Test client authenticated as a non-admin user (scopes=['read'])."""
+def non_admin_client(client, user):
+    """Test client that authenticates as a non-admin user (scopes=['read']).
+
+    Uses the existing `client` fixture (which sets up db_session), and
+    temporarily swaps get_current_user to return a non-admin mock.
+    """
     from memory.api.auth import get_current_user
-    from memory.common.db.connection import get_session
+    from memory.api.app import app
 
-    test_client, app = app_client
-
-    # Save existing overrides to restore after test
     prev_auth = app.dependency_overrides.get(get_current_user)
-    prev_session = app.dependency_overrides.get(get_session)
 
     mock_user = MagicMock()
     mock_user.id = user.id
     mock_user.email = user.email
     mock_user.scopes = ["read"]
 
-    def mock_get_current_user():
-        return mock_user
-
-    def get_test_session():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_current_user] = mock_get_current_user
-    app.dependency_overrides[get_session] = get_test_session
-    yield test_client
-    # Restore previous overrides
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    yield client
+    # Restore — prev_auth is always set because app_client sets it at session scope
     if prev_auth is not None:
         app.dependency_overrides[get_current_user] = prev_auth
     else:
         app.dependency_overrides.pop(get_current_user, None)
-    if prev_session is not None:
-        app.dependency_overrides[get_session] = prev_session
-    else:
-        app.dependency_overrides.pop(get_session, None)
 
 
 @pytest.fixture
@@ -488,11 +474,14 @@ def admin_client(app_client, db_session, admin_user):
     """Get a test client authenticated as admin user."""
     from unittest.mock import MagicMock, patch
     from memory.api import auth
+    from memory.api.auth import get_current_user
     from memory.common.db.connection import get_session
 
     test_client, app = app_client
 
-    # Create mock admin user
+    # Save existing auth override to restore after
+    prev_auth = app.dependency_overrides.get(get_current_user)
+
     mock_admin = MagicMock()
     mock_admin.id = admin_user.id
     mock_admin.email = admin_user.email
@@ -508,7 +497,10 @@ def admin_client(app_client, db_session, admin_user):
     with patch.object(auth, "get_session_user", return_value=mock_admin):
         app.dependency_overrides[get_session] = get_test_session
         yield test_client
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_session, None)
+    # Restore the session-scoped auth override
+    if prev_auth is not None:
+        app.dependency_overrides[get_current_user] = prev_auth
 
 
 def test_admin_can_see_other_user_job(admin_client: TestClient, job_for_other_user):

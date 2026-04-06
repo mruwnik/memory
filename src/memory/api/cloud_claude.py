@@ -969,9 +969,11 @@ async def stream_session_logs(
         # Shared state for adaptive polling - input handler updates last_input_time
         # and sets input_event to wake up the capture loop immediately
         input_event = asyncio.Event()
+        pane_event = asyncio.Event()
         activity_state = {
             "last_input_time": 0.0,
             "input_event": input_event,
+            "pane_event": pane_event,
         }
 
         # Run screen capture, input handling, and pane polling concurrently

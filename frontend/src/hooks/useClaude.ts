@@ -131,7 +131,8 @@ export interface SessionLogs {
 }
 
 export interface PaneInfo {
-  id: string
+  id: string        // Stable tmux pane ID (%0, %1, etc.)
+  position: string  // Positional ID (0.0, 0.1) - use for select_pane
   window_name: string
   active: boolean
   command: string

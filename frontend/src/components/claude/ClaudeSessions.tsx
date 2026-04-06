@@ -27,6 +27,8 @@ interface ScreenMessage {
   rows?: number
   scrolled?: number
   pane_count?: number
+  pane?: string
+  command?: string
   panes?: PaneInfo[]
 }
 
@@ -211,13 +213,22 @@ const ClaudeSessions = () => {
         if (msg.type === 'screen') {
           setScreenContent(msg.data)
           setScrollOffset(msg.scrolled || 0)
+          // TCP relay includes pane_count with every capture
+          if (msg.pane_count !== undefined) setPaneCount(msg.pane_count)
+          if (msg.pane !== undefined) setActivePane(msg.pane)
         } else if (msg.type === 'panes') {
           // Pane list update from the pane polling loop
           setPaneCount(msg.pane_count || 1)
           if (msg.panes) {
-            setPanes(msg.panes)
-            // Track which pane is active
-            const active = msg.panes.find(p => p.active)
+            // Sort by stable tmux pane ID (%0, %1, ...) for consistent chip order
+            const sorted = [...msg.panes].sort((a, b) => {
+              const numA = parseInt(a.id.replace('%', ''), 10)
+              const numB = parseInt(b.id.replace('%', ''), 10)
+              return numA - numB
+            })
+            setPanes(sorted)
+            // Track which pane is active (by stable id)
+            const active = sorted.find(p => p.active)
             if (active) setActivePane(active.id)
           }
         } else if (msg.type === 'error') {

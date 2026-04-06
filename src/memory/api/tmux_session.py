@@ -203,12 +203,18 @@ async def screen_capture_loop(
             activity_state["terminal_rows"] = rows
             activity_state["terminal_cols"] = cols
 
+            # The TCP relay returns pane info with every capture
+            pane_count = result.get("pane_count", 1)
+            pane_id = result.get("pane", "")
+            command = result.get("command", "")
+
             # Only send if screen changed and user isn't scrolled back
             if screen and screen != last_screen:
                 if activity_state.get("scroll_offset", 0) == 0:
                     await send_ws_json(
                         websocket, "screen", screen,
                         cols=cols, rows=rows, scrolled=0,
+                        pane_count=pane_count, pane=pane_id, command=command,
                     )
                     # Only update last_screen when actually sent to client,
                     # so the backoff timer doesn't reset while user is scrolled back
@@ -376,6 +382,10 @@ async def input_handler_loop(
                         await relay.resize(cols, rows)
                     except RelayError:
                         pass
+                    # Signal pane poll to refresh immediately (IDs change after swap)
+                    pane_event = activity_state.get("pane_event")
+                    if pane_event:
+                        pane_event.set()
                     # Wake up capture loop to show new pane immediately
                     activity_state["last_input_time"] = asyncio.get_running_loop().time()
                     input_event = activity_state.get("input_event")
@@ -408,12 +418,15 @@ async def pane_poll_loop(
 
     Runs independently of the screen capture loop. Sends a 'panes' message
     whenever the pane list changes, so the frontend can show/hide a pane switcher.
+    Wakes immediately when activity_state["pane_event"] is set (e.g. after pane switch).
     """
     last_pane_ids: list[str] = []
 
     # Wait for the running phase before polling
     while activity_state.get("phase") != "running":
         await asyncio.sleep(1.0)
+
+    pane_event = activity_state.get("pane_event")
 
     while True:
         try:
@@ -432,4 +445,12 @@ async def pane_poll_loop(
         except Exception:
             break  # WebSocket closed or similar
 
-        await asyncio.sleep(PANE_POLL_INTERVAL)
+        # Wait for either the poll interval or a pane_event signal
+        if pane_event:
+            try:
+                await asyncio.wait_for(pane_event.wait(), timeout=PANE_POLL_INTERVAL)
+                pane_event.clear()
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(PANE_POLL_INTERVAL)
