@@ -49,8 +49,8 @@ from memory.common.slack import (
 )
 from memory.common.content_processing import (
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
 
 logger = logging.getLogger(__name__)
@@ -208,7 +208,7 @@ def get_workspace_credentials(
 
 
 @app.task(name=SYNC_ALL_SLACK_WORKSPACES)
-@safe_task_execution
+@tracked_task
 def sync_all_slack_workspaces() -> dict[str, Any]:
     """
     Periodic task to sync all active Slack workspaces.
@@ -245,7 +245,7 @@ def sync_all_slack_workspaces() -> dict[str, Any]:
 
 
 @app.task(name=SYNC_SLACK_WORKSPACE)
-@safe_task_execution
+@tracked_task
 def sync_slack_workspace(workspace_id: str) -> dict[str, Any]:
     """
     Sync a single Slack workspace.
@@ -427,7 +427,7 @@ def build_user_cache(client: SlackClient) -> dict[str, str]:
 
 
 @app.task(name=SYNC_SLACK_CHANNEL)
-@safe_task_execution
+@tracked_task
 def sync_slack_channel(channel_id: str) -> dict[str, Any]:
     """
     Sync messages from a Slack channel.
@@ -566,7 +566,7 @@ def fetch_thread_replies(
 
 
 @app.task(name=ADD_SLACK_MESSAGE)
-@safe_task_execution
+@tracked_task
 def add_slack_message(
     workspace_id: str,
     channel_id: str,

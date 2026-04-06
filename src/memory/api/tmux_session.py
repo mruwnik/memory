@@ -14,13 +14,10 @@ The orchestrator client is only used for container logs during startup/exit.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
-
+from typing import Any
 from fastapi import WebSocket
 
-if TYPE_CHECKING:
-    from memory.api.orchestrator_client import OrchestratorClient
-
+from memory.api.orchestrator_client import OrchestratorClient, OrchestratorError
 from memory.api.terminal_relay_client import RelayClient, RelayError
 
 logger = logging.getLogger(__name__)
@@ -34,6 +31,7 @@ SCREEN_BACKOFF_UNCHANGED_THRESHOLD = 4  # Start slowing after this many unchange
 SCREEN_BACKOFF_MULTIPLIER = 1.5  # Multiply interval by this on each idle poll
 
 SCROLL_LINES = 3  # Lines per scroll wheel event
+PANE_POLL_INTERVAL = 5.0  # Poll orchestrator for pane list every 5s
 
 
 async def send_live_screen(
@@ -67,7 +65,7 @@ async def send_ws_json(
     websocket: WebSocket,
     msg_type: str,
     data: str | None = None,
-    **extra: int | str | bool,
+    **extra: Any,
 ) -> None:
     """Send a JSON message with timestamp over WebSocket."""
     msg: dict[str, str | int | bool] = {
@@ -186,6 +184,7 @@ async def screen_capture_loop(
             # Tmux is ready - switch to running phase
             if phase == "startup":
                 phase = "running"
+                activity_state["phase"] = "running"
                 await send_ws_json(websocket, "phase", "running")
                 # Apply any resize that arrived before the relay was ready
                 pending = activity_state.pop("pending_resize", None)
@@ -202,6 +201,7 @@ async def screen_capture_loop(
             history_size = result.get("history_size", 0)
             activity_state["history_size"] = history_size
             activity_state["terminal_rows"] = rows
+            activity_state["terminal_cols"] = cols
 
             # Only send if screen changed and user isn't scrolled back
             if screen and screen != last_screen:
@@ -283,6 +283,7 @@ async def input_handler_loop(
     session_id: str,
     relay: RelayClient,
     activity_state: dict,
+    client: "OrchestratorClient | None" = None,
 ) -> None:
     """Receive input from WebSocket and send to tmux session via relay.
 
@@ -363,6 +364,25 @@ async def input_handler_loop(
                 await send_live_screen(websocket, relay, activity_state)
             except RelayError as e:
                 logger.debug("RelayError on scroll-to-bottom: %s", e)
+        elif msg_type == "select_pane":
+            pane = message.get("pane", "")
+            if pane and client:
+                try:
+                    await client.relay_select_pane(session_id, pane)
+                    # Resize the new pane to match the terminal dimensions
+                    cols = activity_state.get("terminal_cols", 80)
+                    rows = activity_state.get("terminal_rows", 24)
+                    try:
+                        await relay.resize(cols, rows)
+                    except RelayError:
+                        pass
+                    # Wake up capture loop to show new pane immediately
+                    activity_state["last_input_time"] = asyncio.get_running_loop().time()
+                    input_event = activity_state.get("input_event")
+                    if input_event:
+                        input_event.set()
+                except OrchestratorError as e:
+                    await send_ws_json(websocket, "error", f"Failed to select pane: {e}")
         elif msg_type == "resize":
             cols = message.get("cols", 80)
             rows = message.get("rows", 24)
@@ -376,3 +396,40 @@ async def input_handler_loop(
                     logger.debug(f"resize failed: {result.get('error')}")
             except RelayError as e:
                 logger.debug(f"resize error (will retry when relay ready): {e}")
+
+
+async def pane_poll_loop(
+    websocket: WebSocket,
+    session_id: str,
+    client: OrchestratorClient,
+    activity_state: dict,
+) -> None:
+    """Poll the orchestrator for tmux pane info and send updates to the client.
+
+    Runs independently of the screen capture loop. Sends a 'panes' message
+    whenever the pane list changes, so the frontend can show/hide a pane switcher.
+    """
+    last_pane_ids: list[str] = []
+
+    # Wait for the running phase before polling
+    while activity_state.get("phase") != "running":
+        await asyncio.sleep(1.0)
+
+    while True:
+        try:
+            panes = await client.relay_list_panes(session_id)
+            pane_ids = [p.get("id", "") for p in panes] if isinstance(panes, list) else []
+
+            if pane_ids != last_pane_ids:
+                last_pane_ids = pane_ids
+                await send_ws_json(
+                    websocket, "panes", None,
+                    pane_count=len(panes),
+                    panes=panes,
+                )
+        except OrchestratorError:
+            pass  # Orchestrator unavailable, skip this cycle
+        except Exception:
+            break  # WebSocket closed or similar
+
+        await asyncio.sleep(PANE_POLL_INTERVAL)

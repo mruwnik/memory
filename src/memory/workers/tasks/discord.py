@@ -31,8 +31,8 @@ from memory.common.content_processing import (
     check_content_exists,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
-@safe_task_execution
+@tracked_task
 def add_discord_message(
     bot_id: int,
     message_id: int,
@@ -218,7 +218,7 @@ def add_discord_message(
 
 
 @app.task(name=EDIT_DISCORD_MESSAGE)
-@safe_task_execution
+@tracked_task
 def edit_discord_message(
     message_id: int,
     content: str,
@@ -262,7 +262,7 @@ def edit_discord_message(
 
 
 @app.task(name=UPDATE_REACTIONS)
-@safe_task_execution
+@tracked_task
 def update_reactions(
     message_id: int,
     reactions: list[dict],

@@ -20,8 +20,8 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 from memory.common.people import link_people
 
 logger = logging.getLogger(__name__)
@@ -176,7 +176,7 @@ def _update_existing_doc(
 
 
 @app.task(name=SYNC_GOOGLE_DOC)
-@safe_task_execution
+@tracked_task
 def sync_google_doc(
     folder_id: int,
     file_data_serialized: dict[str, Any],
@@ -217,7 +217,7 @@ def sync_google_doc(
 
 
 @app.task(name=SYNC_GOOGLE_FOLDER)
-@safe_task_execution
+@tracked_task
 def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, Any]:
     """Sync all documents in a Google Drive folder."""
     logger.info(f"Syncing Google folder {folder_id}")
@@ -353,7 +353,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
 
 @app.task(name=SYNC_ALL_GOOGLE_ACCOUNTS)
-@safe_task_execution
+@tracked_task
 def sync_all_google_accounts(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active Google Drive folders."""
     with make_session() as session:

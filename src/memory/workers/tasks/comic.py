@@ -22,8 +22,8 @@ from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def fetch_new_comics(
 
 
 @app.task(name=SYNC_COMIC)
-@safe_task_execution
+@tracked_task
 def sync_comic(
     url: str,
     image_url: str,
@@ -129,19 +129,21 @@ def sync_comic(
 
 
 @app.task(name=SYNC_SMBC)
+@tracked_task
 def sync_smbc() -> set[str]:
     """Synchronize SMBC comics from RSS feed."""
     return fetch_new_comics(BASE_SMBC_URL, SMBC_RSS_URL, comics.extract_smbc)
 
 
 @app.task(name=SYNC_XKCD)
+@tracked_task
 def sync_xkcd() -> set[str]:
     """Synchronize XKCD comics from RSS feed."""
     return fetch_new_comics(BASE_XKCD_URL, XKCD_RSS_URL, comics.extract_xkcd)
 
 
 @app.task(name=SYNC_ALL_COMICS)
-@safe_task_execution
+@tracked_task
 def sync_all_comics():
     """Synchronize all active comics."""
     sync_smbc.delay()  # type: ignore
@@ -150,6 +152,7 @@ def sync_all_comics():
 
 
 @app.task(name="memory.workers.tasks.comic.full_sync_comic")
+@tracked_task
 def trigger_comic_sync():
     def prev_smbc_comic(url: str) -> str | None:
         from bs4 import BeautifulSoup

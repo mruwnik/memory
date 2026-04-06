@@ -16,13 +16,13 @@ from memory.workers.verification import (
     group_items_by_batch_key,
     verify_items,
 )
-from memory.common.content_processing import safe_task_execution
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(name=VERIFY_ORPHANS)
-@safe_task_execution
+@tracked_task
 def verify_orphans(
     batch_size: int | None = None,
     source_types: list[str] | None = None,
@@ -78,7 +78,7 @@ def verify_orphans(
 
 
 @app.task(name=VERIFY_SOURCE_BATCH)
-@safe_task_execution
+@tracked_task
 def verify_source_batch(
     source_type: str,
     batch_key: Any,

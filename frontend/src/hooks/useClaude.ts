@@ -130,6 +130,15 @@ export interface SessionLogs {
   logs: string
 }
 
+export interface PaneInfo {
+  id: string
+  window_name: string
+  active: boolean
+  command: string
+  title: string
+  size?: string
+}
+
 export const useClaude = () => {
   const { apiCall } = useAuth()
 
@@ -211,6 +220,13 @@ export const useClaude = () => {
     return response.json()
   }, [apiCall])
 
+  // Panes
+  const listPanes = useCallback(async (sessionId: string): Promise<PaneInfo[]> => {
+    const response = await apiCall(`/claude/${sessionId}/panes`)
+    if (!response.ok) return []
+    return response.json()
+  }, [apiCall])
+
   // Session logs
   const getSessionLogs = useCallback(
     async (sessionId: string, tail: number = 200): Promise<SessionLogs> => {
@@ -282,6 +298,8 @@ export const useClaude = () => {
     getAttachInfo,
     getOrchestratorStatus,
     getSessionLogs,
+    // Panes
+    listPanes,
     // Snapshots
     listSnapshots,
     // Environments

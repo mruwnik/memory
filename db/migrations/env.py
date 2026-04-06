@@ -16,7 +16,9 @@ from memory.common.db.models import Base
 config = context.config
 
 # setup database URL from environment variables
-config.set_main_option("sqlalchemy.url", settings.DB_URL)
+# Escape % as %% because configparser treats % as interpolation syntax,
+# and URL-encoded passwords (e.g. %2B) would otherwise cause ValueError.
+config.set_main_option("sqlalchemy.url", settings.DB_URL.replace("%", "%%"))
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

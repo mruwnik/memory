@@ -43,6 +43,7 @@ from memory.api.orchestrator_client import (
 from memory.api.terminal_relay_client import RelayClient
 from memory.api.tmux_session import (
     input_handler_loop,
+    pane_poll_loop,
     screen_capture_loop,
     send_ws_json,
 )
@@ -543,6 +544,27 @@ async def kill_session(
     return {"status": "killed", "session_id": session_id}
 
 
+@router.get("/{session_id}/panes")
+async def list_panes(
+    session_id: str,
+    user: User = Depends(get_current_user),
+) -> list[dict]:
+    """List tmux panes for a Claude session.
+
+    Returns a list of pane objects with id, window, size, active flag, and command.
+    Used by the frontend to populate a pane switcher when multiple panes exist.
+    """
+    if not user_owns_session(user, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    client = get_orchestrator_client()
+    try:
+        return await client.relay_list_panes(session_id)
+    except OrchestratorError as e:
+        logger.warning(f"Failed to list panes for {session_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to list panes: {e}")
+
+
 @router.get("/{session_id}/attach")
 async def get_attach_commands(
     session_id: str,
@@ -952,18 +974,21 @@ async def stream_session_logs(
             "input_event": input_event,
         }
 
-        # Run screen capture and input handling concurrently
+        # Run screen capture, input handling, and pane polling concurrently
         screen_task = asyncio.create_task(
             screen_capture_loop(websocket, session_id, client, activity_state, relay)
         )
         input_task = asyncio.create_task(
-            input_handler_loop(websocket, session_id, relay, activity_state)
+            input_handler_loop(websocket, session_id, relay, activity_state, client)
+        )
+        pane_task = asyncio.create_task(
+            pane_poll_loop(websocket, session_id, client, activity_state)
         )
 
-        # Wait for either task to complete (usually screen_task on container exit,
-        # or input_task on disconnect)
-        done, pending = await asyncio.wait(
-            [screen_task, input_task],
+        # Wait for either main task to complete (usually screen_task on container exit,
+        # or input_task on disconnect). Pane polling is auxiliary.
+        _, pending = await asyncio.wait(
+            [screen_task, input_task, pane_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 

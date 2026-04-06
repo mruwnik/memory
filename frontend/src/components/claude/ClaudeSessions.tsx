@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import XtermTerminal from './XtermTerminal'
 
 const COMMON_TOOLS = [
@@ -20,12 +20,14 @@ const GITHUB_TOKEN_STORAGE_KEY = 'claude_session_github_token'
 const GITHUB_TOKEN_WRITE_STORAGE_KEY = 'claude_session_github_token_write'
 
 interface ScreenMessage {
-  type: 'screen' | 'error' | 'status'
+  type: 'screen' | 'error' | 'status' | 'panes'
   data: string
   timestamp: string
   cols?: number
   rows?: number
   scrolled?: number
+  pane_count?: number
+  panes?: PaneInfo[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -63,6 +65,11 @@ const ClaudeSessions = () => {
   const [wsConnected, setWsConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+
+  // Pane state
+  const [paneCount, setPaneCount] = useState(1)
+  const [activePane, setActivePane] = useState<string>('')
+  const [panes, setPanes] = useState<PaneInfo[]>([])
 
   // UI State
   const [loading, setLoading] = useState(true)
@@ -186,6 +193,9 @@ const ClaudeSessions = () => {
 
     setScreenContent('')
     setWsError(null)
+    setPaneCount(1)
+    setActivePane('')
+    setPanes([])
 
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -201,6 +211,15 @@ const ClaudeSessions = () => {
         if (msg.type === 'screen') {
           setScreenContent(msg.data)
           setScrollOffset(msg.scrolled || 0)
+        } else if (msg.type === 'panes') {
+          // Pane list update from the pane polling loop
+          setPaneCount(msg.pane_count || 1)
+          if (msg.panes) {
+            setPanes(msg.panes)
+            // Track which pane is active
+            const active = msg.panes.find(p => p.active)
+            if (active) setActivePane(active.id)
+          }
         } else if (msg.type === 'error') {
           setWsError(msg.data)
         }
@@ -227,6 +246,12 @@ const ClaudeSessions = () => {
       wsRef.current = null
     }
   }, [selectedSession])
+
+  // Handler for switching panes via WebSocket
+  const handleSelectPane = useCallback((paneId: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({ type: 'select_pane', pane: paneId }))
+  }, [])
 
   // Persist allowed tools to localStorage
   useEffect(() => {
@@ -864,6 +889,46 @@ const ClaudeSessions = () => {
                     connected={wsConnected}
                   />
                 </div>
+                {/* Pane switcher chips */}
+                {paneCount > 1 && (
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <span className="text-xs text-slate-500 mr-1">Panes:</span>
+                    {panes.length > 0 ? panes.map((pane) => (
+                      <button
+                        key={pane.id}
+                        onClick={() => handleSelectPane(pane.id)}
+                        className={[
+                          "px-3 py-1 rounded-full text-xs font-mono transition-colors",
+                          pane.id === activePane
+                            ? "bg-primary text-white"
+                            : "bg-slate-200 text-slate-700 hover:bg-slate-300",
+                        ].join(" ")}
+                        title={`${pane.command} — ${pane.title || pane.id}`}
+                      >
+                        {pane.title || pane.command?.split('/').pop() || pane.id}
+                      </button>
+                    )) : (
+                      // Fallback: show simple numbered chips when pane list hasn't loaded
+                      Array.from({ length: paneCount }, (_, i) => {
+                        const paneId = `0.${i}`
+                        return (
+                          <button
+                            key={paneId}
+                            onClick={() => handleSelectPane(paneId)}
+                            className={[
+                              "px-3 py-1 rounded-full text-xs font-mono transition-colors",
+                              paneId === activePane
+                                ? "bg-primary text-white"
+                                : "bg-slate-200 text-slate-700 hover:bg-slate-300",
+                            ].join(" ")}
+                          >
+                            {paneId}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Differ code review panel */}

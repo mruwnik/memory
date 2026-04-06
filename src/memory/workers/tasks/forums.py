@@ -9,8 +9,8 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def update_engagement_metrics(
 
 
 @app.task(name=SYNC_LESSWRONG_POST)
-@safe_task_execution
+@tracked_task
 def sync_lesswrong_post(
     post: LessWrongPost,
     tags: list[str] = [],
@@ -61,7 +61,7 @@ def sync_lesswrong_post(
 
 
 @app.task(name=SYNC_LESSWRONG)
-@safe_task_execution
+@tracked_task
 def sync_lesswrong(
     since: str | None = None,
     until: str | None = None,

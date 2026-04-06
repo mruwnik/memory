@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
-from memory.common.content_processing import safe_task_execution
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +264,7 @@ def backup_encrypted_directory(path: Path) -> dict:
 
 
 @app.task(name=BACKUP_PATH)
+@tracked_task
 def backup_to_s3(path: Path | str):
     """Backup a specific directory to S3."""
     path = Path(path)
@@ -278,7 +279,7 @@ def backup_to_s3(path: Path | str):
 
 
 @app.task(name=BACKUP_ALL)
-@safe_task_execution
+@tracked_task
 def backup_all_to_s3():
     """Main backup task that syncs unencrypted dirs and uploads encrypted dirs.
 

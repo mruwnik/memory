@@ -18,7 +18,16 @@ interface UserSelectorProps {
   filterToUsers?: FilterUser[]
   // Only show human users (excludes bots)
   onlyHumanUsers?: boolean
+  // Show an "All users" option (id: -1) at the top of the list
+  showAllOption?: boolean
+  // Show a "No user" option (id: -2) for system/automatic jobs
+  showNoneOption?: boolean
 }
+
+/** Sentinel value for "all users" selection */
+export const ALL_USERS_ID = -1
+/** Sentinel value for "no user" (NULL user_id) selection */
+export const NO_USER_ID = -2
 
 /**
  * User selector dropdown for admin users.
@@ -28,7 +37,7 @@ interface UserSelectorProps {
  * If filterToUsers is provided, only users in that list will be shown.
  * If onlyHumanUsers is true, bot users will be excluded.
  */
-const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHumanUsers = false }: UserSelectorProps) => {
+const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHumanUsers = false, showAllOption = false, showNoneOption = false }: UserSelectorProps) => {
   const { hasScope, user: currentUser } = useAuth()
   const { listUsers } = useUsers()
   const [users, setUsers] = useState<User[]>([])
@@ -100,11 +109,23 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
         value={value.id}
         onChange={(e) => {
           const userId = parseInt(e.target.value, 10)
-          const user = users.find(u => u.id === userId)
-          onChange({ type: 'user', id: userId, name: user?.name || '' })
+          if (userId === ALL_USERS_ID) {
+            onChange({ type: 'user', id: ALL_USERS_ID, name: 'All users' })
+          } else if (userId === NO_USER_ID) {
+            onChange({ type: 'user', id: NO_USER_ID, name: 'No user' })
+          } else {
+            const user = users.find(u => u.id === userId)
+            onChange({ type: 'user', id: userId, name: user?.name || '' })
+          }
         }}
         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
       >
+        {showAllOption && (
+          <option value={ALL_USERS_ID}>All users</option>
+        )}
+        {showNoneOption && (
+          <option value={NO_USER_ID}>System (no user)</option>
+        )}
         {displayUsers.map(user => (
           <option key={user.id} value={user.id}>
             {user.name} {user.id === currentUser?.id ? '(you)' : ''}
@@ -121,7 +142,7 @@ export default UserSelector
  * Hook to manage user selection state with localStorage persistence.
  * Returns [selectedUser, setSelectedUser] similar to useState.
  */
-export function useUserSelection(storageKey: string = 'adminSelectedUser'): [SelectedUser, (user: SelectedUser) => void] {
+export function useUserSelection(storageKey: string = 'adminSelectedUser', defaultToAll: boolean = false): [SelectedUser, (user: SelectedUser) => void] {
   const { hasScope, user: currentUser } = useAuth()
   const isAdmin = hasScope('admin') || hasScope('*')
 
@@ -140,6 +161,11 @@ export function useUserSelection(storageKey: string = 'adminSelectedUser'): [Sel
       } catch {
         // Ignore parsing errors
       }
+    }
+
+    // Default to "All users" if requested and admin
+    if (defaultToAll && isAdmin) {
+      return { type: 'user', id: ALL_USERS_ID, name: 'All users' }
     }
 
     // Default to current user for everyone
@@ -164,9 +190,13 @@ export function useUserSelection(storageKey: string = 'adminSelectedUser'): [Sel
   // Update if currentUser changes and selected user is placeholder (id: 0)
   useEffect(() => {
     if (currentUser && selectedUser.id === 0) {
-      setSelectedUserState({ type: 'user', id: currentUser.id, name: currentUser.name })
+      if (defaultToAll && (hasScope('admin') || hasScope('*'))) {
+        setSelectedUserState({ type: 'user', id: ALL_USERS_ID, name: 'All users' })
+      } else {
+        setSelectedUserState({ type: 'user', id: currentUser.id, name: currentUser.name })
+      }
     }
-  }, [currentUser, selectedUser.id])
+  }, [currentUser, selectedUser.id, defaultToAll, hasScope])
 
   return [selectedUser, setSelectedUser]
 }

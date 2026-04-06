@@ -23,7 +23,7 @@ from memory.common.celery_app import (
     RUN_SCHEDULED_TASKS,
     app,
 )
-from memory.common.content_processing import safe_task_execution
+from memory.common.jobs import tracked_task
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordBot, EmailAccount, ScheduledTask, TaskExecution, UserSession
@@ -326,7 +326,7 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
 
 
 @app.task(bind=True, name=EXECUTE_SCHEDULED_TASK)
-@safe_task_execution
+@tracked_task
 def execute_scheduled_task(self, execution_id: str):
     """Execute a scheduled task."""
     logger.info(f"Executing scheduled task execution: {execution_id}")
@@ -406,7 +406,7 @@ def execute_scheduled_task(self, execution_id: str):
 
 
 @app.task(name=RUN_SCHEDULED_TASKS)
-@safe_task_execution
+@tracked_task
 def run_scheduled_tasks():
     """Find and dispatch due scheduled tasks."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)

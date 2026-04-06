@@ -21,8 +21,8 @@ from memory.parsers.google_drive import refresh_credentials
 from memory.common.content_processing import (
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 from memory.common.people import link_people, reconcile_people
 
 logger = logging.getLogger(__name__)
@@ -399,7 +399,7 @@ def _fetch_google_calendar_events(
 
 
 @app.task(name=SYNC_CALENDAR_EVENT)
-@safe_task_execution
+@tracked_task
 def sync_calendar_event(
     account_id: int, event_data_raw: dict[str, Any]
 ) -> dict[str, Any]:
@@ -440,7 +440,7 @@ def sync_calendar_event(
 
 
 @app.task(name=SYNC_CALENDAR_ACCOUNT)
-@safe_task_execution
+@tracked_task
 def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str, Any]:
     """Sync all events from a calendar account."""
     logger.info(f"Syncing calendar account {account_id}")
@@ -526,7 +526,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
 
 
 @app.task(name=SYNC_ALL_CALENDARS)
-@safe_task_execution
+@tracked_task
 def sync_all_calendars(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active calendar accounts."""
     with make_session() as session:

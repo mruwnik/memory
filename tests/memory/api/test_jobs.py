@@ -3,10 +3,52 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import PendingJob, JobStatus, JobType, User
+from unittest.mock import MagicMock
+
+from memory.common.db.models import PendingJob, JobStatus, JobType, User, HumanUser
 
 
 # Note: app_client, client, and user fixtures are defined in conftest.py
+
+
+@pytest.fixture
+def non_admin_client(app_client, db_session, user):
+    """Test client authenticated as a non-admin user (scopes=['read'])."""
+    from memory.api.auth import get_current_user
+    from memory.common.db.connection import get_session
+
+    test_client, app = app_client
+
+    # Save existing overrides to restore after test
+    prev_auth = app.dependency_overrides.get(get_current_user)
+    prev_session = app.dependency_overrides.get(get_session)
+
+    mock_user = MagicMock()
+    mock_user.id = user.id
+    mock_user.email = user.email
+    mock_user.scopes = ["read"]
+
+    def mock_get_current_user():
+        return mock_user
+
+    def get_test_session():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    app.dependency_overrides[get_session] = get_test_session
+    yield test_client
+    # Restore previous overrides
+    if prev_auth is not None:
+        app.dependency_overrides[get_current_user] = prev_auth
+    else:
+        app.dependency_overrides.pop(get_current_user, None)
+    if prev_session is not None:
+        app.dependency_overrides[get_session] = prev_session
+    else:
+        app.dependency_overrides.pop(get_session, None)
 
 
 @pytest.fixture
@@ -30,10 +72,11 @@ def other_user(db_session):
     existing = db_session.query(User).filter(User.id == 99999).first()
     if existing:
         return existing
-    other = User(
+    other = HumanUser(
         id=99999,
         name="Other User",
         email="other@example.com",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(other)
     db_session.commit()
@@ -91,9 +134,9 @@ def test_get_job_not_found(client: TestClient):
     assert response.json()["detail"] == "Job not found"
 
 
-def test_get_job_other_user_returns_404(client: TestClient, job_for_other_user):
-    """Test that users cannot see other users' jobs."""
-    response = client.get(f"/jobs/{job_for_other_user.id}")
+def test_get_job_other_user_returns_404(non_admin_client: TestClient, job_for_other_user):
+    """Test that non-admin users cannot see other users' jobs."""
+    response = non_admin_client.get(f"/jobs/{job_for_other_user.id}")
 
     # Should return 404 (not 403) to avoid leaking job existence
     assert response.status_code == 404
@@ -146,9 +189,9 @@ def test_get_job_by_external_id_not_found(client: TestClient):
     assert response.json()["detail"] == "Job not found"
 
 
-def test_get_job_by_external_id_other_user(client: TestClient, job_for_other_user):
+def test_get_job_by_external_id_other_user(non_admin_client: TestClient, job_for_other_user):
     """Test that external_id lookup respects user ownership."""
-    response = client.get(f"/jobs/external/{job_for_other_user.external_id}")
+    response = non_admin_client.get(f"/jobs/external/{job_for_other_user.external_id}")
 
     assert response.status_code == 404
 
@@ -255,9 +298,9 @@ def test_list_jobs_pagination(client: TestClient, db_session, user):
     assert page1_ids.isdisjoint(page2_ids)
 
 
-def test_list_jobs_excludes_other_users(client: TestClient, job_for_other_user, user):
+def test_list_jobs_excludes_other_users(non_admin_client: TestClient, job_for_other_user, user):
     """Test that list_jobs only returns current user's jobs."""
-    response = client.get("/jobs")
+    response = non_admin_client.get("/jobs")
 
     assert response.status_code == 200
     data = response.json()
@@ -332,8 +375,8 @@ def test_retry_job_missing_task_name(client: TestClient, db_session, user):
     assert "missing _task_name" in response.json()["detail"]
 
 
-def test_retry_job_other_user(client: TestClient, db_session, other_user):
-    """Test that users cannot retry other users' jobs."""
+def test_retry_job_other_user(non_admin_client: TestClient, db_session, other_user):
+    """Test that non-admin users cannot retry other users' jobs."""
     # Create a failed job for another user
     other_job = PendingJob(
         job_type=JobType.MEETING.value,
@@ -344,7 +387,7 @@ def test_retry_job_other_user(client: TestClient, db_session, other_user):
     db_session.add(other_job)
     db_session.commit()
 
-    response = client.post(f"/jobs/{other_job.id}/retry")
+    response = non_admin_client.post(f"/jobs/{other_job.id}/retry")
 
     assert response.status_code == 404
 
@@ -359,6 +402,64 @@ def test_route_ordering_external_before_job_id(client: TestClient, job_for_user)
     assert response.json()["external_id"] == "user-job-ext-123"
 
 
+def test_get_job_includes_user_id(client: TestClient, job_for_user):
+    """Test that job responses include user_id field."""
+    response = client.get(f"/jobs/{job_for_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "user_id" in data
+    assert data["user_id"] == job_for_user.user_id
+
+
+def test_list_jobs_includes_user_id(client: TestClient, job_for_user):
+    """Test that listed jobs include user_id field."""
+    response = client.get("/jobs")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    assert "user_id" in data[0]
+
+
+def test_get_job_types_empty(client: TestClient):
+    """Test getting job types when no jobs exist."""
+    response = client.get("/jobs/types")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+
+
+def test_get_job_types(client: TestClient, db_session, user):
+    """Test getting distinct job types."""
+    jobs = [
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.REPROCESS.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.COMPLETE.value, user_id=user.id,
+        ),
+    ]
+    db_session.add_all(jobs)
+    db_session.commit()
+
+    response = client.get("/jobs/types")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "meeting" in data
+    assert "reprocess" in data
+    # Should be deduplicated (meeting appears twice in DB but once in response)
+    assert data.count("meeting") == 1
+
+
 # ---------- Admin user tests ----------
 
 
@@ -370,10 +471,11 @@ def admin_user(db_session):
         existing.scopes = ["*"]
         db_session.commit()
         return existing
-    admin = User(
+    admin = HumanUser(
         id=2,
         name="Admin User",
         email="admin@example.com",
+        password_hash="bcrypt_hash_placeholder",
         scopes=["*"],
     )
     db_session.add(admin)
@@ -489,10 +591,10 @@ def test_admin_filter_nonexistent_user(admin_client: TestClient):
     assert response.json()["detail"] == "User not found"
 
 
-def test_non_admin_cannot_filter_by_user_id(client: TestClient, job_for_other_user):
+def test_non_admin_cannot_filter_by_user_id(non_admin_client: TestClient, job_for_other_user):
     """Test that non-admin users cannot use user_id filter to see other users' jobs."""
     # Regular client (non-admin) trying to filter by other user's ID
-    response = client.get(f"/jobs?user_id={job_for_other_user.user_id}")
+    response = non_admin_client.get(f"/jobs?user_id={job_for_other_user.user_id}")
 
     assert response.status_code == 200
     data = response.json()

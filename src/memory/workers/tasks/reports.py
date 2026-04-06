@@ -12,8 +12,8 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 from memory.parsers.html import process_images, convert_to_markdown
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def convert_html_report(file_path: pathlib.Path) -> tuple[str, list[str]]:
 
 
 @app.task(name=SYNC_REPORT)
-@safe_task_execution
+@tracked_task
 def sync_report(
     file_path: str,
     title: str | None = None,

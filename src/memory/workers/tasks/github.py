@@ -28,8 +28,8 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +405,7 @@ def _lookup_milestone_id(
 
 
 @app.task(name=SYNC_GITHUB_ITEM)
-@safe_task_execution
+@tracked_task
 def sync_github_item(
     repo_id: int,
     issue_data_serialized: dict[str, Any],
@@ -467,7 +467,7 @@ def sync_github_item(
 
 
 @app.task(name=SYNC_GITHUB_REPO)
-@safe_task_execution
+@tracked_task
 def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
     """Sync all issues and PRs for a repository."""
     logger.info(f"Syncing GitHub repo {repo_id}")
@@ -592,7 +592,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
 
 
 @app.task(name=SYNC_ALL_GITHUB_REPOS)
-@safe_task_execution
+@tracked_task
 def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
     """Trigger sync for all active GitHub repos.
 
@@ -677,7 +677,7 @@ def _sync_project(
 
 
 @app.task(name=SYNC_GITHUB_PROJECTS)
-@safe_task_execution
+@tracked_task
 def sync_github_projects(
     account_id: int,
     owner: str,

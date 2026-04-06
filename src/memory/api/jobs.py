@@ -1,8 +1,10 @@
 """API endpoints for job status tracking."""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import exists
+from sqlalchemy import distinct, exists, func
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
@@ -29,8 +31,18 @@ def can_access_job(job, current_user: User) -> bool:
     return job.user_id is None or job.user_id == current_user.id
 
 
-# NOTE: /external/{external_id} must come BEFORE /{job_id} to avoid
-# FastAPI treating "external" as a job_id integer
+@router.get("/types")
+def get_job_types(
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> list[str]:
+    """Get distinct job types that exist in the database."""
+    rows = db.query(distinct(PendingJob.job_type)).order_by(PendingJob.job_type).all()
+    return [r[0] for r in rows]
+
+
+# NOTE: /external/{external_id} and /types must come BEFORE /{job_id}
+# to avoid FastAPI treating the path segment as a job_id integer
 @router.get("/external/{external_id}")
 def get_job_by_external_id(
     external_id: str,
@@ -87,6 +99,9 @@ def list_jobs(
     limit: int = Query(50, ge=1, le=200, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results to skip"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
+    source: str | None = Query(None, description="Filter by origin: 'manual' (user-initiated) or 'automatic' (system/beat)"),
+    created_after: str | None = Query(None, description="Filter jobs created after this ISO datetime"),
+    created_before: str | None = Query(None, description="Filter jobs created before this ISO datetime"),
 ) -> list[PendingJobPayload]:
     """
     List jobs for the current user.
@@ -99,10 +114,24 @@ def list_jobs(
     """
     resolved_user_id = resolve_user_filter(user_id, user, db)
 
+    parsed_after = None
+    parsed_before = None
+    if created_after:
+        parsed_after = datetime.fromisoformat(created_after)
+        if parsed_after.tzinfo is None:
+            parsed_after = parsed_after.replace(tzinfo=timezone.utc)
+    if created_before:
+        parsed_before = datetime.fromisoformat(created_before)
+        if parsed_before.tzinfo is None:
+            parsed_before = parsed_before.replace(tzinfo=timezone.utc)
+
     jobs = job_utils.list_jobs(
         db,
         status=status,
         job_type=job_type,
+        source=source,
+        created_after=parsed_after,
+        created_before=parsed_before,
         user_id=resolved_user_id,
         limit=limit,
         offset=offset,

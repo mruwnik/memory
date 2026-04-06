@@ -154,5 +154,6 @@ class PendingJobPayload(BaseModel):
     updated_at: datetime
     completed_at: datetime | None
     attempts: int
+    user_id: int | None = None
 
     model_config = {"from_attributes": True}

@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useJobs, Job, JobStatus, JobUser } from '@/hooks/useJobs'
-import UserSelector, { useUserSelection } from '@/components/common/UserSelector'
+import { useJobs, Job, JobStatus, JobSource, JobUser } from '@/hooks/useJobs'
+import UserSelector, { useUserSelection, ALL_USERS_ID, NO_USER_ID } from '@/components/common/UserSelector'
 
 type StatusFilter = 'all' | JobStatus
+
+const PAGE_SIZE = 100
 
 const STATUS_ORDER: Record<string, number> = {
   failed: 0,
@@ -28,37 +30,69 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const Jobs = () => {
-  const { listJobs, retryJob, reingestJob, getUsersWithJobs } = useJobs()
+  const { listJobs, retryJob, reingestJob, getUsersWithJobs, getJobTypes } = useJobs()
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [jobTypeFilter, setJobTypeFilter] = useState<string>('all')
+  const [sourceFilter, setSourceFilter] = useState<'all' | JobSource>('all')
+  const [createdAfter, setCreatedAfter] = useState<string>('')
+  const [createdBefore, setCreatedBefore] = useState<string>('')
+  const [page, setPage] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [retryingId, setRetryingId] = useState<number | null>(null)
   const [reingestingId, setReingestingId] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
-  const [selectedUser, setSelectedUser] = useUserSelection('jobsSelectedUser')
+  const [selectedUser, setSelectedUser] = useUserSelection('jobsSelectedUser', true)
   const [usersWithJobs, setUsersWithJobs] = useState<JobUser[]>([])
+  const [jobTypes, setJobTypes] = useState<string[]>([])
 
-  // Load users with jobs data for the selector filter
+  // Load users with jobs and job types for filter dropdowns
   useEffect(() => {
-    getUsersWithJobs()
-      .then(setUsersWithJobs)
-      .catch(console.error)
-  }, [getUsersWithJobs])
+    getUsersWithJobs().then(setUsersWithJobs).catch(console.error)
+    getJobTypes().then(setJobTypes).catch(console.error)
+  }, [getUsersWithJobs, getJobTypes])
 
   // Convert selectedUser to userId for API calls
-  // Note: id=0 is a placeholder meaning "user not loaded yet", so treat it as undefined
-  const userId = selectedUser.id !== 0 ? selectedUser.id : undefined
+  // id=0 is a placeholder meaning "user not loaded yet"
+  // ALL_USERS_ID (-1) means show all users' jobs
+  // NO_USER_ID (-2) means show system jobs (user_id IS NULL)
+  const userId = selectedUser.id === ALL_USERS_ID || selectedUser.id === NO_USER_ID
+    ? undefined
+    : selectedUser.id !== 0
+      ? selectedUser.id
+      : undefined
+
+  const showingAllUsers = selectedUser.id === ALL_USERS_ID || selectedUser.id === NO_USER_ID
+
+  // When "System (no user)" is selected, force source=automatic
+  const effectiveSourceFilter = selectedUser.id === NO_USER_ID ? 'automatic' : sourceFilter
+
+  // Build a user lookup map for displaying user names on job rows
+  const userNameMap = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const u of usersWithJobs) {
+      map.set(u.id, u.name || u.email)
+    }
+    return map
+  }, [usersWithJobs])
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     setActionError(null)
     try {
-      const filters = statusFilter !== 'all' ? { status: statusFilter } : {}
-      const data = await listJobs({ ...filters, limit: 100, userId })
+      const filters: Record<string, string | number | undefined> = {}
+      if (statusFilter !== 'all') filters.status = statusFilter
+      if (jobTypeFilter !== 'all') filters.job_type = jobTypeFilter
+      if (effectiveSourceFilter !== 'all') filters.source = effectiveSourceFilter
+      if (createdAfter) filters.created_after = new Date(createdAfter).toISOString()
+      if (createdBefore) filters.created_before = new Date(createdBefore + 'T23:59:59').toISOString()
+      const data = await listJobs({ ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE, userId } as Parameters<typeof listJobs>[0])
       // Check if request was aborted
       if (signal?.aborted) return
+      setHasMore(data.length === PAGE_SIZE)
       // Sort: failed first, then processing, pending, complete
       const sorted = [...data].sort((a, b) => {
         const aOrder = STATUS_ORDER[a.status] ?? 4
@@ -77,7 +111,7 @@ const Jobs = () => {
         setLoading(false)
       }
     }
-  }, [listJobs, statusFilter, userId])
+  }, [listJobs, statusFilter, jobTypeFilter, effectiveSourceFilter, createdAfter, createdBefore, page, userId])
 
   useEffect(() => {
     // Cancel any in-flight request
@@ -87,6 +121,11 @@ const Jobs = () => {
     loadJobs(controller.signal)
     return () => controller.abort()
   }, [loadJobs])
+
+  // Reset to first page when filters change
+  useEffect(() => {
+    setPage(0)
+  }, [statusFilter, jobTypeFilter, effectiveSourceFilter, createdAfter, createdBefore, userId])
 
   const handleRetry = async (jobId: number) => {
     setRetryingId(jobId)
@@ -147,7 +186,7 @@ const Jobs = () => {
           Back
         </Link>
         <h1 className="text-2xl font-semibold text-slate-800 flex-1">Jobs</h1>
-        <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithJobs} />
+        <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithJobs} showAllOption showNoneOption />
         <div className="flex gap-3 text-sm">
           {showStats ? (
             <>
@@ -178,6 +217,53 @@ const Jobs = () => {
               {f.label}
             </button>
           ))}
+          {jobTypes.length > 1 && (
+            <select
+              value={jobTypeFilter}
+              onChange={(e) => setJobTypeFilter(e.target.value)}
+              className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            >
+              <option value="all">All types</option>
+              {jobTypes.map(t => (
+                <option key={t} value={t}>{formatJobType(t)}</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value as 'all' | JobSource)}
+            className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+          >
+            <option value="all">All sources</option>
+            <option value="manual">Manual</option>
+            <option value="automatic">Automatic</option>
+          </select>
+          <div className="flex items-center gap-1 ml-2">
+            <input
+              type="date"
+              value={createdAfter}
+              onChange={(e) => setCreatedAfter(e.target.value)}
+              className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+              title="From date"
+            />
+            <span className="text-slate-400 text-xs">to</span>
+            <input
+              type="date"
+              value={createdBefore}
+              onChange={(e) => setCreatedBefore(e.target.value)}
+              className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+              title="To date"
+            />
+            {(createdAfter || createdBefore) && (
+              <button
+                onClick={() => { setCreatedAfter(''); setCreatedBefore('') }}
+                className="text-xs text-slate-400 hover:text-slate-600 px-1"
+                title="Clear dates"
+              >
+                &times;
+              </button>
+            )}
+          </div>
           <button
             onClick={() => loadJobs()}
             className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
@@ -240,6 +326,11 @@ const Jobs = () => {
                     <div className="flex gap-4 mt-2 text-xs text-slate-500">
                       <span>{formatRelativeTime(job.created_at)}</span>
                       <span>{job.attempts} attempt{job.attempts !== 1 ? 's' : ''}</span>
+                      {showingAllUsers && job.user_id && (
+                        <span className="text-slate-600 font-medium">
+                          {userNameMap.get(job.user_id) || `user #${job.user_id}`}
+                        </span>
+                      )}
                       {job.result_type && job.result_id && (
                         <span className="text-primary">{job.result_type} #{job.result_id}</span>
                       )}
@@ -275,6 +366,29 @@ const Jobs = () => {
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Pagination */}
+        {!loading && (page > 0 || hasMore) && (
+          <div className="flex items-center justify-between pt-2">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-slate-500">
+              Page {page + 1}{hasMore ? '' : ' (last)'}
+            </span>
+            <button
+              onClick={() => setPage(p => p + 1)}
+              disabled={!hasMore}
+              className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         )}
       </div>
     </div>

@@ -23,10 +23,8 @@ from memory.workers.email import (
     process_folder,
     vectorize_email,
 )
-from memory.common.content_processing import (
-    check_content_exists,
-    safe_task_execution,
-)
+from memory.common.content_processing import check_content_exists
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +93,7 @@ def email_sync_lock(account_id: int) -> Generator[EmailSyncLock | None, None, No
 
 
 @app.task(name=PROCESS_EMAIL)
-@safe_task_execution
+@tracked_task
 def process_message(
     account_id: int,
     message_id: str,
@@ -351,7 +349,7 @@ def sync_gmail_messages(
 
 
 @app.task(name=SYNC_ACCOUNT)
-@safe_task_execution
+@tracked_task
 def sync_account(account_id: int, since_date: str | None = None) -> dict:
     """
     Synchronize emails from a specific account.
@@ -406,7 +404,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
 
 
 @app.task(name=SYNC_ALL_ACCOUNTS)
-@safe_task_execution
+@tracked_task
 def sync_all_accounts() -> list[dict]:
     """
     Synchronize all active email accounts.

@@ -34,13 +34,14 @@ from memory.common.db.models import Chunk, CodingProject, Session, SourceItem
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(name=CLEAN_COLLECTION)
+@tracked_task
 def clean_collection(collection: str) -> dict[str, int]:
     logger.info(f"Cleaning collection {collection}")
 
@@ -69,7 +70,7 @@ def clean_collection(collection: str) -> dict[str, int]:
 
 
 @app.task(name=CLEAN_ALL_COLLECTIONS)
-@safe_task_execution
+@tracked_task
 def clean_all_collections():
     logger.info("Cleaning all collections")
     for collection in collections.ALL_COLLECTIONS:
@@ -78,6 +79,7 @@ def clean_all_collections():
 
 
 @app.task(name=REINGEST_CHUNK)
+@tracked_task
 def reingest_chunk(chunk_id: str, collection: str):
     logger.info(f"Reingesting chunk {chunk_id}")
     with make_session() as session:
@@ -139,6 +141,7 @@ def get_item_class(item_type: str) -> type[SourceItem]:
 
 
 @app.task(name=REINGEST_ITEM)
+@tracked_task
 def reingest_item(item_id: str, item_type: str):
     logger.info(f"Reingesting {item_type} {item_id}")
     try:
@@ -157,6 +160,7 @@ def reingest_item(item_id: str, item_type: str):
 
 
 @app.task(name=REINGEST_EMPTY_SOURCE_ITEMS)
+@tracked_task
 def reingest_empty_source_items(item_type: str):
     logger.info("Reingesting empty source items")
     try:
@@ -177,6 +181,7 @@ def reingest_empty_source_items(item_type: str):
 
 
 @app.task(name=REINGEST_ALL_EMPTY_SOURCE_ITEMS)
+@tracked_task
 def reingest_all_empty_source_items():
     logger.info("Reingesting all empty source items")
     for item_type in SourceItem.registry._class_registry.keys():
@@ -184,6 +189,7 @@ def reingest_all_empty_source_items():
 
 
 @app.task(name=PROCESS_RAW_ITEM)
+@tracked_task
 def process_raw_item(item_id: int, item_type: str):
     """Process a single RAW item - generate embeddings and store in Qdrant.
 
@@ -216,7 +222,7 @@ def process_raw_item(item_id: int, item_type: str):
 
 
 @app.task(name=PROCESS_RAW_ITEMS)
-@safe_task_execution
+@tracked_task
 def process_raw_items(
     item_type: str | None = None,
     modality: str | None = None,
@@ -295,7 +301,7 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
 
 
 @app.task(name=REINGEST_MISSING_CHUNKS)
-@safe_task_execution
+@tracked_task
 def reingest_missing_chunks(
     batch_size: int = 1000,
     collection: str | None = None,
@@ -368,6 +374,7 @@ def _payloads_equal(current: dict[str, Any], new: dict[str, Any]) -> bool:
 
 
 @app.task(name=UPDATE_METADATA_FOR_ITEM)
+@tracked_task
 def update_metadata_for_item(item_id: str, item_type: str):
     """Update metadata in Qdrant for all chunks of a single source item, merging tags."""
     logger.info(f"Updating metadata for {item_type} {item_id}")
@@ -430,6 +437,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
 
 
 @app.task(name=UPDATE_METADATA_FOR_SOURCE_ITEMS)
+@tracked_task
 def update_metadata_for_source_items(item_type: str):
     """Update metadata in Qdrant for all chunks of all items of a given source type."""
     logger.info(f"Updating metadata for all {item_type} source items")
@@ -450,7 +458,7 @@ def update_metadata_for_source_items(item_type: str):
 
 
 @app.task(name=CLEANUP_EXPIRED_OAUTH_STATES)
-@safe_task_execution
+@tracked_task
 def cleanup_expired_oauth_states(max_age_hours: int = 1):
     """Clean up OAuth states that are older than max_age_hours.
 
@@ -488,6 +496,7 @@ def cleanup_expired_oauth_states(max_age_hours: int = 1):
 
 
 @app.task(name=CLEANUP_EXPIRED_SESSIONS)
+@tracked_task
 def cleanup_expired_sessions():
     """Clean up expired user sessions from the database."""
     from memory.common.db.models import UserSession
@@ -513,7 +522,7 @@ def cleanup_expired_sessions():
 
 
 @app.task(name=CLEANUP_OLD_CLAUDE_SESSIONS)
-@safe_task_execution
+@tracked_task
 def cleanup_old_claude_sessions(max_age_days: int | None = None):
     """Clean up old coding sessions.
 
@@ -729,6 +738,7 @@ def get_data_source_model(source_type: str):
 
 
 @app.task(name=UPDATE_SOURCE_ACCESS_CONTROL, bind=True, max_retries=3)
+@tracked_task
 def update_source_access_control(
     self, source_type: str, source_id: int | str, config_version: int
 ):

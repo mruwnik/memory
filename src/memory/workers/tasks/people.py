@@ -13,14 +13,14 @@ from memory.common.celery_app import (
 from memory.common.content_processing import (
     create_content_hash,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(name=SYNC_PERSON_TIDBIT)
-@safe_task_execution
+@tracked_task
 def sync_person_tidbit(
     person_id: int,
     content: str,

@@ -11,14 +11,14 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(name=SYNC_OBSERVATION)
-@safe_task_execution
+@tracked_task
 def sync_observation(
     subject: str,
     content: str,

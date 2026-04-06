@@ -20,14 +20,14 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(name=SYNC_WEBPAGE)
-@safe_task_execution
+@tracked_task
 def sync_webpage(url: str, tags: Iterable[str] = []) -> dict:
     """
     Synchronize a webpage from a URL.
@@ -77,7 +77,7 @@ def sync_webpage(url: str, tags: Iterable[str] = []) -> dict:
 
 
 @app.task(name=SYNC_ARTICLE_FEED)
-@safe_task_execution
+@tracked_task
 def sync_article_feed(feed_id: int) -> dict:
     """
     Synchronize articles from a specific ArticleFeed.
@@ -150,7 +150,7 @@ def sync_article_feed(feed_id: int) -> dict:
 
 
 @app.task(name=SYNC_ALL_ARTICLE_FEEDS)
-@safe_task_execution
+@tracked_task
 def sync_all_article_feeds() -> list[dict]:
     """
     Trigger sync for all active ArticleFeeds.
@@ -175,6 +175,7 @@ def sync_all_article_feeds() -> list[dict]:
 
 
 @app.task(name=ADD_ARTICLE_FEED)
+@tracked_task
 def add_article_feed(
     url: str,
     title: str | None = None,
@@ -217,7 +218,7 @@ def add_article_feed(
 
 
 @app.task(name=SYNC_WEBSITE_ARCHIVE)
-@safe_task_execution
+@tracked_task
 def sync_website_archive(
     url: str, tags: Iterable[str] = [], max_pages: int = 100, add_feed: bool = True
 ) -> dict:

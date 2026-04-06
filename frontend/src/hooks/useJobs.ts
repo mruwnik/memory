@@ -16,14 +16,20 @@ export interface Job {
   updated_at: string
   completed_at: string | null
   attempts: number
+  user_id: number | null
 }
+
+export type JobSource = 'manual' | 'automatic'
 
 export interface JobFilters {
   status?: JobStatus
   job_type?: string
+  source?: JobSource
   limit?: number
   offset?: number
   userId?: number  // Admin only: filter by specific user, omit for all users
+  created_after?: string  // ISO datetime
+  created_before?: string  // ISO datetime
 }
 
 export interface JobUser {
@@ -50,6 +56,9 @@ export const useJobs = () => {
     if (filters.job_type) params.set('job_type', filters.job_type)
     if (filters.limit) params.set('limit', filters.limit.toString())
     if (filters.offset) params.set('offset', filters.offset.toString())
+    if (filters.source) params.set('source', filters.source)
+    if (filters.created_after) params.set('created_after', filters.created_after)
+    if (filters.created_before) params.set('created_before', filters.created_before)
     if (filters.userId !== undefined) params.set('user_id', filters.userId.toString())
 
     const query = params.toString()
@@ -86,6 +95,12 @@ export const useJobs = () => {
     return parseJsonResponse<Job>(response)
   }, [apiCall])
 
+  const getJobTypes = useCallback(async (): Promise<string[]> => {
+    const response = await apiCall('/jobs/types')
+    if (!response.ok) return []
+    return parseJsonResponse<string[]>(response)
+  }, [apiCall])
+
   const getUsersWithJobs = useCallback(async (): Promise<JobUser[]> => {
     const response = await apiCall('/jobs/users/with-jobs')
     if (!response.ok) {
@@ -99,6 +114,7 @@ export const useJobs = () => {
     getJob,
     retryJob,
     reingestJob,
+    getJobTypes,
     getUsersWithJobs,
   }
 }

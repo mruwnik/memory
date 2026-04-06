@@ -22,8 +22,8 @@ from memory.common.content_processing import (
     create_content_hash,
     create_task_result,
     process_content_item,
-    safe_task_execution,
 )
+from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note"):
 
 
 @app.task(name=SYNC_NOTE)
-@safe_task_execution
+@tracked_task
 def sync_note(
     subject: str,
     content: str,
@@ -227,7 +227,7 @@ def sync_note(
 
 
 @app.task(name=SYNC_NOTES)
-@safe_task_execution
+@tracked_task
 def sync_notes(folder: str):
     path = pathlib.Path(folder)
     logger.info(f"Syncing notes from {folder}")
@@ -260,7 +260,7 @@ def sync_notes(folder: str):
 
 
 @app.task(name=SETUP_GIT_NOTES)
-@safe_task_execution
+@tracked_task
 def setup_git_notes(origin: str, email: str, name: str):
     logger.info(f"Setting up git notes in {origin}")
     if (settings.NOTES_STORAGE_DIR / ".git").exists():
@@ -278,7 +278,7 @@ def setup_git_notes(origin: str, email: str, name: str):
 
 
 @app.task(name=TRACK_GIT_CHANGES)
-@safe_task_execution
+@tracked_task
 def track_git_changes():
     """Track git changes by noting current commit, pulling new commits, and listing changed files."""
     logger.info("Tracking git changes")
