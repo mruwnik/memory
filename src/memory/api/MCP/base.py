@@ -113,9 +113,9 @@ async def oauth_protected_resource(request: Request):
 
 def login_form(request: Request, form_data: dict, error: str | None = None):
     return templates.TemplateResponse(
+        request,
         "login.html",
         {
-            "request": request,
             "form_data": form_data,
             "error": error,
             "action": "/oauth/login",
