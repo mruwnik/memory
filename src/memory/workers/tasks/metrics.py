@@ -95,13 +95,15 @@ def collect_system_metrics() -> dict:
         mem = psutil.virtual_memory()
         record_gauge("system.memory_percent", mem.percent)
         record_gauge("system.memory_available_mb", mem.available / 1024 / 1024)
-        metrics_collected += 2
+        record_gauge("system.memory_total_mb", mem.total / 1024 / 1024)
+        metrics_collected += 3
 
         # Disk usage for root partition
         disk = psutil.disk_usage("/")
         record_gauge("system.disk_usage_percent", disk.percent)
         record_gauge("system.disk_free_gb", disk.free / 1024 / 1024 / 1024)
-        metrics_collected += 2
+        record_gauge("system.disk_total_gb", disk.total / 1024 / 1024 / 1024)
+        metrics_collected += 3
 
     except Exception as e:
         logger.error(f"Error collecting system metrics: {e}")

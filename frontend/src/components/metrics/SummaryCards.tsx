@@ -16,7 +16,14 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
   const hasSystemCpu = 'system.cpu_percent' in systemMetrics
   const cpuPercent = systemMetrics['system.cpu_percent'] ?? systemMetrics['process.cpu_percent']
   const memoryPercent = systemMetrics['system.memory_percent']
+  const memoryAvailableMb = systemMetrics['system.memory_available_mb']
+  const memoryTotalMb = systemMetrics['system.memory_total_mb']
   const diskPercent = systemMetrics['system.disk_usage_percent']
+  const diskFreeGb = systemMetrics['system.disk_free_gb']
+  const diskTotalGb = systemMetrics['system.disk_total_gb']
+
+  const memoryDetail = formatUsedTotal(memoryTotalMb, memoryAvailableMb, mbToHuman)
+  const diskDetail = formatUsedTotal(diskTotalGb, diskFreeGb, gbToHuman)
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -52,6 +59,9 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
             {memoryPercent.toFixed(1)}%
           </span>
           <span className="text-sm text-slate-500">Memory Usage</span>
+          {memoryDetail && (
+            <span className="block text-xs text-slate-400 mt-1">{memoryDetail}</span>
+          )}
         </div>
       )}
 
@@ -61,6 +71,9 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
             {diskPercent.toFixed(1)}%
           </span>
           <span className="text-sm text-slate-500">Disk Usage</span>
+          {diskDetail && (
+            <span className="block text-xs text-slate-400 mt-1">{diskDetail}</span>
+          )}
         </div>
       )}
     </div>
@@ -91,4 +104,26 @@ const getUsageColor = (percent: number): string => {
   if (percent <= 60) return 'text-success'
   if (percent <= 80) return 'text-warning'
   return 'text-danger'
+}
+
+// Format "used / total" given total and free/available, using a unit-aware formatter.
+const formatUsedTotal = (
+  total: number | undefined,
+  free: number | undefined,
+  format: (value: number) => string,
+): string | null => {
+  if (total === undefined || free === undefined) return null
+  const used = Math.max(total - free, 0)
+  return `${format(used)} / ${format(total)}`
+}
+
+const mbToHuman = (mb: number): string => {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${mb.toFixed(0)} MB`
+}
+
+const gbToHuman = (gb: number): string => {
+  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  return `${(gb * 1024).toFixed(0)} MB`
 }
