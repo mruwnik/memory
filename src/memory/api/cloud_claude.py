@@ -548,11 +548,11 @@ async def kill_session(
 async def list_panes(
     session_id: str,
     user: User = Depends(get_current_user),
-) -> list[dict]:
-    """List tmux panes for a Claude session.
+) -> dict:
+    """List tmux panes for a Claude session, plus container resource stats.
 
-    Returns a list of pane objects with id, window, size, active flag, and command.
-    Used by the frontend to populate a pane switcher when multiple panes exist.
+    Returns `{panes: [...], stats: {memory, cpu} | None}`. The pane list is
+    used by the frontend to populate a pane switcher when multiple panes exist.
     """
     if not user_owns_session(user, session_id):
         raise HTTPException(status_code=404, detail="Session not found")

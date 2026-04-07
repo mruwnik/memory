@@ -140,6 +140,16 @@ export interface PaneInfo {
   size?: string
 }
 
+export interface ContainerStats {
+  memory: { used_mb: number; limit_mb: number; pct: number }
+  cpu: { pct: number; limit_pct: number }
+}
+
+export interface PaneListResponse {
+  panes: PaneInfo[]
+  stats: ContainerStats | null
+}
+
 export const useClaude = () => {
   const { apiCall } = useAuth()
 
@@ -222,9 +232,9 @@ export const useClaude = () => {
   }, [apiCall])
 
   // Panes
-  const listPanes = useCallback(async (sessionId: string): Promise<PaneInfo[]> => {
+  const listPanes = useCallback(async (sessionId: string): Promise<PaneListResponse> => {
     const response = await apiCall(`/claude/${sessionId}/panes`)
-    if (!response.ok) return []
+    if (!response.ok) return { panes: [], stats: null }
     return response.json()
   }, [apiCall])
 

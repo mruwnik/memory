@@ -426,15 +426,20 @@ async def pane_poll_loop(
 
     while True:
         try:
-            panes = await client.relay_list_panes(session_id)
-            pane_ids = [p.get("id", "") for p in panes] if isinstance(panes, list) else []
+            result = await client.relay_list_panes(session_id)
+            panes = result.get("panes", [])
+            stats = result.get("stats")
+            pane_ids = [p.get("id", "") for p in panes]
 
-            if pane_ids != last_pane_ids:
+            # Send on pane change OR when stats are present (so stats stay fresh
+            # without spamming when the relay doesn't expose them).
+            if pane_ids != last_pane_ids or stats is not None:
                 last_pane_ids = pane_ids
                 await send_ws_json(
                     websocket, "panes", None,
                     pane_count=len(panes),
                     panes=panes,
+                    stats=stats,
                 )
         except OrchestratorError:
             pass  # Orchestrator unavailable, skip this cycle

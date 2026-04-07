@@ -402,18 +402,24 @@ class OrchestratorClient:
     # Terminal relay (tmux pane management)
     # -------------------------------------------------------------------------
 
-    async def relay_list_panes(self, session_id: str) -> list[dict[str, Any]]:
-        """List all tmux panes for a session."""
+    async def relay_list_panes(self, session_id: str) -> dict[str, Any]:
+        """List all tmux panes for a session, plus container resource stats.
+
+        Returns a dict with `panes` (list) and `stats` (dict or None).
+        Older relays may return a bare list of panes; in that case `stats` is None.
+        """
         status, data = await self._request(
             "GET", f"/containers/{session_id}/relay/panes"
         )
         if status == 404:
-            return []
+            return {"panes": [], "stats": None}
         if status >= 400:
             raise OrchestratorError(
                 data.get("detail", f"Failed to list panes ({status})")
             )
-        return data if isinstance(data, list) else data.get("panes", [])
+        if isinstance(data, list):
+            return {"panes": data, "stats": None}
+        return {"panes": data.get("panes", []), "stats": data.get("stats")}
 
     async def relay_select_pane(
         self,

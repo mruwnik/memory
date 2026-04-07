@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
+import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, ContainerStats, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import XtermTerminal from './XtermTerminal'
 
 const COMMON_TOOLS = [
@@ -30,6 +30,7 @@ interface ScreenMessage {
   pane?: string
   command?: string
   panes?: PaneInfo[]
+  stats?: ContainerStats | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -37,6 +38,41 @@ const STATUS_COLORS: Record<string, string> = {
   created: 'bg-blue-100 text-blue-700',
   exited: 'bg-slate-100 text-slate-600',
   paused: 'bg-yellow-100 text-yellow-700',
+}
+
+const formatMb = (mb: number): string => {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${Math.round(mb)} MB`
+}
+
+const usagePctColor = (pct: number): string => {
+  if (pct >= 90) return 'text-red-600'
+  if (pct >= 75) return 'text-yellow-600'
+  return 'text-slate-600'
+}
+
+const ContainerStatsBadge: React.FC<{ stats: ContainerStats }> = ({ stats }) => {
+  const { memory, cpu } = stats
+  // CPU pct is reported relative to a single core, so a 200% limit means 2 cores.
+  // Show "12% / 200%" so the limit is visible.
+  const cpuPct = Math.round(cpu.pct)
+  const cpuPctOfLimit = cpu.limit_pct > 0 ? (cpu.pct / cpu.limit_pct) * 100 : 0
+  return (
+    <div className="flex items-center gap-3 text-xs text-slate-500">
+      <span className="flex items-center gap-1" title={`CPU: ${cpu.pct.toFixed(1)}% of ${cpu.limit_pct}% limit`}>
+        <span className="font-medium text-slate-600">CPU</span>
+        <span className={`font-mono ${usagePctColor(cpuPctOfLimit)}`}>
+          {cpuPct}% / {cpu.limit_pct}%
+        </span>
+      </span>
+      <span className="flex items-center gap-1" title={`Memory: ${memory.used_mb} MB of ${memory.limit_mb} MB`}>
+        <span className="font-medium text-slate-600">Mem</span>
+        <span className={`font-mono ${usagePctColor(memory.pct)}`}>
+          {formatMb(memory.used_mb)} / {formatMb(memory.limit_mb)} ({Math.round(memory.pct)}%)
+        </span>
+      </span>
+    </div>
+  )
 }
 
 const ClaudeSessions = () => {
@@ -72,6 +108,7 @@ const ClaudeSessions = () => {
   const [paneCount, setPaneCount] = useState(1)
   const [activePane, setActivePane] = useState<string>('')
   const [panes, setPanes] = useState<PaneInfo[]>([])
+  const [containerStats, setContainerStats] = useState<ContainerStats | null>(null)
 
   // UI State
   const [loading, setLoading] = useState(true)
@@ -198,6 +235,7 @@ const ClaudeSessions = () => {
     setPaneCount(1)
     setActivePane('')
     setPanes([])
+    setContainerStats(null)
 
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -231,6 +269,8 @@ const ClaudeSessions = () => {
             const active = sorted.find(p => p.active)
             if (active) setActivePane(active.id)
           }
+          // Stats may be null if the relay doesn't provide them
+          if (msg.stats !== undefined) setContainerStats(msg.stats)
         } else if (msg.type === 'error') {
           setWsError(msg.data)
         }
@@ -873,7 +913,7 @@ const ClaudeSessions = () => {
 
               {/* Terminal screen */}
               <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex items-center mb-2">
+                <div className="flex items-center mb-2 gap-3">
                   <div className="text-sm font-medium text-slate-700 flex items-center gap-2">
                     <span>Terminal</span>
                     {wsConnected ? (
@@ -891,6 +931,7 @@ const ClaudeSessions = () => {
                       </span>
                     )}
                   </div>
+                  {containerStats && <ContainerStatsBadge stats={containerStats} />}
                 </div>
                 <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden min-h-[400px]">
                   <XtermTerminal
