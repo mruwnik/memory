@@ -1053,7 +1053,7 @@ def update_issue(
     owner: str,
     repo_name: str,
     number: int,
-    title: str,
+    title: str | None,
     body: str | None,
     state: str | None,
     label_ids: list[str] | None,

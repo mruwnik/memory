@@ -1,6 +1,7 @@
 """MCP subserver for GitHub issue tracking and management."""
 
 import asyncio
+import json
 import logging
 from typing import Any, Literal
 
@@ -91,7 +92,7 @@ async def list_entities(
     updated_before: str | None = None,
     deadline_before: str | None = None,
     include_closed: bool = False,
-    limit: int = 50,
+    limit: int | str = 50,
     order_by: str = "updated",
 ) -> list[dict]:
     """
@@ -128,6 +129,8 @@ async def list_entities(
     Returns: List of matching entities with relevant fields
     """
     logger.info(f"github_list called: type={type}, repo={repo}, owner={owner}")
+
+    limit = int(limit)
 
     if type == "issue":
         return list_issues(
@@ -176,7 +179,7 @@ async def fetch(
     type: GithubEntityType,
     repo: str | None = None,
     owner: str | None = None,
-    number: int | None = None,
+    number: int | str | None = None,
     slug: str | None = None,
 ) -> dict:
     """
@@ -200,24 +203,26 @@ async def fetch(
         f"github_fetch called: type={type}, repo={repo}, owner={owner}, number={number}, slug={slug}"
     )
 
+    number_int = int(number) if number is not None else None
+
     if type == "issue":
         if not repo:
             raise ValueError("repo is required for fetching issues")
-        if number is None:
+        if number_int is None:
             raise ValueError("number is required for fetching issues")
-        return fetch_issue(repo, number)
+        return fetch_issue(repo, number_int)
     elif type == "milestone":
         if not repo:
             raise ValueError("repo is required for fetching milestones")
-        if number is None:
+        if number_int is None:
             raise ValueError("number is required for fetching milestones")
-        return fetch_milestone(repo, number)
+        return fetch_milestone(repo, number_int)
     elif type == "project":
         if not owner:
             raise ValueError("owner is required for fetching projects")
-        if number is None:
+        if number_int is None:
             raise ValueError("number is required for fetching projects")
-        return fetch_project(owner, number)
+        return fetch_project(owner, number_int)
     elif type == "team":
         if not owner:
             raise ValueError("owner (org) is required for fetching teams")
@@ -233,15 +238,15 @@ async def fetch(
 @visible_when(require_scopes(SCOPE_GITHUB_WRITE), has_github_account)
 async def upsert_issue(
     repo: str,
-    title: str,
+    title: str | None = None,
     body: str | None = None,
-    number: int | None = None,
+    number: int | str | None = None,
     state: str | None = None,
     labels: list[str] | None = None,
     assignees: list[str] | None = None,
     milestone: str | int | None = None,
     project: str | None = None,
-    project_fields: dict[str, str] | None = None,
+    project_fields: dict[str, str] | str | None = None,
     deadline: str | None = None,
 ) -> dict:
     """
@@ -257,7 +262,8 @@ async def upsert_issue(
         assignees: List of GitHub usernames to assign
         milestone: Milestone title (string) or number (int) to assign
         project: Project name to add issue to (e.g., "My Project Board")
-        project_fields: Dict of project field values (e.g., {"Status": "In Progress", "Priority": "High"})
+        project_fields: Dict of project field values (e.g., {"Status": "In Progress", "Priority": "High"}).
+            May also be passed as a JSON-encoded string for clients that struggle with object parameters.
         deadline: Due date in ISO format (YYYY-MM-DD). Sets the "Due Date" project field.
 
     Returns:
@@ -269,6 +275,25 @@ async def upsert_issue(
     if len(parts) != 2:
         raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
     owner, repo_name = parts
+
+    number_int = int(number) if number is not None else None
+    if number_int is None and not title:
+        raise ValueError("title is required when creating a new issue")
+
+    if isinstance(project_fields, str):
+        try:
+            parsed_fields = json.loads(project_fields)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"project_fields must be a dict or JSON-encoded object, got invalid JSON: {e}"
+            )
+        if not isinstance(parsed_fields, dict):
+            raise ValueError(
+                f"project_fields JSON must decode to an object, got {type(parsed_fields).__name__}"
+            )
+        project_fields = {k: str(v) for k, v in parsed_fields.items()}
+    elif project_fields is not None:
+        project_fields = {k: str(v) for k, v in project_fields.items()}
 
     user = get_mcp_current_user()
     if not user or user.id is None:
@@ -288,8 +313,9 @@ async def upsert_issue(
         assignee_ids = client.get_user_ids(assignees) if assignees else None
 
         # Create or update
-        if number is None:
-            issue_data, number = create_issue(
+        if number_int is None:
+            assert title is not None  # checked above
+            issue_data, number_int = create_issue(
                 client,
                 owner,
                 repo_name,
@@ -305,7 +331,7 @@ async def upsert_issue(
                 client,
                 owner,
                 repo_name,
-                number,
+                number_int,
                 title,
                 body,
                 state,
@@ -322,7 +348,7 @@ async def upsert_issue(
 
         result: dict[str, Any] = {
             "action": action,
-            "number": number,
+            "number": number_int,
             "title": issue_data.get("title"),
             "state": issue_data.get("state"),
             "url": issue_data.get("url"),
@@ -339,7 +365,7 @@ async def upsert_issue(
                 client,
                 owner,
                 repo_name,
-                number,
+                number_int,
                 issue_data.get("id"),
                 project,
                 project_fields,
@@ -351,7 +377,7 @@ async def upsert_issue(
         # Trigger database sync (only if repo is tracked)
         if repo_obj is not None:
             success, error = sync_issue_to_database(
-                client, session, repo_obj, owner, repo_name, number
+                client, session, repo_obj, owner, repo_name, number_int
             )
             result["sync_triggered"] = success
             if error:

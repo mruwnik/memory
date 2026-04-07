@@ -2,8 +2,9 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from memory.api.MCP.servers.github import fetch, list_entities, upsert_issue
 from memory.common.db.models import GithubItem
 from memory.common.db import connection as db_connection
 
@@ -782,3 +783,149 @@ def test_extract_deadline_project_field_takes_priority():
 
     # Project field should win
     assert extract_deadline(item) == "2026-03-01"
+
+
+# =============================================================================
+# Tests for lenient input parsing in upsert_issue / list_entities / fetch
+# =============================================================================
+#
+# These tests verify that the MCP tools accept stringified versions of typed
+# parameters (limit="3", number="46", project_fields='{"k": "v"}') for clients
+# whose tool-call serialization doesn't match the strict schema. See docstrings
+# for context.
+
+
+@pytest.fixture
+def mock_upsert_deps():
+    """Patch all the side-effecting machinery for upsert_issue input tests."""
+    with (
+        patch("memory.api.MCP.servers.github.get_mcp_current_user") as mock_user,
+        patch("memory.api.MCP.servers.github.make_session") as mock_session,
+        patch("memory.api.MCP.servers.github.get_github_client") as mock_get_client,
+        patch("memory.api.MCP.servers.github.update_issue") as mock_update,
+        patch("memory.api.MCP.servers.github.create_issue") as mock_create,
+        patch(
+            "memory.api.MCP.servers.github.handle_project_integration"
+        ) as mock_project,
+        patch(
+            "memory.api.MCP.servers.github.sync_issue_to_database"
+        ) as mock_sync,
+    ):
+        mock_user.return_value = MagicMock(id=1)
+        mock_session.return_value.__enter__ = lambda s: MagicMock()
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        mock_get_client.return_value = (MagicMock(), None)
+        mock_create.return_value = ({"title": "T", "state": "OPEN", "url": "u", "id": "x"}, 99)
+        mock_update.return_value = {"title": "T", "state": "OPEN", "url": "u", "id": "x"}
+        mock_project.return_value = ([], None)
+        mock_sync.return_value = (False, None)
+        yield {
+            "create": mock_create,
+            "update": mock_update,
+            "project": mock_project,
+        }
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_accepts_project_fields_as_json_string(mock_upsert_deps):
+    """project_fields passed as a JSON-encoded string should be parsed into a dict."""
+    result = await upsert_issue.fn(
+        repo="owner/name",
+        title="hello",
+        project="P",
+        project_fields='{"Status": "Ready", "Hours": "10"}',
+    )
+
+    assert result["project_fields"] == {"Status": "Ready", "Hours": "10"}
+    # handle_project_integration should receive a real dict, not a string
+    call_kwargs = mock_upsert_deps["project"].call_args.args
+    assert call_kwargs[6] == {"Status": "Ready", "Hours": "10"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_coerces_project_fields_values_to_strings(mock_upsert_deps):
+    """Numeric values in a project_fields dict should be stringified."""
+    result = await upsert_issue.fn(
+        repo="owner/name",
+        title="hello",
+        project="P",
+        project_fields={"Hours": 10, "Min": 50},  # type: ignore[arg-type]
+    )
+
+    assert result["project_fields"] == {"Hours": "10", "Min": "50"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_rejects_invalid_json_project_fields(mock_upsert_deps):
+    """Invalid JSON in project_fields should raise ValueError."""
+    with pytest.raises(ValueError, match="invalid JSON"):
+        await upsert_issue.fn(
+            repo="owner/name",
+            title="hello",
+            project_fields="not valid json {",
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_rejects_non_object_json_project_fields(mock_upsert_deps):
+    """JSON that doesn't decode to an object should raise ValueError."""
+    with pytest.raises(ValueError, match="must decode to an object"):
+        await upsert_issue.fn(
+            repo="owner/name",
+            title="hello",
+            project_fields='["Status", "Ready"]',
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_accepts_number_as_string(mock_upsert_deps):
+    """number passed as a string should be coerced to int and used to update."""
+    result = await upsert_issue.fn(
+        repo="owner/name",
+        number="46",  # type: ignore[arg-type]
+        title="hello",
+    )
+
+    assert result["action"] == "updated"
+    assert result["number"] == 46
+    # update_issue (not create_issue) should have been called
+    mock_upsert_deps["update"].assert_called_once()
+    mock_upsert_deps["create"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_title_optional_for_update(mock_upsert_deps):
+    """Updating an existing issue should not require a title."""
+    result = await upsert_issue.fn(repo="owner/name", number=46)
+
+    assert result["action"] == "updated"
+    # update_issue should be called with title=None
+    update_args = mock_upsert_deps["update"].call_args.args
+    assert update_args[4] is None  # title positional arg
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_title_required_for_create(mock_upsert_deps):
+    """Creating a new issue (no number) without a title should raise."""
+    with pytest.raises(ValueError, match="title is required"):
+        await upsert_issue.fn(repo="owner/name")
+
+
+@pytest.mark.asyncio
+async def test_list_entities_accepts_limit_as_string():
+    """list_entities should coerce string limit to int."""
+    with patch("memory.api.MCP.servers.github.list_issues") as mock_list:
+        mock_list.return_value = []
+        await list_entities.fn(type="issue", limit="3")  # type: ignore[arg-type]
+
+    assert mock_list.call_args.kwargs["limit"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_accepts_number_as_string():
+    """fetch should coerce string number to int."""
+    with patch("memory.api.MCP.servers.github.fetch_issue") as mock_fetch:
+        mock_fetch.return_value = {}
+        await fetch.fn(type="issue", repo="o/r", number="46")  # type: ignore[arg-type]
+
+    mock_fetch.assert_called_once_with("o/r", 46)
