@@ -33,7 +33,7 @@ class RelayClient:
         await self._close_connection()
 
         self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_connection(self.host, self.port),
+            asyncio.open_connection(self.host, self.port, limit=2 * 1024 * 1024),
             timeout=CONNECT_TIMEOUT,
         )
         return self._reader, self._writer
