@@ -44,6 +44,10 @@ WHITELIST = {
     "/admin/statics/",  # SQLAdmin static resources
     "/google-drive/callback",  # Google OAuth callback
     "/polls/respond",  # Public poll response endpoints
+    # Cloud-claude file transfer: gated by HMAC-signed presigned tokens
+    # (query string for pull, Bearer header for push) inside the endpoints
+    # themselves — must bypass OAuth or curl can't reach them.
+    "/claude/transfer/",
 }
 
 # Claude WebSocket session path pattern - more specific than prefix matching

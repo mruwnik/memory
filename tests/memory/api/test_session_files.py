@@ -295,3 +295,44 @@ def test_transfer_push_rejects_bearer_with_only_whitespace_token(client):
         headers={"Authorization": "Bearer   "},
     )
     assert resp.status_code == 401
+
+
+# -- auth middleware whitelist (regression guard) ----------------------------
+#
+# The streaming transfer endpoints carry their own auth via HMAC-signed tokens
+# (query string for pull, Bearer header for push). They must NOT be gated by
+# OAuth middleware — otherwise curl can't reach them, since curl has no
+# OAuth token. This test pins the whitelist behavior so a future refactor
+# of auth.py can't silently re-block the endpoints.
+
+
+def test_transfer_endpoints_are_in_oauth_middleware_whitelist():
+    """If you remove /claude/transfer/ from auth.WHITELIST, deployed curl
+    requests will get 401 from middleware before HMAC verification runs.
+    This was the bug found via live testing on chris.equistamp.io."""
+    from memory.api.auth import WHITELIST
+
+    has_transfer_whitelist = any(
+        "/claude/transfer/".startswith(entry)
+        or entry.startswith("/claude/transfer")
+        for entry in WHITELIST
+    )
+    assert has_transfer_whitelist, (
+        "Add `/claude/transfer/` to auth.WHITELIST — the streaming "
+        "transfer endpoints authenticate via HMAC-signed tokens, not "
+        "OAuth, and must bypass the auth middleware."
+    )
+
+    # Verify the whitelist's startswith check would actually let
+    # /claude/transfer/pull and /claude/transfer/push through.
+    paths_to_let_through = [
+        "/claude/transfer/pull",
+        "/claude/transfer/push",
+        "/claude/transfer/pull?token=foo",
+    ]
+    for path in paths_to_let_through:
+        # Strip query for the startswith check (matches AuthMiddleware
+        # which checks request.url.path, no query)
+        bare = path.split("?", 1)[0]
+        matched = any(bare.startswith(entry) for entry in WHITELIST)
+        assert matched, f"WHITELIST does not let {bare} through"
