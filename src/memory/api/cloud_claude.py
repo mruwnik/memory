@@ -10,12 +10,13 @@ Session IDs are prefixed with user_id to enable authorization filtering:
 """
 
 import asyncio
+import json
 import logging
 import re
 import secrets
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import websockets
@@ -34,6 +35,12 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, get_user_from_token, require_scope
+from memory.api.transfer_tokens import (
+    TransferTokenError,
+    TransferTokenPayload,
+    validate_transfer_path,
+    verify_token,
+)
 from memory.common.scopes import SCOPE_SCHEDULE_WRITE
 from memory.api.orchestrator_client import (
     ORCHESTRATOR_SOCKET,
@@ -598,6 +605,201 @@ async def get_attach_commands(
     }
 
 
+# -- File transfer ----------------------------------------------------------
+#
+# Streaming tar bytes to/from session containers. The MCP `claude` subserver
+# mints presigned URLs pointing at these endpoints; the bundled session-files
+# skill curls the URL with the token. Tokens are short-lived (~60s) and bind
+# the URL to a specific user/session/path/action — so even if the URL leaks
+# via logs, blast radius is one operation.
+#
+# Listing and URL minting are MCP-only (see `claude.session_list_dir` /
+# `session_pull_url` / `session_push_url`); the frontend defaults to MCP tool
+# calls and doesn't need duplicate REST endpoints for those.
+
+
+def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayload:
+    """Verify a token and check it grants the expected action on a session
+    that the token's user actually owns. Raises HTTPException on failure.
+
+    Re-validates ``session_id`` and ``path`` defensively. Mint-time validation
+    already enforces these, but if ``TRANSFER_TOKEN_SECRET`` ever leaks (it
+    falls back to ``SECRETS_ENCRYPTION_KEY`` in dev), or a future code path
+    skips the mint helpers, this is the only line of defense before the
+    orchestrator URL is constructed.
+    """
+    try:
+        payload = verify_token(token)
+    except TransferTokenError as e:
+        msg = str(e)
+        if "expired" in msg:
+            raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {msg}")
+
+    if payload.action != expected_action:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Token does not grant {expected_action} access",
+        )
+
+    if not is_valid_session_id(payload.session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID in token")
+
+    try:
+        validate_transfer_path(payload.path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path in token")
+
+    owner_id = get_user_id_from_session(payload.session_id)
+    if owner_id != payload.user_id:
+        raise HTTPException(
+            status_code=403, detail="Token user does not own session"
+        )
+    return payload
+
+
+def container_files_url(session_id: str, path: str) -> str:
+    """Build the orchestrator URL for the container files endpoint.
+
+    The path segment is percent-encoded with ``/`` preserved as the path
+    separator. ``validate_transfer_path`` already rejects URL-meaningful
+    characters (``?``/``#``/``%``/``;``/``&``/``\\``/space/CRLF/quote) at
+    mint time, so this encoding is mostly belt-and-suspenders for non-ASCII
+    filenames and any future path that slips through the validator.
+    """
+    clean = path.lstrip("/")
+    return f"{settings.ORCHESTRATOR_BASE_URL}/containers/{session_id}/files/{quote(clean, safe='/')}"
+
+
+@router.get("/transfer/pull")
+async def transfer_pull(token: str = Query(...)) -> StreamingResponse:
+    """Stream a tar of the file/directory referenced by a presigned token."""
+    payload = verify_transfer_token(token, "read")
+
+    upstream_url = container_files_url(payload.session_id, payload.path)
+    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    client = httpx.AsyncClient(transport=transport, timeout=600.0)
+
+    try:
+        upstream_resp = await client.send(
+            client.build_request("GET", upstream_url),
+            stream=True,
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
+    except Exception:
+        await client.aclose()
+        raise
+
+    if upstream_resp.status_code >= 400:
+        body = await upstream_resp.aread()
+        await upstream_resp.aclose()
+        await client.aclose()
+        raise HTTPException(
+            status_code=upstream_resp.status_code,
+            detail=body.decode("utf-8", errors="replace") or "Orchestrator error",
+        )
+
+    media_type = upstream_resp.headers.get("content-type", "application/x-tar")
+    raw_filename = payload.path.rstrip("/").split("/")[-1] or "session"
+    # Sanitize before interpolating into Content-Disposition: refuse anything
+    # that's not in a safe filename charset to prevent header injection /
+    # response splitting (CRLF would have been blocked at mint, but defend
+    # in depth — a future code path could skip mint validation).
+    safe_filename = re.sub(r"[^A-Za-z0-9._-]", "_", raw_filename) or "session"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{safe_filename}.tar"',
+    }
+
+    async def stream():
+        try:
+            async for chunk in upstream_resp.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream_resp.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        stream(),
+        status_code=upstream_resp.status_code,
+        headers=headers,
+        media_type=media_type,
+    )
+
+
+@router.put("/transfer/push")
+async def transfer_push(request: Request) -> dict:
+    """Accept a tar stream and extract it inside the session container."""
+    auth = request.headers.get("authorization", "")
+    parts = auth.split(None, 1)
+    # Robustly parse "Bearer <token>" — split(None) handles repeated whitespace
+    # but returns a single-element list for "Bearer" with no token, which is
+    # why we check len + nonempty token explicitly here.
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = parts[1].strip()
+    payload = verify_transfer_token(token, "write")
+
+    # Buffer the request body at the API layer rather than streaming it to the
+    # orchestrator. Two reasons:
+    #   1. The orchestrator's Unix-socket HTTP parser reads `Content-Length`
+    #      worth of bytes — it doesn't speak Transfer-Encoding: chunked. A
+    #      curl-piped tar (`tar -cf - | curl --data-binary @-`) sends chunked
+    #      with no Content-Length, so streaming through would hang/truncate.
+    #   2. Mixing httpx's streaming `content=` with a manually-set
+    #      Content-Length is ambiguous across httpx versions.
+    # Trade-off: loses streaming on the push side. Acceptable here because
+    # this endpoint is for skill-bundled tar uploads of small artifacts
+    # (markdown reports, specs, configs). If anyone hits a buffer cap, we
+    # extend the orchestrator HTTP parser to handle chunked encoding.
+    body = await request.body()
+
+    upstream_url = container_files_url(payload.session_id, payload.path)
+    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    client = httpx.AsyncClient(transport=transport, timeout=600.0)
+
+    forward_headers = {
+        "content-type": "application/x-tar",
+        "content-length": str(len(body)),
+    }
+
+    try:
+        upstream_resp = await client.send(
+            client.build_request(
+                "PUT",
+                upstream_url,
+                headers=forward_headers,
+                content=body,
+            ),
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
+    except Exception:
+        # Mirror the pull-side pattern: any failure during send must not leak
+        # the httpx client.
+        await client.aclose()
+        raise
+
+    try:
+        resp_body = await upstream_resp.aread()
+    finally:
+        await upstream_resp.aclose()
+        await client.aclose()
+
+    if upstream_resp.status_code >= 400:
+        raise HTTPException(
+            status_code=upstream_resp.status_code,
+            detail=resp_body.decode("utf-8", errors="replace") or "Orchestrator error",
+        )
+
+    try:
+        return json.loads(resp_body)
+    except ValueError:
+        return {"status": "ok"}
+
+
 @router.get("/{session_id}/logs")
 async def get_session_logs(
     session_id: str,
@@ -722,7 +924,7 @@ async def proxy_differ(
     raw_path = request.scope.get("raw_path", b"")
     differ_path = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
 
-    upstream_url = f"http://orchestrator/containers/{session_id}/differ/{differ_path}"
+    upstream_url = f"{settings.ORCHESTRATOR_BASE_URL}/containers/{session_id}/differ/{differ_path}"
     query_string = str(request.url.query)
     if query_string:
         upstream_url += f"?{query_string}"

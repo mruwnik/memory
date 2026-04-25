@@ -350,6 +350,23 @@ SECRETS_ENCRYPTION_SALT = os.getenv(
 # Set to "prod" or "dev" to separate environments
 MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
 
+# HMAC secret for short-lived signed URLs used by the cloud-claude session
+# file transfer endpoints. Falls back to SECRETS_ENCRYPTION_KEY in dev so
+# operators don't need to configure two secrets to get started.
+TRANSFER_TOKEN_SECRET = secret_env("TRANSFER_TOKEN_SECRET") or SECRETS_ENCRYPTION_KEY
+
+# Default lifetime (seconds) for cloud-claude file transfer URLs.
+TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))
+
+# Base URL the API uses to proxy to the Claude session orchestrator. The host
+# part is consumed by ``httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)``
+# (the actual transport is the Unix socket; the URL hostname is just an
+# unused placeholder), but configurable so non-prod stacks or tests can
+# override the prefix without patching call sites.
+ORCHESTRATOR_BASE_URL = os.getenv(
+    "ORCHESTRATOR_BASE_URL", "http://orchestrator"
+).rstrip("/")
+
 
 def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[str]:
     """Parse comma-separated env var into a frozenset."""

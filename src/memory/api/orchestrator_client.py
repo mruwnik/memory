@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,23 @@ LOG_DIR = Path("/var/log/claude-sessions")
 
 
 class OrchestratorError(Exception):
-    """Error communicating with the orchestrator."""
+    """Error communicating with the orchestrator.
+
+    ``status_code`` is set when raised by methods that explicitly propagate
+    upstream status (currently only :meth:`OrchestratorClient.list_dir`,
+    consumed by the ``list_session_dir`` API endpoint to forward
+    client-actionable errors). It is ``None`` for all other call sites,
+    including transport-level failures and the various 4xx/5xx paths in
+    other client methods that just wrap the detail string.
+
+    If you need status propagation for another endpoint, populate
+    ``status_code`` at the raise site there too — the attribute is opt-in
+    rather than guaranteed.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -396,6 +413,41 @@ class OrchestratorClient:
             raise OrchestratorError(
                 data.get("detail", f"Failed to reset volume ({status})")
             )
+        return data
+
+    # -------------------------------------------------------------------------
+    # File operations on container filesystems
+    # -------------------------------------------------------------------------
+
+    async def list_dir(
+        self,
+        session_id: str,
+        path: str,
+        recursive: bool = False,
+        max_entries: int = 1000,
+    ) -> dict[str, Any]:
+        """List entries in a directory inside a session container.
+
+        Calls orchestrator
+        ``GET /containers/{session_id}/files/list?path=<abs_path>``.
+        Path is sent as a query parameter (not embedded in the URL) so
+        absolute paths with slashes round-trip cleanly.
+        """
+        params: dict[str, str] = {"path": path}
+        if recursive:
+            params["recursive"] = "true"
+        if max_entries is not None:
+            params["max_entries"] = str(max_entries)
+        url = f"/containers/{session_id}/files/list?{urlencode(params)}"
+
+        status, data = await self._request("GET", url)
+        if status >= 400:
+            detail = (
+                data.get("detail", f"List failed ({status})")
+                if isinstance(data, dict)
+                else f"List failed ({status})"
+            )
+            raise OrchestratorError(detail, status_code=status)
         return data
 
     # -------------------------------------------------------------------------
