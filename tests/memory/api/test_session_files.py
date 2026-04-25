@@ -167,29 +167,27 @@ def test_transfer_pull_rejects_token_with_url_meaningful_chars(client, bad_char_
     assert resp.status_code == 400
 
 
-def test_container_files_url_percent_encodes_non_ascii(client, mock_orch_pull):
-    """The orchestrator URL must percent-encode the path segment so non-ASCII
-    filenames (and any character that slips past validate_transfer_path)
-    survive transit through httpx without being mis-interpreted as URL syntax.
-
-    Slashes stay literal because they're path separators."""
-    # Non-ASCII path passes validate_transfer_path (no forbidden chars)
-    # and should be percent-encoded when forwarded to the orchestrator.
+def test_container_files_url_uses_query_string_for_path(client, mock_orch_pull):
+    """The orchestrator's GET/PUT file endpoints take the in-container path
+    as a ``?path=…`` query string, not embedded in the URL path. The
+    ``…/files/{path}`` form is not a registered orchestrator route and
+    returns 404. The list endpoint uses the same query-string convention
+    (see ``orchestrator_client.list_dir``)."""
     token = make_token(action="read", path="/workspace/レポート.md")
     resp = client.get(f"/claude/transfer/pull?token={token}")
     assert resp.status_code == 200
 
-    # Inspect the URL that got built for the orchestrator
     assert mock_orch_pull[0].await_count == 1
     forwarded_request = mock_orch_pull[0].call_args[0][0]
     forwarded_url = str(forwarded_request.url)
-    # Path separators preserved
-    assert f"/containers/{SESSION_ID}/files/workspace/" in forwarded_url
-    # Non-ASCII chars are percent-encoded — none of the original UTF-8 bytes
-    # appear raw in the URL string
+    # Path is in the query string, not the URL path
+    assert f"/containers/{SESSION_ID}/files?path=" in forwarded_url
+    assert f"/containers/{SESSION_ID}/files/workspace" not in forwarded_url
+    # Leading slash is percent-encoded (safe='' for quote)
+    assert "path=%2Fworkspace" in forwarded_url
+    # Non-ASCII chars are percent-encoded as UTF-8 bytes
     assert "レポート" not in forwarded_url
-    # And the percent-encoded form is present (UTF-8 of レ is E3 83 AC)
-    assert "%E3%83%AC" in forwarded_url
+    assert "%E3%83%AC" in forwarded_url  # レ -> E3 83 AC
 
 
 # -- transfer/push (signed token in header) ----------------------------------

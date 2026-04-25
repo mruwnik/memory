@@ -661,14 +661,22 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
 def container_files_url(session_id: str, path: str) -> str:
     """Build the orchestrator URL for the container files endpoint.
 
-    The path segment is percent-encoded with ``/`` preserved as the path
-    separator. ``validate_transfer_path`` already rejects URL-meaningful
-    characters (``?``/``#``/``%``/``;``/``&``/``\\``/space/CRLF/quote) at
-    mint time, so this encoding is mostly belt-and-suspenders for non-ASCII
-    filenames and any future path that slips through the validator.
+    The orchestrator's GET/PUT file endpoints take the in-container path as
+    a ``?path=…`` **query string**, not as part of the URL path —
+    ``…/files/{path}`` is not a registered route and returns 404. (The
+    list endpoint uses the same query-string convention; see
+    ``orchestrator_client.list_dir``.) ``quote(path, safe="")`` percent-
+    encodes the leading slash and any other URL-meaningful chars so the
+    full absolute path round-trips through the orchestrator.
+
+    ``validate_transfer_path`` already rejects URL-meaningful characters
+    (``?``/``#``/``%``/``;``/``&``/``\\``/space/CRLF/quote) at mint time,
+    so the encoding here is belt-and-suspenders for non-ASCII filenames.
     """
-    clean = path.lstrip("/")
-    return f"{settings.ORCHESTRATOR_BASE_URL}/containers/{session_id}/files/{quote(clean, safe='/')}"
+    return (
+        f"{settings.ORCHESTRATOR_BASE_URL}/containers/{session_id}/files"
+        f"?path={quote(path, safe='')}"
+    )
 
 
 @router.get("/transfer/pull")
