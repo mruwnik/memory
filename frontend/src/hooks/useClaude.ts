@@ -95,6 +95,48 @@ export interface AttachInfo {
 export interface OrchestratorStatus {
   available: boolean
   socket_path: string | null
+  containers?: { running: number; max: number } | null
+  // Sampler-backed fields (added in orchestrator commit 4c45a70). `used*` is
+  // the live total across running containers; `allocated*` is the static sum
+  // of HostConfig limits; `max*` is the orchestrator-wide cap.
+  memory?: { used_mb?: number; allocated_mb?: number; max_mb?: number } | null
+  cpus?: { used?: number; allocated?: number; max?: number } | null
+}
+
+// /claude/stats response shape. Admins get the full payload; non-admins get
+// only `ts` and their own `containers[]` (no `global`).
+export interface FleetStats {
+  ts: string
+  global?: {
+    running: number
+    max: number
+    memory_mb: { used: number; allocated: number; max: number }
+    cpus: { used: number; allocated: number; max: number }
+  }
+  containers: ContainerStatsEntry[]
+}
+
+export interface ContainerStatsEntry {
+  id: string
+  status: string
+  allocated: { memory_mb: number; cpus: number }
+  // null for non-running containers and on the very first sample tick.
+  used: { memory_mb: number; memory_pct: number; cpu_pct: number | null } | null
+}
+
+export interface StatsHistoryPoint {
+  ts: string
+  session_id: string
+  // null on the first sample for a container (no prior baseline for the delta).
+  cpu_pct: number | null
+  memory_mb: number
+  memory_pct: number
+}
+
+export interface StatsHistoryResponse {
+  points: StatsHistoryPoint[]
+  count: number
+  truncated: boolean
 }
 
 export interface SpawnRequest {
@@ -216,6 +258,28 @@ export const useClaude = () => {
     return response.json()
   }, [apiCall])
 
+  const getFleetStats = useCallback(async (): Promise<FleetStats> => {
+    const response = await apiCall('/claude/stats')
+    if (!response.ok) throw new Error('Failed to get fleet stats')
+    return response.json()
+  }, [apiCall])
+
+  const getStatsHistory = useCallback(
+    async (
+      opts: { sessionId?: string; since?: string; max?: number } = {}
+    ): Promise<StatsHistoryResponse> => {
+      const params = new URLSearchParams()
+      if (opts.sessionId) params.set('session_id', opts.sessionId)
+      if (opts.since) params.set('since', opts.since)
+      if (opts.max !== undefined) params.set('max', String(opts.max))
+      const qs = params.toString()
+      const response = await apiCall(`/claude/stats/history${qs ? `?${qs}` : ''}`)
+      if (!response.ok) throw new Error('Failed to get stats history')
+      return response.json()
+    },
+    [apiCall]
+  )
+
   // Snapshots (for selecting config when spawning)
   const listSnapshots = useCallback(async (): Promise<Snapshot[]> => {
     const response = await apiCall('/claude/snapshots/list')
@@ -308,6 +372,8 @@ export const useClaude = () => {
     killSession,
     getAttachInfo,
     getOrchestratorStatus,
+    getFleetStats,
+    getStatsHistory,
     getSessionLogs,
     // Panes
     listPanes,

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, ContainerStats, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import XtermTerminal from './XtermTerminal'
+import ClaudeFleetStats from './ClaudeFleetStats'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -1005,26 +1006,17 @@ const ClaudeSessions = () => {
               )}
             </div>
           ) : (
-            // Empty state
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="text-slate-400 mb-4">
-                <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1}
-                    d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                  />
-                </svg>
+            // Empty state — show fleet-wide resource overview while no session
+            // is selected. Admins see global capacity + every container; non-
+            // admins see only their own.
+            <div className="max-w-4xl">
+              <div className="flex items-baseline justify-between mb-4">
+                <h2 className="text-xl font-semibold text-slate-800">Fleet Overview</h2>
+                <p className="text-sm text-slate-500">
+                  Select a session for details, or click a row below to see its history.
+                </p>
               </div>
-              <h3 className="text-lg font-medium text-slate-600 mb-2">No Session Selected</h3>
-              <p className="text-sm text-slate-500 mb-4">Select a session from the sidebar or start a new one</p>
-              <button
-                onClick={handleNewSession}
-                className="bg-primary text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-primary/90"
-              >
-                + New Session
-              </button>
+              <ClaudeFleetStats />
             </div>
           )}
         </main>
