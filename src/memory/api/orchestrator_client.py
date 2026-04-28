@@ -65,12 +65,17 @@ class SessionInfo:
 
 @dataclass
 class HealthInfo:
-    """Orchestrator health and resource usage."""
+    """Orchestrator health and resource usage.
+
+    `memory` and `cpus` may carry both ``allocated*`` (legacy) and ``used*``
+    (added in orchestrator commit 4c45a70) keys. Values are widened to float
+    because ``cpus.used`` is fractional.
+    """
 
     status: str
     containers: dict[str, int] = field(default_factory=dict)
-    memory: dict[str, int] = field(default_factory=dict)
-    cpus: dict[str, int] = field(default_factory=dict)
+    memory: dict[str, float] = field(default_factory=dict)
+    cpus: dict[str, float] = field(default_factory=dict)
 
 
 async def http_request(
@@ -337,6 +342,58 @@ class OrchestratorClient:
                 data.get("detail", "Cleanup failed")
             )
         return data.get("removed", [])
+
+    # -------------------------------------------------------------------------
+    # Stats (sampler-backed)
+    # -------------------------------------------------------------------------
+
+    async def stats(self) -> dict[str, Any]:
+        """Return the orchestrator's most-recent stats snapshot.
+
+        Shape: ``{ts, global, containers: [...]}``. See orchestrator docs.
+        """
+        status, data = await self._request("GET", "/stats")
+        if status >= 400:
+            detail = data.get("detail", f"Stats failed ({status})") if isinstance(data, dict) else f"Stats failed ({status})"
+            raise OrchestratorError(detail, status_code=status)
+        return data
+
+    async def container_stats(self, session_id: str) -> dict[str, Any] | None:
+        """Return current stats for a single container, or None if not managed."""
+        status, data = await self._request(
+            "GET", f"/containers/{session_id}/stats"
+        )
+        if status == 404:
+            return None
+        if status >= 400:
+            detail = data.get("detail", f"Container stats failed ({status})") if isinstance(data, dict) else f"Container stats failed ({status})"
+            raise OrchestratorError(detail, status_code=status)
+        return data
+
+    async def stats_history(
+        self,
+        *,
+        session_id: str | None = None,
+        since: str | None = None,
+        max_points: int = 1000,
+    ) -> dict[str, Any]:
+        """Return ring-buffer points: ``{points, count, truncated}``.
+
+        ``since`` is an ISO 8601 string passed through verbatim; the
+        orchestrator does the parsing. ``max_points`` is sent on the wire
+        as ``max=`` (the orchestrator's parameter name).
+        """
+        params: dict[str, str] = {"max": str(max_points)}
+        if session_id:
+            params["session_id"] = session_id
+        if since:
+            params["since"] = since
+        url = f"/stats/history?{urlencode(params)}"
+        status, data = await self._request("GET", url)
+        if status >= 400:
+            detail = data.get("detail", f"Stats history failed ({status})") if isinstance(data, dict) else f"Stats history failed ({status})"
+            raise OrchestratorError(detail, status_code=status)
+        return data
 
     # -------------------------------------------------------------------------
     # Volumes

@@ -41,6 +41,7 @@ from memory.api.transfer_tokens import (
     validate_transfer_path,
     verify_token,
 )
+from memory.common.access_control import has_admin_scope
 from memory.common.scopes import SCOPE_SCHEDULE_WRITE
 from memory.api.orchestrator_client import (
     ORCHESTRATOR_SOCKET,
@@ -216,6 +217,97 @@ async def orchestrator_status() -> OrchestratorStatus:
         )
     except OrchestratorError:
         return OrchestratorStatus(available=False)
+
+
+@router.get("/stats")
+async def session_stats(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Live container resource snapshot.
+
+    Admins get the full orchestrator payload. Non-admins get only their own
+    containers and no `global` block (orchestrator-wide capacity is an
+    operator concern, not a user-facing one).
+    """
+    client = get_orchestrator_client()
+    try:
+        snapshot = await client.stats()
+    except OrchestratorError as e:
+        status = e.status_code if e.status_code else 502
+        raise HTTPException(status_code=status, detail=str(e))
+
+    if has_admin_scope(user):
+        return snapshot
+
+    own = [
+        c for c in snapshot.get("containers", [])
+        if user_owns_session(user, c.get("id", ""))
+    ]
+    return {"ts": snapshot.get("ts"), "containers": own}
+
+
+@router.get("/stats/history")
+async def session_stats_history(
+    session_id: str | None = Query(None),
+    since: str | None = Query(None),
+    max_points: int = Query(1000, ge=1, le=10000, alias="max"),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Time-series ring buffer for the sampler.
+
+    Admins see all sessions (or filter to one with `session_id`).
+    Non-admins must specify `session_id` — letting them call without one
+    would force the orchestrator to materialize every user's history
+    just to filter it back down here, which is a soft-DoS vector.
+    """
+    is_admin = has_admin_scope(user)
+    if not is_admin and not session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="session_id required for non-admin callers",
+        )
+    if session_id and not is_admin and not user_owns_session(user, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    client = get_orchestrator_client()
+    try:
+        result = await client.stats_history(
+            session_id=session_id, since=since, max_points=max_points
+        )
+    except OrchestratorError as e:
+        status = e.status_code if e.status_code else 502
+        raise HTTPException(status_code=status, detail=str(e))
+
+    return result
+
+
+@router.get("/{session_id}/stats")
+async def container_stats(
+    session_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Live stats for a single container.
+
+    Returns 404 both for unknown sessions and for sessions the caller
+    doesn't own — same shape as kill_session and friends.
+    """
+    if not has_admin_scope(user) and not user_owns_session(user, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    client = get_orchestrator_client()
+    try:
+        data = await client.container_stats(session_id)
+    except OrchestratorError as e:
+        status = e.status_code if e.status_code else 502
+        raise HTTPException(status_code=status, detail=str(e))
+
+    if data is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if data.get("id") != session_id:
+        raise HTTPException(
+            status_code=502, detail="orchestrator returned mismatched session"
+        )
+    return data
 
 
 @router.post("/spawn")

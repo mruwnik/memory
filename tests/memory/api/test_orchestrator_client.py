@@ -107,3 +107,103 @@ async def test_list_dir_raises_with_status_code_on_4xx_5xx(orch_status):
             await OrchestratorClient().list_dir(SESSION_ID, "/missing")
     assert exc_info.value.status_code == orch_status
     assert "orch said no" in str(exc_info.value)
+
+
+# -- stats endpoints -------------------------------------------------------
+
+
+SAMPLE_SNAPSHOT = {
+    "ts": "2026-04-27T14:18:05.813523+00:00",
+    "global": {
+        "running": 1, "max": 12,
+        "memory_mb": {"used": 600, "allocated": 6144, "max": 49152},
+        "cpus": {"used": 0.04, "allocated": 2.0, "max": 8},
+    },
+    "containers": [
+        {
+            "id": SESSION_ID,
+            "status": "running",
+            "allocated": {"memory_mb": 6144, "cpus": 2.0},
+            "used": {"memory_mb": 598, "memory_pct": 9.74, "cpu_pct": 4.05},
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_stats_round_trips_snapshot():
+    _, p = _capture_request(retval=(200, SAMPLE_SNAPSHOT))
+    with p:
+        result = await OrchestratorClient().stats()
+    assert result == SAMPLE_SNAPSHOT
+
+
+@pytest.mark.asyncio
+async def test_stats_calls_correct_url():
+    captured, p = _capture_request(retval=(200, SAMPLE_SNAPSHOT))
+    with p:
+        await OrchestratorClient().stats()
+    assert captured["method"] == "GET"
+    assert captured["url"] == "/stats"
+
+
+@pytest.mark.asyncio
+async def test_container_stats_returns_dict():
+    payload = SAMPLE_SNAPSHOT["containers"][0]
+    captured, p = _capture_request(retval=(200, payload))
+    with p:
+        result = await OrchestratorClient().container_stats(SESSION_ID)
+    assert result == payload
+    assert captured["url"] == f"/containers/{SESSION_ID}/stats"
+
+
+@pytest.mark.asyncio
+async def test_container_stats_returns_none_on_404():
+    """404 from orchestrator means session isn't currently managed —
+    surfaced as None rather than raising, mirroring get_container."""
+    _, p = _capture_request(retval=(404, {"detail": "not found"}))
+    with p:
+        result = await OrchestratorClient().container_stats("u1-x-deadbeef")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_stats_history_passes_query_params():
+    captured, p = _capture_request(
+        retval=(200, {"points": [], "count": 0, "truncated": False})
+    )
+    with p:
+        await OrchestratorClient().stats_history(
+            session_id=SESSION_ID,
+            since="2026-04-27T13:00:00Z",
+            max_points=200,
+        )
+    url = captured["url"]
+    assert url.startswith("/stats/history?")
+    assert f"session_id={SESSION_ID}" in url
+    assert "since=2026-04-27T13%3A00%3A00Z" in url
+    assert "max=200" in url
+
+
+@pytest.mark.asyncio
+async def test_stats_history_omits_optional_params():
+    captured, p = _capture_request(
+        retval=(200, {"points": [], "count": 0, "truncated": False})
+    )
+    with p:
+        await OrchestratorClient().stats_history()
+    url = captured["url"]
+    assert "session_id=" not in url
+    assert "since=" not in url
+    assert "max=1000" in url
+
+
+@pytest.mark.asyncio
+async def test_stats_history_400_raises_with_status():
+    """Bad `since` or out-of-range `max` round-trip the 400 with detail."""
+    _, p = _capture_request(retval=(400, {"detail": "max out of range"}))
+    with p:
+        with pytest.raises(OrchestratorError) as exc_info:
+            await OrchestratorClient().stats_history(max_points=99999)
+    assert exc_info.value.status_code == 400
+    assert "max out of range" in str(exc_info.value)

@@ -1,6 +1,6 @@
 """Tests for Cloud Claude Code session management API."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -315,3 +315,239 @@ def test_schedule_rejects_six_field_cron(client, user):
     )
     assert response.status_code == 400
     assert "5-field" in response.json()["detail"]
+
+
+# --- Stats endpoint tests ---
+
+# A snapshot covering both user 1 (the test client's user) and user 9999 (other),
+# plus a non-running container. Used by all the /claude/stats* tests.
+_STATS_SNAPSHOT = {
+    "ts": "2026-04-27T14:18:05.813523+00:00",
+    "global": {
+        "running": 2, "max": 12,
+        "memory_mb": {"used": 1200, "allocated": 12288, "max": 49152},
+        "cpus": {"used": 0.07, "allocated": 4.0, "max": 8},
+    },
+    "containers": [
+        {
+            "id": "u1-e1-aaaa1111",
+            "status": "running",
+            "allocated": {"memory_mb": 6144, "cpus": 2.0},
+            "used": {"memory_mb": 600, "memory_pct": 9.74, "cpu_pct": 4.05},
+        },
+        {
+            "id": "u9999-e2-bbbb2222",
+            "status": "running",
+            "allocated": {"memory_mb": 6144, "cpus": 2.0},
+            "used": {"memory_mb": 612, "memory_pct": 9.95, "cpu_pct": 3.80},
+        },
+        {
+            "id": "u1-e3-cccc3333",
+            "status": "exited",
+            "allocated": {"memory_mb": 6144, "cpus": 2.0},
+            "used": None,
+        },
+    ],
+}
+
+
+_HISTORY_RESULT = {
+    "points": [
+        {"ts": "2026-04-27T14:00:00+00:00", "session_id": "u1-e1-aaaa1111",
+         "cpu_pct": 1.0, "memory_mb": 100, "memory_pct": 1.6},
+        {"ts": "2026-04-27T14:00:30+00:00", "session_id": "u9999-e2-bbbb2222",
+         "cpu_pct": 2.0, "memory_mb": 200, "memory_pct": 3.2},
+        {"ts": "2026-04-27T14:01:00+00:00", "session_id": "u1-e1-aaaa1111",
+         "cpu_pct": 3.0, "memory_mb": 110, "memory_pct": 1.8},
+    ],
+    "count": 3,
+    "truncated": False,
+}
+
+
+def test_stats_admin_sees_full_snapshot(client, user):
+    """Admins (scopes=['*']) get the orchestrator response unmodified —
+    other users' containers, the global block, everything."""
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        new=AsyncMock(return_value=_STATS_SNAPSHOT),
+    ):
+        response = client.get("/claude/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data == _STATS_SNAPSHOT
+
+
+def test_stats_regular_user_filtered_no_global(regular_client, user):
+    """Non-admin users see only their own containers and no global block.
+    The global block leaks orchestrator-wide capacity, which is an operator
+    concern — surfacing it to every user is information disclosure."""
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        new=AsyncMock(return_value=_STATS_SNAPSHOT),
+    ):
+        response = regular_client.get("/claude/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert "global" not in data
+    ids = sorted(c["id"] for c in data["containers"])
+    assert ids == ["u1-e1-aaaa1111", "u1-e3-cccc3333"]
+
+
+def test_stats_orchestrator_down_returns_502(client, user):
+    """Orchestrator unreachable → 502, not a misleading 200."""
+    from memory.api.orchestrator_client import OrchestratorError
+
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        new=AsyncMock(side_effect=OrchestratorError("socket missing")),
+    ):
+        response = client.get("/claude/stats")
+    assert response.status_code == 502
+
+
+def test_container_stats_admin_can_view_others(client, user):
+    """Admin can fetch stats for any session including ones they don't own."""
+    payload = _STATS_SNAPSHOT["containers"][1]
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        new=AsyncMock(return_value=payload),
+    ):
+        response = client.get("/claude/u9999-e2-bbbb2222/stats")
+    assert response.status_code == 200
+    assert response.json() == payload
+
+
+def test_container_stats_regular_user_404_on_other_user(regular_client, user):
+    """Non-admin requesting another user's session gets 404 (not 403) —
+    same shape as kill_session and friends, so we don't disclose existence."""
+    response = regular_client.get("/claude/u9999-e2-bbbb2222/stats")
+    assert response.status_code == 404
+
+
+def test_container_stats_404_when_session_unknown(client, user):
+    """Orchestrator returning 404 (None from client) propagates as 404."""
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        new=AsyncMock(return_value=None),
+    ):
+        response = client.get("/claude/u1-x-deadbeef/stats")
+    assert response.status_code == 404
+
+
+def test_container_stats_orchestrator_status_propagates(client, user):
+    """If the orchestrator raises with a status_code, the API forwards it
+    unchanged rather than squashing to 502 — mirrors stats_history behavior."""
+    from memory.api.orchestrator_client import OrchestratorError
+
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        new=AsyncMock(
+            side_effect=OrchestratorError("orch unavailable", status_code=503)
+        ),
+    ):
+        response = client.get("/claude/u1-e1-aaaa1111/stats")
+    assert response.status_code == 503
+    assert "orch unavailable" in response.json()["detail"]
+
+
+def test_stats_history_non_admin_without_session_id_400(regular_client, user):
+    """Non-admin must specify `session_id` — calling without one would force
+    the orchestrator to materialize every user's history just so the API
+    can filter it back down. That's a soft-DoS vector, so we reject early."""
+    response = regular_client.get("/claude/stats/history")
+    assert response.status_code == 400
+    assert "session_id" in response.json()["detail"]
+
+
+def test_stats_history_non_admin_with_own_session_id(regular_client, user):
+    """Non-admin happy path: with `session_id` set to one they own, the
+    orchestrator is called with that id and the result is returned as-is."""
+    captured = {}
+
+    async def fake_history(self, *, session_id=None, since=None, max_points=1000):
+        captured["session_id"] = session_id
+        return _HISTORY_RESULT
+
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        new=fake_history,
+    ):
+        response = regular_client.get(
+            "/claude/stats/history?session_id=u1-e1-aaaa1111"
+        )
+    assert response.status_code == 200
+    assert captured["session_id"] == "u1-e1-aaaa1111"
+    assert response.json() == _HISTORY_RESULT
+
+
+def test_stats_history_admin_sees_all_points(client, user):
+    """Admin gets the orchestrator response untouched."""
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        new=AsyncMock(return_value=_HISTORY_RESULT),
+    ):
+        response = client.get("/claude/stats/history")
+    assert response.status_code == 200
+    assert response.json() == _HISTORY_RESULT
+
+
+def test_stats_history_404_on_other_user_session(regular_client, user):
+    """Asking for another user's session by id is 404 — never reaches the
+    orchestrator. (If we let it through, a regular user could probe which
+    session ids exist.)"""
+    response = regular_client.get(
+        "/claude/stats/history?session_id=u9999-e2-bbbb2222"
+    )
+    assert response.status_code == 404
+
+
+def test_stats_history_passes_query_params_through(client, user):
+    """`since` and `max` round-trip cleanly to the orchestrator client.
+    The wire name is `max=` (orchestrator's parameter); inside Python
+    we pass it as `max_points=` to avoid shadowing the builtin."""
+    captured = {}
+
+    async def fake_history(self, *, session_id=None, since=None, max_points=1000):
+        captured["session_id"] = session_id
+        captured["since"] = since
+        captured["max_points"] = max_points
+        return _HISTORY_RESULT
+
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        new=fake_history,
+    ):
+        response = client.get(
+            "/claude/stats/history?"
+            "session_id=u1-e1-aaaa1111&since=2026-04-27T13:00:00Z&max=200"
+        )
+    assert response.status_code == 200
+    assert captured == {
+        "session_id": "u1-e1-aaaa1111",
+        "since": "2026-04-27T13:00:00Z",
+        "max_points": 200,
+    }
+
+
+def test_stats_history_max_out_of_range_422(client, user):
+    """FastAPI's Query(ge=1, le=10000) rejects max=20000 with a 422.
+    (This is a behavior contract; the orchestrator's own 400 is unreachable
+    once FastAPI validates first.)"""
+    response = client.get("/claude/stats/history?max=20000")
+    assert response.status_code == 422
+
+
+def test_stats_history_orchestrator_400_propagates(client, user):
+    """If the orchestrator returns a 400 (e.g. bad `since`), the API forwards
+    it unchanged rather than squashing to 502 — pins the
+    `status = e.status_code if e.status_code else 502` propagation behavior."""
+    from memory.api.orchestrator_client import OrchestratorError
+
+    with patch(
+        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        new=AsyncMock(side_effect=OrchestratorError("bad since", status_code=400)),
+    ):
+        response = client.get("/claude/stats/history?since=not-a-date")
+    assert response.status_code == 400
+    assert "bad since" in response.json()["detail"]
