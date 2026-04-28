@@ -90,7 +90,7 @@ const ClaudeSessions = () => {
     listEnvironments,
     listUserRepos,
   } = useClaude()
-  const { hasScope } = useAuth()
+  const { hasScope, user: authUser } = useAuth()
   const { listUsers } = useUsers()
   const navigate = useNavigate()
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>()
@@ -950,11 +950,16 @@ const ClaudeSessions = () => {
                 </div>
               </div>
 
-              {/* Resource stats */}
-              <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4">
-                <h3 className="text-sm font-semibold text-slate-700 mb-3">Resource Stats</h3>
-                <SessionStatsPanel sessionId={selectedSession.session_id} />
-              </div>
+              {/* Resource stats — collapsed by default; the chart polls only
+                  while expanded (mounted) so closed panels are zero cost. */}
+              <details className="mb-4 bg-white rounded-lg border border-slate-200">
+                <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Resource Stats
+                </summary>
+                <div className="px-4 pb-4">
+                  <SessionStatsPanel sessionId={selectedSession.session_id} />
+                </div>
+              </details>
 
               {/* Attach commands (collapsible) */}
               {attachInfo && (
@@ -1094,6 +1099,7 @@ const ClaudeSessions = () => {
                 onSelectContainer={(id) => navigate(`/ui/claude/${id}`)}
                 environments={environments}
                 hasAdminScope={hasScope('*')}
+                currentUserId={authUser?.id ?? null}
               />
             </div>
           )}

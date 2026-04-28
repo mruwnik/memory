@@ -180,15 +180,24 @@ const ContainerRow: React.FC<{
   c: ContainerStatsEntry
   display: SessionDisplay
   selected: boolean
+  clickable: boolean
   onSelect: () => void
-}> = ({ c, display, selected, onSelect }) => {
+}> = ({ c, display, selected, clickable, onSelect }) => {
   const used = c.used
+  // Non-clickable rows are visible (so admins can see what's running) but
+  // muted, since /claude/list only returns sessions the caller owns —
+  // navigating to one would land on an empty details panel.
+  const baseCls = 'border-b border-slate-100 transition-colors'
+  const stateCls = !clickable
+    ? 'opacity-60 cursor-not-allowed'
+    : selected
+      ? 'bg-blue-50 cursor-pointer'
+      : 'hover:bg-slate-50 cursor-pointer'
   return (
     <tr
-      className={`border-b border-slate-100 cursor-pointer transition-colors ${
-        selected ? 'bg-blue-50' : 'hover:bg-slate-50'
-      }`}
-      onClick={onSelect}
+      className={`${baseCls} ${stateCls}`}
+      onClick={clickable ? onSelect : undefined}
+      title={clickable ? undefined : "Belongs to another user — details aren't accessible from here"}
     >
       <td className="px-3 py-2">
         <div className="text-sm text-slate-800">{display.title}</div>
@@ -366,6 +375,12 @@ interface ClaudeFleetStatsProps {
   // Empty arrays are fine — display falls back to ids.
   environments: Environment[]
   hasAdminScope: boolean
+  // The viewer's user_id. Rows whose session_id parses to a different user
+  // render as non-clickable, since /claude/list only returns the caller's
+  // own sessions — clicking would land on an empty details panel. Null
+  // means we don't know yet (auth still loading); be permissive in that
+  // case so we don't accidentally lock everything out.
+  currentUserId: number | null
 }
 
 const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
@@ -373,6 +388,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
   onSelectContainer,
   environments,
   hasAdminScope,
+  currentUserId,
 }) => {
   const { getFleetStats } = useClaude()
   const { listUsers } = useUsers()
@@ -452,15 +468,23 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
               </tr>
             </thead>
             <tbody>
-              {containers.map((c) => (
-                <ContainerRow
-                  key={c.id}
-                  c={c}
-                  display={sessionDisplay(c.id, environments, users)}
-                  selected={selectedSessionId === c.id}
-                  onSelect={() => onSelectContainer(c.id)}
-                />
-              ))}
+              {containers.map((c) => {
+                const parsed = parseSessionId(c.id)
+                const owned =
+                  currentUserId === null ||
+                  parsed === null ||
+                  parsed.userId === currentUserId
+                return (
+                  <ContainerRow
+                    key={c.id}
+                    c={c}
+                    display={sessionDisplay(c.id, environments, users)}
+                    selected={selectedSessionId === c.id}
+                    clickable={owned}
+                    onSelect={() => onSelectContainer(c.id)}
+                  />
+                )
+              })}
             </tbody>
           </table>
         )}
