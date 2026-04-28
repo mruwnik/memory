@@ -13,7 +13,9 @@ import {
   type FleetStats,
   type ContainerStatsEntry,
   type StatsHistoryPoint,
+  type Environment,
 } from '../../hooks/useClaude'
+import { useUsers, type User } from '../../hooks/useUsers'
 
 const REFRESH_MS = 10_000
 const HISTORY_MAX = 240 // ~2h at 30s cadence
@@ -29,11 +31,72 @@ const usagePctColor = (pct: number): string => {
   return 'text-slate-700'
 }
 
-// Bar width helper: clamps to 100% so over-allocation (allocated > max) at
-// least visualizes as "full" rather than overflowing the track.
 const barWidth = (value: number, max: number): string => {
   if (max <= 0) return '0%'
   return `${Math.min(100, (value / max) * 100).toFixed(1)}%`
+}
+
+// Session IDs follow `u<userId>-<source><sourceId?>-<randomHex>`. `source` is
+// `e<envId>` (environment), `s<snapId>` (snapshot), or bare `x` (no source).
+// Returns null if the id doesn't parse — callers fall back to the raw id.
+export interface ParsedSessionId {
+  userId: number | null
+  sourceType: 'environment' | 'snapshot' | 'unknown'
+  sourceId: number | null
+  hex: string
+}
+
+export const parseSessionId = (sessionId: string): ParsedSessionId | null => {
+  const parts = sessionId.split('-')
+  if (parts.length !== 3) return null
+  const [userPart, sourcePart, hex] = parts
+  if (!userPart.startsWith('u')) return null
+  const userId = Number(userPart.slice(1))
+  if (Number.isNaN(userId)) return null
+
+  let sourceType: ParsedSessionId['sourceType'] = 'unknown'
+  let sourceId: number | null = null
+  if (sourcePart.startsWith('e')) {
+    sourceType = 'environment'
+    const n = Number(sourcePart.slice(1))
+    if (!Number.isNaN(n)) sourceId = n
+  } else if (sourcePart.startsWith('s')) {
+    sourceType = 'snapshot'
+    const n = Number(sourcePart.slice(1))
+    if (!Number.isNaN(n)) sourceId = n
+  }
+  return { userId, sourceType, sourceId, hex }
+}
+
+export interface SessionDisplay {
+  // Primary label: env name if known, else `snapshot #N`, else fallback.
+  title: string
+  // Secondary label: user name if known, else `user N`. null if no info.
+  subtitle: string | null
+}
+
+export const sessionDisplay = (
+  sessionId: string,
+  environments: Environment[],
+  users: User[]
+): SessionDisplay => {
+  const parsed = parseSessionId(sessionId)
+  if (!parsed) return { title: sessionId, subtitle: null }
+
+  let title = sessionId
+  if (parsed.sourceType === 'environment' && parsed.sourceId !== null) {
+    const env = environments.find((e) => e.id === parsed.sourceId)
+    title = env ? env.name : `env #${parsed.sourceId}`
+  } else if (parsed.sourceType === 'snapshot' && parsed.sourceId !== null) {
+    title = `snapshot #${parsed.sourceId}`
+  }
+
+  let subtitle: string | null = null
+  if (parsed.userId !== null) {
+    const user = users.find((u) => u.id === parsed.userId)
+    subtitle = user ? user.name : `user ${parsed.userId}`
+  }
+  return { title, subtitle }
 }
 
 const Bar: React.FC<{
@@ -44,10 +107,6 @@ const Bar: React.FC<{
   format?: (n: number) => string
 }> = ({ used, allocated, max, unit, format }) => {
   const fmt = format ?? ((n) => n.toString())
-  // Two stacked layers: a wider faded bar showing allocation, a narrower
-  // solid bar showing live usage. Quick visual answer to "are we
-  // overcommitted?" (allocated bar near full) vs. "are we busy?" (used bar
-  // catching up to allocated).
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs mb-1">
@@ -119,9 +178,10 @@ const StatusPill: React.FC<{ status: string }> = ({ status }) => {
 
 const ContainerRow: React.FC<{
   c: ContainerStatsEntry
+  display: SessionDisplay
   selected: boolean
   onSelect: () => void
-}> = ({ c, selected, onSelect }) => {
+}> = ({ c, display, selected, onSelect }) => {
   const used = c.used
   return (
     <tr
@@ -130,7 +190,13 @@ const ContainerRow: React.FC<{
       }`}
       onClick={onSelect}
     >
-      <td className="px-3 py-2 font-mono text-xs text-slate-700">{c.id}</td>
+      <td className="px-3 py-2">
+        <div className="text-sm text-slate-800">{display.title}</div>
+        {display.subtitle && (
+          <div className="text-xs text-slate-500">{display.subtitle}</div>
+        )}
+        <div className="font-mono text-[10px] text-slate-400">{c.id}</div>
+      </td>
       <td className="px-3 py-2"><StatusPill status={c.status} /></td>
       <td className="px-3 py-2 text-xs font-mono text-right">
         {used && used.cpu_pct !== null
@@ -152,8 +218,6 @@ const ContainerRow: React.FC<{
   )
 }
 
-// Recharts wants timestamps as numbers/strings on the X axis. We feed millis
-// for proper time-axis behavior and format the tick labels ourselves.
 const formatTickTime = (ms: number): string => {
   const d = new Date(ms)
   const hh = d.getHours().toString().padStart(2, '0')
@@ -161,10 +225,7 @@ const formatTickTime = (ms: number): string => {
   return `${hh}:${mm}`
 }
 
-const HistoryChart: React.FC<{ points: StatsHistoryPoint[] }> = ({ points }) => {
-  // One row per point, with cpu_pct (% of one core) and memory_mb so the two
-  // y-axes can share the same domain. Recharts skips null cpu_pct gaps
-  // automatically with `connectNulls={false}` (the default).
+export const HistoryChart: React.FC<{ points: StatsHistoryPoint[] }> = ({ points }) => {
   const data = useMemo(
     () => points.map((p) => ({
       ts: new Date(p.ts).getTime(),
@@ -261,13 +322,63 @@ const HistoryChart: React.FC<{ points: StatsHistoryPoint[] }> = ({ points }) => 
   )
 }
 
-const ClaudeFleetStats: React.FC = () => {
-  const { getFleetStats, getStatsHistory } = useClaude()
-  const [snap, setSnap] = useState<FleetStats | null>(null)
+// SessionStatsPanel — live stats + history for a single session.
+// Used in the session details view. Auto-refreshes the history; the live
+// numbers come from the snapshot the parent already fetches and passes in.
+export const SessionStatsPanel: React.FC<{ sessionId: string }> = ({ sessionId }) => {
+  const { getStatsHistory } = useClaude()
+  const [points, setPoints] = useState<StatsHistoryPoint[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
-  const [history, setHistory] = useState<StatsHistoryPoint[]>([])
-  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    try {
+      const h = await getStatsHistory({ sessionId, max: HISTORY_MAX })
+      setPoints(h.points)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load history')
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId, getStatsHistory])
+
+  useEffect(() => {
+    setLoading(true)
+    load()
+    const id = setInterval(load, REFRESH_MS)
+    return () => clearInterval(id)
+  }, [load])
+
+  if (loading && points.length === 0) {
+    return <div className="text-sm text-slate-500 py-4">Loading history…</div>
+  }
+  if (error) {
+    return <div className="text-sm text-red-600 py-2">{error}</div>
+  }
+  return <HistoryChart points={points} />
+}
+
+interface ClaudeFleetStatsProps {
+  selectedSessionId: string | null
+  onSelectContainer: (sessionId: string) => void
+  // Lookup tables: parent loads these once; we render with what's available.
+  // Empty arrays are fine — display falls back to ids.
+  environments: Environment[]
+  hasAdminScope: boolean
+}
+
+const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
+  selectedSessionId,
+  onSelectContainer,
+  environments,
+  hasAdminScope,
+}) => {
+  const { getFleetStats } = useClaude()
+  const { listUsers } = useUsers()
+  const [snap, setSnap] = useState<FleetStats | null>(null)
+  const [users, setUsers] = useState<User[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   const loadSnap = useCallback(async () => {
     try {
@@ -279,40 +390,23 @@ const ClaudeFleetStats: React.FC = () => {
     }
   }, [getFleetStats])
 
-  const loadHistory = useCallback(
-    async (sessionId: string) => {
-      try {
-        const h = await getStatsHistory({ sessionId, max: HISTORY_MAX })
-        setHistory(h.points)
-        setHistoryError(null)
-      } catch (e) {
-        setHistoryError(e instanceof Error ? e.message : 'Failed to load history')
-        setHistory([])
-      }
-    },
-    [getStatsHistory]
-  )
-
-  // Initial + periodic snapshot refresh.
   useEffect(() => {
     loadSnap()
     const id = setInterval(loadSnap, REFRESH_MS)
     return () => clearInterval(id)
   }, [loadSnap])
 
-  // Load history when a container is selected, and refresh on the same
-  // cadence as the snapshot. Each refresh re-fetches the full window — at 240
-  // points × ~50 bytes ≈ 12KB per call, this is cheap, and avoids the
-  // bookkeeping of incremental `since=` polling.
+  // User listing requires admin scope server-side. Skip the call entirely for
+  // non-admins — they'd get 403 anyway, and they only ever see their own
+  // sessions in the table, so the lookup is moot.
   useEffect(() => {
-    if (!selected) {
-      setHistory([])
-      return
-    }
-    loadHistory(selected)
-    const id = setInterval(() => loadHistory(selected), REFRESH_MS)
-    return () => clearInterval(id)
-  }, [selected, loadHistory])
+    if (!hasAdminScope) return
+    listUsers()
+      .then(setUsers)
+      .catch(() => {
+        // Non-fatal: rows just show "user N" instead of names.
+      })
+  }, [hasAdminScope, listUsers])
 
   if (error) {
     return (
@@ -321,7 +415,6 @@ const ClaudeFleetStats: React.FC = () => {
       </div>
     )
   }
-
   if (!snap) {
     return (
       <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm text-slate-500">
@@ -331,10 +424,6 @@ const ClaudeFleetStats: React.FC = () => {
   }
 
   const containers = snap.containers
-  const selectedContainer = selected
-    ? containers.find((c) => c.id === selected) ?? null
-    : null
-
   return (
     <div className="space-y-4">
       {snap.global && <GlobalSummary snap={snap} />}
@@ -367,35 +456,15 @@ const ClaudeFleetStats: React.FC = () => {
                 <ContainerRow
                   key={c.id}
                   c={c}
-                  selected={selected === c.id}
-                  onSelect={() => setSelected(selected === c.id ? null : c.id)}
+                  display={sessionDisplay(c.id, environments, users)}
+                  selected={selectedSessionId === c.id}
+                  onSelect={() => onSelectContainer(c.id)}
                 />
               ))}
             </tbody>
           </table>
         )}
       </div>
-
-      {selectedContainer && (
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <div className="flex items-baseline justify-between mb-3">
-            <h3 className="text-sm font-semibold text-slate-700">
-              History <span className="font-mono text-slate-500 font-normal">— {selectedContainer.id}</span>
-            </h3>
-            <button
-              onClick={() => setSelected(null)}
-              className="text-xs text-slate-500 hover:text-slate-700"
-            >
-              close
-            </button>
-          </div>
-          {historyError ? (
-            <div className="text-sm text-red-600">{historyError}</div>
-          ) : (
-            <HistoryChart points={history} />
-          )}
-        </div>
-      )}
     </div>
   )
 }

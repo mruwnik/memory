@@ -248,6 +248,14 @@ const AuthWrapper = () => {
         )
       } />
 
+      <Route path="/ui/claude/:sessionId" element={
+        isAuthenticated ? (
+          <Suspense fallback={<Loading />}><ClaudeSessions /></Suspense>
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
       <Route path="/ui/celery" element={
         isAuthenticated && hasScope('admin') ? (
           <CeleryOverview />

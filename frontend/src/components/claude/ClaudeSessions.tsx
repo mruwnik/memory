@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, ContainerStats, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
+import { useAuth } from '../../hooks/useAuth'
+import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
-import ClaudeFleetStats from './ClaudeFleetStats'
+import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -88,10 +90,15 @@ const ClaudeSessions = () => {
     listEnvironments,
     listUserRepos,
   } = useClaude()
+  const { hasScope } = useAuth()
+  const { listUsers } = useUsers()
+  const navigate = useNavigate()
+  const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>()
 
   // State
   const [sessions, setSessions] = useState<ClaudeSession[]>([])
   const [selectedSession, setSelectedSession] = useState<ClaudeSession | null>(null)
+  const [users, setUsers] = useState<User[]>([])
   const [attachInfo, setAttachInfo] = useState<AttachInfo | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
   const [environments, setEnvironments] = useState<Environment[]>([])
@@ -146,20 +153,31 @@ const ClaudeSessions = () => {
   const [scheduling, setScheduling] = useState(false)
   const [scheduleSuccess, setScheduleSuccess] = useState<ScheduleResponse | null>(null)
 
+  // Selecting a session goes through the URL so refresh preserves the
+  // choice. The state setter still exists for the load-time path (sync from
+  // URL once the session list arrives) — UI callsites use selectSession.
+  const selectSession = useCallback(
+    (s: ClaudeSession | null) => {
+      navigate(s ? `/ui/claude/${s.session_id}` : '/ui/claude')
+    },
+    [navigate]
+  )
+
   // Load data
   const loadSessions = useCallback(async () => {
     try {
       const data = await listSessions()
       setSessions(data)
-      // If selected session no longer exists, clear it
+      // If selected session no longer exists, clear it (and the URL).
       if (selectedSession && !data.find((s) => s.session_id === selectedSession.session_id)) {
         setSelectedSession(null)
         setAttachInfo(null)
+        navigate('/ui/claude')
       }
     } catch (e) {
       console.error('Failed to load sessions:', e)
     }
-  }, [listSessions, selectedSession])
+  }, [listSessions, selectedSession, navigate])
 
   const loadInitialData = useCallback(async () => {
     setLoading(true)
@@ -199,6 +217,39 @@ const ClaudeSessions = () => {
     const interval = setInterval(loadSessions, 5000)
     return () => clearInterval(interval)
   }, [loadSessions])
+
+  // Keep selectedSession in sync with the URL. Runs on mount and whenever
+  // either the URL or the session list changes — the list might arrive after
+  // the URL, so we re-resolve as soon as the matching session shows up.
+  useEffect(() => {
+    if (urlSessionId) {
+      const match = sessions.find((s) => s.session_id === urlSessionId)
+      if (match) {
+        if (match.session_id !== selectedSession?.session_id) {
+          setSelectedSession(match)
+        }
+      } else if (sessions.length > 0 && selectedSession) {
+        // URL points at something the list says doesn't exist (kicked, killed,
+        // or never existed) — clear local selection but leave the URL alone
+        // so the user can correct it manually if they typed it.
+        setSelectedSession(null)
+      }
+    } else if (selectedSession) {
+      setSelectedSession(null)
+    }
+  }, [urlSessionId, sessions, selectedSession])
+
+  // Load users for the fleet table's "user" column. Only admins can list
+  // users; non-admins skip the call (they only see their own sessions
+  // anyway, so the lookup is moot).
+  useEffect(() => {
+    if (!hasScope('*')) return
+    listUsers()
+      .then(setUsers)
+      .catch(() => {
+        // Non-fatal: rows fall back to "user N".
+      })
+  }, [hasScope, listUsers])
 
   // Load attach info when session selected
   useEffect(() => {
@@ -351,7 +402,7 @@ const ClaudeSessions = () => {
 
   // Handlers
   const handleSelectSession = (session: ClaudeSession) => {
-    setSelectedSession(session)
+    selectSession(session)
     setShowNewSession(false)
   }
 
@@ -361,7 +412,7 @@ const ClaudeSessions = () => {
     try {
       await killSession(sessionId)
       if (selectedSession?.session_id === sessionId) {
-        setSelectedSession(null)
+        selectSession(null)
         setAttachInfo(null)
       }
       await loadSessions()
@@ -397,7 +448,7 @@ const ClaudeSessions = () => {
     try {
       const newSession = await spawnSession(buildSpawnConfig())
       await loadSessions()
-      setSelectedSession(newSession)
+      selectSession(newSession)
       setShowNewSession(false)
       // Reset form
       setSelectedRepoUrl('')
@@ -439,7 +490,7 @@ const ClaudeSessions = () => {
   }
 
   const handleNewSession = () => {
-    setSelectedSession(null)
+    selectSession(null)
     setAttachInfo(null)
     setShowNewSession(true)
   }
@@ -856,14 +907,28 @@ const ClaudeSessions = () => {
             </div>
           ) : selectedSession ? (
             // Selected session details
+            (() => {
+              const display = sessionDisplay(selectedSession.session_id, environments, users)
+              return (
             <div className="h-full flex flex-col">
               {/* Header */}
               <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-xl font-semibold text-slate-800">Session Details</h2>
+                <button
+                  onClick={() => selectSession(null)}
+                  className="text-sm text-slate-600 hover:text-slate-800 underline-offset-2 hover:underline"
+                  title="Back to fleet overview"
+                >
+                  ← Fleet
+                </button>
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-xl font-semibold text-slate-800 truncate">{display.title}</h2>
+                  {display.subtitle && (
+                    <div className="text-xs text-slate-500">{display.subtitle}</div>
+                  )}
+                </div>
                 <span className={`text-sm px-3 py-1 rounded ${getStatusColor(selectedSession.status)}`}>
                   {selectedSession.status || 'unknown'}
                 </span>
-                <div className="flex-1" />
                 <button
                   onClick={() => handleKillSession(selectedSession.session_id)}
                   disabled={killingId === selectedSession.session_id}
@@ -883,6 +948,12 @@ const ClaudeSessions = () => {
                   <div className="text-xs text-slate-500 mb-1">Container</div>
                   <div className="font-mono text-sm text-slate-800">{selectedSession.container_name || 'N/A'}</div>
                 </div>
+              </div>
+
+              {/* Resource stats */}
+              <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">Resource Stats</h3>
+                <SessionStatsPanel sessionId={selectedSession.session_id} />
               </div>
 
               {/* Attach commands (collapsible) */}
@@ -1005,6 +1076,8 @@ const ClaudeSessions = () => {
                 </details>
               )}
             </div>
+              )
+            })()
           ) : (
             // Empty state — show fleet-wide resource overview while no session
             // is selected. Admins see global capacity + every container; non-
@@ -1016,7 +1089,12 @@ const ClaudeSessions = () => {
                   Select a session for details, or click a row below to see its history.
                 </p>
               </div>
-              <ClaudeFleetStats />
+              <ClaudeFleetStats
+                selectedSessionId={null}
+                onSelectContainer={(id) => navigate(`/ui/claude/${id}`)}
+                environments={environments}
+                hasAdminScope={hasScope('*')}
+              />
             </div>
           )}
         </main>
