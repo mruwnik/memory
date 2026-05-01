@@ -61,6 +61,8 @@ class AnthropicProvider(BaseLLMProvider):
 
     def _convert_image_content(self, content: ImageContent) -> dict[str, Any]:
         """Convert ImageContent to Anthropic's base64 source format."""
+        if content.image is None:
+            raise ValueError("ImageContent.image must not be None")
         encoded_image = self.encode_image(content.image)
         return {
             "type": "image",

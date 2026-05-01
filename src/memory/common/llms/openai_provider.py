@@ -72,6 +72,8 @@ class OpenAIProvider(BaseLLMProvider):
 
     def _convert_image_content(self, content: ImageContent) -> dict[str, Any]:
         """Convert ImageContent to OpenAI image_url format."""
+        if content.image is None:
+            raise ValueError("ImageContent.image must not be None")
         encoded_image = self.encode_image(content.image)
         image_part: dict[str, Any] = {
             "type": "image_url",
@@ -88,7 +90,7 @@ class OpenAIProvider(BaseLLMProvider):
             "type": "function",
             "function": {
                 "name": content.name,
-                "arguments": json.dumps(content.input),
+                "arguments": json.dumps(content.input or {}),
             },
         }
 
