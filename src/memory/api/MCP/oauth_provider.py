@@ -238,7 +238,28 @@ class SimpleOAuthProvider(OAuthProvider):
             return client and OAuthClientInformationFull(**client.serialize())
 
     async def register_client(self, client_info: OAuthClientInformationFull):
-        """Register a new OAuth client."""
+        """Register a new OAuth client.
+
+        Validates that all redirect_uris start with an allowed URI prefix to
+        prevent authorization-code phishing via open dynamic client registration.
+        Configure OAUTH_REDIRECT_URI_ALLOWLIST (comma-separated URI prefixes) to
+        expand the default localhost-only allowlist.
+        """
+        allowlist = settings.OAUTH_REDIRECT_URI_ALLOWLIST
+        if allowlist != ["*"]:
+            for uri in client_info.redirect_uris:
+                uri_str = str(uri)
+                if not any(uri_str.startswith(prefix) for prefix in allowlist):
+                    logger.warning(
+                        "Rejected OAuth client registration: redirect_uri %r not in allowlist %r",
+                        uri_str,
+                        allowlist,
+                    )
+                    raise ValueError(
+                        f"redirect_uri {uri_str!r} is not permitted. "
+                        "Set OAUTH_REDIRECT_URI_ALLOWLIST to allow additional URI prefixes."
+                    )
+
         with make_session() as session:
             client = session.get(OAuthClientInformation, client_info.client_id)
             if not client:
