@@ -11,9 +11,10 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
-from memory.common.scopes import SCOPE_EMAIL_WRITE
+from memory.common.access_control import get_user_project_roles, user_can_access
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import UserSession
+from memory.common.db.models import SourceItem, User, UserSession
+from memory.common.scopes import SCOPE_EMAIL_WRITE
 from memory.common.email_sender import (
     EmailAttachmentData,
     get_account_by_address,
@@ -60,10 +61,11 @@ def _get_user_id(session: DBSession) -> int:
     return user_session.user.id
 
 
-def _load_attachment(path: str) -> EmailAttachmentData | None:
+def _load_attachment(path: str, user: User | None) -> EmailAttachmentData | None:
     """Load an attachment from the file storage directory.
 
     Only allows files within FILE_STORAGE_DIR for security.
+    Performs an ownership check to prevent cross-user file exfiltration.
     """
     try:
         file_path = Path(settings.FILE_STORAGE_DIR) / path
@@ -72,7 +74,7 @@ def _load_attachment(path: str) -> EmailAttachmentData | None:
         storage_dir = Path(settings.FILE_STORAGE_DIR).resolve()
 
         try:
-            file_path.relative_to(storage_dir)
+            relative = file_path.relative_to(storage_dir).as_posix()
         except ValueError:
             logger.warning(f"Attempted path traversal: {path}")
             return None
@@ -80,6 +82,21 @@ def _load_attachment(path: str) -> EmailAttachmentData | None:
         if not file_path.exists():
             logger.warning(f"Attachment not found: {path}")
             return None
+
+        # Ownership check: require a SourceItem that the requesting user can access
+        if user is None:
+            logger.warning(f"Unauthenticated attachment request for: {path}")
+            return None
+
+        with make_session() as session:
+            item = session.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
+            if item is None:
+                logger.warning(f"No SourceItem found for attachment: {relative}")
+                return None
+            project_roles = get_user_project_roles(session, user)
+            if not user_can_access(user, item, project_roles):
+                logger.warning(f"Access denied to attachment {relative} for user {user.id}")
+                return None
 
         content = file_path.read_bytes()
 
@@ -138,6 +155,8 @@ async def send(
 
     with make_session() as session:
         user_id = _get_user_id(session)
+        # Load the full user object needed for attachment ownership checks
+        user = session.query(User).filter(User.id == user_id).one_or_none()
         # Find the email account
         account = get_account_by_address(session, user_id, from_address)
 
@@ -158,7 +177,7 @@ async def send(
     if attachment_paths:
         attachments = []
         for path in attachment_paths:
-            att = _load_attachment(path)
+            att = _load_attachment(path, user)
             if att:
                 attachments.append(att)
             else:
