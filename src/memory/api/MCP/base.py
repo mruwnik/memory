@@ -19,6 +19,7 @@ from memory.api.MCP.servers import (
 )
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
+from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState, UserSession
 from memory.common.db.models.users import HumanUser
 from memory.common.qdrant import get_qdrant_client
@@ -176,12 +177,12 @@ def get_current_user() -> dict:
         return {"authenticated": False}
 
     with make_session() as session:
-        user_session = session.get(UserSession, access_token.token)
+        user = fetch_user_by_token(session, access_token.token)
 
-        if user_session and user_session.user:
-            user_info = user_session.user.serialize()
-        else:
-            user_info = {"error": "User not found"}
+        if user is None:
+            return {"authenticated": False}
+
+        user_info = user.serialize()
 
     return {
         "authenticated": True,
