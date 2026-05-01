@@ -440,18 +440,26 @@ def list_bot_users(
 # --- Server Endpoints ---
 
 
+def user_can_manage_server(user: User, db: Session, server: DiscordServer) -> bool:
+    """Check that the user has a bot linked to this server.
+
+    Returns True when:
+    - The server has no owning bot (legacy rows — allow for backwards compat)
+    - The server's bot_id belongs to a bot the user is authorised for
+    """
+    if server.bot_id is None:
+        return True
+    user_bot_ids = {bot.id for bot in get_user_bots(db, user.id)}
+    return server.bot_id in user_bot_ids
+
+
 @router.get("/servers")
 def list_servers(
-    bot_id: int | None = None,
     auth: tuple[User, Session] = Depends(require_discord_access),
 ) -> list[DiscordServerResponse]:
-    """List Discord servers.
-
-    Note: Currently returns all servers. In a multi-bot setup, could filter
-    by which servers the bot is in.
-    """
-    _, db = auth
-    servers = fetch_servers(db)
+    """List Discord servers owned by the requesting user's bots."""
+    user, db = auth
+    servers = fetch_servers(db, user_id=user.id)
     return [server_to_response(server) for server in servers]
 
 
@@ -462,9 +470,11 @@ def update_server(
     auth: tuple[User, Session] = Depends(require_discord_access),
 ) -> DiscordServerResponse:
     """Update server collection settings."""
-    _, db = auth
+    user, db = auth
     server = db.get(DiscordServer, server_id)
     if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if not user_can_manage_server(user, db, server):
         raise HTTPException(status_code=404, detail="Server not found")
 
     if updates.collect_messages is not None:
@@ -496,9 +506,12 @@ def update_channel(
     - false: Never collect messages from this channel
     - null: Inherit from server setting
     """
-    _, db = auth
+    user, db = auth
     channel = db.get(DiscordChannel, channel_id)
     if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    # Check ownership via the channel's parent server
+    if channel.server and not user_can_manage_server(user, db, channel.server):
         raise HTTPException(status_code=404, detail="Channel not found")
 
     # Allow setting to None (inherit) - check if key is present, not if value is None
