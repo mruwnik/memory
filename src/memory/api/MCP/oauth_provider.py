@@ -405,6 +405,16 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"Invalid authorization code: {authorization_code}")
                 raise ValueError("Invalid authorization code")
 
+            # RFC 6749 §4.1.3: verify the code was issued to THIS client
+            if auth_code.client_id != client.client_id:
+                logger.warning(
+                    "Authorization code %s requested by client %r but issued to %r",
+                    authorization_code,
+                    client.client_id,
+                    auth_code.client_id,
+                )
+                raise ValueError("Authorization code not issued to this client")
+
             return AuthorizationCode(**auth_code.serialize(code=True))
 
     async def exchange_authorization_code(
@@ -422,6 +432,16 @@ class SimpleOAuthProvider(OAuthProvider):
             if not auth_code:
                 logger.error(f"Invalid authorization code: {authorization_code.code}")
                 raise ValueError("Invalid authorization code")
+
+            # RFC 6749 §4.1.3: verify the code was issued to THIS client
+            if auth_code.client_id != client.client_id:
+                logger.warning(
+                    "Authorization code %s exchange attempted by client %r but issued to %r",
+                    authorization_code.code,
+                    client.client_id,
+                    auth_code.client_id,
+                )
+                raise ValueError("Authorization code not issued to this client")
 
             if not auth_code.user:
                 logger.error(f"No user found for auth code: {authorization_code.code}")
