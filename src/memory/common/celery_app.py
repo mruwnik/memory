@@ -259,12 +259,11 @@ app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
-    # Default retry configuration for transient failures
-    task_autoretry_for=(Exception,),
-    task_retry_kwargs={"max_retries": 3},
-    task_retry_backoff=True,
-    task_retry_backoff_max=600,  # Max 10 minutes between retries
-    task_retry_jitter=True,
+    # No global autoretry: blanket retry on Exception silently retries programming
+    # errors (ValueError, KeyError, etc.) and causes side effects — e.g. spawning
+    # duplicate Claude containers or sending duplicate notifications.
+    # Tasks that need retry should declare autoretry_for per-task for transient
+    # errors only (e.g. requests.Timeout, ConnectionError).
     task_time_limit=3600,  # 1 hour hard limit
     task_soft_time_limit=3000,  # 50 minute soft limit
     task_routes={
