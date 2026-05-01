@@ -618,6 +618,18 @@ async def upsert(
     }
 
     with make_session() as session:
+        user = get_mcp_current_user(session, full=True)
+        if not user:
+            return {"error": "Not authenticated"}
+
+        # For existing teams, require lead/admin to prevent arbitrary modification.
+        # (Creating a new team is allowed for any teams:write user.)
+        existing_team = session.query(Team).filter(Team.slug == slug).first()
+        if existing_team:
+            caller_role = get_caller_team_role(session, user, existing_team.id)
+            if caller_role not in ("lead", "admin"):
+                return {"error": "Only team leads and admins can modify an existing team"}
+
         # Resolve owner: _UNSET = skip, None = clear, str/int = resolve person
         owner_id: int | None = 0  # 0 = skip
         if owner is None:
