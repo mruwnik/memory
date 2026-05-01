@@ -491,12 +491,22 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
+                # oauth_state_id is nullable — sessions created programmatically
+                # (e.g. create_access_token_session with no state_id) won't have one.
+                # Mirror verify_token's fallback to "frontend" as client_id.
                 oauth_state = user_session.oauth_state
-                assert oauth_state is not None  # Guaranteed by FK constraint
+                if oauth_state is not None:
+                    client_id = oauth_state.client_id
+                    scopes = oauth_state.scopes
+                else:
+                    client_id = "frontend"
+                    # Fall back to the user's own scopes when no OAuth state
+                    user_scopes = user_session.user.scopes if user_session.user else []
+                    scopes = list(user_scopes or [])
                 return AccessToken(
                     token=token,
-                    client_id=oauth_state.client_id,
-                    scopes=oauth_state.scopes,
+                    client_id=client_id,
+                    scopes=scopes,
                     expires_at=int(user_session.expires_at.timestamp()),
                 )
 
