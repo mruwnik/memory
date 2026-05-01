@@ -1,8 +1,7 @@
 import hashlib
 import logging
 import secrets
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -55,8 +54,15 @@ REFRESH_TOKEN_LIFETIME = 30 * 24 * 3600  # 30 days
 
 
 def create_expiration(lifetime_seconds: int) -> datetime:
-    """Create expiration datetime from lifetime in seconds."""
-    return datetime.fromtimestamp(time.time() + lifetime_seconds)
+    """Create a UTC-aware expiration datetime from a lifetime in seconds.
+
+    Returns a naive UTC datetime (tzinfo=None) for consistency with how
+    expires_at is stored in the database. Using UTC ensures correct behaviour
+    on servers whose local timezone is not UTC.
+    """
+    return (datetime.now(timezone.utc) + timedelta(seconds=lifetime_seconds)).replace(
+        tzinfo=None
+    )
 
 
 def generate_refresh_token() -> str:
@@ -334,7 +340,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 == "true",
                 code_challenge=params.code_challenge or "",
                 scopes=requested_scopes,
-                expires_at=datetime.fromtimestamp(time.time() + 600),  # 10 min expiry
+                expires_at=create_expiration(600),  # 10 min expiry
             )
             session.add(oauth_state)
             session.commit()
@@ -365,8 +371,8 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"State {state} not found in database")
                 raise ValueError("Invalid state parameter")
 
-            # Check if state has expired
-            now = datetime.fromtimestamp(time.time())
+            # Check if state has expired (compare naive UTC datetimes)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             if oauth_state.expires_at < now:
                 logger.error(f"State {state} has expired")
                 oauth_state.stale = True  # type: ignore
@@ -519,7 +525,7 @@ class SimpleOAuthProvider(OAuthProvider):
     ) -> Optional[RefreshToken]:
         """Load and validate a refresh token."""
         with make_session() as session:
-            now = datetime.now()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
 
             # Query for the refresh token
             db_refresh_token = (
