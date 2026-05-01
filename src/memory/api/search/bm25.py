@@ -9,7 +9,7 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import bindparam, func, text, or_, exists, select, false as sql_false, literal_column
+from sqlalchemy import func, text, or_, exists, select, false as sql_false
 
 from memory.api.search.types import SearchFilters
 from memory.common import extract
@@ -53,18 +53,24 @@ def apply_access_filter(query, access_filter: AccessFilter | None):
 
     Access is granted if ANY of these conditions are true:
     1. User has admin scope (superadmin) - access_filter will be None
-    2. Person override: user's person is attached to the item via source_item_people
-    3. Public bypass: item's resolved sensitivity is "public"
-    4. Project access: resolved project_id matches a project the user has access to,
-       AND resolved sensitivity is within the user's allowed sensitivities for that role
+    2. Creator override: user is the creator of the item (creator_id matches)
+    3. Person override: user's person is attached to the item via source_item_people
+    4. Public bypass: item sensitivity is "public"
+    5. Project access: project_id matches AND sensitivity is within the user's allowed
+       sensitivities for that project role
 
-    Uses source_item_access_view for resolved project_id and sensitivity (query-time inheritance).
+    Uses SourceItem columns directly — avoids the phantom source_item_access_view that
+    does not exist in any migration and would cause BM25 filtering to silently fail.
     """
     if access_filter is None:
         # Superadmin - no filtering
         return query
 
     conditions = []
+
+    # Creator override: users can always see items they created
+    if access_filter.creator_id is not None:
+        conditions.append(SourceItem.creator_id == access_filter.creator_id)
 
     # Person override: if user's person is attached to item, grant access
     if access_filter.person_id is not None:
@@ -75,40 +81,19 @@ def apply_access_filter(query, access_filter: AccessFilter | None):
         )
         conditions.append(person_override)
 
-    # Public bypass: items with resolved sensitivity "public" are visible to all authenticated users
+    # Public bypass: items with sensitivity "public" are visible to all authenticated users
     if access_filter.include_public:
-        # Use the view for resolved sensitivity (handles inheritance)
-        # Join to the view and check resolved_sensitivity
-        public_condition = exists(
-            select(literal_column("1"))
-            .select_from(text("source_item_access_view av"))
-            .where(text("av.id = source_item.id"))
-            .where(text("av.resolved_sensitivity = 'public'"))
-        )
-        conditions.append(public_condition)
+        conditions.append(SourceItem.sensitivity == "public")
 
-    # Project access conditions using resolved values from view
-    for i, condition in enumerate(access_filter.conditions):
-        # Build the condition using the access view for resolved values
-        # This handles inheritance: item -> data source -> class default
-        # Use parameterized queries to prevent SQL injection
-        project_param = bindparam(f"project_id_{i}", value=condition.project_id)
-        sensitivity_params = [
-            bindparam(f"sens_{i}_{j}", value=s)
-            for j, s in enumerate(condition.sensitivities)
-        ]
-        sensitivity_placeholders = ", ".join(f":sens_{i}_{j}" for j in range(len(condition.sensitivities)))
-        project_condition = exists(
-            select(literal_column("1"))
-            .select_from(text("source_item_access_view av"))
-            .where(text("av.id = source_item.id"))
-            .where(text(f"av.resolved_project_id = :project_id_{i}").bindparams(project_param))
-            .where(text(f"av.resolved_sensitivity IN ({sensitivity_placeholders})").bindparams(*sensitivity_params))
+    # Project access conditions
+    for condition in access_filter.conditions:
+        project_condition = (SourceItem.project_id == condition.project_id) & (
+            SourceItem.sensitivity.in_(list(condition.sensitivities))
         )
         conditions.append(project_condition)
 
     if not conditions:
-        # No project access AND no person override AND no public bypass = match nothing
+        # No access conditions at all — match nothing
         return query.filter(sql_false())
 
     # Apply OR across all access conditions
