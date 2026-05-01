@@ -631,6 +631,10 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
     # Build OR conditions for access
     or_conditions = []
 
+    # Creator override: users always see items they created, regardless of project
+    if access_filter.creator_id is not None:
+        or_conditions.append(SourceItem.creator_id == access_filter.creator_id)
+
     # Public items are visible to all authenticated users
     if access_filter.include_public:
         or_conditions.append(SourceItem.sensitivity == "public")
