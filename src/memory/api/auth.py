@@ -16,6 +16,7 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
+from memory.common.access_control import has_admin_scope
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
@@ -409,15 +410,6 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
     if account.user_id != user.id and not has_admin_scope(user):  # type: ignore[attr-defined]
         raise HTTPException(status_code=404, detail="Account not found")
     return account
-
-
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope (can view all users' data).
-
-    Admin users have either '*' (full access) or 'admin' scope.
-    """
-    user_scopes = user.scopes or []
-    return SCOPE_ADMIN in user_scopes
 
 
 def resolve_user_filter(

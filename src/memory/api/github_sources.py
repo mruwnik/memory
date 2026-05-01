@@ -11,7 +11,8 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account, has_admin_scope, resolve_user_filter
+from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.common.access_control import has_admin_scope
 from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
 from memory.common.db.connection import get_session

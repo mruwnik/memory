@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from sqlalchemy import distinct, exists, func
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, has_admin_scope, resolve_user_filter
+from memory.api.auth import get_current_user, resolve_user_filter
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
