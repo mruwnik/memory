@@ -139,8 +139,10 @@ async def login_page(request: Request):
             session.query(OAuthState).filter(OAuthState.state == state).first()
         )
         if not oauth_state:
-            logger.error(f"State {state} not found in database")
-            raise ValueError("Invalid state parameter")
+            logger.warning("OAuth login_page: state %r not found in database", state)
+            return login_form(
+                request, form_data, "Session expired or invalid — please try again."
+            )
 
     return login_form(request, form_data, None)
 
