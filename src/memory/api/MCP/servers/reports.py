@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 
 from memory.api.MCP.access import get_mcp_current_user, get_project_roles_by_user_id
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.access_control import has_admin_scope, user_can_access
 from memory.common.celery_app import SYNC_REPORT
 from memory.common.celery_app import app as celery_app
@@ -85,7 +85,12 @@ async def upsert(
                 existing.tags = tags
             session.commit()
 
-    file_path = settings.REPORT_STORAGE_DIR / filename
+    # Validate filename to prevent path traversal outside REPORT_STORAGE_DIR.
+    # Matches the same pattern used by notes.py.
+    try:
+        file_path = paths.validate_path_within_directory(settings.REPORT_STORAGE_DIR, filename)
+    except ValueError as e:
+        return {"error": f"Invalid filename: {e}"}
 
     # Dispatch to worker for content processing
     task = celery_app.send_task(
