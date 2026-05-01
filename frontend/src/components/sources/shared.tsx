@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 // Format relative time
 export const formatRelativeTime = (dateString: string | null): string => {
@@ -23,18 +23,27 @@ interface StatusBadgeProps {
   onClick?: () => void
 }
 
-export const StatusBadge = ({ active, onClick }: StatusBadgeProps) => (
-  <span
-    className={`px-2 py-1 rounded text-xs font-medium ${
-      active
-        ? 'bg-green-100 text-green-700'
-        : 'bg-slate-100 text-slate-500'
-    } ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
-    onClick={onClick}
-  >
-    {active ? 'Active' : 'Inactive'}
-  </span>
-)
+export const StatusBadge = ({ active, onClick }: StatusBadgeProps) => {
+  const className = `px-2 py-1 rounded text-xs font-medium ${
+    active ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+  }`
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={active}
+        className={`${className} cursor-pointer hover:opacity-80`}
+        onClick={onClick}
+      >
+        {active ? 'Active' : 'Inactive'}
+      </button>
+    )
+  }
+
+  return <span className={className}>{active ? 'Active' : 'Inactive'}</span>
+}
 
 // Sync Status
 interface SyncStatusProps {
@@ -188,27 +197,52 @@ interface ConfirmDialogProps {
   onCancel: () => void
 }
 
-export const ConfirmDialog = ({ message, onConfirm, onCancel }: ConfirmDialogProps) => (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-    <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full">
-      <p className="text-slate-800 mb-4">{message}</p>
-      <div className="flex justify-end gap-2">
-        <button
-          className="py-2 px-4 border border-slate-200 rounded text-slate-600 hover:bg-slate-50"
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
-        <button
-          className="py-2 px-4 bg-red-600 text-white rounded hover:bg-red-700"
-          onClick={onConfirm}
-        >
-          Confirm
-        </button>
+export const ConfirmDialog = ({ message, onConfirm, onCancel }: ConfirmDialogProps) => {
+  const titleId = useId()
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  // Focus the Cancel button on mount (safer default for destructive confirmations)
+  useEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel])
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full"
+      >
+        <p id={titleId} className="text-slate-800 mb-4">{message}</p>
+        <div className="flex justify-end gap-2">
+          <button
+            ref={cancelRef}
+            className="py-2 px-4 border border-slate-200 rounded text-slate-600 hover:bg-slate-50"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="py-2 px-4 bg-red-600 text-white rounded hover:bg-red-700"
+            onClick={onConfirm}
+          >
+            Confirm
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-)
+  )
+}
 
 // Modal wrapper
 interface ModalProps {
@@ -218,27 +252,59 @@ interface ModalProps {
   className?: string
 }
 
-export const Modal = ({ title, onClose, children, className }: ModalProps) => (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+export const Modal = ({ title, onClose, children, className }: ModalProps) => {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  // Move focus into the dialog on mount; restore to the previously focused element on close
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    firstFocusable?.focus()
+    return () => previouslyFocused?.focus()
+  }, [])
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
     <div
-      className={`bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-auto ${className || ''}`}
-      onClick={e => e.stopPropagation()}
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
     >
-      <div className="flex items-center justify-between p-4 border-b border-slate-100">
-        <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
-        <button
-          className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
-          onClick={onClose}
-        >
-          &times;
-        </button>
-      </div>
-      <div className="p-4">
-        {children}
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-auto ${className || ''}`}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-slate-100">
+          <h3 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h3>
+          <button
+            aria-label="Close"
+            className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
+            onClick={onClose}
+          >
+            &times;
+          </button>
+        </div>
+        <div className="p-4">
+          {children}
+        </div>
       </div>
     </div>
-  </div>
-)
+  )
+}
 
 // Source Card wrapper
 interface SourceCardProps {
