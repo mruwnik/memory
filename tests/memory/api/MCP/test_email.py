@@ -298,30 +298,41 @@ async def test_send_send_failure(
     assert result["error"] == "SMTP connection failed"
 
 
-@pytest.mark.parametrize(
-    "path,should_load",
-    [
-        ("valid/file.txt", True),
-        ("../outside/file.txt", False),  # Path traversal attempt
-        ("nonexistent.txt", False),
-    ],
-)
-def test_load_attachment_security(path, should_load, tmp_path):
+def test_load_attachment_valid_path(tmp_path):
+    """_load_attachment returns content for a file inside the storage directory."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
 
-    # Create a valid file
     valid_dir = tmp_path / "valid"
     valid_dir.mkdir()
     valid_file = valid_dir / "file.txt"
     valid_file.write_text("test content")
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
+        result = _load_attachment("valid/file.txt")
+
+    assert result is not None
+    assert result.filename == "file.txt"
+    assert result.content == b"test content"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("../outside/file.txt", id="path_traversal_blocked"),
+        pytest.param("nonexistent.txt", id="missing_file_returns_none"),
+    ],
+)
+def test_load_attachment_invalid_path(path, tmp_path):
+    """_load_attachment returns None for paths outside the storage dir or non-existent files."""
+    from memory.api.MCP.servers.email import _load_attachment
+    from memory.common import settings
+
+    valid_dir = tmp_path / "valid"
+    valid_dir.mkdir()
+    (valid_dir / "file.txt").write_text("test content")
+
+    with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
         result = _load_attachment(path)
 
-    if should_load:
-        assert result is not None
-        assert result.filename == "file.txt"
-        assert result.content == b"test content"
-    else:
-        assert result is None
+    assert result is None

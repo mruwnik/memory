@@ -267,29 +267,36 @@ async def test_list_all_unauthenticated_returns_error(db_session):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "use_admin,team_slug,expect_success",
+    "use_admin,team_slug",
     [
-        pytest.param(False, "team-alpha", True, id="regular_user_can_access_member_team"),
-        pytest.param(False, "team-gamma", False, id="regular_user_cannot_access_non_member_team"),
-        pytest.param(True, "team-gamma", True, id="admin_can_access_any_team"),
+        pytest.param(False, "team-alpha", id="regular_user_can_access_member_team"),
+        pytest.param(True, "team-gamma", id="admin_can_access_any_team"),
     ],
 )
-async def test_fetch_access_control(
+async def test_fetch_access_control_success(
     db_session, user_session, admin_session, teams_and_projects,
-    use_admin, team_slug, expect_success
+    use_admin, team_slug
 ):
-    """Test that fetch respects access control."""
+    """Test that fetch grants access to authorized teams."""
 
     session_id = admin_session.id if use_admin else user_session.id
     with mcp_auth_context(session_id):
         result = await get_fn(fetch)(team_slug)
 
-    if expect_success:
-        assert "team" in result, f"Expected team in result, got: {result}"
-        assert result["team"]["slug"] == team_slug
-    else:
-        assert "error" in result
-        assert "Team not found" in result["error"]
+    assert "team" in result, f"Expected team in result, got: {result}"
+    assert result["team"]["slug"] == team_slug
+
+
+@pytest.mark.asyncio
+async def test_fetch_access_control_denied(
+    db_session, user_session, teams_and_projects
+):
+    """Test that fetch denies access to teams the user is not a member of."""
+    with mcp_auth_context(user_session.id):
+        result = await get_fn(fetch)("team-gamma")
+
+    assert "error" in result
+    assert "Team not found" in result["error"]
 
 
 # =============================================================================
@@ -321,28 +328,35 @@ async def test_list_all_includes_projects_when_requested(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "use_admin,team_slug,expect_success",
+    "use_admin,team_slug",
     [
-        pytest.param(False, "team-alpha", True, id="regular_user_can_add_to_member_team"),
-        pytest.param(False, "team-gamma", False, id="regular_user_cannot_add_to_non_member_team"),
-        pytest.param(True, "team-gamma", True, id="admin_can_add_to_any_team"),
+        pytest.param(False, "team-alpha", id="regular_user_can_add_to_member_team"),
+        pytest.param(True, "team-gamma", id="admin_can_add_to_any_team"),
     ],
 )
-async def test_team_add_member_access_control(
+async def test_team_add_member_access_control_success(
     db_session, user_session, admin_session, teams_and_projects,
-    use_admin, team_slug, expect_success
+    use_admin, team_slug
 ):
-    """Test that team_add_member respects access control."""
+    """Test that team_add_member grants access for authorized users."""
 
     session_id = admin_session.id if use_admin else user_session.id
     with mcp_auth_context(session_id):
         result = await get_fn(team_add_member)(team_slug, "person2")
 
-    if expect_success:
-        assert result.get("success") is True or result.get("already_member") is True
-    else:
-        assert "error" in result
-        assert "Team not found" in result["error"]
+    assert result.get("success") is True or result.get("already_member") is True
+
+
+@pytest.mark.asyncio
+async def test_team_add_member_access_control_denied(
+    db_session, user_session, teams_and_projects
+):
+    """Test that team_add_member denies access for non-members."""
+    with mcp_auth_context(user_session.id):
+        result = await get_fn(team_add_member)("team-gamma", "person2")
+
+    assert "error" in result
+    assert "Team not found" in result["error"]
 
 
 # =============================================================================
