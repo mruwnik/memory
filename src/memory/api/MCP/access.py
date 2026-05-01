@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.auth import lookup_api_key
+from memory.api.auth import handle_api_key_use, lookup_api_key
 from memory.common.access_control import (
     AccessFilter,
     build_access_filter,
@@ -106,16 +106,26 @@ def is_session_expired(user_session: UserSession) -> bool:
 def fetch_user_by_token(
     session: "Session | scoped_session[Session]", token: str
 ) -> User | None:
-    """Look up a user by token (session token or API key)."""
+    """Look up a user by token (session token or API key).
+
+    For API keys, validates expiry via is_valid() and handles one-time key
+    consumption via handle_api_key_use() to mirror the REST auth path.
+    """
     user_session = session.get(UserSession, token)
     if user_session and user_session.user and not is_session_expired(user_session):
         return user_session.user
 
     api_key_record = lookup_api_key(token, session)
-    if api_key_record and api_key_record.user:
-        return api_key_record.user
+    if api_key_record is None or not api_key_record.is_valid():
+        return None
 
-    return None
+    # Eagerly load user before handle_api_key_use, which may delete the key
+    # (for one-time keys). This prevents DetachedInstanceError on lazy load.
+    user = api_key_record.user
+    if user is None:
+        return None
+    handle_api_key_use(api_key_record, session)
+    return user
 
 
 @overload
