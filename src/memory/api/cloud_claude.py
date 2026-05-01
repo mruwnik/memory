@@ -1141,12 +1141,19 @@ async def proxy_differ_ws(
             await websocket.close(code=4004, reason="Session not found")
             return
 
-    await websocket.accept()
-
     # Extract subpath from raw_path to preserve percent-encoding (see proxy_differ)
+    # Must happen BEFORE accept() so we can close with an error code on bad input.
     prefix = f"/claude/{session_id}/differ/".encode()
     raw_path = websocket.scope.get("raw_path", b"")
     ws_subpath = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
+
+    # Reject path traversal attempts (same logic as HTTP differ proxy)
+    for _segment in unquote(ws_subpath).split("/"):
+        if _segment in (".", ".."):
+            await websocket.close(code=4000, reason="Path traversal not allowed")
+            return
+
+    await websocket.accept()
 
     # Connect to orchestrator's WebSocket proxy via Unix socket
     orch_url = f"ws://orchestrator/containers/{session_id}/differ/{ws_subpath}"
