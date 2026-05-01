@@ -5,6 +5,7 @@ Provides functions to build access filters and log access from MCP tool context.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, Protocol, overload
 
 if TYPE_CHECKING:
@@ -87,12 +88,27 @@ class UserProxy:
         self.scopes = user_dict.get("scopes", [])
 
 
+def is_session_expired(user_session: UserSession) -> bool:
+    """Return True if the session's expires_at is in the past.
+
+    Mirrors the logic in auth.py get_user_session to handle both
+    timezone-aware and naive (assumed UTC) datetimes consistently.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = user_session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at < now
+
+
 def fetch_user_by_token(
     session: "Session | scoped_session[Session]", token: str
 ) -> User | None:
     """Look up a user by token (session token or API key)."""
     user_session = session.get(UserSession, token)
-    if user_session and user_session.user:
+    if user_session and user_session.user and not is_session_expired(user_session):
         return user_session.user
 
     api_key_record = lookup_api_key(token, session)
