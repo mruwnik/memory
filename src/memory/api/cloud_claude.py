@@ -16,7 +16,7 @@ import re
 import secrets
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 
 import httpx
 import websockets
@@ -1024,6 +1024,7 @@ async def proxy_differ(
     raw_path = request.scope.get("raw_path", b"")
     differ_path = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
 
+    validate_differ_subpath(differ_path)
     upstream_url = f"{settings.ORCHESTRATOR_BASE_URL}/containers/{session_id}/differ/{differ_path}"
     query_string = str(request.url.query)
     if query_string:
@@ -1207,6 +1208,24 @@ async def proxy_differ_ws(
 
 
 # --- WebSocket log streaming helpers ---
+
+
+def validate_differ_subpath(differ_path: str) -> None:
+    """Reject path-traversal attempts in the differ proxy subpath.
+
+    ``differ_path`` comes from the raw request bytes and may still contain
+    percent-encoded characters.  An attacker can smuggle traversal sequences as
+    ``%2e%2e`` or plain ``..``.  Decode before checking so both forms are
+    caught.
+
+    Raises HTTPException 400 if the path contains traversal or empty segments
+    that would cause httpx (or a downstream proxy) to normalise the URL into a
+    different orchestrator endpoint.
+    """
+    decoded = unquote(differ_path)
+    for segment in decoded.split("/"):
+        if segment in (".", ".."):
+            raise HTTPException(status_code=400, detail="Path traversal not allowed")
 
 
 def is_valid_session_id(session_id: str) -> bool:

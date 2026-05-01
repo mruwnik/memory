@@ -3,11 +3,13 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from memory.api.cloud_claude import (
     get_user_id_from_session,
     make_session_id,
     user_owns_session,
+    validate_differ_subpath,
 )
 from memory.common import settings
 from memory.common.db.models import ScheduledTask
@@ -66,6 +68,36 @@ def test_user_owns_session():
     assert user_owns_session(user, "u42-xyz789") is True
     assert user_owns_session(user, "u1-abc123") is False
     assert user_owns_session(user, "invalid") is False
+
+
+# Tests for differ proxy path traversal validation
+
+
+@pytest.mark.parametrize("bad_path", [
+    "../other-session",
+    "../../etc/passwd",
+    "subdir/../../../etc/shadow",
+    "%2e%2e/other-session",
+    "%2E%2E/other-session",
+    "subdir/%2e%2e/secrets",
+    "a/b/./c",
+    "%2e/relative",
+])
+def test_validate_differ_subpath_rejects_traversal(bad_path):
+    with pytest.raises(HTTPException) as exc_info:
+        validate_differ_subpath(bad_path)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("good_path", [
+    "sessions",
+    "diff/some-file.txt",
+    "api/v1/status",
+    "files/workspace/project/main.py",
+    "diff/path%20with%20spaces",
+])
+def test_validate_differ_subpath_allows_normal_paths(good_path):
+    validate_differ_subpath(good_path)  # Should not raise
 
 
 # Tests for SSH key encryption (in users.py, using secrets module)
