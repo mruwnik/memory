@@ -20,7 +20,7 @@ from memory.api.MCP.servers import (
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.api.MCP.access import fetch_user_by_token
-from memory.common.db.models import OAuthState, UserSession
+from memory.common.db.models import OAuthState
 from memory.common.db.models.users import HumanUser
 from memory.common.qdrant import get_qdrant_client
 
