@@ -961,6 +961,14 @@ async def tidbit_add(
     user = get_mcp_current_user()
     creator_id = user.id if user else None
 
+    # Prevent leaking tidbits to projects the caller doesn't belong to.
+    if project_id is not None and not (user and has_admin_scope(user)):
+        if creator_id is None:
+            raise PermissionError("Cannot verify project membership without user ID")
+        project_roles = get_project_roles_by_user_id(creator_id)
+        if project_id not in project_roles:
+            raise PermissionError(f"You are not a member of project {project_id}")
+
     task = celery_app.send_task(
         SYNC_PERSON_TIDBIT,
         queue=f"{settings.CELERY_QUEUE_PREFIX}-people",
@@ -1026,6 +1034,17 @@ async def tidbit_update(
         if tags is not None:
             tidbit.tags = list(tags)
         if project_id is not None:
+            # Prevent leaking tidbits to projects the caller doesn't belong to.
+            # Admins can assign any project; regular users must be a member.
+            if not has_admin_scope(user):
+                caller_id = user.id if user else None
+                if caller_id is None:
+                    raise PermissionError("Cannot verify project membership without user ID")
+                project_roles = get_project_roles_by_user_id(caller_id)
+                if project_id not in project_roles:
+                    raise PermissionError(
+                        f"You are not a member of project {project_id}"
+                    )
             tidbit.project_id = project_id
         if sensitivity is not None:
             tidbit.sensitivity = sensitivity
