@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, FrozenSet, Protocol, runtime_checkable
 
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Query
@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 # Protocols for duck-typed access control checks
 # These allow tests to use simple mock objects without importing full models
-# Using Any return types to accommodate SQLAlchemy's Mapped[T] types
 
 
 @runtime_checkable
@@ -43,10 +42,10 @@ class UserLike(Protocol):
     """Protocol for objects that can be checked for access control."""
 
     @property
-    def id(self) -> Any: ...
+    def id(self) -> int | None: ...
 
     @property
-    def scopes(self) -> Any: ...
+    def scopes(self) -> list[str]: ...
 
 
 @runtime_checkable
@@ -54,10 +53,10 @@ class SourceItemLike(Protocol):
     """Protocol for objects that can be checked for item access."""
 
     @property
-    def project_id(self) -> Any: ...
+    def project_id(self) -> int | None: ...
 
     @property
-    def sensitivity(self) -> Any: ...
+    def sensitivity(self) -> str: ...
 
 logger = logging.getLogger(__name__)
 
