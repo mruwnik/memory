@@ -1055,6 +1055,14 @@ async def create_repo_project(
         .first()
     )
     if existing_project:
+        # Access check: caller must have permission to modify this project
+        if not has_admin_scope(user) and not user_can_access_project(
+            session, user, existing_project.id
+        ):
+            return {
+                "error": f"Access denied to project {existing_project.id}",
+                "project": None,
+            }
         # Update teams if provided
         existing_project.teams = teams  # type: ignore[assignment]
         if parent_id is not None:
@@ -1242,6 +1250,14 @@ async def create_milestone_project(
         .first()
     )
     if existing_project:
+        # Access check: caller must have permission to modify this project
+        if not has_admin_scope(user) and not user_can_access_project(
+            session, user, existing_project.id
+        ):
+            return {
+                "error": f"Access denied to project {existing_project.id}",
+                "project": None,
+            }
         # Update teams if provided
         existing_project.teams = teams  # type: ignore[assignment]
         if parent_id is not None:
