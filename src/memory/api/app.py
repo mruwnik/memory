@@ -214,6 +214,29 @@ def validate_path_within_directory(
         raise HTTPException(status_code=403, detail="Access denied")
 
 
+# Characters that must never appear in a CSP source value.
+# ';' splits CSP directives — injecting "evil.com; script-src *" would add a
+# new directive that overrides the whole policy.  '\r'/'\n'/'\0' can split or
+# terminate HTTP header values entirely.  Space separates source expressions
+# within a directive and must also be rejected in individual values.
+_CSP_FORBIDDEN_CHARS = frozenset({';', '\r', '\n', '\0', ' '})
+
+
+def sanitize_csp_source_list(sources: list[str]) -> list[str]:
+    """Return sources with any CSP-injection-unsafe entries removed.
+
+    Silently drops values rather than raising so that stale/bad DB rows do not
+    break report serving entirely.  Bad values are logged as warnings.
+    """
+    clean = []
+    for src in sources:
+        if any(ch in src for ch in _CSP_FORBIDDEN_CHARS):
+            logger.warning("Dropped unsafe CSP source value: %r", src)
+        else:
+            clean.append(src)
+    return clean
+
+
 @app.get("/ui{full_path:path}")
 async def serve_react_app(full_path: str):
     full_path = full_path.lstrip("/")
@@ -269,10 +292,13 @@ async def serve_report(
     if mime_type in ("text/html", "application/xhtml+xml"):
         # Check if report allows scripts (for system-generated interactive reports)
         if report.allow_scripts:
-            # Build connect-src directive with allowed external URLs
+            # Build connect-src directive with allowed external URLs.
+            # Sanitize to prevent CSP directive injection via stored values.
             connect_sources = ["'self'"]
             if report.allowed_connect_urls:
-                connect_sources.extend(report.allowed_connect_urls)
+                connect_sources.extend(
+                    sanitize_csp_source_list(report.allowed_connect_urls)
+                )
             connect_src = " ".join(connect_sources)
 
             # Relaxed CSP for trusted system-generated reports with JavaScript
