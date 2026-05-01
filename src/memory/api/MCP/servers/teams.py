@@ -980,6 +980,23 @@ async def team_add_member(
         if not person_obj:
             return {"error": f"Person not found: {person}"}
 
+        # Verify caller has lead/admin role in the team — members cannot add others.
+        # Admins (has_admin_scope) are implicitly "admin" and always pass.
+        caller_role = get_caller_team_role(session, user, team_obj.id)
+        if caller_role not in ("lead", "admin"):
+            return {"error": "Only team leads and admins can add members"}
+
+        # Verify caller cannot assign a role higher than their own.
+        caller_rank = _ROLE_RANK.get(caller_role, -1)
+        target_rank = _ROLE_RANK.get(role, -1)
+        if target_rank > caller_rank:
+            return {
+                "error": (
+                    f"Cannot assign role '{role}' — "
+                    f"your team role is '{caller_role}'"
+                )
+            }
+
         # Check if already a member
         if person_obj in team_obj.members:
             return {
@@ -1060,6 +1077,11 @@ async def team_remove_member(
 
         if not team_obj:
             return {"error": f"Team not found: {team}"}
+
+        # Verify caller has lead/admin role before removing members.
+        caller_role = get_caller_team_role(session, user, team_obj.id)
+        if caller_role not in ("lead", "admin"):
+            return {"error": "Only team leads and admins can remove members"}
 
         # Find person
         person_obj = resolve_person(session, person, eager_load=[
@@ -1381,6 +1403,39 @@ async def project_list_access(
 
 
 # ============== Helper Functions ==============
+
+# Role ordering for privilege checks — higher index = higher privilege.
+_ROLE_RANK = {"member": 0, "lead": 1, "admin": 2}
+
+
+def get_caller_team_role(
+    session: Session | scoped_session[Session], user: User, team_id: int
+) -> str | None:
+    """Return the caller's role ('member'/'lead'/'admin') in the given team.
+
+    Returns None if the caller has no person record or is not a team member.
+    Admins (has_admin_scope) bypass this and are treated as implicit 'admin'.
+    """
+    from memory.common.access_control import has_admin_scope
+    from memory.common.db.models.sources import Person as PersonModel
+
+    if has_admin_scope(user):
+        return "admin"
+
+    person = (
+        session.query(PersonModel)
+        .filter(PersonModel.user_id == user.id)
+        .first()
+    )
+    if person is None:
+        return None
+
+    row = session.execute(
+        select(team_members.c.role)
+        .where(team_members.c.team_id == team_id)
+        .where(team_members.c.person_id == person.id)
+    ).first()
+    return row.role if row else None
 
 
 def find_project_with_access(session: Session | scoped_session[Session], user: User, project: int | str) -> Project | None:
