@@ -245,6 +245,14 @@ def get_or_create_session(
     session = db_session.query(Session).filter(Session.id == session_uuid).first()
 
     if session:
+        # Verify ownership before allowing event injection.
+        # A user who knows another user's session UUID could otherwise corrupt
+        # their transcript by sending events for that session.
+        if session.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized for this session",
+            )
         return session
 
     parent_session_id = None
