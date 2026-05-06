@@ -9,7 +9,11 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import (
+    apply_access_filter_to_query,
+    build_access_filter,
+    get_user_project_roles,
+)
 from memory.common.celery_app import SYNC_NOTE
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import make_session
@@ -111,24 +115,32 @@ async def note_files(path: str = "/"):
     path_prefix = path.lstrip("/")
 
     user = get_mcp_current_user()
+    if user is None:
+        return []
 
     with make_session() as session:
         query = session.query(Note.filename).filter(Note.filename.isnot(None))
 
-        is_admin = user is not None and has_admin_scope(user)
-        if not is_admin:
-            # Regular users only see their own notes
-            user_id = user.id if user else None
-            if user_id is None:
-                return []
-            query = query.filter(Note.creator_id == user_id)
+        # Notes are private artefacts — no public-bypass even if a Note ever
+        # ends up with sensitivity="public". Project access + creator override
+        # + person override all still apply, via the central access filter so
+        # this stays in lock-step with search.
+        access_filter = build_access_filter(
+            user,
+            get_user_project_roles(session, user),  # type: ignore[arg-type]
+            include_public=False,
+        )
+        query = apply_access_filter_to_query(query, access_filter)
 
         # Apply directory prefix filter when a sub-path was requested.
-        # Use startswith() so SQLAlchemy escapes LIKE wildcards (% and _) —
-        # otherwise a user could pass path="%/secret" to enumerate beyond
-        # their own subtree, defeating the directory-prefix semantics.
+        # autoescape=True is required: without it, SQLAlchemy's startswith()
+        # passes % and _ through unescaped (it just appends "%" to the pattern),
+        # which would let path="%/secret" enumerate beyond the requested
+        # subtree.
         if path_prefix:
-            query = query.filter(Note.filename.startswith(path_prefix))
+            query = query.filter(
+                Note.filename.startswith(path_prefix, autoescape=True)
+            )
 
         rows = query.all()
 
