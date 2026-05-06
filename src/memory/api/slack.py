@@ -26,6 +26,7 @@ from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
+    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -202,6 +203,25 @@ def require_slack_configured() -> None:
         )
 
 
+def get_legacy_slack_app(db: Session) -> SlackApp:
+    """Resolve the SlackApp row for the env-var configured legacy app.
+
+    The Alembic migration creates this row from SLACK_CLIENT_ID/SLACK_CLIENT_SECRET
+    on first run. Fail loudly if it's missing — that means the migration didn't
+    populate it (e.g., env vars were added after migration time).
+    """
+    app = db.query(SlackApp).filter(SlackApp.client_id == settings.SLACK_CLIENT_ID).first()
+    if app is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Slack app row not found for configured SLACK_CLIENT_ID. "
+                "Re-run migrations or create the SlackApp row manually."
+            ),
+        )
+    return app
+
+
 # --- OAuth Endpoints ---
 
 
@@ -334,8 +354,11 @@ async def slack_callback(
             microsecond=0
         ) + timedelta(seconds=expires_in - 300)  # 5-minute buffer
 
-    # Get or create user credentials for this workspace
+    slack_app = get_legacy_slack_app(db)
+
+    # Get or create user credentials for this (app, workspace, user)
     existing_creds = db.query(SlackUserCredentials).filter(
+        SlackUserCredentials.slack_app_id == slack_app.id,
         SlackUserCredentials.workspace_id == team_id,
         SlackUserCredentials.user_id == user_id,
     ).first()
@@ -350,6 +373,7 @@ async def slack_callback(
     else:
         # Create new credentials
         credentials = SlackUserCredentials(
+            slack_app_id=slack_app.id,
             workspace_id=team_id,
             user_id=user_id,
             scopes=authed_user.get("scope", "").split(),

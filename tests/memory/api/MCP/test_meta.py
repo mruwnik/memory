@@ -212,13 +212,15 @@ async def test_get_user_returns_none_when_no_ssh_key(db_session, admin_user, adm
 @pytest.mark.asyncio
 async def test_get_user_slack_credentials(db_session, admin_session):
     """Get user includes Slack accounts from SlackUserCredentials."""
-    from memory.common.db.models.slack import SlackWorkspace, SlackUserCredentials
+    from memory.common.db.models.slack import SlackApp, SlackWorkspace, SlackUserCredentials
 
+    app = SlackApp(client_id="meta.test.app", name="Meta Test App", setup_state="live")
     workspace = SlackWorkspace(id="W456WORK", name="Test Workspace")
-    db_session.add(workspace)
+    db_session.add_all([app, workspace])
     db_session.flush()
 
     cred = SlackUserCredentials(
+        slack_app_id=app.id,
         workspace_id="W456WORK",
         user_id=admin_session.user_id,
         slack_user_id="U123SLACK",
@@ -293,13 +295,15 @@ async def test_get_user_person_slack_from_contact_info(db_session, admin_user, a
 @pytest.mark.asyncio
 async def test_get_user_slack_credentials_take_precedence(db_session, admin_user, admin_session):
     """SlackUserCredentials take precedence over Person contact_info Slack data."""
-    from memory.common.db.models import Person, SlackUserCredentials, SlackWorkspace
+    from memory.common.db.models import Person, SlackApp, SlackUserCredentials, SlackWorkspace
 
+    app = SlackApp(client_id="meta.cred.app", name="Meta Cred App", setup_state="live")
     workspace = SlackWorkspace(id="W_CRED", name="Cred Workspace")
-    db_session.add(workspace)
+    db_session.add_all([app, workspace])
     db_session.flush()
 
     cred = SlackUserCredentials(
+        slack_app_id=app.id,
         workspace_id="W_CRED",
         user_id=admin_session.user_id,
         slack_user_id="U_CRED_SLACK",
