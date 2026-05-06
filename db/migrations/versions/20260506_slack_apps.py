@@ -16,7 +16,7 @@ The new uniqueness constraint on slack_user_credentials becomes
 added so existing duplicates do not block deployment.
 
 Revision ID: 20260506_slack_apps
-Revises: 20260216_report_connect_urls
+Revises: 20260506_transcript_accounts
 Create Date: 2026-05-06
 """
 
@@ -28,7 +28,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260506_slack_apps"
-down_revision: Union[str, None] = "20260216_report_connect_urls"
+down_revision: Union[str, None] = "20260506_transcript_accounts"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
