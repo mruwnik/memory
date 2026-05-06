@@ -568,6 +568,165 @@ async def slack_callback(
     return HTMLResponse(content=html_content)
 
 
+@router.get("/callback/{slack_app_id}")
+async def slack_callback_for_app(
+    slack_app_id: int,
+    code: str = Query(...),
+    state: str = Query(...),
+    error: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Multi-tenant OAuth callback (slack-changes.md §3.2 / §3.4 row 4).
+
+    Looks up the SlackApp from the URL path and uses ITS encrypted
+    client_id/client_secret for the token exchange — not the env-var
+    credentials. State is bound to the user's session via the same
+    ``Depends(get_current_user)`` rule used by /slack/callback (CSRF fix
+    a5c9746d). Stored credentials carry the path's ``slack_app_id``.
+    """
+    logger.info(
+        f"Slack OAuth callback received (multi-app): slack_app_id={slack_app_id}, "
+        f"code_corr={log_corr_id(code)}, "
+        f"state_corr={log_corr_id(state)}, len={len(state)}, error={error}"
+    )
+
+    if error:
+        logger.warning(f"Slack OAuth error from provider: {error}")
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
+
+    slack_app = db.get(SlackApp, slack_app_id)
+    if slack_app is None or not slack_app.is_active:
+        raise HTTPException(status_code=404, detail="Slack app not found")
+    if not slack_app.is_authorized(user):
+        # Authorized users (and the owner) are the only ones who may complete
+        # OAuth into this app's tenant.
+        raise HTTPException(status_code=403, detail="Not authorized for this Slack app")
+    client_id = slack_app.client_id
+    client_secret = slack_app.client_secret
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Slack app client credentials not configured",
+        )
+
+    state_user_id = validate_and_consume_state(db, state, "slack")
+    if not state_user_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
+    if user.id != state_user_id:
+        raise HTTPException(
+            status_code=403, detail="OAuth state was issued for a different session"
+        )
+
+    redirect_uri = _callback_url_for(slack_app_id)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+        data = response.json()
+
+    if not data.get("ok"):
+        error_msg = data.get("error", "Unknown error")
+        logger.error(f"Slack OAuth token exchange error: {error_msg}")
+        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {error_msg}")
+
+    authed_user = data.get("authed_user", {})
+    access_token = authed_user.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No user access token received")
+
+    team = data.get("team", {})
+    team_id = team.get("id")
+    team_name = team.get("name", "Unknown Workspace")
+    if not team_id or not _SLACK_TEAM_ID_PATTERN.fullmatch(team_id):
+        raise HTTPException(status_code=400, detail="Malformed team ID in response")
+
+    workspace = db.get(SlackWorkspace, team_id)
+    if not workspace:
+        workspace = SlackWorkspace(id=team_id, name=team_name)
+        db.add(workspace)
+        db.flush()
+    else:
+        workspace.name = team_name
+
+    token_expires_at = None
+    expires_in = authed_user.get("expires_in")
+    if expires_in and expires_in > 300:
+        token_expires_at = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ) + timedelta(seconds=expires_in - 300)
+
+    existing_creds = (
+        db.query(SlackUserCredentials)
+        .filter(
+            SlackUserCredentials.slack_app_id == slack_app.id,
+            SlackUserCredentials.workspace_id == team_id,
+            SlackUserCredentials.user_id == user.id,
+        )
+        .first()
+    )
+    if existing_creds:
+        existing_creds.access_token = access_token
+        existing_creds.refresh_token = authed_user.get("refresh_token")
+        existing_creds.scopes = authed_user.get("scope", "").split()
+        existing_creds.token_expires_at = token_expires_at
+        existing_creds.slack_user_id = authed_user.get("id")
+    else:
+        credentials = SlackUserCredentials(
+            slack_app_id=slack_app.id,
+            workspace_id=team_id,
+            user_id=user.id,
+            scopes=authed_user.get("scope", "").split(),
+            token_expires_at=token_expires_at,
+            slack_user_id=authed_user.get("id"),
+        )
+        credentials.access_token = access_token
+        credentials.refresh_token = authed_user.get("refresh_token")
+        db.add(credentials)
+
+    workspace.sync_error = None
+    db.commit()
+
+    # Trigger an immediate workspace sync (slack-changes.md §3.7 backfill).
+    celery_app.send_task(
+        SYNC_SLACK_WORKSPACE,
+        kwargs={"workspace_id": team_id, "slack_app_id": slack_app.id},
+    )
+
+    frontend_url = (
+        f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
+    )
+    workspace_id_js = json.dumps(team_id)
+    frontend_url_js = json.dumps(frontend_url)
+    channel_name_js = json.dumps(f"slack-oauth-{user.id}")
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Slack Connected</title></head>
+    <body>
+        <p>Slack workspace connected successfully. Redirecting...</p>
+        <script>
+            const channel = new BroadcastChannel({channel_name_js});
+            channel.postMessage({{ type: 'oauth-complete', workspaceId: {workspace_id_js}, slackAppId: {slack_app.id} }});
+            channel.close();
+            if (window.opener) {{
+                window.close();
+            }} else {{
+                window.location.href = {frontend_url_js};
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
 # --- Workspace Endpoints ---
 
 
@@ -1382,3 +1541,201 @@ async def slack_events(
 
     # Unknown envelope type — accept (Slack expects 200) but don't dispatch.
     return PlainTextResponse(content="", status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# Wizard endpoints (slack-changes.md §3.4) — owner-only secret + nonce flow
+# ---------------------------------------------------------------------------
+
+
+WIZARD_NONCE_TTL_SECONDS = 30 * 60  # 30 min — long enough for the user to
+# paste the URL into Slack and click Save.
+
+WIZARD_TEST_MESSAGE_TTL_SECONDS = 60  # 60s window — slack-changes.md §3.4
+# row 6.
+
+
+class SlackAppSecretBody(BaseModel):
+    secret: str
+
+
+class SlackAppNonceResponse(BaseModel):
+    nonce: str
+    callback_url: str
+    events_url: str
+
+
+class SlackWizardStatus(BaseModel):
+    setup_state: str
+    has_credentials: bool
+    test_message_pending: bool
+
+
+class SlackTestMessageStart(BaseModel):
+    token: str
+
+
+class SlackTestMessageStatus(BaseModel):
+    status: Literal["waiting", "matched", "expired"]
+
+
+def _events_url_for(slack_app_id: int, nonce: str) -> str:
+    return f"{settings.SERVER_URL}/slack/events/{slack_app_id}?wizard_nonce={nonce}"
+
+
+def _callback_url_for(slack_app_id: int) -> str:
+    return f"{settings.SERVER_URL}/slack/callback/{slack_app_id}"
+
+
+@router.post("/apps/{app_id}/client-secret", response_model=SlackAppResponse)
+def set_client_secret(
+    app_id: int,
+    body: SlackAppSecretBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Store the SlackApp client_secret encrypted. Owner only.
+
+    Validation gate is the OAuth callback — Slack will reject mismatched
+    client_secret/redirect_uri combos there.
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+    if not body.secret.strip():
+        raise HTTPException(status_code=400, detail="client_secret cannot be empty")
+    app.client_secret = body.secret.strip()
+    db.commit()
+    db.refresh(app)
+    return slack_app_to_response(app, user)
+
+
+@router.post("/apps/{app_id}/signing-secret", response_model=SlackAppResponse)
+def set_signing_secret(
+    app_id: int,
+    body: SlackAppSecretBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Store the SlackApp signing_secret encrypted. Owner only.
+
+    State stays 'draft' until url_verification succeeds in /slack/events.
+    Failed verification doesn't roll state back — user can re-paste and retry.
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+    if not body.secret.strip():
+        raise HTTPException(status_code=400, detail="signing_secret cannot be empty")
+    app.signing_secret = body.secret.strip()
+    db.commit()
+    db.refresh(app)
+    return slack_app_to_response(app, user)
+
+
+@router.post("/apps/{app_id}/wizard-nonce", response_model=SlackAppNonceResponse)
+def issue_wizard_nonce(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppNonceResponse:
+    """Issue a fresh wizard_nonce bound to (slack_app_id, user_id).
+
+    Stored in Redis with TTL 30 min, scoped per (app, user). The frontend
+    embeds this nonce in the Events URL it tells the user to paste into
+    Slack's Event Subscriptions config; Slack's url_verification ping
+    must echo it back, otherwise we won't advance setup_state.
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+    nonce = hashlib.sha256(
+        f"{app.id}:{user.id}:{time.time_ns()}".encode()
+    ).hexdigest()[:32]
+    redis_client = _slack_redis()
+    redis_client.set(
+        _wizard_nonce_redis_key(app.id),
+        nonce,
+        ex=WIZARD_NONCE_TTL_SECONDS,
+    )
+    return SlackAppNonceResponse(
+        nonce=nonce,
+        callback_url=_callback_url_for(app.id),
+        events_url=_events_url_for(app.id, nonce),
+    )
+
+
+@router.get("/apps/{app_id}/wizard-status", response_model=SlackWizardStatus)
+def wizard_status(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackWizardStatus:
+    """Return wizard progress for the frontend's polling loop.
+
+    Available to any authorized user (not just the owner) — they need
+    progress visibility when the owner ran the wizard.
+    """
+    app = get_slack_app_for_authorized_user(db, app_id, user)
+    has_credentials = (
+        db.query(SlackUserCredentials)
+        .filter(SlackUserCredentials.slack_app_id == app.id)
+        .first()
+        is not None
+    )
+    test_pending = _slack_redis().get(f"slack_wizard_test_token:{app.id}") is not None
+    return SlackWizardStatus(
+        setup_state=app.setup_state,
+        has_credentials=has_credentials,
+        test_message_pending=test_pending,
+    )
+
+
+@router.post("/apps/{app_id}/test-message", response_model=SlackTestMessageStatus)
+def begin_test_message(
+    app_id: int,
+    body: SlackTestMessageStart,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackTestMessageStatus:
+    """Begin the 60s test-message window. Owner only.
+
+    Stores the user-supplied token in Redis; the events handler matches
+    incoming `message` events against it and advances setup_state to
+    'live' when a match arrives. Token requirement (slack-changes.md §3.4
+    B4 fix) prevents false-positives from chatty workspaces.
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+    if app.setup_state not in ("signing_verified", "live", "degraded"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"App must be in signing_verified/live state to begin "
+                f"test-message; current: {app.setup_state}"
+            ),
+        )
+    token = body.token.strip()
+    if not token or len(token) < 8:
+        raise HTTPException(
+            status_code=400, detail="token must be at least 8 chars"
+        )
+    redis_client = _slack_redis()
+    redis_client.set(
+        f"slack_wizard_test_token:{app.id}",
+        token,
+        ex=WIZARD_TEST_MESSAGE_TTL_SECONDS,
+    )
+    return SlackTestMessageStatus(status="waiting")
+
+
+@router.get("/apps/{app_id}/test-message", response_model=SlackTestMessageStatus)
+def poll_test_message(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackTestMessageStatus:
+    """Poll for the test-message advance.
+
+    The events handler clears the Redis token and advances setup_state on
+    match. The frontend polls this endpoint to know when to advance UI.
+    """
+    app = get_slack_app_for_authorized_user(db, app_id, user)
+    if app.setup_state == "live":
+        return SlackTestMessageStatus(status="matched")
+    if _slack_redis().get(f"slack_wizard_test_token:{app.id}") is not None:
+        return SlackTestMessageStatus(status="waiting")
+    return SlackTestMessageStatus(status="expired")
