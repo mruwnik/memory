@@ -52,11 +52,14 @@ WHITELIST = {
 }
 
 # Claude WebSocket session path pattern - more specific than prefix matching
-# Session IDs have formats:
-#   Legacy:   u{user_id}-{hex}            e.g. u123-abc123
-#   New:      u{user_id}-{source}-{hex}   e.g. u123-e456-abc123 (env), u123-s789-abc123 (snapshot), u123-x-abc123
-# All three must be whitelisted so WebSocket clients can authenticate via ?token= query param.
-_CLAUDE_SESSION_PATTERN = re.compile(r"^/claude/u\d+(?:-[a-z]\d*)?-[a-fA-F0-9]+", re.IGNORECASE)
+# Session IDs have format: u{user_id}-{source}-{hex} where source is:
+#   e{env_id}  for environment-based sessions   (e.g. u123-e456-abc123)
+#   s{snap_id} for snapshot-based sessions      (e.g. u123-s789-abc123)
+#   x          for sessions without snapshot/environment (e.g. u123-x-abc123)
+# Whitelisted here so WebSocket clients can authenticate via ?token= query param.
+_CLAUDE_SESSION_PATTERN = re.compile(
+    r"^/claude/u\d+-[a-z]\d*-[a-fA-F0-9]+", re.IGNORECASE
+)
 
 # Prefixes that identify a token as an API key (vs a session token)
 API_KEY_PREFIXES = (
