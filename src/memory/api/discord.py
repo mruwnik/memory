@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import discord as discord_client
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import Person, User
 from memory.common.db.models.discord import (
@@ -444,11 +445,17 @@ def user_can_manage_server(user: User, db: Session, server: DiscordServer) -> bo
     """Check that the user has a bot linked to this server.
 
     Returns True when:
-    - The server has no owning bot (legacy rows — allow for backwards compat)
+    - The user has admin scope (superadmin)
     - The server's bot_id belongs to a bot the user is authorised for
+
+    Servers with bot_id IS NULL (legacy rows from before the bot_id migration,
+    or rows whose bot has been deleted) are admin-only — treating them as
+    "anyone can manage" would be a privilege-escalation back door.
     """
-    if server.bot_id is None:
+    if has_admin_scope(user):
         return True
+    if server.bot_id is None:
+        return False
     user_bot_ids = {bot.id for bot in get_user_bots(db, user.id)}
     return server.bot_id in user_bot_ids
 

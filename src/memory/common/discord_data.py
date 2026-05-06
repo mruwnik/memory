@@ -186,13 +186,13 @@ def fetch_servers(session: DBSession, user_id: int | None = None) -> list[Discor
         session: Database session.
         user_id: When provided, only return servers whose ``bot_id`` belongs
             to a bot that this user is authorized for.  Servers with no
-            ``bot_id`` set (legacy rows) are always included so that
-            existing data remains visible.
+            ``bot_id`` set (legacy rows or orphaned after bot deletion) are
+            excluded from per-user listings — they are admin-only.
     """
     query = session.query(DiscordServer)
     if user_id is not None:
         user_bot_ids = [bot.id for bot in get_user_bots(session, user_id)]
-        query = query.filter(
-            (DiscordServer.bot_id.is_(None)) | (DiscordServer.bot_id.in_(user_bot_ids))
-        )
+        if not user_bot_ids:
+            return []
+        query = query.filter(DiscordServer.bot_id.in_(user_bot_ids))
     return query.order_by(DiscordServer.name).all()
