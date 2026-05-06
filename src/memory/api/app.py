@@ -16,9 +16,15 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from memory.common import extract, paths, settings
-from memory.common.access_control import get_user_project_roles, has_admin_scope, user_can_access
+from memory.common.access_control import (
+    get_accessible_source_item_by_filename,
+    get_user_project_roles,
+    has_admin_scope,
+    user_can_access,
+)
+from memory.common.csp import sanitize_csp_source_list
 from memory.common.db.connection import get_session
-from memory.common.db.models import SourceItem, User
+from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
 from memory.api.auth import (
     AuthenticationMiddleware,
@@ -214,29 +220,6 @@ def validate_path_within_directory(
         raise HTTPException(status_code=403, detail="Access denied")
 
 
-# Characters that must never appear in a CSP source value.
-# ';' splits CSP directives — injecting "evil.com; script-src *" would add a
-# new directive that overrides the whole policy.  '\r'/'\n'/'\0' can split or
-# terminate HTTP header values entirely.  Space separates source expressions
-# within a directive and must also be rejected in individual values.
-_CSP_FORBIDDEN_CHARS = frozenset({';', '\r', '\n', '\0', ' '})
-
-
-def sanitize_csp_source_list(sources: list[str]) -> list[str]:
-    """Return sources with any CSP-injection-unsafe entries removed.
-
-    Silently drops values rather than raising so that stale/bad DB rows do not
-    break report serving entirely.  Bad values are logged as warnings.
-    """
-    clean = []
-    for src in sources:
-        if any(ch in src for ch in _CSP_FORBIDDEN_CHARS):
-            logger.warning("Dropped unsafe CSP source value: %r", src)
-        else:
-            clean.append(src)
-    return clean
-
-
 @app.get("/ui{full_path:path}")
 async def serve_react_app(full_path: str):
     full_path = full_path.lstrip("/")
@@ -344,12 +327,11 @@ async def serve_file(
     except ValueError:
         raise HTTPException(status_code=404, detail="File not found")
 
-    item = db.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
-    if not item:
+    try:
+        get_accessible_source_item_by_filename(db, user, relative)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
-
-    project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
-    if not user_can_access(user, item, project_roles):
+    except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 
     mime_type, _ = mimetypes.guess_type(str(file_path))

@@ -9,14 +9,14 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import func, text, or_, exists, select, false as sql_false
+from sqlalchemy import func, text, or_, exists, select
 
 from memory.api.search.types import SearchFilters
 from memory.common import extract
+from memory.common.access_control import AccessFilter, apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
-from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
 
@@ -41,74 +41,12 @@ _STOPWORDS = frozenset([
 
 
 def apply_access_filter(query, access_filter: AccessFilter | None):
+    """Backwards-compatible alias for :func:`apply_access_filter_to_query`.
+
+    Older code paths in this module call ``apply_access_filter``; new code
+    should use the canonical helper in ``memory.common.access_control``.
     """
-    Apply access control filter to a SQLAlchemy query.
-
-    Args:
-        query: SQLAlchemy query (must have SourceItem joined)
-        access_filter: Access filter from user's memberships, or None for superadmin
-
-    Returns:
-        Modified query with access control filter applied
-
-    Access is granted if ANY of these conditions are true:
-    1. User has admin scope (superadmin) - access_filter will be None
-    2. Creator override: user is the creator of the item (creator_id matches)
-    3. Person override: user's person is attached to the item via source_item_people
-    4. Public bypass: item sensitivity is "public"
-    5. Project access: project_id matches AND sensitivity is within the user's allowed
-       sensitivities for that project role
-
-    Uses SourceItem columns directly — avoids the phantom source_item_access_view that
-    does not exist in any migration and would cause BM25 filtering to silently fail.
-
-    NULL semantics:
-    - ``SourceItem.sensitivity`` is NOT NULL (default ``"basic"``), so the
-      ``IN (...)`` and ``== "public"`` checks are well-defined for every row.
-    - ``SourceItem.project_id`` is nullable.  A NULL ``project_id`` means
-      "superadmin only" per CLAUDE.md, and the project_condition below
-      naturally excludes such rows for non-admins because ``NULL == X`` is
-      NULL (not true).  Items with NULL project_id are still visible to
-      non-admins via the creator/person/public bypass conditions above.
-
-    This matches ``apply_access_control_to_query`` in MCP/servers/core.py.
-    """
-    if access_filter is None:
-        # Superadmin - no filtering
-        return query
-
-    conditions = []
-
-    # Creator override: users can always see items they created
-    if access_filter.creator_id is not None:
-        conditions.append(SourceItem.creator_id == access_filter.creator_id)
-
-    # Person override: if user's person is attached to item, grant access
-    if access_filter.person_id is not None:
-        person_override = exists(
-            select(source_item_people.c.source_item_id)
-            .where(source_item_people.c.source_item_id == SourceItem.id)
-            .where(source_item_people.c.person_id == access_filter.person_id)
-        )
-        conditions.append(person_override)
-
-    # Public bypass: items with sensitivity "public" are visible to all authenticated users
-    if access_filter.include_public:
-        conditions.append(SourceItem.sensitivity == "public")
-
-    # Project access conditions
-    for condition in access_filter.conditions:
-        project_condition = (SourceItem.project_id == condition.project_id) & (
-            SourceItem.sensitivity.in_(list(condition.sensitivities))
-        )
-        conditions.append(project_condition)
-
-    if not conditions:
-        # No access conditions at all — match nothing
-        return query.filter(sql_false())
-
-    # Apply OR across all access conditions
-    return query.filter(or_(*conditions))
+    return apply_access_filter_to_query(query, access_filter)
 
 
 def build_tsquery(query: str) -> str:

@@ -17,8 +17,10 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.common.access_control import (
+    apply_access_filter_to_query,
+    build_access_filter,
     filter_projects_query,
-    get_accessible_project_ids,
+    get_user_project_roles,
     has_admin_scope,
 )
 from memory.common.db.connection import DBSession, make_session
@@ -26,7 +28,6 @@ from memory.common.db.models import (
     GithubItem,
     Project,
     GithubProject,
-    SourceItem,
 )
 from memory.common.db.models.sources import GithubRepo
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
@@ -137,12 +138,16 @@ def list_issues(
     with make_session() as session:
         query = session.query(GithubItem)
 
-        # Apply access control: only return items from projects the user can access
-        if user is not None and not has_admin_scope(user):
-            accessible_ids = get_accessible_project_ids(session, user)
-            if accessible_ids is not None:
-                # accessible_ids is a set; empty set means no access
-                query = query.filter(SourceItem.project_id.in_(accessible_ids))
+        # Apply the central access filter so list_issues mirrors search:
+        # creator override + person override + public bypass + project access,
+        # in lock-step with bm25.apply_access_filter and core.fetch_file.
+        # GithubItem inherits SourceItem columns via single-table inheritance,
+        # so referencing SourceItem.* in the filter resolves to the same row.
+        if user is not None:
+            access_filter = build_access_filter(
+                user, get_user_project_roles(session, user)
+            )
+            query = apply_access_filter_to_query(query, access_filter)
 
         if repo:
             query = query.filter(GithubItem.repo_path == repo)

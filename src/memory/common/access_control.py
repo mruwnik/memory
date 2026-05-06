@@ -200,6 +200,70 @@ def normalize_sensitivity(sensitivity: SensitivityLevel | str) -> str:
     return str(sensitivity)
 
 
+def apply_access_filter_to_query(query, access_filter: "AccessFilter | None"):
+    """Apply an ``AccessFilter`` to a SQLAlchemy query joined against ``SourceItem``.
+
+    Single source of truth used by every code path that needs to filter a
+    query by the caller's access rights — BM25, MCP core search, project-
+    aware listings (issues, milestones, notes), etc.
+
+    Access is granted if ANY of these conditions is true:
+
+    1. User has admin scope (superadmin) — ``access_filter is None``.
+    2. Creator override: ``creator_id`` matches the caller.
+    3. Person override: caller's person is attached via ``source_item_people``.
+    4. Public bypass: ``sensitivity == "public"`` AND ``include_public``.
+    5. Project access: ``project_id`` matches AND ``sensitivity`` is in the
+       caller's allowed sensitivities for that project role.
+
+    NULL semantics:
+
+    - ``SourceItem.sensitivity`` is NOT NULL (default ``"basic"``).
+    - ``SourceItem.project_id`` is nullable; NULL means "superadmin only"
+      by project invariant.  Such rows naturally fall out of the project
+      conditions for non-admins because ``NULL == X`` is NULL, but can
+      still surface via creator/person/public bypass.
+
+    Caller is responsible for ensuring ``SourceItem`` is reachable in the
+    query (typically via subclass polymorphism or an explicit join).
+    """
+    from sqlalchemy import false as sql_false
+    from sqlalchemy import exists, or_, select
+
+    from memory.common.db.models import SourceItem
+    from memory.common.db.models.source_item import source_item_people
+
+    if access_filter is None:
+        return query
+
+    conditions = []
+
+    if access_filter.creator_id is not None:
+        conditions.append(SourceItem.creator_id == access_filter.creator_id)
+
+    if access_filter.person_id is not None:
+        person_override = exists(
+            select(source_item_people.c.source_item_id)
+            .where(source_item_people.c.source_item_id == SourceItem.id)
+            .where(source_item_people.c.person_id == access_filter.person_id)
+        )
+        conditions.append(person_override)
+
+    if access_filter.include_public:
+        conditions.append(SourceItem.sensitivity == "public")
+
+    for condition in access_filter.conditions:
+        project_condition = (SourceItem.project_id == condition.project_id) & (
+            SourceItem.sensitivity.in_(list(condition.sensitivities))
+        )
+        conditions.append(project_condition)
+
+    if not conditions:
+        return query.filter(sql_false())
+
+    return query.filter(or_(*conditions))
+
+
 def get_accessible_source_item_by_filename(
     session: "Session | scoped_session[Session]",
     user: UserLike,
@@ -350,6 +414,7 @@ def user_can_create_in_project(
 def build_access_filter(
     user: UserLike,
     project_roles: dict[int, str] | None = None,
+    include_public: bool = True,
 ) -> AccessFilter | None:
     """
     Build filter for search queries based on user's access.
@@ -357,6 +422,10 @@ def build_access_filter(
     Args:
         user: The user performing the search
         project_roles: Pre-fetched project roles from get_user_project_roles()
+        include_public: Whether items with sensitivity="public" bypass project
+            membership. Default True for content searches; pass False for
+            entity types where "public" doesn't make sense (e.g. private
+            notes — see ``MCP/servers/notes.py:note_files``).
 
     Returns:
         AccessFilter with conditions, or None for superadmins (no filtering)
@@ -378,7 +447,7 @@ def build_access_filter(
             conditions=[],
             person_id=person_id,
             creator_id=user_id,
-            include_public=True,
+            include_public=include_public,
         )
 
     conditions = []
@@ -400,7 +469,7 @@ def build_access_filter(
         conditions=conditions,
         person_id=person_id,
         creator_id=user_id,
-        include_public=True,
+        include_public=include_public,
     )
 
 

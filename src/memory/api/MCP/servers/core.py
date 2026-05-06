@@ -25,6 +25,7 @@ from memory.api.MCP.access import (
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import (
     AccessFilter,
+    apply_access_filter_to_query,
     get_accessible_source_item_by_filename,
     user_can_access,
 )
@@ -634,62 +635,15 @@ async def fetch(
 
 
 def apply_access_control_to_query(query, access_filter: AccessFilter | None, session):
+    """Backwards-compatible wrapper around :func:`apply_access_filter_to_query`.
+
+    The ``session`` argument is unused — the canonical helper builds an
+    ``EXISTS`` subquery for the person-override condition rather than running
+    a separate ``SELECT``.  Kept here for callers that already pass a session
+    so they don't have to change.
     """
-    Apply access control filters to a SQLAlchemy query.
-
-    Args:
-        query: SQLAlchemy query object
-        access_filter: AccessFilter from get_current_user_access_filter()
-        session: Database session for user lookup
-
-    Returns:
-        Modified query with access control applied
-    """
-    from sqlalchemy import or_
-
-    # Superadmin - no filtering
-    if access_filter is None:
-        return query
-
-    # Build OR conditions for access
-    or_conditions = []
-
-    # Creator override: users always see items they created, regardless of project
-    if access_filter.creator_id is not None:
-        or_conditions.append(SourceItem.creator_id == access_filter.creator_id)
-
-    # Public items are visible to all authenticated users
-    if access_filter.include_public:
-        or_conditions.append(SourceItem.sensitivity == "public")
-
-    # Person override: if user's person is associated with item
-    if access_filter.person_id is not None:
-        from memory.common.db.models.source_item import source_item_people
-
-        # Items where user's person is in the people relationship
-        person_subquery = (
-            session.query(source_item_people.c.source_item_id)
-            .filter(source_item_people.c.person_id == access_filter.person_id)
-            .subquery()
-        )
-        or_conditions.append(SourceItem.id.in_(person_subquery))
-
-    # Project-based access
-    for condition in access_filter.conditions:
-        # Item must be in project AND have allowed sensitivity
-        project_condition = (SourceItem.project_id == condition.project_id) & (
-            SourceItem.sensitivity.in_(list(condition.sensitivities))
-        )
-        or_conditions.append(project_condition)
-
-    # If no conditions, user has no access - return empty result
-    if not or_conditions:
-        # Add impossible condition to return no results
-        query = query.filter(SourceItem.id == -1)
-    else:
-        query = query.filter(or_(*or_conditions))
-
-    return query
+    del session  # unused; the canonical helper doesn't need it
+    return apply_access_filter_to_query(query, access_filter)
 
 
 @core_mcp.tool()
