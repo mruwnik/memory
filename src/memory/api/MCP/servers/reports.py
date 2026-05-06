@@ -14,24 +14,12 @@ from memory.common.access_control import has_admin_scope, user_can_access
 from memory.common.celery_app import SYNC_REPORT
 from memory.common.celery_app import app as celery_app
 from memory.common.content_processing import clear_item_chunks
+from memory.common.csp import find_invalid_csp_sources
 from memory.common.db.connection import make_session
 from memory.common.db.models import Report
 from memory.common.scopes import SCOPE_REPORTS_WRITE
 
 logger = logging.getLogger(__name__)
-
-# Characters that must not appear in a CSP source value.
-# ';' splits CSP directives; '\r'/'\n'/'\0' split HTTP header values;
-# space separates source expressions within a directive.
-_CSP_FORBIDDEN_CHARS = frozenset({';', '\r', '\n', '\0', ' '})
-
-
-def validate_csp_sources(sources: list[str]) -> list[str]:
-    """Raise ValueError if any source contains CSP/HTTP-header-injection chars."""
-    for src in sources:
-        if any(ch in src for ch in _CSP_FORBIDDEN_CHARS):
-            raise ValueError(f"Invalid CSP source value: {src!r}")
-    return sources
 
 
 reports_mcp = FastMCP("memory-reports")
@@ -72,10 +60,12 @@ async def upsert(
 
     # Validate allowed_connect_urls to prevent CSP directive injection.
     if allowed_connect_urls:
-        try:
-            validate_csp_sources(allowed_connect_urls)
-        except ValueError as e:
-            return {"error": str(e)}
+        bad = find_invalid_csp_sources(allowed_connect_urls)
+        if bad:
+            return {
+                "error": "Invalid CSP source values: "
+                + ", ".join(repr(s) for s in bad)
+            }
 
     # Use caller-supplied filename or generate from content hash + title
     if not filename:
