@@ -43,6 +43,19 @@ def token_id(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
 
+
+def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
+    """Return the (scheme, host, port) origin of a redirect URI.
+
+    Used to compare allowlist entries to client-supplied redirect_uris
+    by *origin*, not by string prefix.  String-prefix matching is unsafe:
+    ``http://localhost.evil.com`` starts with ``http://localhost``, so a
+    naive ``startswith`` allowlist would let an attacker register an
+    arbitrary host.
+    """
+    parsed = urlparse(uri)
+    return (parsed.scheme, parsed.hostname or "", parsed.port)
+
 ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
 BASE_SCOPES = [SCOPE_READ]
 RW_SCOPES = [SCOPE_READ, SCOPE_WRITE]
@@ -51,6 +64,16 @@ RW_SCOPES = [SCOPE_READ, SCOPE_WRITE]
 # Token configuration constants
 ACCESS_TOKEN_LIFETIME = 3600 * 30 * 24  # 30 days
 REFRESH_TOKEN_LIFETIME = 30 * 24 * 3600  # 30 days
+
+
+def now_naive_utc() -> datetime:
+    """Return ``datetime.now(timezone.utc)`` stripped of tzinfo.
+
+    UserSession/OAuth* tables store ``expires_at`` as naive UTC; this helper
+    keeps the conversion in one place so a future ``datetime.now()`` slip
+    (which would silently use *local* time) can't drift the bookkeeping.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def create_expiration(lifetime_seconds: int) -> datetime:
@@ -81,7 +104,7 @@ def create_access_token_session(
     )
 
 
-def _resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
+def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
     """Return ``(client_id, scopes)`` for a UserSession.
 
     When the session has no associated OAuthState (frontend logins, scheduled-
@@ -212,11 +235,11 @@ class SimpleOAuthProvider(OAuthProvider):
             # Try as OAuth access token first
             user_session = session.get(UserSession, token)
             if user_session:
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                now = now_naive_utc()
                 if user_session.expires_at < now:
                     return None
 
-                client_id, base_scopes = _resolve_session_scopes(user_session)
+                client_id, base_scopes = resolve_session_scopes(user_session)
                 # Always include SCOPE_READ/SCOPE_WRITE for FastMCP endpoint auth
                 scopes: list[str] = sorted(set(base_scopes) | {SCOPE_READ, SCOPE_WRITE})
 
@@ -257,24 +280,38 @@ class SimpleOAuthProvider(OAuthProvider):
     async def register_client(self, client_info: OAuthClientInformationFull):
         """Register a new OAuth client.
 
-        Validates that all redirect_uris start with an allowed URI prefix to
-        prevent authorization-code phishing via open dynamic client registration.
-        Configure OAUTH_REDIRECT_URI_ALLOWLIST (comma-separated URI prefixes) to
-        expand the default localhost-only allowlist.
+        Validates that every redirect_uri's *origin* (scheme + host + port)
+        matches one in the allowlist exactly, to prevent authorization-code
+        phishing via open dynamic client registration.  A previous version
+        used ``str.startswith`` which let an attacker register
+        ``http://localhost.evil.com/cb`` (it starts with ``http://localhost``)
+        and harvest auth codes; comparing parsed origins closes that hole.
+
+        Configure OAUTH_REDIRECT_URI_ALLOWLIST (comma-separated URIs) to
+        expand the default localhost-only allowlist.  ``*`` disables the
+        check entirely (logged at startup-time so leaks are visible).
         """
         allowlist = settings.OAUTH_REDIRECT_URI_ALLOWLIST
-        if allowlist != ["*"]:
+        if allowlist == ["*"]:
+            logger.warning(
+                "OAUTH_REDIRECT_URI_ALLOWLIST=['*'] — dynamic client "
+                "registration accepts any redirect_uri. This is unsafe in "
+                "production."
+            )
+        else:
+            allowed_origins = {redirect_uri_origin(p) for p in allowlist}
             for uri in client_info.redirect_uris:
                 uri_str = str(uri)
-                if not any(uri_str.startswith(prefix) for prefix in allowlist):
+                if redirect_uri_origin(uri_str) not in allowed_origins:
                     logger.warning(
-                        "Rejected OAuth client registration: redirect_uri %r not in allowlist %r",
+                        "Rejected OAuth client registration: redirect_uri %r "
+                        "origin not in allowlist %r",
                         uri_str,
                         allowlist,
                     )
                     raise ValueError(
                         f"redirect_uri {uri_str!r} is not permitted. "
-                        "Set OAUTH_REDIRECT_URI_ALLOWLIST to allow additional URI prefixes."
+                        "Set OAUTH_REDIRECT_URI_ALLOWLIST to allow additional URIs."
                     )
 
         with make_session() as session:
@@ -383,7 +420,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 raise ValueError("Invalid state parameter")
 
             # Check if state has expired (compare naive UTC datetimes)
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            now = now_naive_utc()
             if oauth_state.expires_at < now:
                 logger.error(f"State {state} has expired")
                 oauth_state.stale = True  # type: ignore
@@ -495,14 +532,12 @@ class SimpleOAuthProvider(OAuthProvider):
             # Try as OAuth access token first
             user_session = session.get(UserSession, token)
             if user_session:
-                now = datetime.now(timezone.utc).replace(
-                    tzinfo=None
-                )  # Make naive for DB comparison
+                now = now_naive_utc()  # Make naive for DB comparison
 
                 if user_session.expires_at < now:
                     return None
 
-                client_id, scopes = _resolve_session_scopes(user_session)
+                client_id, scopes = resolve_session_scopes(user_session)
                 return AccessToken(
                     token=token,
                     client_id=client_id,
@@ -535,7 +570,7 @@ class SimpleOAuthProvider(OAuthProvider):
     ) -> Optional[RefreshToken]:
         """Load and validate a refresh token."""
         with make_session() as session:
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            now = now_naive_utc()
 
             # Query for the refresh token
             db_refresh_token = (
