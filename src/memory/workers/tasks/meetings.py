@@ -18,7 +18,13 @@ from memory.common.content_processing import (
     process_content_item,
     safe_task_execution,
 )
-from memory.common.people import find_or_create_person, find_person_by_name
+from memory.common.db.models import Person
+from memory.common.people import (
+    find_or_create_person,
+    find_person_by_email,
+    find_person_by_name,
+    make_identifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,39 +140,214 @@ def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:
     return result
 
 
+def prettify_email_localpart(email: str) -> str:
+    """Convert an email local-part into a slightly more humane display name.
+
+    `daniel.oconnell@x.com` -> `Daniel Oconnell`, `dan_o@x.com` -> `Dan O`.
+    Still imperfect (no real name signal), but less ugly than the raw
+    local-part for entries the user will see in admin UI / search results.
+    Returns "Unknown" for inputs that don't look like an email (no `@`) or
+    have an empty local-part.
+    """
+    if "@" not in email:
+        return "Unknown"
+    local = email.split("@", 1)[0]
+    cleaned = local.replace(".", " ").replace("_", " ").replace("-", " ")
+    parts = [p for p in cleaned.split() if p]
+    return " ".join(p.capitalize() for p in parts) or local or "Unknown"
+
+
+def find_or_create_paired_person(
+    session: DBSession,
+    email: str,
+    name: str,
+    create_missing: bool,
+) -> tuple[Person | None, bool]:
+    """Email-authoritative variant of ``find_or_create_person`` for the paired path.
+
+    The paired path has *both* an email and a name from the same upstream
+    attendee record. The email is the stable identifier; if find-by-email
+    misses, we should NOT fall back to ``find_person_by_name`` (which can
+    cross-link two real people who happen to share a display name like
+    "Alex Smith"). Either link to the existing email-matched Person, create
+    a brand-new one with this email, or return None.
+
+    The unpaired email path (``leftover_emails``) and unpaired name path
+    (``leftover_names``) keep their existing fuzzy behavior — only the
+    paired path tightens here.
+    """
+    person = find_person_by_email(session, email)
+    if person is not None:
+        return person, False
+    if not create_missing:
+        return None, False
+
+    identifier = make_identifier(name)
+    person = Person(
+        identifier=identifier,
+        display_name=name,
+        aliases=[name],
+        contact_info={"email": email},
+    )
+    session.add(person)
+    session.flush()
+    logger.info(f"Created person '{identifier}' for paired attendee '{name}' <{email}>")
+    return person, True
+
+
+def attach_attendee(
+    meeting: Meeting,
+    person: Person,
+    label: str,
+    was_created: bool,
+    seen_person_ids: set[int],
+) -> str | None:
+    """Attach a Person to the meeting if not already linked.
+
+    Returns the outcome label: "created", "linked", or None if the person
+    was already attached. The caller maintains seen_person_ids; this function
+    mutates it to track which persons have been attached on this run.
+    """
+    if person.id in seen_person_ids:
+        return None
+    seen_person_ids.add(person.id)
+    meeting.attendees.append(person)
+    if was_created:
+        logger.info(f"Created person '{person.identifier}' for attendee '{label}'")
+        return "created"
+    logger.info(f"Linked attendee '{label}' to person '{person.identifier}'")
+    return "linked"
+
+
 def link_attendees(
     session,
     meeting: Meeting,
-    attendee_names: Sequence[str | None],
+    attendee_names: Sequence[str | None] = (),
+    attendee_emails: Sequence[str | None] = (),
     create_missing: bool = True,
 ) -> dict:
-    """Link attendee names to Person records, optionally creating new ones."""
-    normalized_names = normalize_attendee_names(attendee_names)
-    logger.info(f"Processing {len(normalized_names)} attendees: {normalized_names}")
+    """Link attendee names and/or emails to Person records.
 
+    Emails are processed first since they're a stable identifier — for
+    Fireflies, meeting_attendees[].email is consistently populated while
+    speaker labels can be garbage ("jgh"). Names are still supported for
+    Granola / API uploads where only display names are available.
+
+    When both lists are provided and equal in length they're paired by index
+    (assumes both lists come from a single source's attendee list, which is
+    the typical case). Otherwise emails and names are processed independently
+    and find_or_create_person will fall back to its own email/name fuzzy
+    match. Already-linked Persons are de-duplicated by id.
+
+    Pairing happens *before* email dedup: when the raw emails list and the
+    raw normalized names list are the same length, we zip them together
+    first and then dedupe (email, name) tuples (preserving the first-seen
+    pair). This protects against case-folded duplicates collapsing the
+    email list out from under the name list — e.g.
+    ``["alice@x.com", "ALICE@x.com"]`` + ``["Alice", "Alice"]`` would
+    otherwise have lengths 1 and 2 after independent dedup, breaking
+    pairing. With dedup-after-zip we get a single ``("alice@x.com", "Alice")``
+    pair instead of fallback-to-independent-processing.
+    """
     linked, created, skipped = 0, 0, []
+    seen_person_ids: set[int] = {p.id for p in meeting.attendees}
 
-    for name in normalized_names:
-        if not name:
+    normalized_emails = [
+        (email or "").strip().lower()
+        for email in attendee_emails
+        if (email or "").strip()
+    ]
+    normalized_names = normalize_attendee_names(attendee_names)
+
+    # Pair-and-dedupe when both lists are present and the *raw* lengths
+    # match. Dedupe by email (case folded above) but preserve the first-seen
+    # name for each email so we don't lose name signal to a noisy upstream
+    # that lists the same address twice.
+    paired: list[tuple[str, str]] = []
+    leftover_emails: list[str] = []
+    leftover_names: list[str] = []
+    if normalized_emails and normalized_names and len(normalized_emails) == len(
+        normalized_names
+    ):
+        seen_emails: set[str] = set()
+        for email, name in zip(normalized_emails, normalized_names):
+            if email in seen_emails:
+                continue
+            seen_emails.add(email)
+            paired.append((email, name))
+        logger.info(f"Processing {len(paired)} paired attendees (email+name)")
+    else:
+        # Lengths genuinely differ pre-dedup, or one list is empty —
+        # process emails and names independently. Dedupe the email list on
+        # its own; cross-list pairing isn't reliable here.
+        seen_emails = set()
+        for email in normalized_emails:
+            if email in seen_emails:
+                continue
+            seen_emails.add(email)
+            leftover_emails.append(email)
+        if normalized_emails and normalized_names:
+            logger.warning(
+                f"Email/name length mismatch ({len(normalized_emails)} emails, "
+                f"{len(normalized_names)} names) — falling back to independent "
+                "processing; cross-linking by display name is fragile."
+            )
+        leftover_names = normalized_names
+
+    for email, name in paired:
+        person, was_created = find_or_create_paired_person(
+            session, email=email, name=name, create_missing=create_missing
+        )
+        if person is None:
+            logger.warning(
+                f"Could not find person for paired attendee '{name}' / '{email}'"
+            )
+            skipped.append(email)
             continue
+        outcome = attach_attendee(
+            meeting, person, f"{name} <{email}>", was_created, seen_person_ids
+        )
+        if outcome == "created":
+            created += 1
+        elif outcome == "linked":
+            linked += 1
 
+    if leftover_emails:
+        logger.info(f"Processing {len(leftover_emails)} attendee emails")
+    for email in leftover_emails:
+        person = find_person_by_email(session, email)
+        was_created = False
+        if person is None and create_missing:
+            display_name = prettify_email_localpart(email)
+            person, was_created = find_or_create_person(
+                session, name=display_name, email=email, create_if_missing=True
+            )
+        if person is None:
+            logger.warning(f"Could not find person for email '{email}'")
+            skipped.append(email)
+            continue
+        outcome = attach_attendee(meeting, person, email, was_created, seen_person_ids)
+        if outcome == "created":
+            created += 1
+        elif outcome == "linked":
+            linked += 1
+
+    if leftover_names:
+        logger.info(
+            f"Processing {len(leftover_names)} attendee names: {leftover_names}"
+        )
+    for name in leftover_names:
         person, was_created = find_or_create_person(
             session, name, create_if_missing=create_missing
         )
-        if not person:
+        if person is None:
             logger.warning(f"Could not find person for attendee '{name}'")
             skipped.append(name)
             continue
-
-        if person in meeting.attendees:
-            continue
-
-        meeting.attendees.append(person)
-        if was_created:
-            logger.info(f"Created person '{person.identifier}' for attendee '{name}'")
+        outcome = attach_attendee(meeting, person, name, was_created, seen_person_ids)
+        if outcome == "created":
             created += 1
-        else:
-            logger.info(f"Linked attendee '{name}' to person '{person.identifier}'")
+        elif outcome == "linked":
             linked += 1
 
     logger.info(
@@ -307,16 +488,20 @@ def create_meeting_record(
     source_tool: str | None,
     external_id: str | None,
     tags: list[str] | None,
+    attendee_emails: list[str] | None = None,
+    transcript_account_id: int | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
     parsed_date = parse_due_date(meeting_date)
 
-    # Prepend attendees to transcript if provided
+    # Prepend attendee identifiers to transcript so the LLM has a hint about
+    # who's in the room. Names take precedence over emails for readability.
     full_transcript = transcript
-    if attendee_names:
-        attendee_list = ", ".join(name for name in attendee_names if name)
-        if attendee_list:
-            full_transcript = f"Attendees: {attendee_list}\n\n{transcript}"
+    attendee_label = ", ".join(
+        v for v in ((attendee_names or []) + (attendee_emails or [])) if v
+    )
+    if attendee_label:
+        full_transcript = f"Attendees: {attendee_label}\n\n{transcript}"
 
     content_hash = hashlib.sha256(full_transcript.encode()).digest()
     meeting = Meeting(
@@ -329,6 +514,7 @@ def create_meeting_record(
         sha256=content_hash,
         tags=["meeting"] + (tags or []),
         extraction_status="processing",
+        transcript_account_id=transcript_account_id,
     )
     session.add(meeting)
     session.flush()
@@ -364,6 +550,7 @@ def execute_meeting_processing(
     system_prompt: str | None,
     model: str | None,
     job_id: int | None,
+    attendee_emails: list[str] | None = None,
 ) -> dict:
     """
     Run the full processing pipeline on a meeting.
@@ -390,9 +577,28 @@ def execute_meeting_processing(
             session, meeting, extraction_prompt, system_prompt, model
         )
 
+        # Bail out early if extraction itself failed — don't proceed to
+        # embeddings or overwrite extraction_status="failed" with "complete".
+        if extract_result.get("status") == "error":
+            error_msg = extract_result.get("error", "extraction failed")
+            if job_id:
+                job_utils.fail_job(session, job_id, error_msg)
+            session.commit()
+            return {
+                "status": "error",
+                "error": error_msg,
+                "meeting_id": meeting.id,
+                "external_id": meeting.external_id,
+            }
+
         attendee_result = {"linked": 0, "created": 0, "skipped": []}
-        if attendee_names:
-            attendee_result = link_attendees(session, meeting, attendee_names)
+        if attendee_names or attendee_emails:
+            attendee_result = link_attendees(
+                session,
+                meeting,
+                attendee_names=attendee_names or [],
+                attendee_emails=attendee_emails or [],
+            )
 
         session.commit()
         session.refresh(meeting)
@@ -449,6 +655,8 @@ def process_meeting(
     system_prompt: str | None = None,
     model: str | None = None,
     job_id: int | None = None,
+    attendee_emails: list[str] | None = None,
+    transcript_account_id: int | None = None,
 ):
     """
     Process a new meeting transcript.
@@ -507,6 +715,8 @@ def process_meeting(
             source_tool,
             external_id,
             tags,
+            attendee_emails=attendee_emails,
+            transcript_account_id=transcript_account_id,
         )
 
         return execute_meeting_processing(
@@ -517,6 +727,7 @@ def process_meeting(
             system_prompt,
             model,
             job_id,
+            attendee_emails=attendee_emails,
         )
 
 

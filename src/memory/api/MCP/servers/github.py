@@ -23,8 +23,6 @@ from memory.api.MCP.servers.github_helpers import (
     fetch_milestone,
     fetch_project,
     fetch_team,
-    get_github_client,
-    get_github_client_for_org,
     handle_project_integration,
     sync_issue_to_database,
     resolve_milestone_node_id,
@@ -32,6 +30,7 @@ from memory.api.MCP.servers.github_helpers import (
     update_issue,
     add_issue_comment,
 )
+from memory.common.project.client import get_github_client, get_github_client_for_org
 
 logger = logging.getLogger(__name__)
 

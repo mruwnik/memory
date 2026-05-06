@@ -178,10 +178,6 @@ def test_find_person_by_name_exact_match(mock_make_session, qdrant):
     person = Person(
         identifier="alice_chen",
         display_name="Alice Chen",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice_chen"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -196,10 +192,6 @@ def test_find_person_by_name_case_insensitive(mock_make_session, qdrant):
     person = Person(
         identifier="bob_smith",
         display_name="Bob Smith",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:bob_smith"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -215,10 +207,6 @@ def test_find_person_by_name_by_alias(mock_make_session, qdrant):
         identifier="charlie_jones",
         display_name="Charlie Jones",
         aliases=["@charlie", "charlie.j@work.com"],
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:charlie_jones"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -234,10 +222,6 @@ def test_find_person_by_name_by_email_in_contact_info(mock_make_session, qdrant)
         identifier="dave_wilson",
         display_name="Dave Wilson",
         contact_info={"email": "dave@example.com"},
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:dave_wilson"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -270,10 +254,6 @@ def test_find_person_by_name_with_whitespace(mock_make_session, qdrant):
     person = Person(
         identifier="eve_brown",
         display_name="Eve Brown",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:eve_brown"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -442,6 +422,32 @@ def test_normalize_attendee_names_handles_trailing_commas():
 
 
 # ============================================================================
+# Tests for prettify_email_localpart
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "email,expected",
+    [
+        ("daniel.oconnell@x.com", "Daniel Oconnell"),
+        ("dan_o@x.com", "Dan O"),
+        ("dan-o@x.com", "Dan O"),
+        ("alice@example.com", "Alice"),
+        ("first.middle.last@example.com", "First Middle Last"),
+        ("ALL.CAPS@example.com", "All Caps"),
+        # Empty local-part falls through to the safety net.
+        ("@example.com", "Unknown"),
+        # No `@` at all is not an email — must not silently produce a "Person"
+        # named after the raw string.
+        ("foo", "Unknown"),
+        ("", "Unknown"),
+    ],
+)
+def test_prettify_email_localpart(email, expected):
+    assert meetings.prettify_email_localpart(email) == expected
+
+
+# ============================================================================
 # Tests for find_or_create_person
 # ============================================================================
 
@@ -451,10 +457,6 @@ def test_find_or_create_person_finds_existing(mock_make_session, qdrant):
     person = Person(
         identifier="existing_person",
         display_name="Existing Person",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:existing_person"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -480,10 +482,6 @@ def test_find_or_create_person_finds_by_identifier(mock_make_session, qdrant):
     person = Person(
         identifier="john_doe",
         display_name="John Doe III",  # Different display name
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:john_doe"),
-        size=0,
     )
     mock_make_session.add(person)
     mock_make_session.commit()
@@ -506,18 +504,10 @@ def test_link_attendees_links_existing_people(mock_make_session, qdrant):
     alice = Person(
         identifier="alice",
         display_name="Alice",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice"),
-        size=0,
     )
     bob = Person(
         identifier="bob",
         display_name="Bob",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:bob"),
-        size=0,
     )
     mock_make_session.add_all([alice, bob])
     mock_make_session.commit()
@@ -600,10 +590,6 @@ def test_link_attendees_mixed_existing_and_new(mock_make_session, qdrant):
     alice = Person(
         identifier="alice",
         display_name="Alice",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice2"),
-        size=0,
     )
     mock_make_session.add(alice)
     mock_make_session.commit()
@@ -675,10 +661,6 @@ def test_link_attendees_skips_already_linked(mock_make_session, qdrant):
     alice = Person(
         identifier="alice",
         display_name="Alice",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice3"),
-        size=0,
     )
     mock_make_session.add(alice)
     mock_make_session.commit()
@@ -734,6 +716,7 @@ def test_create_action_item_tasks_basic(mock_make_session, qdrant):
     assert "Task 1" in created
     assert "Task 2" in created
 
+    mock_make_session.flush()
     tasks = mock_make_session.query(Task).all()
     assert len(tasks) == 2
 
@@ -743,10 +726,6 @@ def test_create_action_item_tasks_with_assignee(mock_make_session, qdrant):
     alice = Person(
         identifier="alice",
         display_name="Alice",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice4"),
-        size=0,
     )
     mock_make_session.add(alice)
     mock_make_session.commit()
@@ -769,6 +748,7 @@ def test_create_action_item_tasks_with_assignee(mock_make_session, qdrant):
     created = meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
 
     assert len(created) == 1
+    mock_make_session.flush()
     task = mock_make_session.query(Task).first()
     assert "assignee:alice" in task.tags
 
@@ -981,9 +961,39 @@ def test_process_meeting_handles_extraction_error(
     )
 
     assert result["status"] == "error"
-    assert "LLM API error" in result["message"]
+    # Error key normalized to "error" (was "message" prior to the regression
+    # fix that bailed out before embedding when extraction itself failed).
+    assert "LLM API error" in result["error"]
 
-    # Verify meeting was created but marked as failed
+    # Verify meeting was created but marked as failed (and NOT overwritten
+    # to "complete" by the embedding step, which the bugfix prevents).
+    meeting = mock_make_session.query(Meeting).first()
+    assert meeting is not None
+    assert meeting.extraction_status == "failed"
+
+
+@patch("memory.workers.tasks.meetings.process_content_item")
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_process_meeting_extraction_failure_short_circuits(
+    mock_extraction, mock_process_content, sample_transcript, mock_make_session, qdrant
+):
+    """Regression: when extraction fails, embedding (process_content_item)
+    must NOT run, extraction_status stays 'failed', and the result keeps
+    status='error' rather than being overwritten to 'complete' by the
+    embedding step. This pins the bugfix in execute_meeting_processing.
+    """
+    mock_extraction.side_effect = Exception("LLM API error")
+
+    result = meetings.process_meeting(
+        transcript=sample_transcript,
+        external_id="extraction-shortcircuit",
+    )
+
+    assert result["status"] == "error"
+    assert "LLM API error" in result["error"]
+    # Crucially: embedding must not be called when extraction failed.
+    mock_process_content.assert_not_called()
+
     meeting = mock_make_session.query(Meeting).first()
     assert meeting is not None
     assert meeting.extraction_status == "failed"
@@ -1000,10 +1010,6 @@ def test_process_meeting_with_existing_people(
     alice = Person(
         identifier="alice",
         display_name="Alice",
-        modality="person",
-        mime_type="text/plain",
-        sha256=create_content_hash("person:alice5"),
-        size=0,
     )
     mock_make_session.add(alice)
     mock_make_session.commit()

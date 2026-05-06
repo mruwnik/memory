@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         EmailAccount,
         GoogleFolder,
         Project,
+        TranscriptAccount,
     )
     from memory.common.db.models.observations import ObservationContradiction
 
@@ -1863,6 +1864,11 @@ class Meeting(SourceItem):
     calendar_event_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("calendar_event.id", ondelete="SET NULL"), nullable=True
     )
+    transcript_account_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("transcript_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # LLM-extracted fields
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1873,6 +1879,11 @@ class Meeting(SourceItem):
     calendar_event: Mapped[CalendarEvent | None] = relationship(
         "CalendarEvent",
         foreign_keys=[calendar_event_id],
+        backref="meetings",
+    )
+    transcript_account: Mapped["TranscriptAccount | None"] = relationship(
+        "TranscriptAccount",
+        foreign_keys=[transcript_account_id],
         backref="meetings",
     )
 
