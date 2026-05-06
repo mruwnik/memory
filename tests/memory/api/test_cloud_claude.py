@@ -82,6 +82,10 @@ def test_user_owns_session():
     "subdir/%2e%2e/secrets",
     "a/b/./c",
     "%2e/relative",
+    "a//b",
+    "/leading-slash",
+    "trailing/",
+    "",
 ])
 def test_validate_differ_subpath_rejects_traversal(bad_path):
     with pytest.raises(HTTPException) as exc_info:

@@ -1147,11 +1147,12 @@ async def proxy_differ_ws(
     raw_path = websocket.scope.get("raw_path", b"")
     ws_subpath = raw_path.split(prefix, 1)[1].decode("ascii") if prefix in raw_path else path
 
-    # Reject path traversal attempts (same logic as HTTP differ proxy)
-    for _segment in unquote(ws_subpath).split("/"):
-        if _segment in (".", ".."):
-            await websocket.close(code=4000, reason="Path traversal not allowed")
-            return
+    # Reject path traversal attempts (same logic as HTTP differ proxy).
+    try:
+        _check_no_traversal(ws_subpath)
+    except _UnsafeSubpathError:
+        await websocket.close(code=4000, reason="Path traversal not allowed")
+        return
 
     await websocket.accept()
 
@@ -1217,22 +1218,40 @@ async def proxy_differ_ws(
 # --- WebSocket log streaming helpers ---
 
 
-def validate_differ_subpath(differ_path: str) -> None:
-    """Reject path-traversal attempts in the differ proxy subpath.
+class _UnsafeSubpathError(Exception):
+    """Internal sentinel: differ subpath contains a traversal or empty segment."""
 
-    ``differ_path`` comes from the raw request bytes and may still contain
-    percent-encoded characters.  An attacker can smuggle traversal sequences as
-    ``%2e%2e`` or plain ``..``.  Decode before checking so both forms are
-    caught.
 
-    Raises HTTPException 400 if the path contains traversal or empty segments
-    that would cause httpx (or a downstream proxy) to normalise the URL into a
-    different orchestrator endpoint.
+def _check_no_traversal(differ_path: str) -> None:
+    """Raise ``_UnsafeSubpathError`` if ``differ_path`` is unsafe to forward.
+
+    The subpath comes from the raw request bytes and may still contain
+    percent-encoded characters.  An attacker can smuggle traversal sequences
+    as ``%2e%2e`` or plain ``..``.  Decode before checking so both forms are
+    caught.  Empty segments (``a//b``) are also rejected because httpx (or a
+    downstream proxy) may normalise them into a different orchestrator
+    endpoint than what the user typed.
+
+    Shared between the HTTP and WebSocket differ proxies so both surfaces stay
+    in lock-step on what counts as "safe to forward".
     """
     decoded = unquote(differ_path)
     for segment in decoded.split("/"):
-        if segment in (".", ".."):
-            raise HTTPException(status_code=400, detail="Path traversal not allowed")
+        if segment in ("", ".", ".."):
+            raise _UnsafeSubpathError(segment)
+
+
+def validate_differ_subpath(differ_path: str) -> None:
+    """HTTP-shaped wrapper around :func:`_check_no_traversal`.
+
+    Raises HTTPException 400 if the path contains traversal or empty segments.
+    """
+    try:
+        _check_no_traversal(differ_path)
+    except _UnsafeSubpathError as exc:
+        raise HTTPException(
+            status_code=400, detail="Path traversal not allowed"
+        ) from exc
 
 
 def is_valid_session_id(session_id: str) -> bool:

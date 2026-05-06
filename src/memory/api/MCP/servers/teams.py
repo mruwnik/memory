@@ -16,6 +16,7 @@ from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
     filter_projects_query,
     filter_teams_query,
+    has_admin_scope,
 )
 from memory.common.scopes import SCOPE_TEAMS, SCOPE_TEAMS_WRITE
 from memory.common.db.connection import make_session
@@ -1428,15 +1429,12 @@ def get_caller_team_role(
     Returns None if the caller has no person record or is not a team member.
     Admins (has_admin_scope) bypass this and are treated as implicit 'admin'.
     """
-    from memory.common.access_control import has_admin_scope
-    from memory.common.db.models.sources import Person as PersonModel
-
     if has_admin_scope(user):
         return "admin"
 
     person = (
-        session.query(PersonModel)
-        .filter(PersonModel.user_id == user.id)
+        session.query(Person)
+        .filter(Person.user_id == user.id)
         .first()
     )
     if person is None:

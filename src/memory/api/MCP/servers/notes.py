@@ -123,9 +123,12 @@ async def note_files(path: str = "/"):
                 return []
             query = query.filter(Note.creator_id == user_id)
 
-        # Apply directory prefix filter when a sub-path was requested
+        # Apply directory prefix filter when a sub-path was requested.
+        # Use startswith() so SQLAlchemy escapes LIKE wildcards (% and _) —
+        # otherwise a user could pass path="%/secret" to enumerate beyond
+        # their own subtree, defeating the directory-prefix semantics.
         if path_prefix:
-            query = query.filter(Note.filename.like(f"{path_prefix}%"))
+            query = query.filter(Note.filename.startswith(path_prefix))
 
         rows = query.all()
 
