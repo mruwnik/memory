@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, FrozenSet, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Query
@@ -34,7 +34,11 @@ if TYPE_CHECKING:
 
 
 # Protocols for duck-typed access control checks
-# These allow tests to use simple mock objects without importing full models
+# These allow tests to use simple mock objects without importing full models.
+# Return types are Any: SQLAlchemy declares ORM columns as Mapped[T], which
+# pyright's structural matching does not unify with concrete T even though it
+# resolves to T at runtime. Validating the actual shape happens at boundaries
+# (e.g. UserProxy below normalizes scopes to list[str]).
 
 
 @runtime_checkable
@@ -42,10 +46,10 @@ class UserLike(Protocol):
     """Protocol for objects that can be checked for access control."""
 
     @property
-    def id(self) -> int | None: ...
+    def id(self) -> Any: ...
 
     @property
-    def scopes(self) -> list[str]: ...
+    def scopes(self) -> Any: ...
 
 
 @runtime_checkable
@@ -53,10 +57,10 @@ class SourceItemLike(Protocol):
     """Protocol for objects that can be checked for item access."""
 
     @property
-    def project_id(self) -> int | None: ...
+    def project_id(self) -> Any: ...
 
     @property
-    def sensitivity(self) -> str: ...
+    def sensitivity(self) -> Any: ...
 
 logger = logging.getLogger(__name__)
 

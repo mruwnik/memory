@@ -81,11 +81,17 @@ def build_user_access_filter(user: "User") -> AccessFilter | None:
 
 
 class UserProxy:
-    """Minimal user proxy for access control when only dict is available."""
+    """Minimal user proxy for access control when only dict is available.
+
+    Normalizes ``scopes`` to ``list[str]`` at the boundary so callers can rely
+    on the shape regardless of what the source dict contained (None, tuple,
+    missing key, etc.).
+    """
 
     def __init__(self, user_dict: dict):
-        self.id = user_dict.get("id")
-        self.scopes = user_dict.get("scopes", [])
+        self.id: int | None = user_dict.get("id")
+        raw_scopes = user_dict.get("scopes") or []
+        self.scopes: list[str] = [str(s) for s in raw_scopes]
 
 
 def is_session_expired(user_session: UserSession) -> bool:
@@ -93,9 +99,16 @@ def is_session_expired(user_session: UserSession) -> bool:
 
     Mirrors the logic in auth.py get_user_session to handle both
     timezone-aware and naive (assumed UTC) datetimes consistently.
+
+    A session with no expires_at is treated as expired (defense-in-depth):
+    ``user_session.user`` is dereferenced by callers prior to this check,
+    so by the time we get here we know we have a session row, but a NULL
+    expiry could only mean "never set" and we'd rather fail closed.
     """
-    now = datetime.now(timezone.utc)
     expires_at = user_session.expires_at
+    if expires_at is None:
+        return True
+    now = datetime.now(timezone.utc)
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     else:
