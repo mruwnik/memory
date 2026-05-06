@@ -148,7 +148,7 @@ def aggregate_availability(poll: AvailabilityPoll) -> list[SlotAggregation]:
                 continue
 
             # Skip misaligned slots (must start on valid boundary from poll start)
-            offset_seconds = (avail.slot_start - poll.datetime_start).total_seconds()
+            offset_seconds = (ensure_utc(avail.slot_start) - ensure_utc(poll.datetime_start)).total_seconds()
             if offset_seconds % expected_duration_seconds != 0:
                 continue
 
@@ -175,24 +175,36 @@ def aggregate_availability(poll: AvailabilityPoll) -> list[SlotAggregation]:
     return result
 
 
+def ensure_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to UTC. Tz-naive datetimes are assumed to be UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def validate_slot(slot: AvailabilitySlot, poll: AvailabilityPoll) -> None:
     """Validate that a slot is within the poll's time window and has valid values."""
+    slot_start = ensure_utc(slot.slot_start)
+    slot_end = ensure_utc(slot.slot_end)
+    poll_start = ensure_utc(poll.datetime_start)
+    poll_end = ensure_utc(poll.datetime_end)
+
     # Ensure slot_start < slot_end
-    if slot.slot_start >= slot.slot_end:
+    if slot_start >= slot_end:
         raise HTTPException(
             status_code=400,
             detail="Slot start must be before slot end",
         )
 
     # Ensure slot is within poll's datetime range
-    if slot.slot_start < poll.datetime_start or slot.slot_end > poll.datetime_end:
+    if slot_start < poll_start or slot_end > poll_end:
         raise HTTPException(
             status_code=400,
-            detail=f"Slot {slot.slot_start.isoformat()} is outside poll time range",
+            detail=f"Slot {slot_start.isoformat()} is outside poll time range",
         )
 
     # Validate slot duration matches poll configuration
-    slot_duration = (slot.slot_end - slot.slot_start).total_seconds() / 60
+    slot_duration = (slot_end - slot_start).total_seconds() / 60
     if slot_duration != poll.slot_duration_minutes:
         raise HTTPException(
             status_code=400,
@@ -200,7 +212,7 @@ def validate_slot(slot: AvailabilitySlot, poll: AvailabilityPoll) -> None:
         )
 
     # Validate slot starts on a valid boundary (aligned to slot duration from poll start)
-    offset_from_start = (slot.slot_start - poll.datetime_start).total_seconds() / 60
+    offset_from_start = (slot_start - poll_start).total_seconds() / 60
     if offset_from_start % poll.slot_duration_minutes != 0:
         raise HTTPException(
             status_code=400,

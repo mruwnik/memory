@@ -23,7 +23,12 @@ from memory.api.MCP.access import (
     get_project_roles_by_user_id,
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.common.access_control import AccessFilter, user_can_access
+from memory.common.access_control import (
+    AccessFilter,
+    apply_access_filter_to_query,
+    get_accessible_source_item_by_filename,
+    user_can_access,
+)
 from memory.common.scopes import (
     SCOPE_OBSERVE,
     SCOPE_OBSERVE_WRITE,
@@ -460,6 +465,25 @@ def fetch_file(filename: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
+    # Ownership check: look up the SourceItem that owns this file and verify access.
+    # Without this, any SCOPE_READ user could read any file in FILE_STORAGE_DIR.
+    try:
+        relative = path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+    except ValueError:
+        raise FileNotFoundError(f"File not found: {filename}")
+
+    user = get_mcp_current_user()
+    if user is None:
+        raise PermissionError(f"Access denied: {filename}")
+
+    with make_session() as session:
+        try:
+            get_accessible_source_item_by_filename(session, user, relative)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"File not found: {filename}")
+        except PermissionError:
+            raise PermissionError(f"Access denied: {filename}")
+
     mime_type = extract.get_mime_type(path)
 
     # Text files: return raw content without chunking to preserve formatting
@@ -611,58 +635,15 @@ async def fetch(
 
 
 def apply_access_control_to_query(query, access_filter: AccessFilter | None, session):
+    """Backwards-compatible wrapper around :func:`apply_access_filter_to_query`.
+
+    The ``session`` argument is unused — the canonical helper builds an
+    ``EXISTS`` subquery for the person-override condition rather than running
+    a separate ``SELECT``.  Kept here for callers that already pass a session
+    so they don't have to change.
     """
-    Apply access control filters to a SQLAlchemy query.
-
-    Args:
-        query: SQLAlchemy query object
-        access_filter: AccessFilter from get_current_user_access_filter()
-        session: Database session for user lookup
-
-    Returns:
-        Modified query with access control applied
-    """
-    from sqlalchemy import or_
-
-    # Superadmin - no filtering
-    if access_filter is None:
-        return query
-
-    # Build OR conditions for access
-    or_conditions = []
-
-    # Public items are visible to all authenticated users
-    if access_filter.include_public:
-        or_conditions.append(SourceItem.sensitivity == "public")
-
-    # Person override: if user's person is associated with item
-    if access_filter.person_id is not None:
-        from memory.common.db.models.source_item import source_item_people
-
-        # Items where user's person is in the people relationship
-        person_subquery = (
-            session.query(source_item_people.c.source_item_id)
-            .filter(source_item_people.c.person_id == access_filter.person_id)
-            .subquery()
-        )
-        or_conditions.append(SourceItem.id.in_(person_subquery))
-
-    # Project-based access
-    for condition in access_filter.conditions:
-        # Item must be in project AND have allowed sensitivity
-        project_condition = (SourceItem.project_id == condition.project_id) & (
-            SourceItem.sensitivity.in_(list(condition.sensitivities))
-        )
-        or_conditions.append(project_condition)
-
-    # If no conditions, user has no access - return empty result
-    if not or_conditions:
-        # Add impossible condition to return no results
-        query = query.filter(SourceItem.id == -1)
-    else:
-        query = query.filter(or_(*or_conditions))
-
-    return query
+    del session  # unused; the canonical helper doesn't need it
+    return apply_access_filter_to_query(query, access_filter)
 
 
 @core_mcp.tool()

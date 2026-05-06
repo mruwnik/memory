@@ -407,6 +407,26 @@ def test_poll_response_edit_token_generated(db_session, sample_poll):
     assert len(response.edit_token) == 32  # 16 bytes hex = 32 chars
 
 
+def test_submit_response_tz_naive_datetime(client: TestClient, sample_poll):
+    """Tz-naive datetimes from clients (no Z suffix) must not raise TypeError."""
+    response = client.post(
+        f"/polls/respond/{sample_poll.slug}",
+        json={
+            "respondent_name": "TzNaive",
+            "availabilities": [
+                {
+                    # No timezone suffix — Pydantic produces a tz-naive datetime
+                    "slot_start": "2026-02-02T10:00:00",
+                    "slot_end": "2026-02-02T10:30:00",
+                    "availability_level": 1,
+                }
+            ],
+        },
+    )
+    # Should succeed (treated as UTC) rather than 500 TypeError
+    assert response.status_code == 200
+
+
 def test_poll_availability_cascade_delete(db_session, sample_poll):
     """Test that deleting a response cascades to availabilities."""
     response = PollResponse(

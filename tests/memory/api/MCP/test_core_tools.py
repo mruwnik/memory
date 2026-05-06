@@ -1080,16 +1080,11 @@ async def test_fetch_with_journal_entries(mock_make_session, mock_get_user, mock
     journal_query.order_by.return_value = journal_query
     journal_query.all.return_value = [mock_entry1, mock_entry2]
 
-    def query_side_effect(model):
-        from memory.common.db.models import SourceItem
-        from memory.common.db.models.journal import JournalEntry
-        if model == SourceItem:
-            return item_query
-        elif model == JournalEntry:
-            return journal_query
-        return MagicMock()
+    from memory.common.db.models import SourceItem
+    from memory.common.db.models.journal import JournalEntry
 
-    mock_session.query.side_effect = query_side_effect
+    _query_map = {SourceItem: item_query, JournalEntry: journal_query}
+    mock_session.query.side_effect = lambda model: _query_map.get(model, MagicMock())
 
     result = await fetch.fn(id=123, include_content=False, include_journal=True)
 

@@ -56,7 +56,7 @@ class ImageContent:
     """Image content in a message."""
 
     type: Literal["image"] = "image"
-    image: Image.Image = None  # type: ignore
+    image: Image.Image | None = None
     detail: str | None = None  # For OpenAI: "low", "high", "auto"
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,7 +76,7 @@ class ToolUseContent:
     type: Literal["tool_use"] = "tool_use"
     id: str = ""
     name: str = ""
-    input: dict[str, Any] = None  # type: ignore
+    input: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format."""

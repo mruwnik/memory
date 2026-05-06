@@ -51,16 +51,16 @@ async def test_get_metadata_schemas_returns_schemas(mock_qdrant, mock_get_schema
         "mail": 75,
     }
 
-    # Mock get_schema to return schemas for different classes
-    def schema_side_effect(klass):
-        class_name = klass.__name__ if hasattr(klass, "__name__") else str(klass)
-        if "Blog" in class_name:
-            return {"title": {"type": "str", "description": "Title"}}
-        elif "Book" in class_name:
-            return {"author": {"type": "str", "description": "Author"}}
-        return {}
-
-    mock_get_schema.side_effect = schema_side_effect
+    # Map class name fragments to schema stubs (dict dispatch, no conditionals)
+    _schema_by_fragment = {
+        "Blog": {"title": {"type": "str", "description": "Title"}},
+        "Book": {"author": {"type": "str", "description": "Author"}},
+    }
+    mock_get_schema.side_effect = lambda klass: next(
+        (schema for fragment, schema in _schema_by_fragment.items()
+         if fragment in (klass.__name__ if hasattr(klass, "__name__") else str(klass))),
+        {},
+    )
 
     result = await get_metadata_schemas.fn()
 

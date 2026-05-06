@@ -197,7 +197,20 @@ const ContainerRow: React.FC<{
     <tr
       className={`${baseCls} ${stateCls}`}
       onClick={clickable ? onSelect : undefined}
+      tabIndex={clickable ? 0 : -1}
+      aria-selected={clickable ? selected : undefined}
+      aria-disabled={!clickable || undefined}
       title={clickable ? undefined : "Belongs to another user — details aren't accessible from here"}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onSelect()
+              }
+            }
+          : undefined
+      }
     >
       <td className="px-3 py-2">
         <div className="text-sm text-slate-800">{display.title}</div>
@@ -458,7 +471,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
             No containers running.
           </div>
         ) : (
-          <table className="w-full">
+          <table className="w-full" role="grid" aria-label="Running containers">
             <thead className="bg-slate-50 text-left">
               <tr className="text-xs text-slate-500 uppercase tracking-wider">
                 <th className="px-3 py-2 font-medium">Session</th>

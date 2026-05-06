@@ -9,14 +9,14 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import bindparam, func, text, or_, exists, select, false as sql_false, literal_column
+from sqlalchemy import func, text, or_, exists, select
 
 from memory.api.search.types import SearchFilters
 from memory.common import extract
+from memory.common.access_control import AccessFilter, apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SlackMessage, SourceItem
 from memory.common.db.models.source_item import source_item_people
-from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
 
@@ -41,78 +41,12 @@ _STOPWORDS = frozenset([
 
 
 def apply_access_filter(query, access_filter: AccessFilter | None):
+    """Backwards-compatible alias for :func:`apply_access_filter_to_query`.
+
+    Older code paths in this module call ``apply_access_filter``; new code
+    should use the canonical helper in ``memory.common.access_control``.
     """
-    Apply access control filter to a SQLAlchemy query.
-
-    Args:
-        query: SQLAlchemy query (must have SourceItem joined)
-        access_filter: Access filter from user's memberships, or None for superadmin
-
-    Returns:
-        Modified query with access control filter applied
-
-    Access is granted if ANY of these conditions are true:
-    1. User has admin scope (superadmin) - access_filter will be None
-    2. Person override: user's person is attached to the item via source_item_people
-    3. Public bypass: item's resolved sensitivity is "public"
-    4. Project access: resolved project_id matches a project the user has access to,
-       AND resolved sensitivity is within the user's allowed sensitivities for that role
-
-    Uses source_item_access_view for resolved project_id and sensitivity (query-time inheritance).
-    """
-    if access_filter is None:
-        # Superadmin - no filtering
-        return query
-
-    conditions = []
-
-    # Person override: if user's person is attached to item, grant access
-    if access_filter.person_id is not None:
-        person_override = exists(
-            select(source_item_people.c.source_item_id)
-            .where(source_item_people.c.source_item_id == SourceItem.id)
-            .where(source_item_people.c.person_id == access_filter.person_id)
-        )
-        conditions.append(person_override)
-
-    # Public bypass: items with resolved sensitivity "public" are visible to all authenticated users
-    if access_filter.include_public:
-        # Use the view for resolved sensitivity (handles inheritance)
-        # Join to the view and check resolved_sensitivity
-        public_condition = exists(
-            select(literal_column("1"))
-            .select_from(text("source_item_access_view av"))
-            .where(text("av.id = source_item.id"))
-            .where(text("av.resolved_sensitivity = 'public'"))
-        )
-        conditions.append(public_condition)
-
-    # Project access conditions using resolved values from view
-    for i, condition in enumerate(access_filter.conditions):
-        # Build the condition using the access view for resolved values
-        # This handles inheritance: item -> data source -> class default
-        # Use parameterized queries to prevent SQL injection
-        project_param = bindparam(f"project_id_{i}", value=condition.project_id)
-        sensitivity_params = [
-            bindparam(f"sens_{i}_{j}", value=s)
-            for j, s in enumerate(condition.sensitivities)
-        ]
-        sensitivity_placeholders = ", ".join(f":sens_{i}_{j}" for j in range(len(condition.sensitivities)))
-        project_condition = exists(
-            select(literal_column("1"))
-            .select_from(text("source_item_access_view av"))
-            .where(text("av.id = source_item.id"))
-            .where(text(f"av.resolved_project_id = :project_id_{i}").bindparams(project_param))
-            .where(text(f"av.resolved_sensitivity IN ({sensitivity_placeholders})").bindparams(*sensitivity_params))
-        )
-        conditions.append(project_condition)
-
-    if not conditions:
-        # No project access AND no person override AND no public bypass = match nothing
-        return query.filter(sql_false())
-
-    # Apply OR across all access conditions
-    return query.filter(or_(*conditions))
+    return apply_access_filter_to_query(query, access_filter)
 
 
 def exclude_soft_deleted(query):
