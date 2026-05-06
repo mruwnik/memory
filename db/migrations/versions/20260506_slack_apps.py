@@ -26,11 +26,6 @@ Operational requirements:
   migration aborts loudly. Inserting a placeholder row would silently
   orphan the credentials at runtime (`get_legacy_slack_app` queries by
   the env-var value, which would now mismatch the placeholder client_id).
-* The companion migration `20260506_slack_msg_deleted_at` adds the
-  `slack_messages.deleted_at` column referenced in design doc §3.1/§5.1
-  (split into a sibling migration so the schema-vs-bridge concerns stay
-  separate). This migration does NOT add deleted_at; both are required
-  for the full §3.1 surface.
 * downgrade() is non-faithful in two small ways: (1) credentials deleted
   by the pre-flight dedup are not restored (no row history kept); (2)
   the legacy SlackApp row created by the upgrade is dropped along with

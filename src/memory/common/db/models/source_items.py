@@ -25,7 +25,6 @@ from sqlalchemy import (
     Numeric,
     Text,
     func,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -515,13 +514,6 @@ class SlackMessage(SourceItem):
     # Local file paths for downloaded images
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
-    # Soft-delete timestamp. When non-null, the message is hidden from search
-    # results but the row is retained for audit purposes. Set by
-    # MARK_SLACK_MESSAGE_DELETED in response to Slack `message_deleted` events.
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
     # Relationships (no author relationship - use author_name field)
     channel: Mapped[SlackChannel | None] = relationship("SlackChannel", foreign_keys=[channel_id])
     workspace: Mapped[SlackWorkspace | None] = relationship("SlackWorkspace", foreign_keys=[workspace_id])
@@ -536,14 +528,6 @@ class SlackMessage(SourceItem):
         Index("slack_message_channel_idx", "channel_id"),
         Index("slack_message_author_idx", "author_id"),
         Index("slack_message_thread_idx", "thread_ts"),
-        # Partial index supports the search-side NOT EXISTS lookup that
-        # filters soft-deleted rows; only indexes rows that are actually
-        # deleted (the typical case is non-deleted, so the index stays small).
-        Index(
-            "slack_message_deleted_at_idx",
-            "deleted_at",
-            postgresql_where=text("deleted_at IS NOT NULL"),
-        ),
     )
 
     @property

@@ -972,12 +972,11 @@ def mark_slack_message_deleted(
     message_ts: str,
     slack_app_id: int | None = None,
 ) -> dict[str, Any]:
-    """Soft-delete a Slack message in response to a `message_deleted` event.
+    """Hard-delete a Slack message in response to a `message_deleted` event.
 
-    Stamps ``deleted_at`` so the row is hidden from search results while
-    audit history is preserved (slack-changes.md §3.6, §7 decision 4).
-    ``slack_app_id`` is accepted for parity with other push handlers but
-    isn't used for the lookup — message identity is
+    Removes the SlackMessage row, its associated Chunks, and the underlying
+    Qdrant points. ``slack_app_id`` is accepted for parity with other push
+    handlers but isn't used for the lookup — message identity is
     ``(workspace_id, channel_id, message_ts)``.
     """
     with make_session() as session:
@@ -997,10 +996,8 @@ def mark_slack_message_deleted(
             )
             return {"status": "not_found", "message_ts": message_ts}
 
-        if message.deleted_at is not None:
-            return {"status": "already_deleted", "message_ts": message_ts}
-
-        message.deleted_at = datetime.now(timezone.utc)
+        clear_item_chunks(message, session)
+        session.delete(message)
         session.commit()
         return {"status": "deleted", "message_ts": message_ts}
 

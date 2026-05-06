@@ -3,8 +3,6 @@ Tests for PostgreSQL full-text search (BM25) functionality.
 """
 
 import asyncio
-import uuid
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -117,7 +115,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0.4
 
-        mock_db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
+        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
             mock_item1,
             mock_item2,
         ]
@@ -144,7 +142,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0.5
 
-        mock_db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
+        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
             mock_item1,
             mock_item2,
         ]
@@ -157,7 +155,7 @@ class TestSearchBm25:
     async def test_no_results_returns_empty(self, mock_make_session):
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
-        mock_db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
 
@@ -171,8 +169,8 @@ class TestSearchBm25:
         mock_query = mock_db.query.return_value
 
         # Make the filter chain return empty results
-        # Chain: filter (initial) → filter (soft-delete) → filter (source_ids)
-        mock_query.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+        # Chain: filter (initial) → filter (source_ids)
+        mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
 
@@ -189,8 +187,8 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
-        # Chain: filter (initial) → filter (soft-delete) → filter (observation_types)
-        mock_query.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+        # Chain: filter (initial) → filter (observation_types)
+        mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
 
@@ -204,8 +202,8 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
-        # Chain: filter (initial) → filter (soft-delete)
-        mock_limit = mock_query.filter.return_value.filter.return_value.order_by.return_value.limit
+        # Chain: single filter (initial)
+        mock_limit = mock_query.filter.return_value.order_by.return_value.limit
         mock_limit.return_value.all.return_value = []
 
         await bm25.search_bm25("test", {"text"}, limit=20)
@@ -227,7 +225,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0  # Zero rank, should be excluded
 
-        mock_db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
+        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
             mock_item1,
             mock_item2,
         ]
@@ -243,8 +241,8 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
-        # Chain: filter (initial) → filter (soft-delete)
-        mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+        # Chain: single filter (initial)
+        mock_query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
 
@@ -429,16 +427,16 @@ class TestSearchBm25PersonFilter:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
-        # Chain: filter (initial) → filter (soft-delete) → join → filter (person)
-        mock_after_soft_delete = mock_query.filter.return_value.filter.return_value
-        mock_join = mock_after_soft_delete.join.return_value
+        # Chain: filter (initial) → join → filter (person)
+        mock_after_initial = mock_query.filter.return_value
+        mock_join = mock_after_initial.join.return_value
         mock_join.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
 
         filters = SearchFilters(person_id=42)
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         # Verify join was called (person_id requires source join)
-        assert mock_after_soft_delete.join.called
+        assert mock_after_initial.join.called
 
     @patch("memory.api.search.bm25.make_session")
     async def test_person_id_filter_applied(self, mock_make_session):
@@ -447,9 +445,9 @@ class TestSearchBm25PersonFilter:
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
 
-        # Setup the chain: filter (initial) → filter (soft-delete) → join → filter (person)
-        mock_after_soft_delete = mock_query.filter.return_value.filter.return_value
-        mock_join = mock_after_soft_delete.join.return_value
+        # Setup the chain: filter (initial) → join → filter (person)
+        mock_after_initial = mock_query.filter.return_value
+        mock_join = mock_after_initial.join.return_value
         mock_person_filter = mock_join.filter.return_value
         mock_person_filter.order_by.return_value.limit.return_value.all.return_value = []
 
@@ -849,159 +847,3 @@ def test_apply_access_filter_contributor_cannot_see_higher_sensitivity(
             assert item.id not in returned_ids, "Contributor saw internal item!"
         if item.sensitivity == "confidential":
             assert item.id not in returned_ids, "Contributor saw confidential item!"
-
-
-# ============================================================================
-# Integration tests for exclude_soft_deleted (SlackMessage.deleted_at)
-# These require db_session (--run-slow) as they test real SQL
-# ============================================================================
-
-
-@pytest.fixture
-def slack_workspace_for_delete_test(db_session):
-    """Minimal SlackWorkspace + SlackChannel for soft-delete tests."""
-    from memory.common.db.models.slack import SlackWorkspace, SlackChannel
-
-    workspace = SlackWorkspace(
-        id=f"T{uuid.uuid4().hex[:10]}",
-        name="Test Workspace",
-        collect_messages=True,
-    )
-    db_session.add(workspace)
-    db_session.flush()
-
-    channel = SlackChannel(
-        id=f"C{uuid.uuid4().hex[:10]}",
-        workspace_id=workspace.id,
-        name="general",
-        channel_type="channel",
-    )
-    db_session.add(channel)
-    db_session.commit()
-    return workspace, channel
-
-
-def _make_slack_message(db_session, workspace_id, channel_id, ts_suffix, deleted_at=None):
-    """Create a SlackMessage + Chunk pair with optional deleted_at."""
-    from memory.common.db.models import SlackMessage
-    from memory.common.db.models.source_item import Chunk
-    from tests.conftest import unique_sha256
-
-    msg = SlackMessage(
-        sha256=unique_sha256(f"slack-soft-delete-{ts_suffix}"),
-        modality="message",
-        content=f"hello world soft delete probe {ts_suffix}",
-        message_ts=f"170000000{ts_suffix}.000000",
-        channel_id=channel_id,
-        workspace_id=workspace_id,
-        author_name="alice",
-        deleted_at=deleted_at,
-    )
-    db_session.add(msg)
-    db_session.flush()
-
-    chunk = Chunk(
-        source_id=msg.id,
-        content=f"hello world soft delete probe {ts_suffix}",
-        collection_name="message",
-        embedding_model="text-embedding-3-small",
-    )
-    db_session.add(chunk)
-    db_session.commit()
-    return msg, chunk
-
-
-def test_exclude_soft_deleted_keeps_active_slack_messages(
-    db_session, slack_workspace_for_delete_test
-):
-    """exclude_soft_deleted leaves SlackMessages without deleted_at alone."""
-    from memory.common.db.models.source_item import Chunk
-
-    workspace, channel = slack_workspace_for_delete_test
-    _, chunk = _make_slack_message(db_session, workspace.id, channel.id, "1")
-
-    query = db_session.query(Chunk.id).filter(Chunk.id == chunk.id)
-    filtered = bm25.exclude_soft_deleted(query)
-    results = filtered.all()
-
-    assert len(results) == 1
-    assert results[0].id == chunk.id
-
-
-def test_exclude_soft_deleted_drops_deleted_slack_messages(
-    db_session, slack_workspace_for_delete_test
-):
-    """exclude_soft_deleted excludes SlackMessages whose deleted_at is set."""
-    from memory.common.db.models.source_item import Chunk
-
-    workspace, channel = slack_workspace_for_delete_test
-    _, chunk = _make_slack_message(
-        db_session,
-        workspace.id,
-        channel.id,
-        "2",
-        deleted_at=datetime(2026, 5, 6, 12, 0, 0, tzinfo=timezone.utc),
-    )
-
-    query = db_session.query(Chunk.id).filter(Chunk.id == chunk.id)
-    filtered = bm25.exclude_soft_deleted(query)
-    results = filtered.all()
-
-    assert results == []
-
-
-def test_exclude_soft_deleted_preserves_non_slack_chunks(db_session):
-    """Chunks pointing to non-SlackMessage sources are never filtered, even
-    when their source_id collides with an unrelated row of another type."""
-    from memory.common.db.models import Note
-    from memory.common.db.models.source_item import Chunk
-    from tests.conftest import unique_sha256
-
-    note = Note(
-        content="some unrelated note content",
-        modality="text",
-        sha256=unique_sha256("soft-delete-note"),
-    )
-    db_session.add(note)
-    db_session.flush()
-
-    chunk = Chunk(
-        source_id=note.id,
-        content="some unrelated note content",
-        collection_name="text",
-        embedding_model="text-embedding-3-small",
-    )
-    db_session.add(chunk)
-    db_session.commit()
-
-    query = db_session.query(Chunk.id).filter(Chunk.id == chunk.id)
-    filtered = bm25.exclude_soft_deleted(query)
-    results = filtered.all()
-
-    assert len(results) == 1
-    assert results[0].id == chunk.id
-
-
-def test_exclude_soft_deleted_mixed_returns_only_active(
-    db_session, slack_workspace_for_delete_test
-):
-    """Two SlackMessages — one active, one deleted — yields only the active."""
-    from memory.common.db.models.source_item import Chunk
-
-    workspace, channel = slack_workspace_for_delete_test
-    _, active_chunk = _make_slack_message(db_session, workspace.id, channel.id, "3")
-    _, deleted_chunk = _make_slack_message(
-        db_session,
-        workspace.id,
-        channel.id,
-        "4",
-        deleted_at=datetime(2026, 5, 6, 12, 0, 0, tzinfo=timezone.utc),
-    )
-
-    query = db_session.query(Chunk.id).filter(
-        Chunk.id.in_([active_chunk.id, deleted_chunk.id])
-    )
-    filtered = bm25.exclude_soft_deleted(query)
-    results = {row.id for row in filtered.all()}
-
-    assert results == {active_chunk.id}

@@ -15,7 +15,7 @@ from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import AccessFilter, apply_access_filter_to_query
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, ConfidenceScore, SlackMessage, SourceItem
+from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
 
 logger = logging.getLogger(__name__)
@@ -47,22 +47,6 @@ def apply_access_filter(query, access_filter: AccessFilter | None):
     should use the canonical helper in ``memory.common.access_control``.
     """
     return apply_access_filter_to_query(query, access_filter)
-
-
-def exclude_soft_deleted(query):
-    """Exclude chunks whose source is a soft-deleted record.
-
-    Currently only SlackMessage supports soft-delete (via `deleted_at`).
-    Implemented as a correlated NOT EXISTS so callers don't have to
-    manage extra joins or worry about cardinality.
-    """
-    return query.filter(
-        ~exists(
-            select(SlackMessage.id)
-            .where(SlackMessage.id == Chunk.source_id)
-            .where(SlackMessage.deleted_at.isnot(None))
-        )
-    )
 
 
 def build_tsquery(query: str) -> str:
@@ -125,11 +109,6 @@ async def search_bm25(
             Chunk.search_vector.isnot(None),
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
-
-        # Defense in depth: exclude soft-deleted rows (currently SlackMessage)
-        # at the SQL layer so BM25 can never surface them, even if a chunk
-        # somehow survived in the index.
-        items_query = exclude_soft_deleted(items_query)
 
         # Join with SourceItem if we need size filters, access control, or person filter
         access_filter = filters.get("access_filter")
