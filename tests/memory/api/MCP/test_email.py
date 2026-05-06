@@ -298,18 +298,30 @@ async def test_send_send_failure(
     assert result["error"] == "SMTP connection failed"
 
 
-def test_load_attachment_valid_path(tmp_path):
+def test_load_attachment_valid_path(tmp_path, db_session, regular_user):
     """_load_attachment returns content for a file inside the storage directory."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
+    from memory.common.db.models import SourceItem
 
     valid_dir = tmp_path / "valid"
     valid_dir.mkdir()
     valid_file = valid_dir / "file.txt"
     valid_file.write_text("test content")
 
+    item = SourceItem(
+        sha256=b"x" * 32,
+        filename="valid/file.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="public",
+        size=len(b"test content"),
+    )
+    db_session.add(item)
+    db_session.commit()
+
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment("valid/file.txt")
+        result = _load_attachment("valid/file.txt", regular_user.id)
 
     assert result is not None
     assert result.filename == "file.txt"
@@ -323,7 +335,7 @@ def test_load_attachment_valid_path(tmp_path):
         pytest.param("nonexistent.txt", id="missing_file_returns_none"),
     ],
 )
-def test_load_attachment_invalid_path(path, tmp_path):
+def test_load_attachment_invalid_path(path, tmp_path, regular_user):
     """_load_attachment returns None for paths outside the storage dir or non-existent files."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
@@ -333,6 +345,56 @@ def test_load_attachment_invalid_path(path, tmp_path):
     (valid_dir / "file.txt").write_text("test content")
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment(path)
+        result = _load_attachment(path, regular_user.id)
+
+    assert result is None
+
+
+def test_load_attachment_no_user_id(tmp_path):
+    """_load_attachment returns None when user_id is None (unauthenticated)."""
+    from memory.api.MCP.servers.email import _load_attachment
+    from memory.common import settings
+
+    valid_dir = tmp_path / "valid"
+    valid_dir.mkdir()
+    (valid_dir / "file.txt").write_text("test content")
+
+    with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
+        result = _load_attachment("valid/file.txt", None)
+
+    assert result is None
+
+
+def test_load_attachment_other_users_file_denied(
+    tmp_path, db_session, regular_user, admin_user
+):
+    """_load_attachment refuses to serve files owned by another user.
+
+    Confirms ownership check denies cross-user file exfiltration via the
+    attachment path.
+    """
+    from memory.api.MCP.servers.email import _load_attachment
+    from memory.common import settings
+    from memory.common.db.models import SourceItem
+
+    valid_dir = tmp_path / "valid"
+    valid_dir.mkdir()
+    (valid_dir / "secret.txt").write_text("secret content")
+
+    # SourceItem owned by admin_user with confidential sensitivity
+    item = SourceItem(
+        sha256=b"y" * 32,
+        filename="valid/secret.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="confidential",
+        size=len(b"secret content"),
+        creator_id=admin_user.id,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
+        result = _load_attachment("valid/secret.txt", regular_user.id)
 
     assert result is None

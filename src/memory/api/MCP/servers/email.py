@@ -61,11 +61,15 @@ def _get_user_id(session: DBSession) -> int:
     return user_session.user.id
 
 
-def _load_attachment(path: str, user: User | None) -> EmailAttachmentData | None:
+def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | None:
     """Load an attachment from the file storage directory.
 
     Only allows files within FILE_STORAGE_DIR for security.
     Performs an ownership check to prevent cross-user file exfiltration.
+
+    Takes ``user_id`` rather than a User ORM instance so we don't rely on a
+    caller's session lifetime — lazy-loaded relationships on a detached user
+    would raise ``DetachedInstanceError``.
     """
     try:
         file_path = Path(settings.FILE_STORAGE_DIR) / path
@@ -84,18 +88,22 @@ def _load_attachment(path: str, user: User | None) -> EmailAttachmentData | None
             return None
 
         # Ownership check: require a SourceItem that the requesting user can access
-        if user is None:
+        if user_id is None:
             logger.warning(f"Unauthenticated attachment request for: {path}")
             return None
 
         with make_session() as session:
+            user = session.query(User).filter(User.id == user_id).one_or_none()
+            if user is None:
+                logger.warning(f"User {user_id} not found for attachment: {path}")
+                return None
             item = session.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
             if item is None:
                 logger.warning(f"No SourceItem found for attachment: {relative}")
                 return None
             project_roles = get_user_project_roles(session, user)
             if not user_can_access(user, item, project_roles):
-                logger.warning(f"Access denied to attachment {relative} for user {user.id}")
+                logger.warning(f"Access denied to attachment {relative} for user {user_id}")
                 return None
 
         content = file_path.read_bytes()
@@ -155,8 +163,6 @@ async def send(
 
     with make_session() as session:
         user_id = _get_user_id(session)
-        # Load the full user object needed for attachment ownership checks
-        user = session.query(User).filter(User.id == user_id).one_or_none()
         # Find the email account
         account = get_account_by_address(session, user_id, from_address)
 
@@ -177,7 +183,7 @@ async def send(
     if attachment_paths:
         attachments = []
         for path in attachment_paths:
-            att = _load_attachment(path, user)
+            att = _load_attachment(path, user_id)
             if att:
                 attachments.append(att)
             else:
