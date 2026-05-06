@@ -6,6 +6,7 @@ import pytest
 
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
+    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -27,6 +28,19 @@ def slack_user(db_session):
 
 
 @pytest.fixture
+def slack_app(db_session):
+    """Create a SlackApp row for tests that need credentials."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Test Slack App",
+        setup_state="live",
+    )
+    db_session.add(app)
+    db_session.commit()
+    return app
+
+
+@pytest.fixture
 def slack_workspace(db_session):
     """Create a Slack workspace for testing."""
     workspace = SlackWorkspace(
@@ -40,9 +54,10 @@ def slack_workspace(db_session):
 
 
 @pytest.fixture
-def slack_credentials(db_session, slack_workspace, slack_user):
+def slack_credentials(db_session, slack_app, slack_workspace, slack_user):
     """Create Slack credentials for testing."""
     credentials = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=slack_user.id,
         scopes=["channels:read", "chat:write"],

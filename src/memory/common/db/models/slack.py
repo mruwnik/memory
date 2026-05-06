@@ -2,9 +2,10 @@
 Database models for the Slack integration.
 
 This module provides models for:
+- SlackApp: Slack apps registered at api.slack.com (encrypted secrets, multi-tenant)
 - SlackWorkspace: Workspace metadata (shared across users)
 - SlackChannel: Channels, DMs, group DMs, and MPIMs
-- SlackUserCredentials: Per-user OAuth credentials for workspaces
+- SlackUserCredentials: Per-user OAuth credentials for (app, workspace)
 
 Note: Slack user data is stored in Person.contact_info instead of a separate table.
 """
@@ -18,12 +19,14 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
     String,
+    Table,
     Text,
     UniqueConstraint,
     func,
@@ -36,6 +39,107 @@ from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User
+
+
+slack_app_users = Table(
+    "slack_app_users",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("slack_app_id", BigInteger, ForeignKey("slack_apps.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class SlackApp(Base):
+    """A Slack app registered at api.slack.com.
+
+    One row per Slack app. Multiple Memory users can be authorized to use the
+    same app (each connecting their own workspaces via OAuth). The app's
+    client_secret and signing_secret are stored encrypted; only the
+    created_by_user_id has the right to read or rotate them — authorized
+    users can install workspaces but cannot view or rotate secrets.
+
+    URL routing uses the surrogate id (not client_id), so the URL schema is
+    decoupled from Slack's client_id format.
+    """
+
+    __tablename__ = "slack_apps"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    client_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    signing_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+    setup_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="draft"
+    )
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    authorized_users: Mapped[list[User]] = relationship(
+        "User",
+        secondary=slack_app_users,
+        back_populates="slack_apps",
+    )
+    user_credentials: Mapped[list[SlackUserCredentials]] = relationship(
+        "SlackUserCredentials", back_populates="slack_app", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "setup_state IN ('draft', 'signing_verified', 'live', 'degraded')",
+            name="valid_slack_app_setup_state",
+        ),
+        Index("slack_apps_setup_state_idx", "setup_state"),
+        Index("slack_apps_created_by_idx", "created_by_user_id"),
+    )
+
+    @property
+    def client_secret(self) -> str | None:
+        if self.client_secret_encrypted is None:
+            return None
+        return decrypt_value(self.client_secret_encrypted)
+
+    @client_secret.setter
+    def client_secret(self, value: str | None) -> None:
+        if value is None:
+            self.client_secret_encrypted = None
+        else:
+            self.client_secret_encrypted = encrypt_value(value)
+
+    @property
+    def signing_secret(self) -> str | None:
+        if self.signing_secret_encrypted is None:
+            return None
+        return decrypt_value(self.signing_secret_encrypted)
+
+    @signing_secret.setter
+    def signing_secret(self, value: str | None) -> None:
+        if value is None:
+            self.signing_secret_encrypted = None
+        else:
+            self.signing_secret_encrypted = encrypt_value(value)
+
+    def is_authorized(self, user: User) -> bool:
+        """Owner counts as authorized; explicit authorized_users list extends that."""
+        if self.created_by_user_id is not None and self.created_by_user_id == user.id:
+            return True
+        return user in self.authorized_users
+
+    def is_owner(self, user: User) -> bool:
+        return self.created_by_user_id is not None and self.created_by_user_id == user.id
 
 
 class SlackWorkspace(Base):
@@ -108,6 +212,9 @@ class SlackUserCredentials(Base):
     __tablename__ = "slack_user_credentials"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slack_app_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("slack_apps.id", ondelete="CASCADE"), nullable=False
+    )
     workspace_id: Mapped[str] = mapped_column(
         Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
     )
@@ -136,9 +243,14 @@ class SlackUserCredentials(Base):
     # Relationships
     workspace: Mapped[SlackWorkspace] = relationship("SlackWorkspace", back_populates="user_credentials")
     user: Mapped[User] = relationship("User", back_populates="slack_credentials")
+    slack_app: Mapped[SlackApp] = relationship("SlackApp", back_populates="user_credentials")
 
     __table_args__ = (
-        UniqueConstraint("workspace_id", "user_id", name="unique_slack_credential_per_user"),
+        UniqueConstraint(
+            "slack_app_id", "workspace_id", "user_id",
+            name="unique_slack_credential_per_app_workspace_user",
+        ),
+        Index("slack_credentials_app_idx", "slack_app_id"),
         Index("slack_credentials_workspace_idx", "workspace_id"),
         Index("slack_credentials_user_idx", "user_id"),
     )

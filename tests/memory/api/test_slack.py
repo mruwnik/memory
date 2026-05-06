@@ -7,6 +7,7 @@ import pytest
 
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
+    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -27,6 +28,19 @@ def other_user(db_session):
 
 
 @pytest.fixture
+def slack_app(db_session):
+    """Create a SlackApp row for tests that need credentials."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Test Slack App",
+        setup_state="live",
+    )
+    db_session.add(app)
+    db_session.commit()
+    return app
+
+
+@pytest.fixture
 def slack_workspace(db_session):
     """Create a Slack workspace for testing."""
     workspace = SlackWorkspace(
@@ -41,9 +55,10 @@ def slack_workspace(db_session):
 
 
 @pytest.fixture
-def slack_credentials(db_session, slack_workspace, user):
+def slack_credentials(db_session, slack_app, slack_workspace, user):
     """Create Slack credentials for the test user."""
     credentials = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=user.id,
         scopes=["channels:read", "chat:write"],
@@ -99,7 +114,7 @@ def test_list_workspaces_empty_when_no_credentials(client, db_session, user):
 
 
 def test_list_workspaces_excludes_workspaces_without_credentials(
-    client, db_session, user, other_user
+    client, db_session, user, other_user, slack_app
 ):
     """List workspaces doesn't return workspaces the user doesn't have credentials for."""
     # Create workspace with credentials for other user only
@@ -111,6 +126,7 @@ def test_list_workspaces_excludes_workspaces_without_credentials(
     db_session.flush()
 
     other_creds = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=workspace.id,
         user_id=other_user.id,
     )
@@ -229,6 +245,7 @@ def test_disconnect_workspace_keeps_for_other_users(
     """Disconnect doesn't delete workspace if other users have credentials."""
     # Add credentials for other user
     other_creds = SlackUserCredentials(
+        slack_app_id=slack_credentials.slack_app_id,
         workspace_id=slack_workspace.id,
         user_id=other_user.id,
     )
@@ -439,9 +456,10 @@ def test_oauth_state_expiration(db_session, user):
 # ====== Model tests ======
 
 
-def test_slack_credentials_token_encryption(db_session, user, slack_workspace):
+def test_slack_credentials_token_encryption(db_session, user, slack_app, slack_workspace):
     """Test that tokens are encrypted when stored."""
     credentials = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=user.id,
     )
@@ -459,9 +477,10 @@ def test_slack_credentials_token_encryption(db_session, user, slack_workspace):
     assert credentials.refresh_token == "xoxr-refresh-token"
 
 
-def test_slack_credentials_token_expiration(db_session, user, slack_workspace):
+def test_slack_credentials_token_expiration(db_session, user, slack_app, slack_workspace):
     """Test token expiration check."""
     credentials = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=user.id,
     )
@@ -515,16 +534,18 @@ def test_slack_channel_should_collect_explicit(db_session, slack_workspace):
     assert channel.should_collect is False
 
 
-def test_multi_user_workspace_access(db_session, user, other_user, slack_workspace):
+def test_multi_user_workspace_access(db_session, user, other_user, slack_app, slack_workspace):
     """Test multiple users can have credentials for the same workspace."""
     # Create credentials for both users
     creds1 = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=user.id,
     )
     creds1.access_token = "xoxp-user1-token"
 
     creds2 = SlackUserCredentials(
+        slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,
         user_id=other_user.id,
     )
