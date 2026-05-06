@@ -8,16 +8,20 @@ Multi-user design:
 - Sending messages uses the caller's own credentials
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Literal
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
+import redis
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -25,8 +29,15 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
-from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
-from memory.common.db.connection import get_session
+from memory.common.celery_app import (
+    ADD_SLACK_MESSAGE,
+    MARK_SLACK_MESSAGE_DELETED,
+    SYNC_SLACK_WORKSPACE,
+    UPDATE_SLACK_CHANNEL,
+    UPDATE_SLACK_REACTIONS,
+    app as celery_app,
+)
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackApp,
@@ -987,3 +998,387 @@ def remove_authorized_user(
         db.refresh(app)
 
     return slack_app_to_response(app, user)
+
+
+# ---------------------------------------------------------------------------
+# Events endpoint (slack-changes.md §3.3) — push delivery from Slack
+# ---------------------------------------------------------------------------
+
+# Body cap is well above any realistic Slack event (Slack max is ~3MB but real
+# events are small) and bounds the surface for pre-decrypt malicious traffic.
+SLACK_EVENT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
+SLACK_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60  # 5 min — Slack's documented window
+SLACK_EVENT_REPLAY_TTL_SECONDS = 6 * 60  # 6 min — slightly larger than skew
+
+# Rate limits per slack-changes.md §3.3 step 3-4
+SLACK_EVENT_PER_IP_BURST = 10
+SLACK_EVENT_PER_IP_SUSTAINED = 2  # tokens/sec
+SLACK_EVENT_PER_APP_BURST = 50
+
+UNIFORM_REJECT_BODY = b"invalid request"
+"""All security-failure responses use this identical body (security M5 — no
+oracle: header issues, signature failures, replay hits all look the same to
+the caller)."""
+
+
+def _slack_redis() -> redis.Redis:
+    """Use the same redis broker as the celery worker side."""
+    return redis.from_url(settings.REDIS_URL)
+
+
+def _events_logger() -> logging.Logger:
+    """Dedicated logger for event ingestion — keeps the whitelist discipline
+    (security S9): only ``slack_app_id``, ``event_type``, ``hmac_ok``,
+    ``ts_skew_seconds``, ``body_sha256`` may appear."""
+    return logging.getLogger("memory.api.slack.events")
+
+
+def _uniform_401() -> Response:
+    return Response(
+        content=UNIFORM_REJECT_BODY,
+        status_code=401,
+        media_type="application/octet-stream",
+    )
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for per-IP rate limiting.
+
+    Trusts ``X-Forwarded-For`` only when explicitly enabled in settings —
+    spoofing this header is trivial otherwise. Falls back to the direct
+    peer address.
+    """
+    if getattr(settings, "TRUST_PROXY_HEADERS", False):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # Leftmost is the original client per RFC 7239 convention.
+            return forwarded.split(",")[0].strip()
+    if request.client is None:
+        return "unknown"
+    return request.client.host
+
+
+def _check_token_bucket(
+    client: redis.Redis, key: str, capacity: int, refill_per_sec: float
+) -> bool:
+    """Atomic-ish token-bucket check via Redis.
+
+    Returns True if a token was consumed (request allowed). Uses a
+    millisecond-resolution clock and lazy refill; non-strict (a small
+    burst above ``capacity`` is possible under contention but bounded).
+    Acceptable for DoS mitigation — we don't need exact fairness.
+    """
+    now_ms = int(time.time() * 1000)
+    pipe = client.pipeline()
+    pipe.hgetall(key)
+    pipe.expire(key, 120)
+    raw, _ = pipe.execute()
+    state = {k.decode(): v.decode() for k, v in raw.items()} if raw else {}
+
+    last_ms = int(state.get("ts", now_ms))
+    tokens = float(state.get("tokens", capacity))
+    elapsed = max(now_ms - last_ms, 0) / 1000.0
+    tokens = min(capacity, tokens + elapsed * refill_per_sec)
+
+    if tokens < 1.0:
+        client.hset(key, mapping={"tokens": f"{tokens:.4f}", "ts": str(now_ms)})
+        return False
+    tokens -= 1.0
+    client.hset(key, mapping={"tokens": f"{tokens:.4f}", "ts": str(now_ms)})
+    return True
+
+
+def _verify_slack_signature(
+    signing_secret: str, request_ts: str, body: bytes, signature_header: str
+) -> bool:
+    """HMAC-SHA256 verification of the Slack request envelope.
+
+    Per Slack's docs the basestring is ``v0:{timestamp}:{body}``. The
+    signature header is ``v0=<hex>``. ``hmac.compare_digest`` is used to
+    avoid timing leaks; the ``v0=`` prefix is verified explicitly.
+    """
+    if not signature_header.startswith("v0="):
+        return False
+    expected_hex = signature_header[len("v0="):]
+    basestring = f"v0:{request_ts}:".encode() + body
+    digest = hmac.new(
+        signing_secret.encode("utf-8"),
+        basestring,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(digest, expected_hex)
+
+
+def _bump_event_counter(client: redis.Redis, slack_app_id: int) -> None:
+    """Bump the rolling-24h counter the watchdog reads.
+
+    Implementation: a single counter with a 24h TTL — refreshed on each
+    write. So a fully idle app's counter expires after 24h, which is the
+    exact signal slack_token_health_check looks for.
+    """
+    key = f"slack_events_count:{slack_app_id}"
+    pipe = client.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, 24 * 3600)
+    pipe.execute()
+
+
+def _wizard_nonce_redis_key(slack_app_id: int) -> str:
+    """Wizard nonce is stored as a hash keyed on slack_app_id, with the
+    initiating user_id as the value. We accept any active nonce for the
+    app — user-binding lives in the OAuth state for /slack/callback,
+    not here."""
+    return f"slack_wizard_nonce:{slack_app_id}"
+
+
+def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
+    """Look up the SlackApp; return None on miss so callers fail closed."""
+    if slack_app_id <= 0:
+        return None
+    return db.get(SlackApp, slack_app_id)
+
+
+def _dispatch_event_callback(
+    body: dict, slack_app_id: int
+) -> dict[str, str]:
+    """Branch on event.type and enqueue the right celery task.
+
+    Returns a small status dict for logging — Slack only needs the 200.
+    """
+    event = body.get("event") or {}
+    event_type = event.get("type") or "unknown"
+    subtype = event.get("subtype")
+    workspace_id = body.get("team_id")
+    channel_id = event.get("channel")
+
+    if event_type == "message":
+        if subtype == "message_deleted":
+            celery_app.send_task(
+                MARK_SLACK_MESSAGE_DELETED,
+                kwargs={
+                    "workspace_id": workspace_id,
+                    "channel_id": channel_id,
+                    "message_ts": (event.get("deleted_ts") or event.get("ts")),
+                    "slack_app_id": slack_app_id,
+                },
+            )
+            return {"dispatch": "mark_deleted"}
+        # Both "message" and "message_changed" go through ADD_SLACK_MESSAGE,
+        # which carries the merge logic from B-pre-1/B-pre-2.
+        message = event if subtype != "message_changed" else event.get("message", {})
+        celery_app.send_task(
+            ADD_SLACK_MESSAGE,
+            kwargs={
+                "workspace_id": workspace_id,
+                "channel_id": channel_id,
+                "message_ts": message.get("ts"),
+                "author_id": message.get("user"),
+                "content": message.get("text", ""),
+                "thread_ts": message.get("thread_ts"),
+                "reply_count": message.get("reply_count"),
+                "subtype": subtype,
+                "edited_ts": message.get("edited", {}).get("ts"),
+                "reactions": message.get("reactions"),
+                "files": message.get("files"),
+                "slack_app_id": slack_app_id,
+            },
+        )
+        return {"dispatch": "add_message"}
+
+    if event_type in ("reaction_added", "reaction_removed"):
+        item = event.get("item") or {}
+        celery_app.send_task(
+            UPDATE_SLACK_REACTIONS,
+            kwargs={
+                "workspace_id": workspace_id,
+                "channel_id": item.get("channel"),
+                "message_ts": item.get("ts"),
+                "reactions": event.get("reactions"),
+                "slack_app_id": slack_app_id,
+            },
+        )
+        return {"dispatch": "update_reactions"}
+
+    if event_type.startswith("channel_"):
+        celery_app.send_task(
+            UPDATE_SLACK_CHANNEL,
+            kwargs={
+                "workspace_id": workspace_id,
+                "channel_id": (event.get("channel") or {}).get("id")
+                if isinstance(event.get("channel"), dict)
+                else channel_id,
+                "channel_payload": event.get("channel") or {},
+                "slack_app_id": slack_app_id,
+            },
+        )
+        return {"dispatch": "update_channel"}
+
+    return {"dispatch": "ignored"}
+
+
+def _check_test_message_token(
+    client: redis.Redis, slack_app_id: int, body: dict
+) -> None:
+    """Wizard step-6 hook: if there's an active test-message token in Redis
+    AND a `message` event for this app contains it, advance the SlackApp
+    state to ``live`` (slack-changes.md §3.4 row 6).
+
+    Idempotent: removes the token on match so duplicate events don't keep
+    re-flipping state. No-ops when there's no token waiting.
+    """
+    event = body.get("event") or {}
+    if event.get("type") != "message":
+        return
+    text = event.get("text") or ""
+    if not text:
+        return
+    key = f"slack_wizard_test_token:{slack_app_id}"
+    raw = client.get(key)
+    if raw is None:
+        return
+    token = raw.decode() if isinstance(raw, bytes) else str(raw)
+    if token not in text:
+        return
+    # Atomically claim the match so a duplicate event doesn't trigger twice.
+    if client.delete(key) == 0:
+        return
+    with make_session() as session:
+        app = session.get(SlackApp, slack_app_id)
+        if app is None:
+            return
+        app.setup_state = "live"
+        session.commit()
+
+
+@router.post("/events/{slack_app_id}")
+async def slack_events(
+    slack_app_id: int,
+    request: Request,
+    db: Session = Depends(get_session),
+) -> Response:
+    """Slack push events endpoint (slack-changes.md §3.3).
+
+    Layered defense:
+      1. Pre-decrypt cheap rejects — body cap, ts skew, per-IP rate limit,
+         per-app rate limit. None of these touch the SlackApp's signing
+         secret, so the OS scheduler sheds DoS traffic before crypto.
+      2. Crypto layer — HMAC verify + replay-cache.
+      3. Dispatch — url_verification or event_callback fan-out to celery.
+    """
+    log = _events_logger()
+    redis_client = _slack_redis()
+
+    # 1. Body size cap (must read body to count, but we cap the read).
+    body = await request.body()
+    if len(body) > SLACK_EVENT_MAX_BODY_BYTES:
+        return _uniform_401()
+
+    # 2. Timestamp skew check (header-only, no body parse).
+    ts_header = request.headers.get("x-slack-request-timestamp", "")
+    try:
+        ts_int = int(ts_header)
+    except (TypeError, ValueError):
+        return _uniform_401()
+    skew = abs(int(time.time()) - ts_int)
+    if skew > SLACK_EVENT_MAX_TS_SKEW_SECONDS:
+        return _uniform_401()
+
+    # 3. Per-IP token bucket.
+    ip_ok = _check_token_bucket(
+        redis_client,
+        f"slack_event_ip_bucket:{_client_ip(request)}",
+        SLACK_EVENT_PER_IP_BURST,
+        SLACK_EVENT_PER_IP_SUSTAINED,
+    )
+    if not ip_ok:
+        return _uniform_401()
+
+    # 4. Per-app token bucket (well above Slack's normal delivery rate).
+    app_ok = _check_token_bucket(
+        redis_client,
+        f"slack_event_app_bucket:{slack_app_id}",
+        SLACK_EVENT_PER_APP_BURST,
+        SLACK_EVENT_PER_APP_BURST,
+    )
+    if not app_ok:
+        return _uniform_401()
+
+    # 5. SlackApp lookup + signing-secret decrypt + HMAC verify.
+    app = _slack_app_for_event(db, slack_app_id)
+    if app is None or not app.is_active:
+        return _uniform_401()
+    signing_secret = app.signing_secret  # decrypts under the hood
+    if not signing_secret:
+        return _uniform_401()
+    sig_header = request.headers.get("x-slack-signature", "")
+    if not _verify_slack_signature(signing_secret, ts_header, body, sig_header):
+        body_sha = hashlib.sha256(body).hexdigest()[:16]
+        log.info(
+            "slack event rejected",
+            extra={
+                "slack_app_id": slack_app_id,
+                "hmac_ok": False,
+                "ts_skew_seconds": skew,
+                "body_sha256": body_sha,
+            },
+        )
+        return _uniform_401()
+
+    # 6. Replay protection via SETNX on the body hash.
+    body_sha = hashlib.sha256(body).hexdigest()
+    replay_key = f"slack_event_seen:{body_sha}"
+    if not redis_client.set(
+        replay_key, "1", nx=True, ex=SLACK_EVENT_REPLAY_TTL_SECONDS
+    ):
+        # Slack expects 200 on duplicates so its retry loop stops.
+        return PlainTextResponse(content="", status_code=200)
+
+    _bump_event_counter(redis_client, slack_app_id)
+
+    # 7. Parse and dispatch.
+    try:
+        envelope = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _uniform_401()
+
+    envelope_type = envelope.get("type")
+
+    if envelope_type == "url_verification":
+        # Wizard nonce binding (slack-changes.md §3.4 step 5b, security H1).
+        nonce_qs = request.query_params.get("wizard_nonce")
+        if not nonce_qs:
+            return _uniform_401()
+        stored = redis_client.get(_wizard_nonce_redis_key(slack_app_id))
+        if stored is None:
+            return _uniform_401()
+        stored_nonce = stored.decode() if isinstance(stored, bytes) else str(stored)
+        if not hmac.compare_digest(stored_nonce, nonce_qs):
+            return _uniform_401()
+
+        # Advance SlackApp.setup_state from 'draft' → 'signing_verified'.
+        # Failed verification doesn't get here; nonce mismatch above bails.
+        if app.setup_state == "draft":
+            app.setup_state = "signing_verified"
+            db.commit()
+
+        challenge = envelope.get("challenge", "")
+        return PlainTextResponse(content=challenge, status_code=200)
+
+    if envelope_type == "event_callback":
+        log.info(
+            "slack event received",
+            extra={
+                "slack_app_id": slack_app_id,
+                "event_type": (envelope.get("event") or {}).get("type"),
+                "hmac_ok": True,
+                "ts_skew_seconds": skew,
+                "body_sha256": body_sha[:16],
+            },
+        )
+        # Test-message wizard hook (step 6).
+        _check_test_message_token(redis_client, slack_app_id, envelope)
+        _dispatch_event_callback(envelope, slack_app_id)
+        return PlainTextResponse(content="", status_code=200)
+
+    # Unknown envelope type — accept (Slack expects 200) but don't dispatch.
+    return PlainTextResponse(content="", status_code=200)
