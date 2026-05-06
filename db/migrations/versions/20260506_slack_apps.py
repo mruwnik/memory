@@ -105,18 +105,43 @@ def upgrade() -> None:
         )
         client_id_value = legacy_client_id or "legacy-env-app"
 
+        # ON CONFLICT here exists to make the migration idempotent.
+        # In practice the row should never pre-exist (this is the same
+        # transaction that creates the table), but if a future redeploy
+        # ever re-runs the legacy backfill against a wizard-created row,
+        # we MUST overwrite the squatting-relevant fields:
+        #   * created_by_user_id → NULL — env-var deployment has no owner;
+        #     leaving an attacker-set value here would let them later read
+        #     and rotate the migrated secret via /slack/apps once the
+        #     wizard CRUD endpoints ship (slack-changes.md §4 S4).
+        #   * client_secret_encrypted → env-var truth (only if we actually
+        #     have one; else keep the existing row's value via COALESCE
+        #     so we don't null out a legitimately wizard-set secret).
+        #   * setup_state → 'live' — env-var deployments are by
+        #     definition past wizard verification.
+        #   * is_active → true — re-enables a row a previous operator may
+        #     have manually deactivated.
+        # See slack-changes.md §3.1 squatting mitigation; CWE-639.
         result = connection.execute(
             sa.text(
                 """
                 INSERT INTO slack_apps (
                     client_id, name, client_secret_encrypted,
-                    setup_state, is_active
+                    setup_state, is_active, created_by_user_id
                 )
                 VALUES (
-                    :client_id, :name, :secret, 'live', true
+                    :client_id, :name, :secret, 'live', true, NULL
                 )
                 ON CONFLICT (client_id) DO UPDATE
-                    SET updated_at = now()
+                    SET created_by_user_id = NULL,
+                        client_secret_encrypted = COALESCE(
+                            EXCLUDED.client_secret_encrypted,
+                            slack_apps.client_secret_encrypted
+                        ),
+                        name = EXCLUDED.name,
+                        setup_state = 'live',
+                        is_active = true,
+                        updated_at = now()
                 RETURNING id
                 """
             ),

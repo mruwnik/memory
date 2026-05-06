@@ -253,3 +253,159 @@ def test_slack_app_user_relationship_cascade_on_user_delete(db_session):
     refreshed = db_session.get(SlackApp, app_id)
     assert refreshed is not None
     assert refreshed.authorized_users == []
+
+
+# ---------------------------------------------------------------------------
+# Migration regression: ON CONFLICT must strip squatter ownership
+# ---------------------------------------------------------------------------
+
+
+# This SQL mirrors the upgrade() logic in
+# db/migrations/versions/20260506_slack_apps.py. Tested separately so we
+# can exercise the conflict path without re-running the full alembic
+# migration (which requires a fresh DB).
+LEGACY_BACKFILL_SQL = """
+INSERT INTO slack_apps (
+    client_id, name, client_secret_encrypted,
+    setup_state, is_active, created_by_user_id
+)
+VALUES (
+    :client_id, :name, :secret, 'live', true, NULL
+)
+ON CONFLICT (client_id) DO UPDATE
+    SET created_by_user_id = NULL,
+        client_secret_encrypted = COALESCE(
+            EXCLUDED.client_secret_encrypted,
+            slack_apps.client_secret_encrypted
+        ),
+        name = EXCLUDED.name,
+        setup_state = 'live',
+        is_active = true,
+        updated_at = now()
+RETURNING id
+"""
+
+
+def test_legacy_backfill_strips_squatter_ownership(db_session):
+    """If a draft SlackApp was claimed by an attacker before the legacy
+    env-var migration runs, the migration MUST strip ownership so the
+    attacker doesn't end up owning the migrated production credentials.
+
+    Regression for slack-changes.md §3.1 squatting + CWE-639.
+    """
+    from sqlalchemy import text
+
+    attacker = HumanUser(
+        email="attacker@example.com",
+        name="Attacker",
+        password_hash="x",
+    )
+    db_session.add(attacker)
+    db_session.commit()
+
+    squatted = SlackApp(
+        client_id="prod.client.id",
+        name="Squatter App",
+        setup_state="draft",
+        created_by_user_id=attacker.id,
+    )
+    squatted.client_secret = "attacker-supplied-junk"
+    db_session.add(squatted)
+    db_session.commit()
+    squatted_id = squatted.id
+    squatter_secret_blob = squatted.client_secret_encrypted
+
+    # Simulate the migration running with a real env-var-supplied secret.
+    from memory.common.db.models.secrets import encrypt_value
+
+    real_secret_blob = encrypt_value("real-env-var-secret")
+
+    result = db_session.execute(
+        text(LEGACY_BACKFILL_SQL),
+        {
+            "client_id": "prod.client.id",
+            "name": "Default (env-var migration)",
+            "secret": real_secret_blob,
+        },
+    )
+    resolved_id = result.scalar_one()
+    db_session.commit()
+
+    # Same row was reused (id matches; we did not create a new row).
+    assert resolved_id == squatted_id
+
+    db_session.expire_all()
+    refreshed = db_session.get(SlackApp, squatted_id)
+    assert refreshed is not None
+    # Squatter's ownership stripped.
+    assert refreshed.created_by_user_id is None
+    # Squatter's secret blob replaced with the env-var truth.
+    assert refreshed.client_secret_encrypted == real_secret_blob
+    assert refreshed.client_secret_encrypted != squatter_secret_blob
+    # Setup state forced to 'live' — env-var deployment is past verification.
+    assert refreshed.setup_state == "live"
+    assert refreshed.is_active is True
+    # Name overwritten with migration's canonical name.
+    assert refreshed.name == "Default (env-var migration)"
+
+
+def test_legacy_backfill_preserves_existing_secret_when_env_unset(db_session):
+    """If the env-var SLACK_CLIENT_SECRET is NOT set, the migration passes
+    NULL for `secret`. The COALESCE guard must keep whatever secret the
+    pre-existing row had — we don't want to null out a legitimately
+    wizard-set secret just because someone deploys without the env var.
+    """
+    from sqlalchemy import text
+
+    legitimate = SlackApp(
+        client_id="prod.client.id",
+        name="Wizard-created App",
+        setup_state="live",
+    )
+    legitimate.client_secret = "wizard-set-secret"
+    db_session.add(legitimate)
+    db_session.commit()
+    original_blob = legitimate.client_secret_encrypted
+
+    # Migration without env-var secret (None passed for `secret`).
+    db_session.execute(
+        text(LEGACY_BACKFILL_SQL),
+        {
+            "client_id": "prod.client.id",
+            "name": "Default (env-var migration)",
+            "secret": None,
+        },
+    )
+    db_session.commit()
+
+    db_session.expire_all()
+    refreshed = db_session.get(SlackApp, legitimate.id)
+    assert refreshed is not None
+    # Existing secret preserved (COALESCE kept it).
+    assert refreshed.client_secret_encrypted == original_blob
+    # But ownership still stripped (the squatter-protection invariant).
+    assert refreshed.created_by_user_id is None
+
+
+def test_legacy_backfill_creates_new_row_when_no_conflict(db_session):
+    """No pre-existing row → INSERT path. Sanity check that the rewritten
+    statement still creates a fresh row and returns its id."""
+    from sqlalchemy import text
+
+    result = db_session.execute(
+        text(LEGACY_BACKFILL_SQL),
+        {
+            "client_id": "first.time.client.id",
+            "name": "Default (env-var migration)",
+            "secret": None,
+        },
+    )
+    new_id = result.scalar_one()
+    db_session.commit()
+
+    fresh = db_session.get(SlackApp, new_id)
+    assert fresh is not None
+    assert fresh.client_id == "first.time.client.id"
+    assert fresh.created_by_user_id is None
+    assert fresh.setup_state == "live"
+    assert fresh.is_active is True
