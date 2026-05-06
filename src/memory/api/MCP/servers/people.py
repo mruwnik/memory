@@ -90,6 +90,14 @@ def require_project_membership(user: Any, project_id: int) -> None:
     ``PermissionError`` otherwise.  Centralised so ``tidbit_add`` and
     ``tidbit_update`` (and any future caller) can't drift on what counts as
     "may set project_id".
+
+    Note: this checks *membership only*, not role.  Any project member
+    (contributor / manager / admin) may add or update a tidbit at any
+    sensitivity — the sensitivity-vs-role matrix is enforced on read
+    (see :func:`memory.common.access_control.user_can_access`), not on
+    write.  If we ever want write-side enforcement (e.g. only managers
+    may attach ``confidential`` tidbits), accept a ``min_role`` argument
+    here and gate ``tidbit_add`` / ``tidbit_update`` per sensitivity.
     """
     if user and has_admin_scope(user):
         return
