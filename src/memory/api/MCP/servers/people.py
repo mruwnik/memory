@@ -83,7 +83,7 @@ def _tidbit_to_dict(tidbit: PersonTidbit) -> dict[str, Any]:
     }
 
 
-def _require_project_membership(user: Any, project_id: int) -> None:
+def require_project_membership(user: Any, project_id: int) -> None:
     """Enforce that the caller may write to ``project_id``.
 
     Admins can assign any project; regular users must be a member.  Raises
@@ -979,7 +979,7 @@ async def tidbit_add(
     creator_id = user.id if user else None
 
     if project_id is not None:
-        _require_project_membership(user, project_id)
+        require_project_membership(user, project_id)
 
     task = celery_app.send_task(
         SYNC_PERSON_TIDBIT,
@@ -1046,7 +1046,7 @@ async def tidbit_update(
         if tags is not None:
             tidbit.tags = list(tags)
         if project_id is not None:
-            _require_project_membership(user, project_id)
+            require_project_membership(user, project_id)
             tidbit.project_id = project_id
         if sensitivity is not None:
             tidbit.sensitivity = sensitivity

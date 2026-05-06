@@ -86,6 +86,8 @@ def test_user_owns_session():
     "/leading-slash",
     "trailing/",
     "",
+    "%252e%252e/other-session",
+    "%25252e%25252e/other-session",
 ])
 def test_validate_differ_subpath_rejects_traversal(bad_path):
     with pytest.raises(HTTPException) as exc_info:

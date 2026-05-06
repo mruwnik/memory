@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
-    _resolve_session_scopes,
+    resolve_session_scopes,
     make_token,
 )
 from memory.common.db.models.users import (
@@ -342,10 +342,10 @@ async def test_verify_token_one_time_key_fails_on_second_use(db_session):
     assert result2 is None
 
 
-# --- _resolve_session_scopes tests ---
+# --- resolve_session_scopes tests ---
 
 
-def test_resolve_session_scopes_uses_oauth_state_when_present(db_session):
+def testresolve_session_scopes_uses_oauth_state_when_present(db_session):
     """When the session has an OAuthState, return its client_id and scopes."""
     user = create_test_user(db_session, scopes=["organizer", "github"])
 
@@ -369,7 +369,7 @@ def test_resolve_session_scopes_uses_oauth_state_when_present(db_session):
     db_session.add(session)
     db_session.commit()
 
-    client_id, scopes = _resolve_session_scopes(session)
+    client_id, scopes = resolve_session_scopes(session)
 
     assert client_id == "my-mcp-client"
     assert scopes == ["read"]
@@ -378,7 +378,7 @@ def test_resolve_session_scopes_uses_oauth_state_when_present(db_session):
     assert "github" not in scopes
 
 
-def test_resolve_session_scopes_falls_back_to_user_scopes_for_frontend(db_session):
+def testresolve_session_scopes_falls_back_to_user_scopes_for_frontend(db_session):
     """Sessions without OAuthState fall back to client_id='frontend' + user scopes."""
     user = create_test_user(db_session, scopes=["organizer", "github"])
 
@@ -390,7 +390,7 @@ def test_resolve_session_scopes_falls_back_to_user_scopes_for_frontend(db_sessio
     db_session.add(session)
     db_session.commit()
 
-    client_id, scopes = _resolve_session_scopes(session)
+    client_id, scopes = resolve_session_scopes(session)
 
     assert client_id == "frontend"
     assert sorted(scopes) == ["github", "organizer"]
