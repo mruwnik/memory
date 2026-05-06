@@ -67,8 +67,16 @@ def get_channel_type(channel: abc.Messageable) -> str:
     return getattr(getattr(channel, "type", None), "name", "unknown")
 
 
-def ensure_server(session: DBSession, guild: Guild) -> DiscordServer:
-    """Ensure a Discord server record exists."""
+def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -> DiscordServer:
+    """Ensure a Discord server record exists.
+
+    Args:
+        session: Database session.
+        guild: Discord Guild object.
+        bot_id: ID of the bot that is registering this server.  Stored on
+            first creation so that the API can scope visibility to the
+            servers each user's bots are in.
+    """
     server = session.get(DiscordServer, guild.id)
     if server is None:
         server = DiscordServer(
@@ -76,6 +84,7 @@ def ensure_server(session: DBSession, guild: Guild) -> DiscordServer:
             name=guild.name or f"Server {guild.id}",
             description=getattr(guild, "description", None),
             member_count=getattr(guild, "member_count", None),
+            bot_id=bot_id,
         )
         session.add(server)
         session.flush()
@@ -88,6 +97,9 @@ def ensure_server(session: DBSession, guild: Guild) -> DiscordServer:
         member_count = getattr(guild, "member_count", None)
         if member_count is not None:
             server.member_count = member_count
+        # Back-fill bot_id if not yet set
+        if server.bot_id is None and bot_id is not None:
+            server.bot_id = bot_id
     return server
 
 
@@ -192,7 +204,7 @@ class MessageCollector(commands.Bot):
 
         with make_session() as session:
             for guild in self.guilds:
-                ensure_server(session, guild)
+                ensure_server(session, guild, bot_id=self.bot_info.id)
                 server_count += 1
 
                 for channel in guild.channels:

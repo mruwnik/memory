@@ -384,3 +384,37 @@ def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_sessio
     assert response.status_code == 200
     data = response.json()
     assert set(data["scopes"]) == {"read", "observe", "discord", "github"}
+
+
+def test_create_api_key_scope_escalation_blocked(regular_client: TestClient, user, db_session):
+    """Regular user cannot create an API key with admin (*) scope they don't have."""
+    response = regular_client.post(
+        f"/users/{user.id}/api-keys",
+        json={"name": "Escalated Key", "scopes": ["*"]},
+    )
+
+    assert response.status_code == 403
+    assert "cannot grant" in response.json()["detail"].lower() or "scope" in response.json()["detail"].lower()
+
+
+def test_create_api_key_invalid_scope_rejected(client: TestClient, admin_user, db_session):
+    """API key creation rejects unknown scope strings."""
+    response = client.post(
+        f"/users/{admin_user.id}/api-keys",
+        json={"name": "Bad Scope Key", "scopes": ["totally_fake_scope"]},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid scopes" in response.json()["detail"]
+
+
+def test_create_api_key_admin_can_grant_full_scope(client: TestClient, admin_user, db_session):
+    """Admin can create a key with full (*) scope."""
+    response = client.post(
+        f"/users/{admin_user.id}/api-keys",
+        json={"name": "Admin Full Scope Key", "scopes": ["*"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scopes"] == ["*"]

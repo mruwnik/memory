@@ -23,7 +23,7 @@ from memory.api.MCP.access import (
     get_project_roles_by_user_id,
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.common.access_control import AccessFilter, user_can_access
+from memory.common.access_control import AccessFilter, has_admin_scope, user_can_access
 from memory.common.scopes import (
     SCOPE_OBSERVE,
     SCOPE_OBSERVE_WRITE,
@@ -460,6 +460,27 @@ def fetch_file(filename: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
+    # Ownership check: look up the SourceItem that owns this file and verify access.
+    # Without this, any SCOPE_READ user could read any file in FILE_STORAGE_DIR.
+    try:
+        relative = path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+    except ValueError:
+        raise FileNotFoundError(f"File not found: {filename}")
+
+    user = get_mcp_current_user()
+    if user is None:
+        raise PermissionError(f"Access denied: {filename}")
+
+    with make_session() as session:
+        item = session.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
+        if item is None:
+            raise FileNotFoundError(f"File not found: {filename}")
+
+        if not has_admin_scope(user):
+            project_roles = get_project_roles_by_user_id(user.id, session) if user.id else {}
+            if not user_can_access(user, item, project_roles):  # type: ignore[arg-type]
+                raise PermissionError(f"Access denied: {filename}")
+
     mime_type = extract.get_mime_type(path)
 
     # Text files: return raw content without chunking to preserve formatting
@@ -630,6 +651,10 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
 
     # Build OR conditions for access
     or_conditions = []
+
+    # Creator override: users always see items they created, regardless of project
+    if access_filter.creator_id is not None:
+        or_conditions.append(SourceItem.creator_id == access_filter.creator_id)
 
     # Public items are visible to all authenticated users
     if access_filter.include_public:

@@ -179,6 +179,20 @@ def fetch_channels(
     return {"channels": formatted, "count": len(formatted)}
 
 
-def fetch_servers(session: DBSession) -> list[DiscordServer]:
-    """Fetch all Discord servers ordered by name."""
-    return session.query(DiscordServer).order_by(DiscordServer.name).all()
+def fetch_servers(session: DBSession, user_id: int | None = None) -> list[DiscordServer]:
+    """Fetch Discord servers, optionally scoped to a user's bots.
+
+    Args:
+        session: Database session.
+        user_id: When provided, only return servers whose ``bot_id`` belongs
+            to a bot that this user is authorized for.  Servers with no
+            ``bot_id`` set (legacy rows or orphaned after bot deletion) are
+            excluded from per-user listings — they are admin-only.
+    """
+    query = session.query(DiscordServer)
+    if user_id is not None:
+        user_bot_ids = [bot.id for bot in get_user_bots(session, user_id)]
+        if not user_bot_ids:
+            return []
+        query = query.filter(DiscordServer.bot_id.in_(user_bot_ids))
+    return query.order_by(DiscordServer.name).all()

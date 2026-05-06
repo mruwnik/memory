@@ -18,7 +18,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from memory.common import extract, paths, settings
 from memory.common.access_control import get_user_project_roles, has_admin_scope, user_can_access
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import SourceItem, User
 from memory.common.db.models.source_items import Report
 from memory.api.auth import (
     AuthenticationMiddleware,
@@ -214,6 +214,29 @@ def validate_path_within_directory(
         raise HTTPException(status_code=403, detail="Access denied")
 
 
+# Characters that must never appear in a CSP source value.
+# ';' splits CSP directives — injecting "evil.com; script-src *" would add a
+# new directive that overrides the whole policy.  '\r'/'\n'/'\0' can split or
+# terminate HTTP header values entirely.  Space separates source expressions
+# within a directive and must also be rejected in individual values.
+_CSP_FORBIDDEN_CHARS = frozenset({';', '\r', '\n', '\0', ' '})
+
+
+def sanitize_csp_source_list(sources: list[str]) -> list[str]:
+    """Return sources with any CSP-injection-unsafe entries removed.
+
+    Silently drops values rather than raising so that stale/bad DB rows do not
+    break report serving entirely.  Bad values are logged as warnings.
+    """
+    clean = []
+    for src in sources:
+        if any(ch in src for ch in _CSP_FORBIDDEN_CHARS):
+            logger.warning("Dropped unsafe CSP source value: %r", src)
+        else:
+            clean.append(src)
+    return clean
+
+
 @app.get("/ui{full_path:path}")
 async def serve_react_app(full_path: str):
     full_path = full_path.lstrip("/")
@@ -269,10 +292,13 @@ async def serve_report(
     if mime_type in ("text/html", "application/xhtml+xml"):
         # Check if report allows scripts (for system-generated interactive reports)
         if report.allow_scripts:
-            # Build connect-src directive with allowed external URLs
+            # Build connect-src directive with allowed external URLs.
+            # Sanitize to prevent CSP directive injection via stored values.
             connect_sources = ["'self'"]
             if report.allowed_connect_urls:
-                connect_sources.extend(report.allowed_connect_urls)
+                connect_sources.extend(
+                    sanitize_csp_source_list(report.allowed_connect_urls)
+                )
             connect_src = " ".join(connect_sources)
 
             # Relaxed CSP for trusted system-generated reports with JavaScript
@@ -295,11 +321,36 @@ async def serve_report(
 
 
 @app.get("/files/{path:path}")
-async def serve_file(path: str, download: bool = False):
+async def serve_file(
+    path: str,
+    download: bool = False,
+    user: User = Depends(get_current_user),
+    db=Depends(get_session),
+):
+    """Serve a stored file with per-item access control.
+
+    Mirrors the access-control model of serve_report: the file must have a
+    corresponding SourceItem DB record and the requesting user must pass
+    user_can_access().
+    """
     file_path = validate_path_within_directory(settings.FILE_STORAGE_DIR, path)
 
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+
+    # Resolve the relative path used as SourceItem.filename in the DB.
+    try:
+        relative = file_path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    item = db.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
+    if not user_can_access(user, item, project_roles):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     mime_type, _ = mimetypes.guess_type(str(file_path))
     if mime_type is None:

@@ -16,6 +16,7 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
+from memory.common.access_control import has_admin_scope
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
@@ -51,9 +52,11 @@ WHITELIST = {
 }
 
 # Claude WebSocket session path pattern - more specific than prefix matching
-# Session IDs are format "u{user_id}-{hex}" so paths look like /claude/u123-abc...
-# Note: Uses case-insensitive hex match to handle any UUID generation method
-_CLAUDE_SESSION_PATTERN = re.compile(r"^/claude/u\d+-[a-fA-F0-9]+", re.IGNORECASE)
+# Session IDs have formats:
+#   Legacy:   u{user_id}-{hex}            e.g. u123-abc123
+#   New:      u{user_id}-{source}-{hex}   e.g. u123-e456-abc123 (env), u123-s789-abc123 (snapshot), u123-x-abc123
+# All three must be whitelisted so WebSocket clients can authenticate via ?token= query param.
+_CLAUDE_SESSION_PATTERN = re.compile(r"^/claude/u\d+(?:-[a-z]\d*)?-[a-fA-F0-9]+", re.IGNORECASE)
 
 # Prefixes that identify a token as an API key (vs a session token)
 API_KEY_PREFIXES = (
@@ -407,15 +410,6 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
     if account.user_id != user.id and not has_admin_scope(user):  # type: ignore[attr-defined]
         raise HTTPException(status_code=404, detail="Account not found")
     return account
-
-
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope (can view all users' data).
-
-    Admin users have either '*' (full access) or 'admin' scope.
-    """
-    user_scopes = user.scopes or []
-    return SCOPE_ADMIN in user_scopes
 
 
 def resolve_user_filter(

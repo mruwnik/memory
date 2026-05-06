@@ -265,18 +265,17 @@ async def test_project_list_unauthenticated(db_session):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "use_admin,project_id,expect_success",
+    "use_admin,project_id",
     [
-        pytest.param(False, -1, True, id="regular_user_can_access_accessible_project"),
-        pytest.param(False, -3, False, id="regular_user_cannot_access_inaccessible_project"),
-        pytest.param(True, -3, True, id="admin_can_access_any_project"),
+        pytest.param(False, -1, id="regular_user_can_access_accessible_project"),
+        pytest.param(True, -3, id="admin_can_access_any_project"),
     ],
 )
-async def test_project_get_access_control(
+async def test_project_get_access_control_success(
     db_session, user_session, admin_session, teams_and_projects,
-    use_admin, project_id, expect_success
+    use_admin, project_id
 ):
-    """Test that project_get respects access control."""
+    """Test that project_get grants access to authorized projects."""
     from memory.api.MCP.servers.projects import fetch
 
     session_id = admin_session.id if use_admin else user_session.id
@@ -289,12 +288,28 @@ async def test_project_get_access_control(
         mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(fetch)(project_id)
 
-    if expect_success:
-        assert "project" in result, f"Expected project in result, got: {result}"
-        assert result["project"]["id"] == project_id
-    else:
-        assert "error" in result
-        assert "Project not found" in result["error"]
+    assert "project" in result, f"Expected project in result, got: {result}"
+    assert result["project"]["id"] == project_id
+
+
+@pytest.mark.asyncio
+async def test_project_get_access_control_denied(
+    db_session, user_session, teams_and_projects
+):
+    """Test that project_get denies access to projects the user cannot see."""
+    from memory.api.MCP.servers.projects import fetch
+
+    mock_token = make_mock_access_token(user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(fetch)(-3)
+
+    assert "error" in result
+    assert "Project not found" in result["error"]
 
 
 @pytest.mark.asyncio

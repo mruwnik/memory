@@ -150,47 +150,6 @@ def validate_parent_project(
     return None
 
 
-def generate_negative_project_id(
-    session: Any, max_retries: int = 3
-) -> tuple[int | None, dict | None]:
-    """Generate a unique negative project ID with retry logic.
-
-    Uses negative IDs to avoid collision with GitHub milestone IDs.
-    Retries on collision to handle concurrent inserts.
-
-    Args:
-        session: Database session
-        max_retries: Number of retries on collision
-
-    Returns:
-        Tuple of (generated ID or None, error dict or None)
-    """
-    for attempt in range(max_retries):
-        max_negative_id = (
-            session.query(func.min(Project.id)).filter(Project.id < 0).scalar()
-        )
-        new_id = (max_negative_id or 0) - 1
-
-        # Test uniqueness via savepoint
-        savepoint = session.begin_nested()
-        try:
-            # Just check if the ID exists - actual insert will be done by caller
-            existing = session.query(Project.id).filter(Project.id == new_id).first()
-            savepoint.rollback()  # We don't want to change anything
-            if not existing:
-                return new_id, None
-        except IntegrityError:
-            savepoint.rollback()
-
-        if attempt == max_retries - 1:
-            return None, {
-                "error": "Failed to generate unique project ID after retries",
-                "project": None,
-            }
-
-    return None, {"error": "Failed to generate unique project ID", "project": None}
-
-
 def create_project_with_retry(
     session: Any,
     teams: list[Team],
@@ -1096,6 +1055,14 @@ async def create_repo_project(
         .first()
     )
     if existing_project:
+        # Access check: caller must have permission to modify this project
+        if not has_admin_scope(user) and not user_can_access_project(
+            session, user, existing_project.id
+        ):
+            return {
+                "error": f"Access denied to project {existing_project.id}",
+                "project": None,
+            }
         # Update teams if provided
         existing_project.teams = teams  # type: ignore[assignment]
         if parent_id is not None:
@@ -1283,6 +1250,14 @@ async def create_milestone_project(
         .first()
     )
     if existing_project:
+        # Access check: caller must have permission to modify this project
+        if not has_admin_scope(user) and not user_can_access_project(
+            session, user, existing_project.id
+        ):
+            return {
+                "error": f"Access denied to project {existing_project.id}",
+                "project": None,
+            }
         # Update teams if provided
         existing_project.teams = teams  # type: ignore[assignment]
         if parent_id is not None:

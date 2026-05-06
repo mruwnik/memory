@@ -229,6 +229,17 @@ RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2-lite")
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
+# OAuth settings
+# Comma-separated list of URI prefixes permitted in dynamic client registration.
+# Defaults to localhost only, which covers Claude Desktop and Cursor.
+# Set to "*" to allow any redirect_uri (not recommended for production).
+# Example: "http://localhost,https://app.example.com"
+OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = [
+    p.strip()
+    for p in os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", "http://localhost,http://127.0.0.1").split(",")
+    if p.strip()
+]
+
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)

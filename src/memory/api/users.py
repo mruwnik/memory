@@ -452,6 +452,30 @@ def create_user_api_key(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    requested_scopes = data.scopes or []
+
+    # Validate scope strings against known scopes
+    if requested_scopes:
+        invalid_scopes = validate_scopes(requested_scopes)
+        if invalid_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid scopes: {', '.join(invalid_scopes)}",
+            )
+
+        # Prevent scope escalation: API key scopes must be a subset of
+        # the requesting user's scopes (not the target user's scopes).
+        # This means admins can create keys for other users, but can only
+        # grant scopes they themselves possess.
+        granting_user_scopes = set(user.scopes or [])
+        if SCOPE_ADMIN not in granting_user_scopes:
+            disallowed = set(requested_scopes) - granting_user_scopes
+            if disallowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Cannot grant scopes you do not possess: {', '.join(sorted(disallowed))}",
+                )
+
     expires_at = None
     if data.expires_in_days:
         expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)

@@ -83,6 +83,23 @@ def _tidbit_to_dict(tidbit: PersonTidbit) -> dict[str, Any]:
     }
 
 
+def _require_project_membership(user: Any, project_id: int) -> None:
+    """Enforce that the caller may write to ``project_id``.
+
+    Admins can assign any project; regular users must be a member.  Raises
+    ``PermissionError`` otherwise.  Centralised so ``tidbit_add`` and
+    ``tidbit_update`` (and any future caller) can't drift on what counts as
+    "may set project_id".
+    """
+    if user and has_admin_scope(user):
+        return
+    user_id = getattr(user, "id", None) if user else None
+    if user_id is None:
+        raise PermissionError("Cannot verify project membership without user ID")
+    if project_id not in get_project_roles_by_user_id(user_id):
+        raise PermissionError(f"You are not a member of project {project_id}")
+
+
 def _filter_tidbits_by_access(
     tidbits: list[PersonTidbit], user: Any, project_roles: dict[int, str] | None = None
 ) -> list[PersonTidbit]:
@@ -961,6 +978,9 @@ async def tidbit_add(
     user = get_mcp_current_user()
     creator_id = user.id if user else None
 
+    if project_id is not None:
+        _require_project_membership(user, project_id)
+
     task = celery_app.send_task(
         SYNC_PERSON_TIDBIT,
         queue=f"{settings.CELERY_QUEUE_PREFIX}-people",
@@ -1026,6 +1046,7 @@ async def tidbit_update(
         if tags is not None:
             tidbit.tags = list(tags)
         if project_id is not None:
+            _require_project_membership(user, project_id)
             tidbit.project_id = project_id
         if sensitivity is not None:
             tidbit.sensitivity = sensitivity

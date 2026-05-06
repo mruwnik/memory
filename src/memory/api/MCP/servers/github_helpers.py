@@ -13,12 +13,18 @@ from sqlalchemy.orm import Session
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.common.access_control import (
+    filter_projects_query,
+    get_accessible_project_ids,
+    has_admin_scope,
+)
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     GithubItem,
     Project,
     GithubProject,
     GithubTeam,
+    SourceItem,
     Team,
 )
 from memory.common.db.models.sources import GithubAccount, GithubRepo
@@ -121,12 +127,20 @@ def list_issues(
     deadline_before: str | None = None,
     limit: int = 50,
     order_by: str = "updated",
+    user: Any = None,
 ) -> list[dict]:
     """List GitHub issues and PRs with flexible filtering."""
     limit = min(limit, 200)
 
     with make_session() as session:
         query = session.query(GithubItem)
+
+        # Apply access control: only return items from projects the user can access
+        if user is not None and not has_admin_scope(user):
+            accessible_ids = get_accessible_project_ids(session, user)
+            if accessible_ids is not None:
+                # accessible_ids is a set; empty set means no access
+                query = query.filter(SourceItem.project_id.in_(accessible_ids))
 
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
@@ -194,12 +208,17 @@ def list_milestones(
     state: str | None = None,
     deadline_before: str | None = None,
     limit: int = 50,
+    user: Any = None,
 ) -> list[dict]:
     """List GitHub milestones with filtering options."""
     limit = min(limit, 200)
 
     with make_session() as session:
         query = session.query(Project).join(GithubRepo)
+
+        # Apply access control: only return milestones from accessible projects
+        if user is not None and not has_admin_scope(user):
+            query = filter_projects_query(session, user, query)
 
         if repo:
             parts = repo.split("/")

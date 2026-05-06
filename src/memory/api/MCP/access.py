@@ -5,6 +5,7 @@ Provides functions to build access filters and log access from MCP tool context.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, Protocol, overload
 
 if TYPE_CHECKING:
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
 
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.auth import lookup_api_key
+from memory.api.auth import handle_api_key_use, lookup_api_key
 from memory.common.access_control import (
     AccessFilter,
     build_access_filter,
@@ -80,26 +81,64 @@ def build_user_access_filter(user: "User") -> AccessFilter | None:
 
 
 class UserProxy:
-    """Minimal user proxy for access control when only dict is available."""
+    """Minimal user proxy for access control when only dict is available.
+
+    Normalizes ``scopes`` to ``list[str]`` at the boundary so callers can rely
+    on the shape regardless of what the source dict contained (None, tuple,
+    missing key, etc.).
+    """
 
     def __init__(self, user_dict: dict):
-        self.id = user_dict.get("id")
-        self.scopes = user_dict.get("scopes", [])
+        self.id: int | None = user_dict.get("id")
+        raw_scopes = user_dict.get("scopes") or []
+        self.scopes: list[str] = [str(s) for s in raw_scopes]
+
+
+def is_session_expired(user_session: UserSession) -> bool:
+    """Return True if the session's expires_at is in the past.
+
+    Mirrors the logic in auth.py get_user_session to handle both
+    timezone-aware and naive (assumed UTC) datetimes consistently.
+
+    A session with no expires_at is treated as expired (defense-in-depth):
+    ``user_session.user`` is dereferenced by callers prior to this check,
+    so by the time we get here we know we have a session row, but a NULL
+    expiry could only mean "never set" and we'd rather fail closed.
+    """
+    expires_at = user_session.expires_at
+    if expires_at is None:
+        return True
+    now = datetime.now(timezone.utc)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at < now
 
 
 def fetch_user_by_token(
     session: "Session | scoped_session[Session]", token: str
 ) -> User | None:
-    """Look up a user by token (session token or API key)."""
+    """Look up a user by token (session token or API key).
+
+    For API keys, validates expiry via is_valid() and handles one-time key
+    consumption via handle_api_key_use() to mirror the REST auth path.
+    """
     user_session = session.get(UserSession, token)
-    if user_session and user_session.user:
+    if user_session and user_session.user and not is_session_expired(user_session):
         return user_session.user
 
     api_key_record = lookup_api_key(token, session)
-    if api_key_record and api_key_record.user:
-        return api_key_record.user
+    if api_key_record is None or not api_key_record.is_valid():
+        return None
 
-    return None
+    # Eagerly load user before handle_api_key_use, which may delete the key
+    # (for one-time keys). This prevents DetachedInstanceError on lazy load.
+    user = api_key_record.user
+    if user is None:
+        return None
+    handle_api_key_use(api_key_record, session)
+    return user
 
 
 @overload

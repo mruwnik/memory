@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass
@@ -150,6 +151,16 @@ def _get_smtp_server_port(config: SmtpConfig) -> tuple[str, int]:
     return smtp_server, smtp_port
 
 
+def sanitize_header(value: str) -> str:
+    """Strip CRLF and null bytes from email header values to prevent injection.
+
+    Python's legacy compat32 email policy does not sanitize these characters,
+    allowing attackers to inject additional headers (e.g. Bcc) by embedding
+    \\r\\n in subject, reply-to, or recipient addresses.
+    """
+    return re.sub(r"[\r\n\x00]", "", value)
+
+
 def _build_mime_message(
     from_addr: str,
     to: list[str],
@@ -169,16 +180,16 @@ def _build_mime_message(
             For SMTP, should be False - Bcc recipients are added to envelope only.
     """
     msg = MIMEMultipart("mixed")
-    msg["From"] = from_addr
-    msg["To"] = ", ".join(to)
-    msg["Subject"] = subject
+    msg["From"] = sanitize_header(from_addr)
+    msg["To"] = ", ".join(sanitize_header(addr) for addr in to)
+    msg["Subject"] = sanitize_header(subject)
 
     if cc:
-        msg["Cc"] = ", ".join(cc)
+        msg["Cc"] = ", ".join(sanitize_header(addr) for addr in cc)
     if bcc and include_bcc_header:
-        msg["Bcc"] = ", ".join(bcc)
+        msg["Bcc"] = ", ".join(sanitize_header(addr) for addr in bcc)
     if reply_to:
-        msg["Reply-To"] = reply_to
+        msg["Reply-To"] = sanitize_header(reply_to)
 
     # Create body part
     if html_body:

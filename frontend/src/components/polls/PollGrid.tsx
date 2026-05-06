@@ -119,6 +119,14 @@ function getHeatmapColor(available: number, ifNeeded: number, total: number, max
   return '#f1f5f9' // slate-100
 }
 
+// Format time key into 12h label
+function formatTimeLabel(timeKey: string): string {
+  const [hours, minutes] = timeKey.split(':').map(Number)
+  const h = hours % 12 || 12
+  const ampm = hours < 12 ? 'AM' : 'PM'
+  return `${h}:${minutes.toString().padStart(2, '0')} ${ampm}`
+}
+
 export const PollGrid: React.FC<PollGridProps> = ({
   datetimeStart,
   datetimeEnd,
@@ -134,6 +142,8 @@ export const PollGrid: React.FC<PollGridProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false)
   const [dragMode, setDragMode] = useState<'select' | 'deselect'>('select')
+  // Roving tabIndex: track which [dayIndex, rowIndex] cell is keyboard-focusable
+  const [activeCell, setActiveCell] = useState<[number, number]>([0, 0])
   const gridRef = useRef<HTMLDivElement>(null)
 
   // Generate time slots grid
@@ -163,17 +173,30 @@ export const PollGrid: React.FC<PollGridProps> = ({
     return map
   }, [aggregatedData])
 
-  // Format time keys for display (convert 24h to 12h format)
+  // Format time keys for display labels
   const timeLabels = useMemo(() => {
-    return gridData.timeKeys.map(timeKey => {
-      const [hours, minutes] = timeKey.split(':').map(Number)
-      const h = hours % 12 || 12
-      const ampm = hours < 12 ? 'AM' : 'PM'
-      return `${h}:${minutes.toString().padStart(2, '0')} ${ampm}`
-    })
+    return gridData.timeKeys.map(formatTimeLabel)
   }, [gridData.timeKeys])
 
-  // Handle slot click/drag
+  // Toggle a single slot (used by both mouse and keyboard)
+  const toggleSlot = useCallback((slot: TimeSlot) => {
+    if (readonly || !onSlotsChange) return
+    const isSelected = selectedMap.has(slot.key)
+    if (isSelected) {
+      onSlotsChange(selectedSlots.filter(s => new Date(s.slot_start).toISOString() !== slot.key))
+    } else {
+      onSlotsChange([
+        ...selectedSlots,
+        {
+          slot_start: slot.start.toISOString(),
+          slot_end: slot.end.toISOString(),
+          availability_level: availabilityLevel,
+        },
+      ])
+    }
+  }, [readonly, onSlotsChange, selectedMap, selectedSlots, availabilityLevel])
+
+  // Handle slot click/drag (mouse/touch)
   const handleSlotInteraction = useCallback((slot: TimeSlot, isStart: boolean) => {
     if (readonly || !onSlotsChange) return
 
@@ -190,7 +213,6 @@ export const PollGrid: React.FC<PollGridProps> = ({
     }
 
     if (effectiveMode === 'select' && !isSelected) {
-      // Add slot
       onSlotsChange([
         ...selectedSlots,
         {
@@ -200,7 +222,6 @@ export const PollGrid: React.FC<PollGridProps> = ({
         },
       ])
     } else if (effectiveMode === 'deselect' && isSelected) {
-      // Remove slot
       onSlotsChange(selectedSlots.filter(s => new Date(s.slot_start).toISOString() !== slot.key))
     }
   }, [readonly, onSlotsChange, selectedMap, selectedSlots, dragMode, availabilityLevel])
@@ -247,6 +268,57 @@ export const PollGrid: React.FC<PollGridProps> = ({
     }
   }, [isDragging, gridData.slots, handleSlotInteraction])
 
+  // Keyboard navigation handler (roving tabIndex within the grid)
+  const handleKeyDown = useCallback((e: React.KeyboardEvent, dayIndex: number, rowIndex: number) => {
+    const numDays = gridData.slots.length
+    const numRows = gridData.timeKeys.length
+
+    let newDay = dayIndex
+    let newRow = rowIndex
+
+    switch (e.key) {
+      case 'ArrowRight':
+        e.preventDefault()
+        newDay = Math.min(dayIndex + 1, numDays - 1)
+        break
+      case 'ArrowLeft':
+        e.preventDefault()
+        newDay = Math.max(dayIndex - 1, 0)
+        break
+      case 'ArrowDown':
+        e.preventDefault()
+        newRow = Math.min(rowIndex + 1, numRows - 1)
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        newRow = Math.max(rowIndex - 1, 0)
+        break
+      case 'Home':
+        e.preventDefault()
+        newDay = 0
+        break
+      case 'End':
+        e.preventDefault()
+        newDay = numDays - 1
+        break
+      case ' ':
+      case 'Enter': {
+        e.preventDefault()
+        const slot = gridData.slots[dayIndex]?.[rowIndex]
+        if (slot) toggleSlot(slot)
+        return
+      }
+      default:
+        return
+    }
+
+    setActiveCell([newDay, newRow])
+    // Focus the button at the new position
+    gridRef.current
+      ?.querySelector<HTMLElement>(`[data-day="${newDay}"][data-row="${newRow}"]`)
+      ?.focus()
+  }, [gridData.slots, gridData.timeKeys.length, toggleSlot])
+
   // Render mode check
   const isHeatmapMode = !!aggregatedData
 
@@ -257,33 +329,37 @@ export const PollGrid: React.FC<PollGridProps> = ({
           {isHeatmapMode ? (
             <>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-slate-100" />
+                <span className="w-4 h-4 rounded bg-slate-100" aria-hidden="true" />
                 No responses
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-green-400" />
+                <span className="w-4 h-4 rounded bg-green-400" aria-hidden="true" />
                 Some available
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-green-500" />
+                <span className="w-4 h-4 rounded bg-green-500" aria-hidden="true" />
                 All available
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-yellow-300" />
+                <span className="w-4 h-4 rounded bg-yellow-300" aria-hidden="true" />
                 If needed only
               </span>
             </>
           ) : (
             <>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-green-500" />
-                Available
+                <span className="w-4 h-4 rounded bg-green-500" aria-hidden="true" />
+                <span aria-hidden="true">✓</span> Available
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded bg-yellow-400" />
-                If needed
+                <span className="w-4 h-4 rounded bg-yellow-400" aria-hidden="true" />
+                <span aria-hidden="true">~</span> If needed
               </span>
-              <span className="text-slate-500">Click and drag to select times</span>
+              {!readonly && (
+                <span className="text-slate-500">
+                  Click, drag, or use arrow keys to select times; Space/Enter to toggle
+                </span>
+              )}
             </>
           )}
         </div>
@@ -291,6 +367,9 @@ export const PollGrid: React.FC<PollGridProps> = ({
 
       <div
         ref={gridRef}
+        role="grid"
+        aria-label="Availability time grid"
+        aria-readonly={readonly || undefined}
         className="grid gap-px bg-slate-200 rounded-lg overflow-hidden"
         style={{
           gridTemplateColumns: `auto repeat(${gridData.slots.length}, 1fr)`,
@@ -300,32 +379,54 @@ export const PollGrid: React.FC<PollGridProps> = ({
         onTouchMove={handleTouchMove}
       >
         {/* Header row - dates */}
-        <div className="bg-slate-50 p-2" />
-        {gridData.dateKeys.map((dateKey, dayIndex) => (
-          <div key={dayIndex} className="bg-slate-50 p-2 text-center text-xs font-medium text-slate-700">
-            {formatDateInTimezone(dateKey, displayTimezone)}
-          </div>
-        ))}
+        <div role="row" className="contents">
+          <div role="columnheader" className="bg-slate-50 p-2" aria-label="Time" />
+          {gridData.dateKeys.map((dateKey, dayIndex) => (
+            <div
+              key={dayIndex}
+              role="columnheader"
+              className="bg-slate-50 p-2 text-center text-xs font-medium text-slate-700"
+            >
+              {formatDateInTimezone(dateKey, displayTimezone)}
+            </div>
+          ))}
+        </div>
 
         {/* Time rows */}
-        {gridData.timeKeys.map((_, rowIndex) => (
-          <React.Fragment key={rowIndex}>
-            <div className="bg-slate-50 p-2 text-xs text-slate-500 text-right whitespace-nowrap">
+        {gridData.timeKeys.map((_timeKey, rowIndex) => (
+          <div key={rowIndex} role="row" className="contents">
+            <div
+              role="rowheader"
+              className="bg-slate-50 p-2 text-xs text-slate-500 text-right whitespace-nowrap"
+            >
               {timeLabels[rowIndex] || ''}
             </div>
             {gridData.slots.map((daySlots, dayIndex) => {
               const slot = daySlots[rowIndex]
-              if (!slot) return <div key={dayIndex} className="bg-slate-100" />
+              const dateLabel = formatDateInTimezone(gridData.dateKeys[dayIndex], displayTimezone)
+              const timeLabel = timeLabels[rowIndex] || ''
+
+              if (!slot) {
+                return (
+                  <div
+                    key={dayIndex}
+                    role="gridcell"
+                    aria-label={`${timeLabel} on ${dateLabel}: not available`}
+                    className="bg-slate-100"
+                  />
+                )
+              }
 
               const selectedSlot = selectedMap.get(slot.key)
               const isSelected = !!selectedSlot
-              // Use composite key (start|end) for aggregated data lookup
               const aggregatedKey = `${slot.start.toISOString()}|${slot.end.toISOString()}`
               const aggregated = aggregatedMap.get(aggregatedKey)
 
               let cellStyle: React.CSSProperties = {}
-              let cellClass = 'min-h-[32px] flex items-center justify-center text-xs font-medium transition-colors'
 
+              // Compute color class separately so it can be shared between
+              // the read-only div and the interactive button
+              let colorClass = 'bg-white'
               if (isHeatmapMode && aggregated) {
                 cellStyle.background = getHeatmapColor(
                   aggregated.available_count,
@@ -333,38 +434,79 @@ export const PollGrid: React.FC<PollGridProps> = ({
                   aggregated.total_count,
                   totalResponses
                 )
+                colorClass = ''
               } else if (isSelected) {
-                cellClass += selectedSlot?.availability_level === 2 ? ' bg-yellow-400' : ' bg-green-500'
-              } else {
-                cellClass += ' bg-white'
+                colorClass = selectedSlot?.availability_level === 2 ? 'bg-yellow-400' : 'bg-green-500'
               }
 
-              if (!readonly) {
-                cellClass += ' cursor-pointer hover:opacity-80'
+              const baseCellClass = `min-h-[32px] flex items-center justify-center text-xs font-medium transition-colors ${colorClass}`
+
+              // Build accessible label
+              let ariaLabel: string
+              if (isHeatmapMode && aggregated) {
+                ariaLabel = `${timeLabel} on ${dateLabel}: ${aggregated.available_count} available, ${aggregated.if_needed_count} if needed`
+              } else if (isSelected) {
+                const levelLabel = selectedSlot?.availability_level === 2 ? 'if needed' : 'available'
+                ariaLabel = `${timeLabel} on ${dateLabel}: selected as ${levelLabel}`
+              } else {
+                ariaLabel = `${timeLabel} on ${dateLabel}: not selected`
               }
+
+              const isActive = activeCell[0] === dayIndex && activeCell[1] === rowIndex
+
+              if (readonly || isHeatmapMode) {
+                return (
+                  <div
+                    key={dayIndex}
+                    role="gridcell"
+                    aria-label={ariaLabel}
+                    className={baseCellClass}
+                    style={cellStyle}
+                    title={
+                      aggregated
+                        ? `${aggregated.available_count} available, ${aggregated.if_needed_count} if needed\n${aggregated.respondents.join(', ')}`
+                        : undefined
+                    }
+                  >
+                    {isHeatmapMode && aggregated && aggregated.total_count > 0 && (
+                      <span className="text-slate-700">{aggregated.available_count}</span>
+                    )}
+                  </div>
+                )
+              }
+
+              // Interactive cell: button for keyboard + screen reader support
+              const buttonClass = `w-full h-full min-h-[32px] flex items-center justify-center text-xs font-medium transition-colors cursor-pointer hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset ${colorClass}`
 
               return (
-                <div
-                  key={dayIndex}
-                  className={cellClass}
-                  style={cellStyle}
-                  data-slot-key={slot.key}
-                  onMouseDown={() => handleMouseDown(slot)}
-                  onMouseEnter={() => handleMouseEnter(slot)}
-                  onTouchStart={() => handleTouchStart(slot)}
-                  title={
-                    aggregated
-                      ? `${aggregated.available_count} available, ${aggregated.if_needed_count} if needed\n${aggregated.respondents.join(', ')}`
-                      : undefined
-                  }
-                >
-                  {isHeatmapMode && aggregated && aggregated.total_count > 0 && (
-                    <span className="text-slate-700">{aggregated.available_count}</span>
-                  )}
+                <div key={dayIndex} role="gridcell">
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={ariaLabel}
+                    tabIndex={isActive ? 0 : -1}
+                    data-slot-key={slot.key}
+                    data-day={dayIndex}
+                    data-row={rowIndex}
+                    className={buttonClass}
+                    style={cellStyle}
+                    onMouseDown={() => handleMouseDown(slot)}
+                    onMouseEnter={() => handleMouseEnter(slot)}
+                    onTouchStart={() => handleTouchStart(slot)}
+                    onFocus={() => setActiveCell([dayIndex, rowIndex])}
+                    onKeyDown={(e) => handleKeyDown(e, dayIndex, rowIndex)}
+                  >
+                    {/* Text indicator supplements color (WCAG 1.4.1 Use of Color) */}
+                    {isSelected && (
+                      <span aria-hidden="true" className="select-none">
+                        {selectedSlot?.availability_level === 2 ? '~' : '✓'}
+                      </span>
+                    )}
+                  </button>
                 </div>
               )
             })}
-          </React.Fragment>
+          </div>
         ))}
       </div>
     </div>

@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 
 from memory.api.MCP.access import get_mcp_current_user, get_project_roles_by_user_id
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.access_control import has_admin_scope, user_can_access
 from memory.common.celery_app import SYNC_REPORT
 from memory.common.celery_app import app as celery_app
@@ -19,6 +19,20 @@ from memory.common.db.models import Report
 from memory.common.scopes import SCOPE_REPORTS_WRITE
 
 logger = logging.getLogger(__name__)
+
+# Characters that must not appear in a CSP source value.
+# ';' splits CSP directives; '\r'/'\n'/'\0' split HTTP header values;
+# space separates source expressions within a directive.
+_CSP_FORBIDDEN_CHARS = frozenset({';', '\r', '\n', '\0', ' '})
+
+
+def validate_csp_sources(sources: list[str]) -> list[str]:
+    """Raise ValueError if any source contains CSP/HTTP-header-injection chars."""
+    for src in sources:
+        if any(ch in src for ch in _CSP_FORBIDDEN_CHARS):
+            raise ValueError(f"Invalid CSP source value: {src!r}")
+    return sources
+
 
 reports_mcp = FastMCP("memory-reports")
 
@@ -56,6 +70,13 @@ async def upsert(
     if not user or user_id is None:
         return {"error": "Authentication required to create reports"}
 
+    # Validate allowed_connect_urls to prevent CSP directive injection.
+    if allowed_connect_urls:
+        try:
+            validate_csp_sources(allowed_connect_urls)
+        except ValueError as e:
+            return {"error": str(e)}
+
     # Use caller-supplied filename or generate from content hash + title
     if not filename:
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
@@ -85,7 +106,12 @@ async def upsert(
                 existing.tags = tags
             session.commit()
 
-    file_path = settings.REPORT_STORAGE_DIR / filename
+    # Validate filename to prevent path traversal outside REPORT_STORAGE_DIR.
+    # Matches the same pattern used by notes.py.
+    try:
+        file_path = paths.validate_path_within_directory(settings.REPORT_STORAGE_DIR, filename)
+    except ValueError as e:
+        return {"error": f"Invalid filename: {e}"}
 
     # Dispatch to worker for content processing
     task = celery_app.send_task(

@@ -78,7 +78,11 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
 
 
 def resolve_bot_id(bot_id: int | None, session: DBSession | None = None) -> int:
-    """Resolve bot_id, using default bot if None.
+    """Resolve and authorise bot_id, using the caller's default bot if None.
+
+    Always verifies that the authenticated user owns (or has access to) the
+    specified bot.  Uses ``resolve_bot`` internally so the ownership check
+    cannot be bypassed by passing an explicit ID.
 
     Args:
         bot_id: Explicit bot ID, or None to use default bot
@@ -86,12 +90,10 @@ def resolve_bot_id(bot_id: int | None, session: DBSession | None = None) -> int:
                  Pass an existing session to avoid nested make_session() calls
                  which can cause DetachedInstanceError.
     """
-    if bot_id is not None:
-        return bot_id
     if session is not None:
-        return _get_default_bot(session).id
+        return resolve_bot(session, bot_id)
     with make_session() as new_session:
-        return _get_default_bot(new_session).id
+        return resolve_bot(new_session, bot_id)
 
 
 async def _call_discord_api(func, *args, error_msg: str, **kwargs) -> dict[str, Any]:

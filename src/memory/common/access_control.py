@@ -34,8 +34,11 @@ if TYPE_CHECKING:
 
 
 # Protocols for duck-typed access control checks
-# These allow tests to use simple mock objects without importing full models
-# Using Any return types to accommodate SQLAlchemy's Mapped[T] types
+# These allow tests to use simple mock objects without importing full models.
+# Return types are Any: SQLAlchemy declares ORM columns as Mapped[T], which
+# pyright's structural matching does not unify with concrete T even though it
+# resolves to T at runtime. Validating the actual shape happens at boundaries
+# (e.g. UserProxy below normalizes scopes to list[str]).
 
 
 @runtime_checkable
