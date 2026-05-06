@@ -245,3 +245,20 @@ Going idle. The remaining pending tasks are all blocked on either:
 My preferred-focus celery tasks (MARK_SLACK_MESSAGE_DELETED, UPDATE_SLACK_REACTIONS, UPDATE_SLACK_CHANNEL, slack_token_health_check, polling-beat) all wait on the propagation. Will pick up immediately when Yondalla's task moves to in_review.
 
 If team-lead wants me to take frontend wizard as parallelizable work despite the React/TypeScript out-of-focus: would need a green light first, since the contracts could shift if the wizard endpoints task changes shape.
+
+### 2026-05-06 — Istus (pr-polisher) — initial sweep
+Attached to differ session `github:mruwnik/memory:75`. CI is `pending` on `lint-and-test`. 10 review comments from Hikahi (Claude Opus 4.6) — 3 IMPORTANT, 5 SUGGESTION, 2 NITPICK. All actionable; none overlap with the documented follow-ups (DB-backed integration tests, frontend polish, §3.5 backfill semaphore, project-hijack 14dd9144).
+
+Triage:
+1. AJdCp [IMPORTANT] migration `legacy-env-app` placeholder — drop placeholder + abort path
+2. AJdK6 [IMPORTANT] no tests for `get_legacy_slack_app` — add both-branch tests
+3. AJdWi [IMPORTANT] pre-flight dedup silent — add RETURNING + print summary
+4. AJdfv [SUGGESTION] `created_at | None` typing — style; will reply rationale (low-conf reviewer)
+5. AJdqW [SUGGESTION] `is_authorized` defensive ordering + short-circuit — quick win
+6. AJdya [SUGGESTION] doc SECRETS_ENCRYPTION_KEY requirement — trivial docstring
+7. AJd-D [NITPICK] downgrade non-faithful + deleted_at confirm — clarify in docstring
+8. AJeDn [NITPICK] rename `_make_app` → `make_app` — aligns with project naming convention
+9. AJeL6 [SUGGESTION] test gap: `is_authorized` with NULL owner — 4-line parametrized
+10. AJeWT [SUGGESTION] doc scoping in SLACK_PUSH_MIGRATION.md — add implementation-status notes
+
+Filing tasks for each, then implementing solo (team reaped). Will batch into ~3 commits.

@@ -15,6 +15,29 @@ The new uniqueness constraint on slack_user_credentials becomes
 (workspace_id, user_id). Pre-flight dedup runs before the constraint is
 added so existing duplicates do not block deployment.
 
+Operational requirements:
+* If SLACK_CLIENT_ID is set OR slack_user_credentials has rows, this
+  migration imports `memory.common.db.models.secrets.encrypt_value` and
+  therefore requires `SECRETS_ENCRYPTION_KEY` to be configured at
+  migration time. Anyone with populated Slack credentials must already
+  have this key set (those credentials are encrypted with it), so this
+  is implicit but not previously documented.
+* If slack_user_credentials has rows but SLACK_CLIENT_ID is unset, the
+  migration aborts loudly. Inserting a placeholder row would silently
+  orphan the credentials at runtime (`get_legacy_slack_app` queries by
+  the env-var value, which would now mismatch the placeholder client_id).
+* The companion migration `20260506_slack_msg_deleted_at` adds the
+  `slack_messages.deleted_at` column referenced in design doc §3.1/§5.1
+  (split into a sibling migration so the schema-vs-bridge concerns stay
+  separate). This migration does NOT add deleted_at; both are required
+  for the full §3.1 surface.
+* downgrade() is non-faithful in two small ways: (1) credentials deleted
+  by the pre-flight dedup are not restored (no row history kept); (2)
+  the legacy SlackApp row created by the upgrade is dropped along with
+  the table, but `slack_user_credentials.slack_app_id` rows would have
+  been NULL in the pre-upgrade schema — downgrade restores the column
+  drop, so all backfilled FK values are lost. Standard alembic shape.
+
 Revision ID: 20260506_slack_apps
 Revises: 20260506_transcript_accounts
 Create Date: 2026-05-06
@@ -97,13 +120,26 @@ def upgrade() -> None:
         sa.text("SELECT EXISTS (SELECT 1 FROM slack_user_credentials)")
     ).scalar()
 
-    if legacy_client_id or has_existing_creds:
+    # Three operational paths:
+    # 1. legacy_client_id set                → INSERT/UPSERT SlackApp + backfill
+    # 2. has_existing_creds, no legacy_client_id → ABORT — placeholder would orphan creds
+    # 3. neither                             → fresh deployment, skip
+    if has_existing_creds and not legacy_client_id:
+        raise RuntimeError(
+            "slack_user_credentials has rows but SLACK_CLIENT_ID is unset. "
+            "Inserting a placeholder SlackApp row would silently orphan these "
+            "credentials at runtime (get_legacy_slack_app queries by the "
+            "env-var value). Either set SLACK_CLIENT_ID to the real Slack "
+            "client_id used to OAuth those credentials and re-run the "
+            "migration, or DELETE the orphaned credentials first."
+        )
+
+    if legacy_client_id:
         from memory.common.db.models.secrets import encrypt_value
 
         client_secret_enc = (
             encrypt_value(legacy_client_secret) if legacy_client_secret else None
         )
-        client_id_value = legacy_client_id or "legacy-env-app"
 
         # ON CONFLICT here exists to make the migration idempotent.
         # In practice the row should never pre-exist (this is the same
@@ -146,7 +182,7 @@ def upgrade() -> None:
                 """
             ),
             {
-                "client_id": client_id_value,
+                "client_id": legacy_client_id,
                 "name": "Default (env-var migration)",
                 "secret": client_secret_enc,
             },
@@ -166,7 +202,9 @@ def upgrade() -> None:
     # (slack_app_id, workspace_id, user_id) and drop older duplicates.
     # Older duplicates only exist if the same user OAuthed twice into the
     # same workspace under what is now a single app — unlikely, but possible.
-    connection.execute(
+    # RETURNING + print() so any deletion is visible in the alembic log;
+    # silent destruction of credentials would be operationally hostile.
+    deleted = connection.execute(
         sa.text(
             """
             DELETE FROM slack_user_credentials
@@ -181,9 +219,21 @@ def upgrade() -> None:
                 ) ranked
                 WHERE ranked.rn > 1
             )
+            RETURNING id, slack_app_id, workspace_id, user_id, created_at
             """
         )
-    )
+    ).fetchall()
+    if deleted:
+        print(
+            f"[slack_apps migration] Pre-flight dedup removed {len(deleted)} "
+            "duplicate slack_user_credentials row(s):"
+        )
+        for row in deleted:
+            print(
+                f"  id={row.id} slack_app_id={row.slack_app_id} "
+                f"workspace_id={row.workspace_id!r} user_id={row.user_id} "
+                f"created_at={row.created_at}"
+            )
 
     # Add NOT NULL via NOT VALID + VALIDATE to avoid a long AccessExclusiveLock.
     op.execute(

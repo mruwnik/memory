@@ -133,13 +133,27 @@ class SlackApp(Base):
             self.signing_secret_encrypted = encrypt_value(value)
 
     def is_authorized(self, user: User) -> bool:
-        """Owner counts as authorized; explicit authorized_users list extends that."""
-        if self.created_by_user_id is not None and self.created_by_user_id == user.id:
+        """Owner counts as authorized; explicit authorized_users list extends that.
+
+        Short-circuit on `user.id is None` first — without this guard, a User
+        with `id=None` (e.g., transient/unsaved) would slip past the owner
+        check via `None == None`. The current `created_by_user_id == user.id`
+        comparison only behaves correctly because `None == int` is False; a
+        future contributor flipping the order to `user.id == self.created_by_user_id`
+        would silently match a user-with-id-None scenario to an app with
+        `created_by_user_id=None` (which `test_slack_app_owner_set_null_on_user_delete`
+        proves is a real state).
+
+        Note: `user in self.authorized_users` will trigger a lazy SELECT if
+        the relationship isn't already loaded. Webhook hot paths should
+        `selectinload(SlackApp.authorized_users)` to avoid a per-call query.
+        """
+        if user.id is not None and self.created_by_user_id == user.id:
             return True
         return user in self.authorized_users
 
     def is_owner(self, user: User) -> bool:
-        return self.created_by_user_id is not None and self.created_by_user_id == user.id
+        return user.id is not None and self.created_by_user_id == user.id
 
 
 class SlackWorkspace(Base):

@@ -424,6 +424,75 @@ def test_authorize_success(mock_settings, client, db_session, user):
     assert len(states) == 1
 
 
+# ====== get_legacy_slack_app tests ======
+
+
+def test_get_legacy_slack_app_returns_matching_row(
+    db_session, slack_app, monkeypatch
+):
+    """Happy path: SlackApp row exists with client_id matching the
+    SLACK_CLIENT_ID env var → returned to caller."""
+    from memory.api.slack import get_legacy_slack_app
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "SLACK_CLIENT_ID", slack_app.client_id)
+
+    result = get_legacy_slack_app(db_session)
+
+    assert result is not None
+    assert result.id == slack_app.id
+    assert result.client_id == slack_app.client_id
+
+
+def test_get_legacy_slack_app_raises_503_when_missing(db_session, monkeypatch):
+    """Sad path: no SlackApp row matches the configured SLACK_CLIENT_ID →
+    503 with documented detail (signals operator to re-run migrations or
+    create the row manually)."""
+    from fastapi import HTTPException
+
+    from memory.api.slack import get_legacy_slack_app
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "SLACK_CLIENT_ID", "no.such.client.id")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_legacy_slack_app(db_session)
+
+    assert exc_info.value.status_code == 503
+    detail = exc_info.value.detail.lower()
+    assert "slack app row not found" in detail
+    assert "slack_client_id" in detail
+
+
+def test_get_legacy_slack_app_does_not_match_unrelated_apps(
+    db_session, slack_app, monkeypatch
+):
+    """Defense-in-depth: even when other SlackApp rows exist, we only return
+    the one whose client_id matches SLACK_CLIENT_ID exactly. Catches
+    regressions that accidentally drop the WHERE clause or use ILIKE."""
+    from fastapi import HTTPException
+
+    from memory.api.slack import get_legacy_slack_app
+    from memory.common import settings
+
+    other = SlackApp(client_id="someone.elses.client.id", name="Other App")
+    db_session.add(other)
+    db_session.commit()
+
+    # Settings points at a third client_id with no row.
+    monkeypatch.setattr(settings, "SLACK_CLIENT_ID", "third.client.id")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_legacy_slack_app(db_session)
+    assert exc_info.value.status_code == 503
+
+    # And when it points at the right one, we get exactly that row, not the other.
+    monkeypatch.setattr(settings, "SLACK_CLIENT_ID", slack_app.client_id)
+    result = get_legacy_slack_app(db_session)
+    assert result.id == slack_app.id
+    assert result.client_id != other.client_id
+
+
 # ====== OAuth State tests ======
 
 

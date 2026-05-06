@@ -8,6 +8,45 @@ Migrate Slack ingestion from periodic polling (every 5 min) to push delivery via
 
 ---
 
+## Implementation status (PR #75)
+
+This doc reads like a v2 spec for the whole migration. The code in this PR
+covers most of it but not all. Future reviewers should consult this map
+before assuming a section reflects merged code.
+
+| Section | Status | Notes |
+|---------|--------|-------|
+| §1.4 B-pre-1 / B-pre-2 / B-pre-3 | ✅ Landed in this PR | Commits `e04a91e` (B-pre-1, B-pre-2) + `39f5611` (B-pre-3). They are addressed here, **not** carried forward as separate prep work. The "must fix as a precondition" wording in §1.4 should be read as "the fix lands in this PR alongside the migration that depends on it". |
+| §3.1 Data model — `SlackApp`, `slack_app_users`, `slack_app_id` FK on credentials | ✅ Landed in this PR | `db/migrations/versions/20260506_slack_apps.py` |
+| §3.1 Data model — `slack_messages.deleted_at` | ✅ Landed in this PR | Sibling migration `20260506_slack_msg_deleted_at.py` (split for review-clarity; both are required for the full §3.1 surface). |
+| §3.1 audit table — `slack_app_id` threaded through credential queries | ✅ Landed in this PR | `5a9b460`. Optional default-None preserves existing single-app callers. |
+| §3.2 `/slack/apps` CRUD + owner-vs-authorized split | ✅ Landed in this PR | `63e49c8` |
+| §3.3 `POST /slack/events/{slack_app_id}` w/ HMAC + replay + token-bucket | ✅ Landed in this PR | `edcd81c` + dispatcher tests `5f1968b` + HMAC mutation discriminators `1ecf42d` |
+| §3.4 wizard endpoints (paste-secret, paste-signing, OAuth callback, test-message) + multi-tenant `/slack/callback/{slack_app_id}` | ✅ Landed in this PR | `b9d105c` + frontend hook/component `a1db0c4` |
+| §3.5 polling beat 5min → 1h, gated on `setup_state IN ('live', 'degraded')` AND `is_active` | ✅ Landed in this PR | `b1dbc6f` |
+| §3.6 `MARK_SLACK_MESSAGE_DELETED`, `UPDATE_SLACK_REACTIONS`, `UPDATE_SLACK_CHANNEL` | ✅ Landed in this PR | `b1dbc6f` |
+| §3.7 backfill on first OAuth | ✅ Landed in this PR | `b9d105c` (immediate `sync_slack_workspace` enqueue) |
+| §3.8 `slack_token_health_check` watchdog (rolling 24h Redis counter) | ✅ Landed in this PR | `b1dbc6f` |
+| §4 S1 (HTTPS only) | ✅ Landed in this PR | enforced at endpoint definition |
+| §4 S2 (HMAC verify) | ✅ Landed in this PR | constant-time, v0= prefix discipline, uniform 401 |
+| §4 S4 (squatter ownership stripped on legacy backfill) | ✅ Landed in this PR | `a1a23c2` |
+| §4 S5 (CSRF on `/slack/callback`) | ✅ Landed in this PR | `eef07c5` (state bound to authenticated session) |
+| §4 S6 (CSRF in HMAC state binding) | Partial | Legacy callback fixed in this PR; wizard csrf_token in HMAC state remains a follow-up if/when wizard becomes browser-driven. |
+| §4 S7 (rate limit) | ✅ Landed in this PR | per-IP + per-app token buckets via Redis |
+| §4 S8 (replay cache) | ✅ Landed in this PR | SETNX with TTL > skew window |
+| §4 S9 (logging discipline) | ✅ Landed in this PR | `5f6d9c2` + tests `f7a2d91`; `log_corr_id` helper in `oauth_client.py` |
+| §4 S10 (signing-secret rotation) | Deferred | Not blocking; `setup_state` already supports the staged rotation flow. |
+| §4 S11 (encryption key rotation) | Deferred | Out-of-scope; addresses platform-wide secret rotation, not Slack-specific. |
+| §4 S12 (BroadcastChannel scoped per-user) | ✅ Landed in this PR | `slack-oauth-{user_id}` topic in `63e49c8` |
+| §1.4 `cleanup_stale_slack_drafts` daily | ✅ Landed in this PR | `718c235` (3:00 UTC) |
+| §3.5 backfill semaphore | Deferred | Polling is now hourly, so the semaphore is a future optimization rather than a correctness fix. Tracked separately. |
+| Frontend wizard polish | Deferred | Wizard hook + multi-step component land in this PR (`a1db0c4`); styling/accessibility polish is separate. |
+| DB-backed integration tests for new celery tasks | Deferred | Sandbox lacked Postgres at PR-prep time; will validate post-merge against a real DB. Tracked separately. |
+
+**Pre-existing security task (not Slack-specific):** the project-hijack via case-mismatch in `projects.upsert` (filed by Imhotep during the post-master-merge sweep) is **not** part of this PR. It predates the merge and should be its own PR.
+
+---
+
 ## 1. Context and motivation
 
 ### 1.1 Current state
@@ -34,13 +73,13 @@ Migrate Slack ingestion from periodic polling (every 5 min) to push delivery via
 
 ### 1.4 Pre-existing bugs uncovered during review
 
-These exist in current code, not introduced by this migration. Listed here because the migration amplifies their impact (more events → more frequent triggering) and the design must either fix them or document tolerance:
+These exist in current code, not introduced by this migration. Listed here because the migration amplifies their impact (more events → more frequent triggering). All three are **fixed in this PR** alongside the new schema, so the §3 work that depends on them ships in the same change set:
 
-- **B-pre-1 (Critical) — `IntegrityError` handler at `slack.py:691-698` corrupts session.** The `try/except IntegrityError` wraps `process_content_item`. After `session.rollback()`, prior in-session work (channel auto-create at `:647-656`, person link at `:686-689`) is also rolled back. Worse: the duplicate path returns `already_exists` without merging fields (reactions, files) from the loser. **Must fix as a precondition** — webhook + polling overlap (§3.5) hits this constantly.
-- **B-pre-2 (Critical) — Edit-before-message ordering bug.** If `message_changed` arrives before the original `message`, the insert branch runs with edited content and `edited_ts` set. When the original `message` event arrives, it short-circuits at `:613` — **the canonical pre-edit content is silently dropped, and the embedding reflects the wrong version**. Must fix: on the "already exists" branch, prefer the older `edited_ts`.
-- **B-pre-3 (Medium) — Qdrant orphan points on rollback.** `process_content_item` writes to Qdrant before the SQL flush. On rollback, the Qdrant write is not reverted.
+- **B-pre-1 (Critical) — `IntegrityError` handler at `slack.py:691-698` corrupts session.** The `try/except IntegrityError` wraps `process_content_item`. After `session.rollback()`, prior in-session work (channel auto-create at `:647-656`, person link at `:686-689`) is also rolled back. Worse: the duplicate path returns `already_exists` without merging fields (reactions, files) from the loser. Webhook + polling overlap (§3.5) would hit this constantly. **Fixed in commit `e04a91e`** — race-safe rollback + merge.
+- **B-pre-2 (Critical) — Edit-before-message ordering bug.** If `message_changed` arrives before the original `message`, the insert branch runs with edited content and `edited_ts` set. When the original `message` event arrives, it short-circuits at `:613` — the canonical pre-edit content was silently dropped, and the embedding reflected the wrong version. **Fixed in commit `e04a91e`** — `merge_slack_message_state` now prefers the older `edited_ts` and merges fields.
+- **B-pre-3 (Medium) — Qdrant orphan points on rollback.** `process_content_item` writes to Qdrant before the SQL flush; on rollback, the Qdrant write was not reverted. **Fixed in commit `39f5611`** — best-effort rollback in `rollback_qdrant_writes`, all-or-nothing across collections.
 
-These three are **pre-migration prep work**, ~0.5 day. Doc proceeds assuming they're fixed.
+These were originally scoped as separate ~0.5-day prep work, but landed inline because they touch the same code regions as the new schema. See "Implementation status" above for the full mapping.
 
 ---
 
