@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from memory.common.db.models import Person, Team, HumanUser, UserSession
-from memory.common.db.models.sources import Project, team_members, project_teams
+from memory.common.db.models.sources import GithubRepo, Project, team_members, project_teams
 from memory.common.db import connection as db_connection
 
 
@@ -778,9 +778,13 @@ async def test_repo_project_requires_create_repo_flag_for_untracked(
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
         patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
         mock_get_client.return_value = (mock_client, None)  # No tracked repo in DB
+        mock_get_client_helpers.return_value = (mock_client, None)
 
         result = await get_fn(upsert)(
             repo="neworg/newrepo",
@@ -816,9 +820,13 @@ async def test_repo_project_with_create_repo_flag(
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
         patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
         mock_get_client.return_value = (mock_client, None)  # No tracked repo initially
+        mock_get_client_helpers.return_value = (mock_client, None)
 
         result = await get_fn(upsert)(
             repo="neworg/newrepo",
@@ -864,6 +872,12 @@ async def test_repo_project_idempotent_update(
     db_session.commit()
 
     mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -925,9 +939,13 @@ async def test_milestone_project_with_create_repo(
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
         patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
         mock_get_client.return_value = (mock_client, None)  # No tracked repo
+        mock_get_client_helpers.return_value = (mock_client, None)
 
         result = await get_fn(upsert)(
             repo="neworg/newrepo",
@@ -954,7 +972,7 @@ async def test_milestone_project_with_create_repo(
 
 def test_ensure_github_repo_finds_existing(db_session, github_account, github_repo):
     """ensure_github_repo returns existing tracking entry."""
-    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+    from memory.common.project.client import ensure_github_repo
 
     mock_client = MagicMock()
 
@@ -978,7 +996,7 @@ def test_ensure_github_repo_creates_tracking_for_existing_github_repo(
     db_session, github_account
 ):
     """ensure_github_repo creates tracking entry for repo that exists on GitHub."""
-    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+    from memory.common.project.client import ensure_github_repo
 
     mock_client = MagicMock()
     mock_client.fetch_repository_info.return_value = {
@@ -1007,7 +1025,7 @@ def test_ensure_github_repo_returns_none_when_not_found_and_no_create(
     db_session, github_account
 ):
     """ensure_github_repo returns None if repo doesn't exist and create_if_missing=False."""
-    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+    from memory.common.project.client import ensure_github_repo
 
     mock_client = MagicMock()
     mock_client.fetch_repository_info.return_value = None  # Not found
@@ -1028,7 +1046,7 @@ def test_ensure_github_repo_returns_none_when_not_found_and_no_create(
 
 def test_ensure_github_repo_creates_repo_when_missing(db_session, github_account):
     """ensure_github_repo creates repo on GitHub when create_if_missing=True."""
-    from memory.api.MCP.servers.github_helpers import ensure_github_repo
+    from memory.common.project.client import ensure_github_repo
 
     mock_client = MagicMock()
     mock_client.fetch_repository_info.return_value = None  # Not found initially
@@ -1303,7 +1321,7 @@ def test_github_client_remove_team_from_repo():
 
 def test_sync_repo_teams_outbound_grants_access(db_session):
     """Test sync_repo_teams_outbound grants repo access to teams with GitHub integration."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+    from memory.common.project.teams import sync_repo_teams_outbound
 
     # Create teams with GitHub integration
     team_with_github = Team(
@@ -1347,7 +1365,7 @@ def test_sync_repo_teams_outbound_grants_access(db_session):
 
 def test_sync_repo_teams_outbound_skips_different_org(db_session):
     """Test sync_repo_teams_outbound skips teams from different org."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+    from memory.common.project.teams import sync_repo_teams_outbound
 
     team_different_org = Team(
         name="Other Org Team",
@@ -1375,7 +1393,7 @@ def test_sync_repo_teams_outbound_skips_different_org(db_session):
 
 def test_sync_repo_teams_outbound_handles_failures(db_session):
     """Test sync_repo_teams_outbound tracks failed syncs."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_outbound
+    from memory.common.project.teams import sync_repo_teams_outbound
 
     team = Team(
         name="Engineering",
@@ -1408,7 +1426,7 @@ def test_sync_repo_teams_outbound_handles_failures(db_session):
 
 def test_sync_repo_teams_inbound_finds_matching_teams(db_session):
     """Test sync_repo_teams_inbound returns teams matching GitHub teams with repo access."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+    from memory.common.project.teams import sync_repo_teams_inbound
 
     # Use a unique github_team_id to avoid collisions with other tests
     unique_github_id = 90001
@@ -1444,7 +1462,7 @@ def test_sync_repo_teams_inbound_finds_matching_teams(db_session):
 
 def test_sync_repo_teams_inbound_returns_empty_for_no_teams(db_session):
     """Test sync_repo_teams_inbound returns empty list when repo has no teams."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+    from memory.common.project.teams import sync_repo_teams_inbound
 
     mock_client = MagicMock()
     mock_client.get_repo_teams.return_value = []
@@ -1461,7 +1479,7 @@ def test_sync_repo_teams_inbound_returns_empty_for_no_teams(db_session):
 
 def test_sync_repo_teams_inbound_returns_empty_for_no_matches(db_session):
     """Test sync_repo_teams_inbound returns empty when no Team records match."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+    from memory.common.project.teams import sync_repo_teams_inbound
 
     mock_client = MagicMock()
     mock_client.get_repo_teams.return_value = [
@@ -1480,7 +1498,7 @@ def test_sync_repo_teams_inbound_returns_empty_for_no_matches(db_session):
 
 def test_sync_repo_teams_inbound_handles_exception(db_session):
     """Test sync_repo_teams_inbound handles GitHub API exceptions gracefully."""
-    from memory.api.MCP.servers.github_helpers import sync_repo_teams_inbound
+    from memory.common.project.teams import sync_repo_teams_inbound
 
     mock_client = MagicMock()
     mock_client.get_repo_teams.side_effect = Exception("API error")
@@ -1528,9 +1546,13 @@ async def test_repo_project_outbound_sync_on_create(
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
         patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
         mock_get_client.return_value = (mock_client, github_repo)
+        mock_get_client_helpers.return_value = (mock_client, github_repo)
 
         result = await get_fn(upsert)(
             repo="testorg/testrepo",
@@ -1585,9 +1607,13 @@ async def test_repo_project_inbound_sync_on_create(
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
         patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
         mock_get_client.return_value = (mock_client, github_repo)
+        mock_get_client_helpers.return_value = (mock_client, github_repo)
 
         result = await get_fn(upsert)(
             repo="testorg/testrepo",
@@ -1651,6 +1677,12 @@ async def test_update_project_outbound_sync_for_new_teams(
     mock_token = make_mock_access_token(github_user_session.id)
     mock_client = MagicMock()
     mock_client.add_team_to_repo.return_value = True
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -1786,6 +1818,7 @@ async def test_update_github_project_due_on_syncs_to_milestone(
     db_session, github_milestone_project
 ):
     """Updating due_on on a GitHub-backed milestone project syncs to GitHub."""
+    from datetime import timezone as tz
     from memory.api.MCP.servers.projects import upsert
 
     mock_token = make_mock_access_token(github_milestone_project._test_session_id)
@@ -1793,10 +1826,36 @@ async def test_update_github_project_due_on_syncs_to_milestone(
 
     mock_github_client = MagicMock()
     mock_github_client.update_milestone.return_value = {"number": 5, "due_on": due_date}
+    mock_github_client.get_repo.return_value = {
+        "archived": False,
+        "id": 99999,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=tz.utc)
+    mock_github_client.fetch_milestone.return_value = {
+        "github_id": 111,
+        "number": 5,
+        "title": "v1.0 Release",
+        "description": "First major release",
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
     ):
         mock_client_class.return_value = mock_github_client
 
@@ -1826,17 +1885,44 @@ async def test_update_github_project_clear_due_on_syncs_to_milestone(
     from memory.api.MCP.servers.projects import upsert
 
     # Set initial due date on the project
-    github_milestone_project.due_on = datetime(2026, 3, 1, tzinfo=tz.utc)
+    initial_due = datetime(2026, 3, 1, tzinfo=tz.utc)
+    github_milestone_project.due_on = initial_due
     db_session.commit()
 
     mock_token = make_mock_access_token(github_milestone_project._test_session_id)
 
     mock_github_client = MagicMock()
     mock_github_client.update_milestone.return_value = {"number": 5, "due_on": None}
+    mock_github_client.get_repo.return_value = {
+        "archived": False,
+        "id": 99999,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=tz.utc)
+    mock_github_client.fetch_milestone.return_value = {
+        "github_id": 111,
+        "number": 5,
+        "title": "v1.0 Release",
+        "description": "First major release",
+        "state": "open",
+        "due_on": initial_due,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
     ):
         mock_client_class.return_value = mock_github_client
 
@@ -1862,6 +1948,7 @@ async def test_update_github_project_due_on_fails_gracefully(
     db_session, github_milestone_project
 ):
     """When GitHub API fails to update milestone, the operation returns an error."""
+    from datetime import timezone as tz
     from memory.api.MCP.servers.projects import upsert
 
     mock_token = make_mock_access_token(github_milestone_project._test_session_id)
@@ -1869,10 +1956,36 @@ async def test_update_github_project_due_on_fails_gracefully(
 
     mock_github_client = MagicMock()
     mock_github_client.update_milestone.return_value = None  # Simulate failure
+    mock_github_client.get_repo.return_value = {
+        "archived": False,
+        "id": 99999,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=tz.utc)
+    mock_github_client.fetch_milestone.return_value = {
+        "github_id": 111,
+        "number": 5,
+        "title": "v1.0 Release",
+        "description": "First major release",
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
     ):
         mock_client_class.return_value = mock_github_client
 
@@ -1890,16 +2003,43 @@ async def test_update_github_project_owner_does_not_call_github(
     db_session, github_milestone_project, teams_and_projects
 ):
     """Updating owner on a GitHub-backed project does NOT call GitHub API."""
+    from datetime import timezone as tz
     from memory.api.MCP.servers.projects import upsert
 
     mock_token = make_mock_access_token(github_milestone_project._test_session_id)
     person = teams_and_projects["person1"]
 
     mock_github_client = MagicMock()
+    mock_github_client.get_repo.return_value = {
+        "archived": False,
+        "id": 99999,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=tz.utc)
+    mock_github_client.fetch_milestone.return_value = {
+        "github_id": 111,
+        "number": 5,
+        "title": "v1.0 Release",
+        "description": "First major release",
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
     ):
         mock_client_class.return_value = mock_github_client
 
@@ -1922,16 +2062,43 @@ async def test_update_github_project_same_due_on_does_not_call_github(
     from memory.api.MCP.servers.projects import upsert
 
     # Set initial due date on the project
-    github_milestone_project.due_on = datetime(2026, 6, 15, 12, 0, 0, tzinfo=tz.utc)
+    initial_due = datetime(2026, 6, 15, 12, 0, 0, tzinfo=tz.utc)
+    github_milestone_project.due_on = initial_due
     db_session.commit()
 
     mock_token = make_mock_access_token(github_milestone_project._test_session_id)
 
     mock_github_client = MagicMock()
+    mock_github_client.get_repo.return_value = {
+        "archived": False,
+        "id": 99999,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=tz.utc)
+    mock_github_client.fetch_milestone.return_value = {
+        "github_id": 111,
+        "number": 5,
+        "title": "v1.0 Release",
+        "description": "First major release",
+        "state": "open",
+        "due_on": initial_due,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.api.MCP.servers.projects.GithubClient") as mock_client_class,
+        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_github_client, github_milestone_project._test_repo),
+        ),
     ):
         mock_client_class.return_value = mock_github_client
 
@@ -1943,3 +2110,1472 @@ async def test_update_github_project_same_due_on_does_not_call_github(
     assert result.get("success") is True, f"Expected success, got: {result}"
     # Verify update_milestone was NOT called (no change in due_on)
     mock_github_client.update_milestone.assert_not_called()
+
+
+# =============================================================================
+# Conflict checks for clear_repo / clear_milestone (Task 1)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_clear_repo_and_repo_together(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_repo=True and repo=... together must error."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_repo=True,
+            repo="testorg/testrepo",
+        )
+
+    assert "error" in result
+    assert "clear_repo" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_clear_milestone_and_milestone_together(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_milestone=True and milestone=... together must error."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_milestone=True,
+            milestone="v2.0",
+        )
+
+    assert "error" in result
+    assert "clear_milestone" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_detach_standalone_project_is_noop(
+    db_session, user_session, teams_and_projects
+):
+    """clear_repo=True on a standalone project succeeds without changes."""
+    from memory.api.MCP.servers.projects import upsert
+
+    project = teams_and_projects["project_one"]
+    assert project.repo_id is None
+    mock_token = make_mock_access_token(user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_repo=True,
+        )
+
+    assert result.get("success") is True
+
+
+@pytest.mark.asyncio
+async def test_detach_github_project_no_items_succeeds(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Detaching a GitHub-backed project with no linked items clears the link."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+    project_id = project.id
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project_id,
+            clear_repo=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id is None
+    assert project.github_id is None
+    assert project.number is None
+
+
+@pytest.mark.asyncio
+async def test_detach_with_linked_items_refused_without_force(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Detach is refused when GithubItems point at the project."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+    from memory.common.db.models import GithubItem
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    item = GithubItem(
+        modality="github",
+        sha256=b"x" * 32,
+        kind="issue",
+        repo_path=github_repo.repo_path,
+        repo_id=github_repo.id,
+        number=42,
+        title="hello",
+        state="open",
+        author="alice",
+        labels=[],
+        assignees=[],
+        project_id=project.id,
+        size=10,
+        mime_type="text/markdown",
+        content="hello",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_repo=True,
+        )
+
+    assert "error" in result
+    assert "linked items" in result["error"].lower() or "linked" in result["error"].lower()
+    assert "force" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_detach_with_linked_items_succeeds_with_force(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Detach with force=True succeeds even with linked items."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+    from memory.common.db.models import GithubItem
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    item = GithubItem(
+        modality="github",
+        sha256=b"y" * 32,
+        kind="issue",
+        repo_path=github_repo.repo_path,
+        repo_id=github_repo.id,
+        number=43,
+        title="hi",
+        state="open",
+        author="bob",
+        labels=[],
+        assignees=[],
+        project_id=project.id,
+        size=10,
+        mime_type="text/markdown",
+        content="hi",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_repo=True,
+            force=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id is None
+
+
+@pytest.mark.asyncio
+async def test_clear_milestone_demotes_to_repo_level(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_milestone clears github_id/number but keeps repo_id."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_milestone=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id == github_repo.id
+    assert project.github_id is None
+    assert project.number is None
+
+
+@pytest.mark.asyncio
+async def test_clear_milestone_on_repo_level_is_noop(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_milestone on a repo-level project (no milestone) is a no-op."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_milestone=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id == github_repo.id
+
+
+@pytest.mark.asyncio
+async def test_clear_milestone_with_linked_items_refused_without_force(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_milestone is refused when GithubItems are linked."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+    from memory.common.db.models import GithubItem
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    item = GithubItem(
+        modality="github",
+        sha256=b"z" * 32,
+        kind="issue",
+        repo_path=github_repo.repo_path,
+        repo_id=github_repo.id,
+        number=44,
+        title="t",
+        state="open",
+        author="c",
+        labels=[],
+        assignees=[],
+        project_id=project.id,
+        size=1,
+        mime_type="text/markdown",
+        content="t",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_milestone=True,
+        )
+
+    assert "error" in result
+    assert "force" in result["error"].lower()
+
+
+def testrefresh_from_github_repo_archived_deactivates_repo(
+    db_session, github_repo
+):
+    """When GitHub reports archived=True, refresh marks repo inactive (in
+    memory — caller decides whether to commit) and raises RepoArchivedError."""
+    from memory.common.project.sync import refresh_from_github
+    from memory.common.project.errors import RepoArchivedError
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": True,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    with pytest.raises(RepoArchivedError) as exc_info:
+        refresh_from_github(db_session, mock_client, project)
+
+    assert "archived" in str(exc_info.value).lower()
+    # Mutate-only contract: deactivation is in memory until caller commits.
+    assert github_repo.active is False
+
+
+def testrefresh_from_github_repo_missing_deactivates_repo(
+    db_session, github_repo
+):
+    """When repo is gone (None), refresh marks repo inactive (in memory)
+    and raises RepoMissingError."""
+    from memory.common.project.sync import refresh_from_github
+    from memory.common.project.errors import RepoMissingError
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = None
+
+    with pytest.raises(RepoMissingError) as exc_info:
+        refresh_from_github(db_session, mock_client, project)
+
+    msg = str(exc_info.value).lower()
+    assert "no longer exists" in msg or "not found" in msg
+    # Mutate-only contract: deactivation is in memory until caller commits.
+    assert github_repo.active is False
+
+
+def testrefresh_from_github_milestone_pulls_fresh_state(
+    db_session, github_repo
+):
+    """When milestone state on GitHub differs, refresh applies it."""
+    from datetime import datetime, timezone
+    from memory.common.project.sync import refresh_from_github
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="OLD",
+        state="open",
+        description="old desc",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    mock_client.fetch_milestone.return_value = {
+        "github_id": 999,
+        "number": 1,
+        "title": "NEW",
+        "description": "new desc",
+        "state": "closed",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": fixed_time,
+    }
+
+    # Returns None on success
+    result = refresh_from_github(db_session, mock_client, project)
+
+    assert result is None
+    # Mutate-only contract: overlay is in memory until caller commits.
+    assert project.title == "NEW"
+    assert project.state == "closed"
+    assert project.description == "new desc"
+
+
+def testrefresh_from_github_missing_milestone_returns_error(
+    db_session, github_repo
+):
+    """When the milestone is gone (returns None), refresh raises but does not deactivate the repo."""
+    from memory.common.project.sync import refresh_from_github
+    from memory.common.project.errors import MilestoneMissingError
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=42,
+        title="ms",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    mock_client.fetch_milestone.return_value = None
+
+    with pytest.raises(MilestoneMissingError) as exc_info:
+        refresh_from_github(db_session, mock_client, project)
+
+    assert "milestone" in str(exc_info.value).lower()
+    # repo not deactivated for a missing milestone (mutate-only contract:
+    # repo.active is unchanged in memory)
+    assert github_repo.active is True
+
+
+@pytest.mark.asyncio
+async def test_update_github_project_refreshes_state_first(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Updating a GitHub-backed project pulls fresh state from GitHub first."""
+    from datetime import datetime, timezone
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="STALE",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    mock_client.fetch_milestone.return_value = {
+        "github_id": 999,
+        "number": 1,
+        "title": "FRESH",
+        "description": None,
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        # Just touching the project (e.g., clear_parent) triggers sync-on-mutate
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_parent=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.title == "FRESH"
+
+
+@pytest.mark.asyncio
+async def test_update_archived_repo_returns_error_and_deactivates(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Updating against an archived repo errors and marks repo inactive."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": True,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_parent=True,
+        )
+
+    assert "error" in result
+    assert "archived" in result["error"].lower()
+    db_session.refresh(github_repo)
+    assert github_repo.active is False
+
+
+@pytest.mark.asyncio
+async def test_detach_skips_sync_on_mutate(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """clear_repo=True must work even if GitHub side is broken — does not call refresh."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=999,
+        number=1,
+        title="ms",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    # Even if GitHub says repo is gone, detach should succeed
+    mock_client.get_repo.return_value = None
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            clear_repo=True,
+        )
+
+    assert result.get("success") is True
+    # get_repo should NOT have been called for detach
+    mock_client.get_repo.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attach_standalone_project_to_existing_repo(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Attach a standalone project to an existing tracked GithubRepo."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        github_id=None,
+        number=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+        mock_get_client_helpers.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="testorg/testrepo",
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id == github_repo.id
+
+
+@pytest.mark.asyncio
+async def test_attach_grants_existing_teams_repo_access_on_github(
+    db_session, github_user_session, github_repo
+):
+    """Regression: attach must trigger outbound team sync for existing teams,
+    even when team_ids isn't passed. Without this, projects could attach to a
+    repo with their teams silently lacking GitHub repo access.
+    """
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project, project_teams
+
+    team = Team(
+        name="Attach Sync Team",
+        slug="attach-sync-team",
+        github_team_id=2001,
+        github_team_slug="attach-sync",
+        github_org="testorg",
+    )
+    db_session.add(team)
+    db_session.flush()
+
+    project = Project(
+        id=-300,
+        repo_id=None,
+        github_id=None,
+        number=None,
+        title="Standalone",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.flush()
+    db_session.execute(
+        project_teams.insert().values(project_id=-300, team_id=team.id)
+    )
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.add_team_to_repo.return_value = True
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, github_repo)
+        mock_get_client_helpers.return_value = (mock_client, github_repo)
+
+        result = await get_fn(upsert)(
+            project_id=-300,
+            repo="testorg/testrepo",
+        )
+
+    assert result.get("success") is True
+    mock_client.add_team_to_repo.assert_called_once_with(
+        org="testorg",
+        team_slug="attach-sync",
+        owner="testorg",
+        repo="testrepo",
+        permission="push",
+    )
+
+
+@pytest.mark.asyncio
+async def test_attach_with_invalid_due_on_does_not_persist_attach(
+    db_session, github_user_session, github_repo
+):
+    """Regression for the validation-after-attach bug.
+
+    `update_project` used to run attach/promote/refresh BEFORE validating
+    `due_on`/`owner_id`/`parent_id`/`team_ids`/`title-on-github-backed`.
+    When validation rejected after the attach, the function returned an
+    error dict — but `make_session`'s clean-exit commit then persisted
+    the in-memory mutation from `handle_attach`. The fix moves all cheap
+    validations BEFORE any DB-mutating call.
+
+    To make this test reproduce the original bug (without the fix), it
+    deliberately uses a `make_session` mock whose `__exit__` actually
+    commits the wrapped session, mirroring production semantics. Other
+    tests in this file patch `make_session` with a non-committing mock,
+    which is why they did not catch this regression.
+    """
+    from contextlib import contextmanager
+
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    project = Project(
+        repo_id=None,
+        github_id=None,
+        number=None,
+        title="Standalone",
+        state="open",
+    )
+    db_session.add(project)
+    db_session.commit()
+    project_id = project.id
+
+    @contextmanager
+    def committing_session():
+        """Mimic real `make_session` semantics: commit on clean exit."""
+        try:
+            yield db_session
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            raise
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch(
+            "memory.api.MCP.servers.projects.make_session",
+            side_effect=lambda: committing_session(),
+        ),
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        result = await get_fn(upsert)(
+            project_id=project_id,
+            repo="testorg/testrepo",
+            due_on="not-a-real-date",
+        )
+
+    assert "error" in result, f"Expected error, got: {result}"
+    assert "due_on" in result["error"].lower() or "iso" in result["error"].lower()
+
+    # Key assertion: the project must NOT have been attached to the repo
+    # despite the error. Validation must run before any mutation.
+    db_session.expire_all()
+    refreshed = db_session.get(Project, project_id)
+    assert refreshed is not None
+    assert refreshed.repo_id is None, (
+        "Validation must run before attach; otherwise an invalid arg "
+        "silently commits the partial attach."
+    )
+
+
+@pytest.mark.asyncio
+async def test_attach_rejects_repo_when_already_attached_to_different_repo(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Cannot attach to a different repo without first detaching."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="otherorg/otherrepo",
+        )
+
+    assert "error" in result
+    assert "already attached" in result["error"].lower()
+    assert "clear_repo" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_attach_with_same_repo_is_noop_for_link(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """Passing repo equal to current attachment is a no-op for the link."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+    original_repo_id = project.repo_id
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="testorg/testrepo",
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id == original_repo_id
+
+
+@pytest.mark.asyncio
+async def test_attach_creates_repo_if_missing_with_create_repo_true(
+    db_session, github_user_session, teams_and_projects, github_account
+):
+    """Attach to a repo that doesn't have a tracking entry, with create_repo=True, creates it."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project, GithubRepo
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = None
+    mock_client.fetch_repository_info.return_value = None
+    mock_client.ensure_repository.return_value = (
+        {"github_id": 99, "owner": "neworg", "name": "newrepo"},
+        True,
+    )
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, None)
+        mock_get_client_helpers.return_value = (mock_client, None)
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="neworg/newrepo",
+            create_repo=True,
+        )
+
+    assert result.get("success") is True
+    db_session.refresh(project)
+    assert project.repo_id is not None
+    new_repo = db_session.query(GithubRepo).filter_by(owner="neworg", name="newrepo").first()
+    assert new_repo is not None
+
+
+@pytest.mark.asyncio
+async def test_attach_refuses_when_repo_missing_and_create_repo_false(
+    db_session, github_user_session, teams_and_projects, github_account
+):
+    """Attach refuses if the repo doesn't exist and create_repo isn't set."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.fetch_repository_info.return_value = None
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.get_github_client") as mock_get_client,
+        patch(
+            "memory.common.project.client.get_github_client"
+        ) as mock_get_client_helpers,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        mock_get_client.return_value = (mock_client, None)
+        mock_get_client_helpers.return_value = (mock_client, None)
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="neworg/newrepo",
+            create_repo=False,
+        )
+
+    assert "error" in result
+    assert "not found" in result["error"].lower() or "does not exist" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_promote_repo_level_to_milestone(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """milestone=X on a repo-level project promotes it to milestone-level."""
+    from datetime import datetime, timezone
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    mock_client.ensure_milestone.return_value = (
+        {
+            "github_id": 555,
+            "number": 7,
+            "title": "v2.0",
+            "description": None,
+            "state": "open",
+            "due_on": None,
+        },
+        False,
+    )
+    fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    mock_client.fetch_milestone.return_value = {
+        "github_id": 555,
+        "number": 7,
+        "title": "v2.0",
+        "description": None,
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            milestone="v2.0",
+            create_milestone=True,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    db_session.refresh(project)
+    assert project.number == 7
+    assert project.title == "v2.0"
+
+
+@pytest.mark.asyncio
+async def test_attach_with_milestone_in_one_step(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """repo=X, milestone=Y on a standalone project attaches + promotes."""
+    from datetime import datetime, timezone
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": False,
+        "id": 12345,
+        "owner": {"login": "testorg"},
+        "name": "testrepo",
+    }
+    mock_client.ensure_milestone.return_value = (
+        {
+            "github_id": 555,
+            "number": 7,
+            "title": "v2.0",
+            "description": None,
+            "state": "open",
+            "due_on": None,
+        },
+        False,
+    )
+    fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    mock_client.fetch_milestone.return_value = {
+        "github_id": 555,
+        "number": 7,
+        "title": "v2.0",
+        "description": None,
+        "state": "open",
+        "due_on": None,
+        "github_created_at": fixed_time,
+        "github_updated_at": fixed_time,
+        "closed_at": None,
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            repo="testorg/testrepo",
+            milestone="v2.0",
+            create_milestone=True,
+        )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    db_session.refresh(project)
+    assert project.repo_id == github_repo.id
+    assert project.number == 7
+
+
+@pytest.mark.asyncio
+async def test_milestone_without_repo_on_standalone_errors(
+    db_session, github_user_session, teams_and_projects
+):
+    """milestone=X on a standalone project (no repo specified) errors."""
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project.id,
+            milestone="v2.0",
+        )
+
+    assert "error" in result
+    assert "repo" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_attach_failed_refresh_leaves_project_standalone(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """If `refresh_from_github` reports the repo as archived right after a
+    successful attach, the project must remain standalone. Regression
+    against the bug where `refresh_from_github` committed internally,
+    making the in-memory rollback in `_handle_attach` a no-op against
+    persisted state.
+    """
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=None,
+        github_id=None,
+        number=None,
+        title="Standalone",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+    project_id = project.id
+
+    mock_client = MagicMock()
+    # First (and only) `get_repo` call comes from refresh_from_github after
+    # the link is assigned. Simulate the repo getting archived in the gap.
+    mock_client.get_repo.return_value = {
+        "archived": True,
+        "id": github_repo.github_id,
+        "owner": {"login": github_repo.owner},
+        "name": github_repo.name,
+    }
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+        patch(
+            "memory.common.project.client.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project_id,
+            repo=f"{github_repo.owner}/{github_repo.name}",
+        )
+
+    assert "error" in result
+    assert "archived" in result["error"].lower()
+
+    # Re-fetch from the database (not just refresh) to confirm the
+    # standalone state actually persisted across the failed attach.
+    db_session.expire_all()
+    refreshed = db_session.get(Project, project_id)
+    assert refreshed is not None
+    assert refreshed.repo_id is None, (
+        "Project must stay standalone after a failed refresh during attach"
+    )
+    # _mark_repo_inactive's commit must persist the deactivation.
+    refreshed_repo = db_session.get(GithubRepo, github_repo.id)
+    assert refreshed_repo is not None
+    assert refreshed_repo.active is False, (
+        "Repo must be deactivated when a failed attach detects archival"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_failed_refresh_leaves_project_at_repo_level(
+    db_session, github_user_session, teams_and_projects, github_repo
+):
+    """If `refresh_from_github` reports the repo as missing right after a
+    successful milestone promote, the project must stay at repo-level.
+    Regression against the same internal-commit bug in `refresh_from_github`.
+    """
+    from memory.api.MCP.servers.projects import upsert
+    from memory.common.db.models.sources import Project
+
+    team = teams_and_projects["team_alpha"]
+    project = Project(
+        repo_id=github_repo.id,
+        github_id=None,
+        number=None,
+        title="repo-level",
+        state="open",
+    )
+    project.teams.append(team)
+    db_session.add(project)
+    db_session.commit()
+    project_id = project.id
+
+    mock_client = MagicMock()
+    # The milestone create itself succeeds...
+    mock_client.ensure_milestone.return_value = (
+        {
+            "github_id": 555,
+            "number": 7,
+            "title": "v2.0",
+            "description": None,
+            "state": "open",
+            "due_on": None,
+        },
+        False,
+    )
+    # ...but the post-promote `get_repo` call (inside refresh_from_github)
+    # returns None, simulating the repo being deleted between the create and
+    # the refresh.
+    mock_client.get_repo.return_value = None
+
+    mock_token = make_mock_access_token(github_user_session.id)
+
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch(
+            "memory.api.MCP.servers.projects.get_github_client",
+            return_value=(mock_client, github_repo),
+        ),
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+
+        result = await get_fn(upsert)(
+            project_id=project_id,
+            milestone="v2.0",
+            create_milestone=True,
+        )
+
+    assert "error" in result
+    assert "no longer exists" in result["error"].lower() or "missing" in result["error"].lower() or "archived" in result["error"].lower()
+
+    db_session.expire_all()
+    refreshed = db_session.get(Project, project_id)
+    assert refreshed is not None
+    assert refreshed.number is None, (
+        "Project must stay at repo-level after a failed refresh during promote"
+    )
+    assert refreshed.github_id is None
+    # _mark_repo_inactive's commit must persist the deactivation.
+    refreshed_repo = db_session.get(GithubRepo, github_repo.id)
+    assert refreshed_repo is not None
+    assert refreshed_repo.active is False, (
+        "Repo must be deactivated when a failed promote detects missing repo"
+    )

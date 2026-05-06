@@ -5,16 +5,22 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.common.db.models import PendingJob, JobStatus, JobType, User
+from memory.common.db.models import HumanUser, PendingJob, JobStatus, JobType
 from memory.common import jobs as job_utils
 
 
 @pytest.fixture
 def test_user(db_session):
-    """Create a test user for job ownership tests."""
-    user = User(
-        name="Test User",
+    """Create a test user for job ownership tests.
+
+    Uses HumanUser (not the abstract base User) because the `users` table has
+    a `user_has_auth_method` check constraint requiring at least one of
+    password_hash / api_key / ssh credentials.
+    """
+    user = HumanUser.create_with_password(
         email="testuser@example.com",
+        password="dummy-test-password",
+        name="Test User",
     )
     db_session.add(user)
     db_session.commit()
@@ -621,3 +627,29 @@ def test_dispatch_job_stores_task_name(db_session):
 
     assert "_task_name" in result.job.params
     assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
+
+
+def test_tracked_task_passes_celery_retry_without_marking_failed():
+    """`@tracked_task` must not mark a PendingJob as FAILED when the wrapped
+    task raises celery.exceptions.Retry. Retries are an in-progress state, not
+    a final failure — marking the job FAILED would prematurely stop further
+    retry attempts from being correlated with the same job row.
+    """
+    from celery.exceptions import Retry
+
+    @job_utils.tracked_task
+    def retrying_task():
+        raise Retry(message="will retry", when=10)
+
+    with patch.object(
+        job_utils, "_start_or_create_job", return_value=42
+    ), patch.object(
+        job_utils, "_mark_job_failed"
+    ) as mark_failed, patch.object(
+        job_utils, "_mark_job_complete"
+    ) as mark_complete:
+        with pytest.raises(Retry):
+            retrying_task()
+
+    mark_failed.assert_not_called()
+    mark_complete.assert_not_called()

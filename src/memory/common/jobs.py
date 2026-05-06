@@ -13,8 +13,13 @@ from typing import Any, Callable, TypeVar, overload
 
 from sqlalchemy.exc import OperationalError
 
+from celery.exceptions import TaskPredicate
+
 from memory.common.celery_app import app as celery_app
-from memory.common.content_processing import get_celery_task_name, safe_task_execution
+from memory.common.content_processing import (
+    get_celery_task_name,
+    safe_task_execution,
+)
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import PendingJob, JobStatus, JobType
 
@@ -584,6 +589,11 @@ def tracked_task(
             # Run the task (safe_task_execution handles metrics + notifications)
             try:
                 result = safe_fn(*args, **kwargs)
+            except TaskPredicate:
+                # Celery flow control — Retry/Reject/Ignore are not failures.
+                # The PendingJob row is left in its in-progress state so the
+                # retried run can pick it up via incoming_job_id.
+                raise
             except Exception as exc:
                 _mark_job_failed(actual_job_id, str(exc)[:500])
                 raise
