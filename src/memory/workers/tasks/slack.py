@@ -16,7 +16,7 @@ import json
 import logging
 import pathlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from memory.common import settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
+    CLEANUP_STALE_SLACK_DRAFTS,
     SYNC_ALL_SLACK_WORKSPACES,
     SYNC_SLACK_CHANNEL,
     SYNC_SLACK_WORKSPACE,
@@ -34,6 +35,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import SlackMessage
 from memory.common.db.models.slack import (
+    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -696,3 +698,49 @@ def add_slack_message(
             session.rollback()
             logger.info(f"Message {message_ts} already exists (concurrent insert)")
             return {"status": "already_exists", "message_ts": message_ts}
+
+
+# Default lifetime of an unfinished `SlackApp` row before it can be reclaimed.
+# Per slack-changes.md §3.1 squatting mitigation: a malicious user can claim a
+# victim's client_id by creating a draft row, but the wizard never advances
+# without the real signing/client secrets. After this window, drafts are
+# auto-cleared and the client_id becomes registerable again.
+STALE_SLACK_DRAFT_AGE_HOURS = 24
+
+
+@app.task(name=CLEANUP_STALE_SLACK_DRAFTS)
+@tracked_task
+def cleanup_stale_slack_drafts(
+    max_age_hours: int = STALE_SLACK_DRAFT_AGE_HOURS,
+) -> dict[str, Any]:
+    """Delete `SlackApp` rows stuck in `setup_state='draft'` past the TTL.
+
+    Squatting mitigation: a stale draft holds the unique `client_id` slot but
+    can never be promoted to `live` without the real signing secret. After
+    `max_age_hours`, the draft is dropped so the legitimate owner can register.
+
+    Only `setup_state='draft'` rows are eligible — once an app reaches
+    `signing_verified` or `live`, it has demonstrated possession of the real
+    secrets and is never auto-deleted.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    logger.info(f"Cleaning up Slack draft apps created before {cutoff.isoformat()}")
+
+    with make_session() as session:
+        stale_drafts = (
+            session.query(SlackApp)
+            .filter(
+                SlackApp.setup_state == "draft",
+                SlackApp.created_at < cutoff,
+            )
+            .all()
+        )
+
+        deleted = 0
+        for draft in stale_drafts:
+            session.delete(draft)
+            deleted += 1
+
+        session.commit()
+
+    logger.info(f"Deleted {deleted} stale Slack draft apps")

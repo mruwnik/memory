@@ -1,5 +1,6 @@
 """Tests for Slack Celery tasks."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -634,3 +635,107 @@ def test_sync_slack_workspace_triggers_unlocked_channels(
     assert result["channels_triggered"] == 1
     # Channel sync task should have been sent
     mock_app.send_task.assert_called_once()
+
+
+def make_slack_app(
+    db_session, *, client_id: str, setup_state: str, age_hours: float
+) -> SlackApp:
+    """Insert a SlackApp with a backdated created_at for age tests."""
+    created_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    app_row = SlackApp(
+        client_id=client_id,
+        name=f"test-{client_id}",
+        setup_state=setup_state,
+        created_at=created_at,
+    )
+    db_session.add(app_row)
+    db_session.commit()
+    return app_row
+
+
+@pytest.mark.parametrize(
+    "setup_state, age_hours, should_delete",
+    [
+        # Drafts older than the 24h cutoff: deleted
+        ("draft", 25, True),
+        ("draft", 240, True),
+        # Drafts younger than the cutoff: retained
+        ("draft", 23, False),
+        ("draft", 0.1, False),
+        # Non-draft states: never auto-deleted regardless of age
+        ("signing_verified", 240, False),
+        ("live", 240, False),
+        ("degraded", 240, False),
+    ],
+)
+def test_cleanup_stale_slack_drafts_age_and_state(
+    db_session, setup_state, age_hours, should_delete
+):
+    """Only `draft` rows older than the cutoff are deleted."""
+    app_row = make_slack_app(
+        db_session,
+        client_id=f"cid.{setup_state}.{age_hours}",
+        setup_state=setup_state,
+        age_hours=age_hours,
+    )
+    app_id = app_row.id
+
+    result = slack.cleanup_stale_slack_drafts()
+
+    assert result["deleted"] == (1 if should_delete else 0)
+    survivor = db_session.query(SlackApp).filter(SlackApp.id == app_id).first()
+    if should_delete:
+        assert survivor is None
+    else:
+        assert survivor is not None
+
+
+def test_cleanup_stale_slack_drafts_partitions_correctly(db_session):
+    """A mixed set yields exactly the expected delete count."""
+    make_slack_app(db_session, client_id="old.1", setup_state="draft", age_hours=48)
+    make_slack_app(db_session, client_id="old.2", setup_state="draft", age_hours=72)
+    make_slack_app(db_session, client_id="fresh.1", setup_state="draft", age_hours=1)
+    make_slack_app(db_session, client_id="live.old", setup_state="live", age_hours=72)
+    make_slack_app(
+        db_session, client_id="verified.old", setup_state="signing_verified", age_hours=72
+    )
+
+    result = slack.cleanup_stale_slack_drafts()
+
+    assert result["deleted"] == 2
+    remaining_states = sorted(
+        row.setup_state for row in db_session.query(SlackApp).all()
+    )
+    assert remaining_states == ["draft", "live", "signing_verified"]
+
+
+def test_cleanup_stale_slack_drafts_respects_custom_max_age(db_session):
+    """Passing a smaller window deletes drafts that the default would keep."""
+    make_slack_app(db_session, client_id="five.h.draft", setup_state="draft", age_hours=5)
+    make_slack_app(db_session, client_id="one.h.draft", setup_state="draft", age_hours=1)
+
+    result = slack.cleanup_stale_slack_drafts(max_age_hours=2)
+
+    assert result["deleted"] == 1
+    survivor_ids = sorted(row.client_id for row in db_session.query(SlackApp).all())
+    assert survivor_ids == ["one.h.draft"]
+
+
+def test_cleanup_stale_slack_drafts_no_apps(db_session):
+    """No-op when the table is empty."""
+    result = slack.cleanup_stale_slack_drafts()
+    assert result == {"deleted": 0}
+
+
+def test_cleanup_stale_slack_drafts_frees_client_id(db_session):
+    """After cleanup, the squatted client_id can be re-registered."""
+    squatted = "victims.client.id"
+    make_slack_app(db_session, client_id=squatted, setup_state="draft", age_hours=48)
+
+    slack.cleanup_stale_slack_drafts()
+
+    # Legitimate owner can now claim the same client_id
+    legit = SlackApp(client_id=squatted, name="Legit App", setup_state="draft")
+    db_session.add(legit)
+    db_session.commit()
+    assert legit.id is not None

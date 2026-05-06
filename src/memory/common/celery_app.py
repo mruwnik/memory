@@ -41,6 +41,7 @@ SYNC_ALL_SLACK_WORKSPACES = f"{SLACK_ROOT}.sync_all_slack_workspaces"
 SYNC_SLACK_WORKSPACE = f"{SLACK_ROOT}.sync_slack_workspace"
 SYNC_SLACK_CHANNEL = f"{SLACK_ROOT}.sync_slack_channel"
 ADD_SLACK_MESSAGE = f"{SLACK_ROOT}.add_slack_message"
+CLEANUP_STALE_SLACK_DRAFTS = f"{SLACK_ROOT}.cleanup_stale_slack_drafts"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
@@ -368,6 +369,10 @@ def build_beat_schedule() -> dict:
         "sync-slack-workspaces": {
             "task": SYNC_ALL_SLACK_WORKSPACES,
             "schedule": settings.SLACK_SYNC_INTERVAL,
+        },
+        "cleanup-stale-slack-drafts": {
+            "task": CLEANUP_STALE_SLACK_DRAFTS,
+            "schedule": crontab(hour="3", minute="0"),
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,
