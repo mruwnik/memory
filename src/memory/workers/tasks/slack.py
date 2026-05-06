@@ -26,9 +26,13 @@ from sqlalchemy.exc import IntegrityError
 from memory.common import settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
+    MARK_SLACK_MESSAGE_DELETED,
+    SLACK_TOKEN_HEALTH_CHECK,
     SYNC_ALL_SLACK_WORKSPACES,
     SYNC_SLACK_CHANNEL,
     SYNC_SLACK_WORKSPACE,
+    UPDATE_SLACK_CHANNEL,
+    UPDATE_SLACK_REACTIONS,
     app,
 )
 from memory.common.db.connection import make_session
@@ -953,3 +957,233 @@ def add_slack_message(
 
     # Race detected — re-fetch and merge in a fresh session.
     return _merge_after_race(msg_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Push-event handlers (slack-changes.md §3.6)
+# ---------------------------------------------------------------------------
+
+
+@app.task(name=MARK_SLACK_MESSAGE_DELETED)
+@tracked_task
+def mark_slack_message_deleted(
+    workspace_id: str,
+    channel_id: str,
+    message_ts: str,
+    slack_app_id: int | None = None,
+) -> dict[str, Any]:
+    """Soft-delete a Slack message in response to a `message_deleted` event.
+
+    Stamps ``deleted_at`` so the row is hidden from search results while
+    audit history is preserved (slack-changes.md §3.6, §7 decision 4).
+    ``slack_app_id`` is accepted for parity with other push handlers but
+    isn't used for the lookup — message identity is
+    ``(workspace_id, channel_id, message_ts)``.
+    """
+    with make_session() as session:
+        message = (
+            session.query(SlackMessage)
+            .filter(
+                SlackMessage.workspace_id == workspace_id,
+                SlackMessage.channel_id == channel_id,
+                SlackMessage.message_ts == message_ts,
+            )
+            .first()
+        )
+        if not message:
+            logger.info(
+                f"mark_slack_message_deleted: no row for "
+                f"({workspace_id}, {channel_id}, {message_ts})"
+            )
+            return {"status": "not_found", "message_ts": message_ts}
+
+        if message.deleted_at is not None:
+            return {"status": "already_deleted", "message_ts": message_ts}
+
+        message.deleted_at = datetime.now(timezone.utc)
+        session.commit()
+        return {"status": "deleted", "message_ts": message_ts}
+
+
+def _reactions_apply_lock_key(
+    workspace_id: str, channel_id: str, message_ts: str
+) -> str:
+    return f"slack_reactions_apply:{workspace_id}:{channel_id}:{message_ts}"
+
+
+@app.task(name=UPDATE_SLACK_REACTIONS)
+@tracked_task
+def update_slack_reactions(
+    workspace_id: str,
+    channel_id: str,
+    message_ts: str,
+    reactions: list[dict] | None,
+    slack_app_id: int | None = None,
+) -> dict[str, Any]:
+    """Apply a `reaction_added` / `reaction_removed` event to a SlackMessage.
+
+    Slack delivers the FULL current reaction list on each event, so naive
+    overwrite is correct (per §7 decision 1). If the parent message row
+    is missing (race against ingestion), enqueue a single-message
+    conversations.history lookup and re-try.
+
+    Coalescing: a short-lived Redis lock keyed on the message ts prevents
+    duplicate concurrent updates from clobbering each other.
+    """
+    redis_client = get_redis_client()
+    lock_key = _reactions_apply_lock_key(workspace_id, channel_id, message_ts)
+    if not redis_client.set(lock_key, "1", nx=True, ex=30):
+        return {"status": "skipped", "reason": "concurrent_update"}
+
+    try:
+        with make_session() as session:
+            message = (
+                session.query(SlackMessage)
+                .filter(
+                    SlackMessage.workspace_id == workspace_id,
+                    SlackMessage.channel_id == channel_id,
+                    SlackMessage.message_ts == message_ts,
+                )
+                .first()
+            )
+            if not message:
+                # Parent missing — fall back to a single-message conversations.history
+                # fetch via add_slack_message, which will create the row. We pass the
+                # reactions list along so it's set on insert.
+                logger.info(
+                    f"update_slack_reactions: parent missing for "
+                    f"({workspace_id}, {channel_id}, {message_ts}); "
+                    f"deferring to add_slack_message"
+                )
+                app.send_task(
+                    ADD_SLACK_MESSAGE,
+                    kwargs={
+                        "workspace_id": workspace_id,
+                        "channel_id": channel_id,
+                        "message_ts": message_ts,
+                        "author_id": None,
+                        "content": "",
+                        "reactions": reactions,
+                        "slack_app_id": slack_app_id,
+                    },
+                )
+                return {"status": "deferred", "message_ts": message_ts}
+
+            message.reactions = reactions
+            session.commit()
+            return {"status": "updated", "message_ts": message_ts}
+    finally:
+        redis_client.delete(lock_key)
+
+
+@app.task(name=UPDATE_SLACK_CHANNEL)
+@tracked_task
+def update_slack_channel(
+    workspace_id: str,
+    channel_id: str,
+    channel_payload: dict,
+    slack_app_id: int | None = None,
+) -> dict[str, Any]:
+    """Cheap upsert of channel metadata in response to a `channel_*` event.
+
+    Used for ``channel_created`` (insert), ``channel_renamed`` (update name),
+    ``channel_archived`` / ``channel_unarchived`` (update is_archived).
+    """
+    name = channel_payload.get("name") or channel_id
+    is_private = bool(channel_payload.get("is_private", False))
+    is_archived = bool(channel_payload.get("is_archived", False))
+    channel_type = get_channel_type(channel_payload)
+
+    with make_session() as session:
+        channel = session.get(SlackChannel, channel_id)
+        created = channel is None
+        if channel is None:
+            channel = SlackChannel(
+                id=channel_id,
+                workspace_id=workspace_id,
+                name=name,
+                channel_type=channel_type,
+                is_private=is_private,
+                is_archived=is_archived,
+            )
+            session.add(channel)
+        else:
+            channel.name = name
+            channel.is_private = is_private
+            channel.is_archived = is_archived
+            channel.channel_type = channel_type
+        session.commit()
+        return {
+            "status": "created" if created else "updated",
+            "channel_id": channel_id,
+        }
+
+
+@app.task(name=SLACK_TOKEN_HEALTH_CHECK)
+@tracked_task
+def slack_token_health_check() -> dict[str, Any]:
+    """Hourly watchdog (slack-changes.md §3.8 / B6 fix).
+
+    For each SlackApp with ``setup_state='live'``: if zero events landed in
+    the last 24h AND any of its workspaces have ``collect_messages=True``,
+    probe a credential with ``auth.test``. On ``token_revoked`` /
+    ``invalid_auth``, flip ``setup_state='degraded'`` so the dashboard
+    surfaces the problem. Polling continues to run on degraded apps.
+    """
+    redis_client = get_redis_client()
+    flipped: list[int] = []
+    checked: list[int] = []
+
+    with make_session() as session:
+        live_apps = (
+            session.query(SlackApp)
+            .filter(SlackApp.setup_state == "live", SlackApp.is_active.is_(True))
+            .all()
+        )
+
+        for slack_app in live_apps:
+            checked.append(slack_app.id)
+            counter_key = f"slack_events_count:{slack_app.id}"
+            try:
+                events_24h = int(redis_client.get(counter_key) or 0)
+            except (TypeError, ValueError):
+                events_24h = 0
+            if events_24h > 0:
+                continue
+
+            collecting_workspaces = (
+                session.query(SlackWorkspace)
+                .join(
+                    SlackUserCredentials,
+                    SlackUserCredentials.workspace_id == SlackWorkspace.id,
+                )
+                .filter(
+                    SlackUserCredentials.slack_app_id == slack_app.id,
+                    SlackWorkspace.collect_messages.is_(True),
+                )
+                .first()
+            )
+            if collecting_workspaces is None:
+                continue
+
+            cred = get_workspace_credentials(
+                session, collecting_workspaces.id, slack_app.id
+            )
+            if cred is None or cred.access_token is None:
+                continue
+
+            try:
+                with SlackClient(cred.access_token) as client:
+                    client.call("auth.test")
+            except SlackAPIError as e:
+                if e.error in ("token_revoked", "invalid_auth", "token_expired"):
+                    slack_app.setup_state = "degraded"
+                    flipped.append(slack_app.id)
+                    logger.warning(
+                        f"slack_token_health_check: SlackApp {slack_app.id} "
+                        f"flipped to degraded ({e.error})"
+                    )
+        if flipped:
+            session.commit()
+
+    return {"checked": len(checked), "flipped": flipped}

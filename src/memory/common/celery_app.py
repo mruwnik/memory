@@ -43,6 +43,10 @@ SYNC_SLACK_WORKSPACE = f"{SLACK_ROOT}.sync_slack_workspace"
 SYNC_SLACK_CHANNEL = f"{SLACK_ROOT}.sync_slack_channel"
 ADD_SLACK_MESSAGE = f"{SLACK_ROOT}.add_slack_message"
 CLEANUP_STALE_SLACK_DRAFTS = f"{SLACK_ROOT}.cleanup_stale_slack_drafts"
+MARK_SLACK_MESSAGE_DELETED = f"{SLACK_ROOT}.mark_slack_message_deleted"
+UPDATE_SLACK_REACTIONS = f"{SLACK_ROOT}.update_slack_reactions"
+UPDATE_SLACK_CHANNEL = f"{SLACK_ROOT}.update_slack_channel"
+SLACK_TOKEN_HEALTH_CHECK = f"{SLACK_ROOT}.slack_token_health_check"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
@@ -381,6 +385,10 @@ def build_beat_schedule() -> dict:
         "cleanup-stale-slack-drafts": {
             "task": CLEANUP_STALE_SLACK_DRAFTS,
             "schedule": crontab(hour="3", minute="0"),
+        },
+        "slack-token-health-check": {
+            "task": SLACK_TOKEN_HEALTH_CHECK,
+            "schedule": crontab(minute="0"),  # hourly
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,
