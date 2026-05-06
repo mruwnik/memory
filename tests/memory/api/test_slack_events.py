@@ -122,3 +122,122 @@ def test_verify_slack_signature_basestring_uses_colon_separator():
     assert (
         _verify_slack_signature(secret, ts, body, f"v0={bad_digest}") is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher routing tests — _dispatch_event_callback
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch
+
+from memory.api.slack import _dispatch_event_callback
+
+
+def _capture_send_task():
+    """Patch celery_app.send_task and return the calls list."""
+    return patch("memory.api.slack.celery_app.send_task")
+
+
+@pytest.mark.parametrize(
+    "event, expected_task_suffix, expected_kwarg_keys",
+    [
+        # Plain message → ADD_SLACK_MESSAGE
+        (
+            {"event": {"type": "message", "ts": "1.2", "user": "U1", "text": "hi"},
+             "team_id": "T1"},
+            "add_slack_message",
+            {"workspace_id", "channel_id", "message_ts", "author_id", "content",
+             "slack_app_id"},
+        ),
+        # Edited → still ADD_SLACK_MESSAGE; merge logic in worker handles ordering.
+        (
+            {"event": {"type": "message", "subtype": "message_changed",
+                       "message": {"ts": "1.2", "user": "U1", "text": "edited"}},
+             "team_id": "T1"},
+            "add_slack_message",
+            {"workspace_id", "message_ts", "slack_app_id"},
+        ),
+        # Deleted → MARK_SLACK_MESSAGE_DELETED
+        (
+            {"event": {"type": "message", "subtype": "message_deleted",
+                       "deleted_ts": "1.2", "channel": "C1"},
+             "team_id": "T1"},
+            "mark_slack_message_deleted",
+            {"workspace_id", "channel_id", "message_ts", "slack_app_id"},
+        ),
+        # Reaction added → UPDATE_SLACK_REACTIONS
+        (
+            {"event": {"type": "reaction_added",
+                       "item": {"channel": "C1", "ts": "1.2"},
+                       "reactions": [{"name": "thumbsup", "count": 1}]},
+             "team_id": "T1"},
+            "update_slack_reactions",
+            {"workspace_id", "channel_id", "message_ts", "reactions",
+             "slack_app_id"},
+        ),
+        # Reaction removed → UPDATE_SLACK_REACTIONS (same handler as add).
+        (
+            {"event": {"type": "reaction_removed",
+                       "item": {"channel": "C1", "ts": "1.2"},
+                       "reactions": []},
+             "team_id": "T1"},
+            "update_slack_reactions",
+            {"workspace_id", "channel_id", "message_ts", "reactions",
+             "slack_app_id"},
+        ),
+    ],
+)
+def test_dispatch_event_callback_routes_correctly(
+    event, expected_task_suffix, expected_kwarg_keys
+):
+    with _capture_send_task() as mock_send:
+        result = _dispatch_event_callback(event, slack_app_id=42)
+
+    assert mock_send.called
+    task_name, kwargs = mock_send.call_args.args[0], mock_send.call_args.kwargs["kwargs"]
+    assert task_name.endswith(expected_task_suffix)
+    assert expected_kwarg_keys.issubset(kwargs.keys())
+    assert kwargs["slack_app_id"] == 42
+    assert result["dispatch"]
+
+
+def test_dispatch_event_callback_ignores_unknown_event_type():
+    """A future Slack event type we don't recognize must not crash and must
+    not enqueue a celery task — better to drop than to misroute."""
+    with _capture_send_task() as mock_send:
+        result = _dispatch_event_callback(
+            {"event": {"type": "team_renamed"}, "team_id": "T1"},
+            slack_app_id=1,
+        )
+    mock_send.assert_not_called()
+    assert result["dispatch"] == "ignored"
+
+
+def test_dispatch_event_callback_message_changed_uses_inner_message_block():
+    """`message_changed` events nest the actual message under
+    `event.message`. The dispatcher must read fields from that nested
+    object, not the outer event (which has type=message but may not
+    carry the post-edit ts/text)."""
+    with _capture_send_task() as mock_send:
+        _dispatch_event_callback(
+            {
+                "event": {
+                    "type": "message",
+                    "subtype": "message_changed",
+                    "message": {
+                        "ts": "1.5",
+                        "user": "U1",
+                        "text": "the edited content",
+                        "edited": {"ts": "1.6"},
+                    },
+                },
+                "team_id": "T1",
+            },
+            slack_app_id=7,
+        )
+    kwargs = mock_send.call_args.kwargs["kwargs"]
+    assert kwargs["message_ts"] == "1.5"
+    assert kwargs["content"] == "the edited content"
+    assert kwargs["edited_ts"] == "1.6"
+    # subtype is preserved so the merge logic knows this is an edit event.
+    assert kwargs["subtype"] == "message_changed"
