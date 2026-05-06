@@ -188,11 +188,45 @@ def by_collection(chunks: Sequence[Chunk]) -> dict[str, dict[str, Any]]:
     return collections
 
 
+def rollback_qdrant_writes(
+    client: Any, written: Sequence[tuple[str, list[Any]]]
+) -> None:
+    """Best-effort cleanup of recently-upserted Qdrant points.
+
+    Used to keep Qdrant consistent with the SQL store when a downstream step
+    fails after a successful (or partially successful) upsert. Never raises —
+    a rollback failure here is logged but must not mask the original error
+    that triggered the rollback.
+
+    Args:
+        client: Qdrant client
+        written: pairs of (collection_name, list_of_point_ids) that were
+            successfully upserted and now need to be removed
+    """
+    for collection_name, ids in written:
+        if not ids:
+            continue
+        try:
+            qdrant.delete_points(client, collection_name, [str(i) for i in ids])
+        except Exception:
+            logger.exception(
+                "Failed to roll back %d Qdrant points in collection %s; "
+                "manual cleanup may be required",
+                len(ids),
+                collection_name,
+            )
+
+
 def push_chunks_to_qdrant(chunks: Sequence[Chunk]) -> None:
     """Push chunks with their vectors directly to Qdrant.
 
     This function takes chunks that already have their vector attribute populated,
     avoiding the need to reload them from the database.
+
+    Multi-collection writes are best-effort atomic: if the upsert to one
+    collection fails after another already succeeded, the successful one is
+    rolled back so the caller observes "all or nothing" — no orphan points
+    in some collections without their counterparts in the others.
 
     Args:
         chunks: Sequence of Chunk objects with populated vector attributes
@@ -205,14 +239,21 @@ def push_chunks_to_qdrant(chunks: Sequence[Chunk]) -> None:
 
     client = qdrant.get_qdrant_client()
     collections = by_collection(chunks)
-    for collection_name, collection in collections.items():
-        qdrant.upsert_vectors(
-            client=client,
-            collection_name=collection_name,
-            ids=collection["ids"],
-            vectors=collection["vectors"],
-            payloads=collection["payloads"],
-        )
+    written: list[tuple[str, list[Any]]] = []
+    try:
+        for collection_name, collection in collections.items():
+            qdrant.upsert_vectors(
+                client=client,
+                collection_name=collection_name,
+                ids=collection["ids"],
+                vectors=collection["vectors"],
+                payloads=collection["payloads"],
+            )
+            written.append((collection_name, list(collection["ids"])))
+    except Exception:
+        # Roll back successful upserts so the caller sees all-or-nothing.
+        rollback_qdrant_writes(client, written)
+        raise
 
 
 def push_to_qdrant(source_items: Sequence[SourceItem]):
@@ -346,8 +387,10 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     chunks_with_vectors = list(item.chunks)
     session.commit()
 
+    qdrant_written = False
     try:
         push_chunks_to_qdrant(chunks_with_vectors)
+        qdrant_written = True
         status = "processed"
         item.embed_status = "STORED"  # type: ignore
         logger.info(
@@ -358,9 +401,39 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         item.embed_status = "FAILED"  # type: ignore
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
         logger.error(traceback.format_exc())
-    session.commit()
+
+    # If the final embed_status update can't be persisted but Qdrant already
+    # accepted the points, the points are orphaned (chunks committed at line
+    # ~347 above are recoverable, but a later DB failure would leave Qdrant
+    # holding state that doesn't match the SourceItem's recorded status).
+    # Roll the points back so re-runs can re-index cleanly.
+    try:
+        session.commit()
+    except Exception:
+        if qdrant_written:
+            rollback_qdrant_writes(
+                qdrant.get_qdrant_client(),
+                _chunks_by_collection(chunks_with_vectors),
+            )
+        raise
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
+
+
+def _chunks_by_collection(
+    chunks: Sequence[Chunk],
+) -> list[tuple[str, list[Any]]]:
+    """Group chunk IDs by their target Qdrant collection.
+
+    Used by rollback paths that need to undo a successful multi-collection
+    upsert by point id.
+    """
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for chunk in chunks:
+        if chunk.id is None or chunk.collection_name is None:
+            continue
+        grouped[cast(str, chunk.collection_name)].append(chunk.id)
+    return list(grouped.items())
 
 
 def extract_task_params(
