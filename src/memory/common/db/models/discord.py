@@ -127,15 +127,23 @@ class DiscordServer(Base):
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
+    # Owning bot: the bot that first registered this server.
+    # Used to scope visibility so users only see/edit servers their bots are in.
+    bot_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_bots.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Relationships
     channels: Mapped[list[DiscordChannel]] = relationship(
         "DiscordChannel", back_populates="server", cascade="all, delete-orphan"
     )
+    bot: Mapped[DiscordBot | None] = relationship("DiscordBot")
 
     __table_args__ = (
         CheckConstraint("sensitivity IN ('public', 'basic', 'internal', 'confidential')", name="valid_discord_server_sensitivity"),
         Index("discord_servers_collect_idx", "collect_messages"),
         Index("discord_servers_project_idx", "project_id"),
+        Index("discord_servers_bot_idx", "bot_id"),
     )
 
 

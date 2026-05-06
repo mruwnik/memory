@@ -6,10 +6,18 @@ import logging
 
 from fastmcp import FastMCP
 
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
+from memory.common.access_control import (
+    apply_access_filter_to_query,
+    build_access_filter,
+    get_user_project_roles,
+)
 from memory.common.celery_app import SYNC_NOTE
 from memory.common.celery_app import app as celery_app
+from memory.common.db.connection import make_session
+from memory.common.db.models import Note
 from memory.common.scopes import SCOPE_NOTES, SCOPE_NOTES_WRITE
 
 logger = logging.getLogger(__name__)
@@ -53,6 +61,9 @@ async def upsert(
         except ValueError as e:
             raise ValueError(f"Invalid filename: {e}")
 
+    user = get_mcp_current_user()
+    creator_id = user.id if user else None
+
     try:
         task = celery_app.send_task(
             SYNC_NOTE,
@@ -64,6 +75,7 @@ async def upsert(
                 "note_type": note_type,
                 "confidences": confidences,
                 "tags": tags,
+                "creator_id": creator_id,
             },
         )
     except Exception as e:
@@ -92,15 +104,44 @@ async def note_files(path: str = "/"):
 
     Returns: List of file paths relative to notes directory
     """
+    # Validate and normalise the requested path prefix (prevents traversal)
     try:
-        root = paths.validate_path_within_directory(
-            settings.NOTES_STORAGE_DIR, path, require_exists=True
-        )
+        paths.validate_path_within_directory(settings.NOTES_STORAGE_DIR, path)
     except ValueError as e:
         raise ValueError(f"Invalid path: {e}")
 
-    return [
-        f"/notes/{f.relative_to(settings.NOTES_STORAGE_DIR)}"
-        for f in root.rglob("*.md")
-        if f.is_file()
-    ]
+    # Normalise to a prefix string we can use for DB filtering.
+    # Strip leading "/" so it matches Note.filename (stored without leading slash).
+    path_prefix = path.lstrip("/")
+
+    user = get_mcp_current_user()
+    if user is None:
+        return []
+
+    with make_session() as session:
+        query = session.query(Note.filename).filter(Note.filename.isnot(None))
+
+        # Notes are private artefacts — no public-bypass even if a Note ever
+        # ends up with sensitivity="public". Project access + creator override
+        # + person override all still apply, via the central access filter so
+        # this stays in lock-step with search.
+        access_filter = build_access_filter(
+            user,
+            get_user_project_roles(session, user),  # type: ignore[arg-type]
+            include_public=False,
+        )
+        query = apply_access_filter_to_query(query, access_filter)
+
+        # Apply directory prefix filter when a sub-path was requested.
+        # autoescape=True is required: without it, SQLAlchemy's startswith()
+        # passes % and _ through unescaped (it just appends "%" to the pattern),
+        # which would let path="%/secret" enumerate beyond the requested
+        # subtree.
+        if path_prefix:
+            query = query.filter(
+                Note.filename.startswith(path_prefix, autoescape=True)
+            )
+
+        rows = query.all()
+
+    return [f"/notes/{row.filename}" for row in rows]

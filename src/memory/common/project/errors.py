@@ -167,3 +167,11 @@ class ProjectIdGenerationError(ProjectError):
 
 class GithubMilestoneSyncError(ProjectError):
     """Failed to push milestone state (e.g. due_on) to GitHub."""
+
+
+class ProjectAccessDeniedError(ProjectError):
+    """Caller lacks permission to read or modify the existing project."""
+
+    def __init__(self, project_id: int):
+        super().__init__(f"Access denied to project {project_id}")
+        self.project_id = project_id

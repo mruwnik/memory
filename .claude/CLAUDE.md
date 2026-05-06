@@ -229,6 +229,44 @@ Key settings (see `src/memory/common/settings.py`):
 - `FILE_STORAGE_DIR` - Where uploaded files are stored
 - `ENABLE_BM25_SEARCH`, `ENABLE_HYDE_EXPANSION`, `ENABLE_RERANKING`, `ENABLE_QUERY_ANALYSIS` - Search feature toggles
 
+## Code Style
+
+### Naming Conventions
+
+#### Underscore Prefix (`_name`)
+
+Reserve underscore-prefixed names for **truly private** items that are unsafe or incorrect to use from outside their immediate context:
+
+- Functions that require preconditions (e.g., caller must hold a lock)
+- Internal thread targets or callbacks
+- Module-level state that must not be accessed directly
+
+**Don't** use underscores merely because a function/exception/constant is only used within one file. File-local helpers that are safe to call should use regular names — the leading underscore should signal "calling this from outside is unsafe", not "this lives in the same file".
+
+```python
+# Good — underscore for truly private (requires lock held)
+def _start_writer_locked() -> None:
+    """Caller must hold _writer_lock."""
+    ...
+
+# Good — no underscore for file-local helpers that are safe to call
+def truncate_value(value: Any, max_length: int) -> Any:
+    """Truncate large values for storage."""
+    ...
+
+CSP_FORBIDDEN_CHARS = frozenset({";", "\r", "\n"})
+
+class UnsafeSubpathError(Exception):
+    """Raised when a request subpath contains traversal or empty segments."""
+
+# Bad — underscore just because used in one file today
+def _truncate_value(value: Any, max_length: int) -> Any: ...
+class _UnsafeSubpathError(Exception): ...
+_CSP_FORBIDDEN_CHARS = frozenset(...)
+```
+
+This matters because today's "file-private" helper often becomes tomorrow's "imported from another file" helper, and renaming on import day generates churn that obscures the actual change.
+
 ## Testing
 
 ```bash

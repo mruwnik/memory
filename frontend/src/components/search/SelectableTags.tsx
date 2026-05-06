@@ -8,7 +8,9 @@ interface SelectableTagProps {
 
 const SelectableTag = ({ tag, selected, onSelect }: SelectableTagProps) => {
     return (
-        <span
+        <button
+            type="button"
+            aria-pressed={selected}
             className={`px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
                 selected
                     ? 'bg-primary text-white'
@@ -17,7 +19,7 @@ const SelectableTag = ({ tag, selected, onSelect }: SelectableTagProps) => {
             onClick={() => onSelect(tag, !selected)}
         >
             {tag}
-        </span>
+        </button>
     )
 }
 

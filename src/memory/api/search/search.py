@@ -343,6 +343,7 @@ def _build_search_data(
 def _fetch_chunks_by_title(
     titles: list[str],
     modalities: set[str],
+    filters: "SearchFilters | None" = None,
     limit_per_title: int = 5,
 ) -> dict[str, float]:
     """
@@ -350,6 +351,10 @@ def _fetch_chunks_by_title(
 
     This ensures recalled content from LLM makes it into the candidate pool
     even if BM25/embedding search doesn't rank it highly.
+
+    Access control is applied via the access_filter in `filters` so that
+    LLM prompt-injection cannot exfiltrate unauthorized content by injecting
+    confidential document titles into the recalled_content array.
     """
     if not titles or not modalities:
         return {}
@@ -357,13 +362,18 @@ def _fetch_chunks_by_title(
     # Normalize titles for matching
     titles_lower = [t.lower() for t in titles[:5]]
 
+    # Import here to avoid circular dependency
+    from memory.api.search.bm25 import apply_access_filter
+
+    access_filter = (filters or {}).get("access_filter")
+
     with make_session() as db:
-        # Query sources in requested modalities
-        # We need to fetch the polymorphic models to get their title attributes
+        # Query sources in requested modalities, applying access control
+        sources_query = db.query(SourceItem).filter(SourceItem.modality.in_(modalities))
+        sources_query = apply_access_filter(sources_query, access_filter)
         sources = (
-            db.query(SourceItem)
-            .filter(SourceItem.modality.in_(modalities))
-            .limit(500)  # Reasonable limit for title scanning
+            sources_query
+            .limit(200)  # Reduced from 500; access filter narrows the set
             .all()
         )
 
@@ -440,9 +450,10 @@ async def _run_searches(
     fused = fuse_scores_rrf(embedding_scores, bm25_scores)
 
     # Add chunks from recalled titles (direct title match)
-    # This ensures LLM-recalled content makes it into the candidate pool
+    # This ensures LLM-recalled content makes it into the candidate pool.
+    # Pass filters so access control prevents prompt-injection exfiltration.
     if recalled_titles:
-        title_chunks = _fetch_chunks_by_title(recalled_titles, modalities)
+        title_chunks = _fetch_chunks_by_title(recalled_titles, modalities, filters)
         for chunk_id, score in title_chunks.items():
             if chunk_id not in fused:
                 fused[chunk_id] = score

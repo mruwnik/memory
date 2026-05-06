@@ -16,6 +16,13 @@ from sqlalchemy import Text, any_, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.common.access_control import (
+    apply_access_filter_to_query,
+    build_access_filter,
+    filter_projects_query,
+    get_user_project_roles,
+    has_admin_scope,
+)
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     GithubItem,
@@ -123,12 +130,24 @@ def list_issues(
     deadline_before: str | None = None,
     limit: int = 50,
     order_by: str = "updated",
+    user: Any = None,
 ) -> list[dict]:
     """List GitHub issues and PRs with flexible filtering."""
     limit = min(limit, 200)
 
     with make_session() as session:
         query = session.query(GithubItem)
+
+        # Apply the central access filter so list_issues mirrors search:
+        # creator override + person override + public bypass + project access,
+        # in lock-step with bm25.apply_access_filter and core.fetch_file.
+        # GithubItem inherits SourceItem columns via single-table inheritance,
+        # so referencing SourceItem.* in the filter resolves to the same row.
+        if user is not None:
+            access_filter = build_access_filter(
+                user, get_user_project_roles(session, user)
+            )
+            query = apply_access_filter_to_query(query, access_filter)
 
         if repo:
             query = query.filter(GithubItem.repo_path == repo)
@@ -196,12 +215,17 @@ def list_milestones(
     state: str | None = None,
     deadline_before: str | None = None,
     limit: int = 50,
+    user: Any = None,
 ) -> list[dict]:
     """List GitHub milestones with filtering options."""
     limit = min(limit, 200)
 
     with make_session() as session:
         query = session.query(Project).join(GithubRepo)
+
+        # Apply access control: only return milestones from accessible projects
+        if user is not None and not has_admin_scope(user):
+            query = filter_projects_query(session, user, query)
 
         if repo:
             parts = repo.split("/")

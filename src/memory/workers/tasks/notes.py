@@ -161,6 +161,7 @@ def sync_note(
     confidences: dict[str, float] | None = None,
     tags: list[str] | None = None,
     save_to_file: bool = True,
+    creator_id: int | None = None,
 ):
     confidences = confidences or {}
     tags = tags or []
@@ -195,6 +196,10 @@ def sync_note(
         note.embed_status = "RAW"  # type: ignore
         note.size = len(text.encode("utf-8"))  # type: ignore
         note.sha256 = sha256  # type: ignore
+
+        # Only set creator_id on new notes; preserve existing ownership on updates
+        if creator_id is not None and note.creator_id is None:
+            note.creator_id = creator_id  # type: ignore
 
         if note_type:
             note.note_type = note_type  # type: ignore

@@ -130,6 +130,7 @@ async def list_entities(
     logger.info(f"github_list called: type={type}, repo={repo}, owner={owner}")
 
     limit = int(limit)
+    user = get_mcp_current_user()
 
     if type == "issue":
         return list_issues(
@@ -147,6 +148,7 @@ async def list_entities(
             deadline_before=deadline_before,
             limit=limit,
             order_by=order_by,
+            user=user,
         )
     elif type == "milestone":
         return list_milestones(
@@ -154,6 +156,7 @@ async def list_entities(
             state=state,
             deadline_before=deadline_before,
             limit=limit,
+            user=user,
         )
     elif type == "project":
         return list_projects(
