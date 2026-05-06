@@ -19,7 +19,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, resolve_user_filter
@@ -123,6 +124,66 @@ class SlackChannelUpdate(BaseModel):
     # Access control
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+
+
+# --- SlackApp request/response models (§3.2, §4 S4) ---
+
+
+class SlackAppCreate(BaseModel):
+    """Body for POST /slack/apps."""
+
+    name: str
+    client_id: str
+
+
+class SlackAppUpdate(BaseModel):
+    """Body for PATCH /slack/apps/{id}.
+
+    `setup_state` is intentionally NOT here — state advances only via the
+    wizard endpoints (paste-secret + url_verification + test-message).
+    Direct mutation would let an owner bypass verification.
+    """
+
+    name: str | None = None
+    is_active: bool | None = None
+
+
+class SlackAppAuthorizedUserAdd(BaseModel):
+    """Body for POST /slack/apps/{id}/authorized-users."""
+
+    user_id: int
+
+
+class SlackAppAuthorizedUser(BaseModel):
+    """Slim user shape returned in the authorized_users list. Email kept
+    so the owner can identify who they have authorized."""
+
+    id: int
+    email: str
+    name: str | None
+
+
+class SlackAppResponse(BaseModel):
+    """Public-facing SlackApp serialization.
+
+    NEVER includes the encrypted secret blobs or the decrypted secrets —
+    only boolean configuration markers. The owner uses the wizard
+    endpoints to (re)set secrets; nobody reads them back through the API.
+    See §4 S4.
+    """
+
+    id: int
+    client_id: str
+    name: str
+    setup_state: str
+    is_active: bool
+    is_owner: bool
+    created_by_user_id: int | None
+    created_at: str | None
+    updated_at: str | None
+    client_secret_configured: bool
+    signing_secret_configured: bool
+    authorized_users: list[SlackAppAuthorizedUser]
 
 
 # --- Helper Functions ---
@@ -447,9 +508,16 @@ async def slack_callback(
     # above, but re-encoding here means a future caller wiring a different
     # value into this template (wizard test-message tokens, future OAuth
     # flows, etc.) gets the same safety guarantee. See SECURITY/MED f2feda6d.
+    #
+    # Per-user BroadcastChannel name (§4 S12, security L3): a global
+    # 'slack-oauth' channel name leaks the oauth-complete event across
+    # tenants — any open Memory tab in any other browser session in the
+    # same origin would receive it. Scope to slack-oauth-{user_id}; the
+    # frontend wizard listens on that user-specific channel.
     frontend_url = f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
     workspace_id_js = json.dumps(team_id)
     frontend_url_js = json.dumps(frontend_url)
+    channel_name_js = json.dumps(f"slack-oauth-{user.id}")
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -457,8 +525,10 @@ async def slack_callback(
     <body>
         <p>Slack workspace connected successfully. Redirecting...</p>
         <script>
-            // Notify any listening windows via BroadcastChannel
-            const channel = new BroadcastChannel('slack-oauth');
+            // Notify any listening windows via BroadcastChannel.
+            // Channel name is scoped to the authenticated user so the
+            // event doesn't leak across tenants — see §4 S12.
+            const channel = new BroadcastChannel({channel_name_js});
             channel.postMessage({{ type: 'oauth-complete', workspaceId: {workspace_id_js} }});
             channel.close();
 
@@ -657,3 +727,251 @@ def update_channel(
     db.refresh(channel)
 
     return channel_to_response(channel)
+
+
+# ===========================================================================
+# /slack/apps CRUD — slack-changes.md §3.2 + §4 S4 / S11 / S12
+# ===========================================================================
+#
+# Lifecycle: a SlackApp is created in `setup_state='draft'` here. The wizard
+# endpoints (POST /slack/apps/{id}/client-secret etc.) advance state to
+# 'signing_verified' and finally 'live'. Direct setup_state mutation via
+# PATCH is intentionally not allowed — verification is a sequence of real
+# Slack API checks, not a flag a privileged user can flip.
+#
+# Owner vs authorized rule (§4 S4):
+# * Owner = `created_by_user_id` of the row.
+# * Authorized = users in the `slack_app_users` join table.
+# * Owner-only:    PATCH, DELETE, authorized-users add/remove,
+#                  client-secret + signing-secret rotation (wizard).
+# * Authorized:    OAuth flow (insert SlackUserCredentials), GET /apps,
+#                  GET /apps/{id}.
+# * Secrets are NEVER returned in any response — only the `*_configured`
+#   booleans. The encrypted bytes never leave the server.
+
+
+def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse:
+    """Public serialization of a SlackApp row.
+
+    Drops both encrypted blobs and any decrypted secret values. Only the
+    `*_configured` booleans signal whether the owner has supplied each
+    secret yet (used by the wizard UI to decide which step to show next).
+    """
+    return SlackAppResponse(
+        id=app.id,
+        client_id=app.client_id,
+        name=app.name,
+        setup_state=app.setup_state,
+        is_active=app.is_active,
+        is_owner=app.is_owner(current_user),
+        created_by_user_id=app.created_by_user_id,
+        created_at=app.created_at.isoformat() if app.created_at else None,
+        updated_at=app.updated_at.isoformat() if app.updated_at else None,
+        client_secret_configured=app.client_secret_encrypted is not None,
+        signing_secret_configured=app.signing_secret_encrypted is not None,
+        authorized_users=[
+            SlackAppAuthorizedUser(id=u.id, email=u.email, name=u.name)
+            for u in app.authorized_users
+        ],
+    )
+
+
+def get_slack_app_for_authorized_user(
+    db: Session, app_id: int, user: User
+) -> SlackApp:
+    """Fetch a SlackApp the user is authorized to see.
+
+    Authorized = owner OR in the authorized_users list. Anyone else gets
+    a 404 (don't leak app existence — same response whether the row
+    doesn't exist OR the user isn't authorized; §4 S11).
+    """
+    app = db.get(SlackApp, app_id)
+    if app is None or not app.is_authorized(user):
+        raise HTTPException(status_code=404, detail="Slack app not found")
+    return app
+
+
+def get_slack_app_for_owner(db: Session, app_id: int, user: User) -> SlackApp:
+    """Fetch a SlackApp owned by the user.
+
+    Authorized-but-not-owner gets 403 (we DO want to signal that the row
+    exists and they're authorized, just not for this action). Non-authorized
+    users continue to get 404 to avoid existence leakage.
+    """
+    app = db.get(SlackApp, app_id)
+    if app is None or not app.is_authorized(user):
+        raise HTTPException(status_code=404, detail="Slack app not found")
+    if not app.is_owner(user):
+        raise HTTPException(
+            status_code=403, detail="Only the app's owner can perform this action"
+        )
+    return app
+
+
+def list_slack_apps_for_user(db: Session, user: User) -> list[SlackApp]:
+    """All SlackApps the user owns or has been authorized for.
+
+    Implemented as a single union query rather than two queries + dedup
+    so callers always get a stable, deduplicated result set.
+    """
+    owned = SlackApp.created_by_user_id == user.id
+    authorized = SlackApp.id.in_(
+        db.query(SlackApp.id)
+        .join(SlackApp.authorized_users)
+        .filter(User.id == user.id)
+    )
+    return db.query(SlackApp).filter(or_(owned, authorized)).all()
+
+
+@router.post("/apps", response_model=SlackAppResponse, status_code=201)
+def create_slack_app(
+    body: SlackAppCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Create a draft SlackApp claim for a (new) Slack client_id.
+
+    Returns 409 if another user has already claimed the same client_id.
+    Per §3.1 squatting mitigation: the legitimate client_id owner can
+    wait 24h for the stale-draft cleanup task to free the slot, or
+    contact support.
+    """
+    app = SlackApp(
+        name=body.name,
+        client_id=body.client_id,
+        created_by_user_id=user.id,
+        setup_state="draft",
+        is_active=True,
+    )
+    db.add(app)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Don't reveal whether the existing row is owned by this user vs
+        # someone else — uniform 409 either way (§4 S11 information
+        # discipline).
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A Slack app with this client_id already exists. If you own "
+                "this client_id, wait up to 24 hours for the squatting "
+                "cleanup or contact support."
+            ),
+        )
+    db.refresh(app)
+    return slack_app_to_response(app, user)
+
+
+@router.get("/apps", response_model=list[SlackAppResponse])
+def list_slack_apps(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[SlackAppResponse]:
+    """List apps the current user owns or has been authorized for."""
+    apps = list_slack_apps_for_user(db, user)
+    return [slack_app_to_response(a, user) for a in apps]
+
+
+@router.get("/apps/{app_id}", response_model=SlackAppResponse)
+def get_slack_app(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Get a single SlackApp by id (owner or authorized user only)."""
+    app = get_slack_app_for_authorized_user(db, app_id, user)
+    return slack_app_to_response(app, user)
+
+
+@router.patch("/apps/{app_id}", response_model=SlackAppResponse)
+def update_slack_app(
+    app_id: int,
+    body: SlackAppUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Update display name / is_active. Owner only."""
+    app = get_slack_app_for_owner(db, app_id, user)
+
+    if body.name is not None:
+        app.name = body.name
+    if body.is_active is not None:
+        app.is_active = body.is_active
+
+    db.commit()
+    db.refresh(app)
+    return slack_app_to_response(app, user)
+
+
+@router.delete("/apps/{app_id}", status_code=204)
+def delete_slack_app(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> None:
+    """Delete a SlackApp. Owner only.
+
+    Cascades to SlackUserCredentials (per the model's relationship
+    cascade='all, delete-orphan'), so deleting the app also disconnects
+    every workspace the app was used to authenticate.
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+    db.delete(app)
+    db.commit()
+
+
+@router.post(
+    "/apps/{app_id}/authorized-users",
+    response_model=SlackAppResponse,
+    status_code=201,
+)
+def add_authorized_user(
+    app_id: int,
+    body: SlackAppAuthorizedUserAdd,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Add a user to authorized_users. Owner only."""
+    app = get_slack_app_for_owner(db, app_id, user)
+
+    target = db.get(User, body.user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target not in app.authorized_users:
+        app.authorized_users.append(target)
+        db.commit()
+        db.refresh(app)
+
+    return slack_app_to_response(app, user)
+
+
+@router.delete(
+    "/apps/{app_id}/authorized-users/{user_id}",
+    response_model=SlackAppResponse,
+)
+def remove_authorized_user(
+    app_id: int,
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackAppResponse:
+    """Remove a user from authorized_users. Owner only.
+
+    Removing the owner from authorized_users is a no-op (they're owner
+    by virtue of created_by_user_id, not the join table — `is_authorized`
+    checks both).
+    """
+    app = get_slack_app_for_owner(db, app_id, user)
+
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target in app.authorized_users:
+        app.authorized_users.remove(target)
+        db.commit()
+        db.refresh(app)
+
+    return slack_app_to_response(app, user)

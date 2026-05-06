@@ -783,3 +783,401 @@ def test_slack_callback_proceeds_when_session_matches_state(
     # The XSS guard further down rejects the malformed team_id with 400.
     assert response.status_code == 400
     assert "team id" in response.json()["detail"].lower()
+
+
+# ==============================================================
+# /slack/apps CRUD (slack-changes.md §3.2 + §4 S4 / S11 / S12)
+# ==============================================================
+
+
+def test_create_slack_app_returns_draft(client, db_session, user):
+    """POST /slack/apps creates a row owned by the caller, in draft state."""
+    response = client.post(
+        "/slack/apps",
+        json={"name": "My App", "client_id": "1234.5678"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["client_id"] == "1234.5678"
+    assert body["name"] == "My App"
+    assert body["setup_state"] == "draft"
+    assert body["is_active"] is True
+    assert body["is_owner"] is True
+    assert body["created_by_user_id"] == user.id
+    # Secrets must NOT be exposed.
+    assert body["client_secret_configured"] is False
+    assert body["signing_secret_configured"] is False
+    assert "client_secret" not in body
+    assert "signing_secret" not in body
+    assert "client_secret_encrypted" not in body
+    assert "signing_secret_encrypted" not in body
+    assert body["authorized_users"] == []
+
+
+def test_create_slack_app_duplicate_client_id_returns_409(client, db_session, user):
+    """A second POST with the same client_id (even by the same user) is 409.
+
+    The error message points at the squatting cleanup window so the
+    legitimate owner has a path forward.
+    """
+    first = client.post(
+        "/slack/apps", json={"name": "First", "client_id": "dup.id"}
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/slack/apps", json={"name": "Second", "client_id": "dup.id"}
+    )
+    assert second.status_code == 409
+    assert "client_id" in second.json()["detail"]
+    assert "24 hours" in second.json()["detail"] or "support" in second.json()["detail"]
+
+
+def test_create_slack_app_secret_blob_never_leaks_via_get(
+    client, db_session, user
+):
+    """Even after a secret is set in the DB (simulating wizard step), the
+    response only signals via *_configured booleans — never the bytes."""
+    create = client.post(
+        "/slack/apps", json={"name": "WithSecret", "client_id": "secret.app"}
+    )
+    app_id = create.json()["id"]
+
+    # Set a secret directly (the wizard task will own this endpoint).
+    app_row = db_session.get(SlackApp, app_id)
+    app_row.client_secret = "supersecret"
+    db_session.commit()
+
+    response = client.get(f"/slack/apps/{app_id}")
+    body = response.json()
+
+    assert body["client_secret_configured"] is True
+    # No path in the response should expose either the encrypted blob or
+    # the decrypted secret.
+    body_str = response.text
+    assert "supersecret" not in body_str
+    assert "client_secret_encrypted" not in body
+    assert "client_secret" not in body or body.get("client_secret") is None
+
+
+def test_list_slack_apps_includes_owned_and_authorized(
+    client, db_session, user, other_user
+):
+    """GET /slack/apps returns apps the user owns OR is authorized for —
+    deduplicated and not leaking apps owned by unrelated users."""
+    # Owned by current user.
+    owned = SlackApp(
+        client_id="owned.app", name="Owned", created_by_user_id=user.id
+    )
+    # Owned by other_user but current user is in authorized_users.
+    auth_for_me = SlackApp(
+        client_id="auth.app", name="Auth", created_by_user_id=other_user.id
+    )
+    auth_for_me.authorized_users.append(user)
+    # Owned by other_user, current user NOT authorized — should NOT appear.
+    invisible = SlackApp(
+        client_id="hidden.app", name="Hidden", created_by_user_id=other_user.id
+    )
+    db_session.add_all([owned, auth_for_me, invisible])
+    db_session.commit()
+
+    response = client.get("/slack/apps")
+    assert response.status_code == 200
+    ids_seen = sorted(a["client_id"] for a in response.json())
+    assert ids_seen == ["auth.app", "owned.app"]
+
+
+def test_get_slack_app_returns_404_for_unauthorized(
+    client, db_session, user, other_user
+):
+    """GET /slack/apps/{id} returns 404 (not 403) for non-authorized users
+    so we don't leak app existence to outsiders (§4 S11)."""
+    invisible = SlackApp(
+        client_id="hidden.app", name="Hidden", created_by_user_id=other_user.id
+    )
+    db_session.add(invisible)
+    db_session.commit()
+
+    response = client.get(f"/slack/apps/{invisible.id}")
+    assert response.status_code == 404
+
+
+def test_get_slack_app_authorized_user_can_read(
+    client, db_session, user, other_user
+):
+    """Authorized non-owner can read the app (but not its secrets)."""
+    app = SlackApp(
+        client_id="auth.read.app",
+        name="Auth Read",
+        created_by_user_id=other_user.id,
+    )
+    app.authorized_users.append(user)
+    db_session.add(app)
+    db_session.commit()
+
+    response = client.get(f"/slack/apps/{app.id}")
+    assert response.status_code == 200
+    assert response.json()["is_owner"] is False
+
+
+def test_patch_slack_app_owner_can_update_name_and_active(
+    client, db_session, user
+):
+    """Owner-only PATCH updates name and is_active."""
+    create = client.post(
+        "/slack/apps", json={"name": "Original", "client_id": "patch.app"}
+    )
+    app_id = create.json()["id"]
+
+    response = client.patch(
+        f"/slack/apps/{app_id}",
+        json={"name": "Renamed", "is_active": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Renamed"
+    assert body["is_active"] is False
+
+
+def test_patch_slack_app_authorized_user_gets_403(
+    client, db_session, user, other_user
+):
+    """Authorized but not owner → 403 (existence is signaled, action is not
+    allowed). Distinct from the unauthorized 404 case."""
+    app = SlackApp(
+        client_id="patch.denied", name="Denied", created_by_user_id=other_user.id
+    )
+    app.authorized_users.append(user)
+    db_session.add(app)
+    db_session.commit()
+
+    response = client.patch(f"/slack/apps/{app.id}", json={"name": "Hijacked"})
+    assert response.status_code == 403
+
+
+def test_patch_slack_app_cannot_mutate_setup_state(client, db_session, user):
+    """Direct setup_state mutation must not be possible via PATCH —
+    state advances only via the wizard endpoints.
+
+    Even if a client smuggles `setup_state` in the body, the Pydantic
+    model strips it (BaseModel ignores extra fields by default in
+    older pydantic, validates them out in v2 with strict mode). The
+    behavior we care about is that the row's setup_state stays unchanged.
+    """
+    create = client.post(
+        "/slack/apps", json={"name": "X", "client_id": "state.app"}
+    )
+    app_id = create.json()["id"]
+
+    response = client.patch(
+        f"/slack/apps/{app_id}",
+        json={"name": "Renamed", "setup_state": "live"},
+    )
+    # The PATCH should succeed for `name` regardless of pydantic's handling.
+    assert response.status_code == 200
+    # State must still be 'draft' — the wizard didn't advance it.
+    refreshed = db_session.get(SlackApp, app_id)
+    db_session.refresh(refreshed)
+    assert refreshed.setup_state == "draft"
+
+
+def test_delete_slack_app_owner_only_and_cascades(
+    client, db_session, user, slack_workspace
+):
+    """DELETE removes the app and (via FK cascade) its credentials."""
+    create = client.post(
+        "/slack/apps", json={"name": "ToDelete", "client_id": "del.app"}
+    )
+    app_id = create.json()["id"]
+
+    # Attach a credential row so we can verify cascade.
+    cred = SlackUserCredentials(
+        slack_app_id=app_id,
+        workspace_id=slack_workspace.id,
+        user_id=user.id,
+    )
+    cred.access_token = "xoxp-token"
+    db_session.add(cred)
+    db_session.commit()
+    cred_id = cred.id
+
+    response = client.delete(f"/slack/apps/{app_id}")
+    assert response.status_code == 204
+
+    # App is gone.
+    assert db_session.get(SlackApp, app_id) is None
+    # Credential cascaded.
+    assert db_session.get(SlackUserCredentials, cred_id) is None
+
+
+def test_delete_slack_app_authorized_user_gets_403(
+    client, db_session, user, other_user
+):
+    app = SlackApp(
+        client_id="del.denied", name="X", created_by_user_id=other_user.id
+    )
+    app.authorized_users.append(user)
+    db_session.add(app)
+    db_session.commit()
+
+    response = client.delete(f"/slack/apps/{app.id}")
+    assert response.status_code == 403
+    # Row still exists.
+    assert db_session.get(SlackApp, app.id) is not None
+
+
+def test_add_authorized_user_owner_only(client, db_session, user, other_user):
+    """Owner adds another user; response includes them in authorized_users."""
+    create = client.post(
+        "/slack/apps", json={"name": "X", "client_id": "auth.add"}
+    )
+    app_id = create.json()["id"]
+
+    response = client.post(
+        f"/slack/apps/{app_id}/authorized-users",
+        json={"user_id": other_user.id},
+    )
+    assert response.status_code == 201
+    auth_user_ids = [u["id"] for u in response.json()["authorized_users"]]
+    assert other_user.id in auth_user_ids
+
+
+def test_add_authorized_user_idempotent(client, db_session, user, other_user):
+    """Adding the same user twice is a no-op — no duplicate join row."""
+    create = client.post(
+        "/slack/apps", json={"name": "X", "client_id": "auth.idem"}
+    )
+    app_id = create.json()["id"]
+
+    client.post(
+        f"/slack/apps/{app_id}/authorized-users",
+        json={"user_id": other_user.id},
+    )
+    response = client.post(
+        f"/slack/apps/{app_id}/authorized-users",
+        json={"user_id": other_user.id},
+    )
+    # Still 201 and the list has exactly one entry for other_user.
+    assert response.status_code == 201
+    matching = [u for u in response.json()["authorized_users"] if u["id"] == other_user.id]
+    assert len(matching) == 1
+
+
+def test_remove_authorized_user(client, db_session, user, other_user):
+    """Owner removes a user; subsequent listing excludes them."""
+    create = client.post(
+        "/slack/apps", json={"name": "X", "client_id": "auth.remove"}
+    )
+    app_id = create.json()["id"]
+
+    client.post(
+        f"/slack/apps/{app_id}/authorized-users",
+        json={"user_id": other_user.id},
+    )
+
+    response = client.delete(
+        f"/slack/apps/{app_id}/authorized-users/{other_user.id}"
+    )
+    assert response.status_code == 200
+    auth_user_ids = [u["id"] for u in response.json()["authorized_users"]]
+    assert other_user.id not in auth_user_ids
+
+
+def test_remove_authorized_user_idempotent(client, db_session, user, other_user):
+    """Removing a user who isn't in the list is a no-op (no error)."""
+    create = client.post(
+        "/slack/apps", json={"name": "X", "client_id": "auth.never"}
+    )
+    app_id = create.json()["id"]
+
+    response = client.delete(
+        f"/slack/apps/{app_id}/authorized-users/{other_user.id}"
+    )
+    assert response.status_code == 200
+
+
+def test_authorized_user_endpoints_reject_non_owner(
+    client, db_session, user, other_user
+):
+    """Even an authorized user can't add/remove other authorized users."""
+    app = SlackApp(
+        client_id="auth.denied", name="X", created_by_user_id=other_user.id
+    )
+    app.authorized_users.append(user)
+    db_session.add(app)
+    db_session.commit()
+
+    add_resp = client.post(
+        f"/slack/apps/{app.id}/authorized-users",
+        json={"user_id": user.id},
+    )
+    assert add_resp.status_code == 403
+
+    rm_resp = client.delete(
+        f"/slack/apps/{app.id}/authorized-users/{user.id}"
+    )
+    assert rm_resp.status_code == 403
+
+
+def test_oauth_callback_uses_per_user_broadcast_channel(
+    client, db_session, user
+):
+    """§4 S12: the callback HTML must scope BroadcastChannel to a
+    per-user name so the oauth-complete event doesn't leak across
+    tenants. We reach the HTML branch by mocking the Slack token
+    exchange to return a valid team_id.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch as _patch
+
+    with _patch("memory.api.slack.settings") as mock_settings, _patch(
+        "memory.api.slack.httpx.AsyncClient"
+    ) as mock_httpx:
+        mock_settings.SLACK_CLIENT_ID = "test_id"
+        mock_settings.SLACK_CLIENT_SECRET = "test_secret"
+        mock_settings.SLACK_REDIRECT_URI = "http://localhost/callback"
+        mock_settings.SERVER_URL = "http://localhost:8000"
+
+        mock_response = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "ok": True,
+                "authed_user": {
+                    "access_token": "xoxp-fake",
+                    "scope": "channels:history",
+                    "id": "U_TEST",
+                },
+                "team": {"id": "T01ABCDEF", "name": "Test"},
+            }
+        )
+
+        async_client_ctx = AsyncMock()
+        async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+        async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+        async_client_ctx.post = AsyncMock(return_value=mock_response)
+        mock_httpx.return_value = async_client_ctx
+
+        signed_state = _seed_signed_state_for_user(db_session, user.id)
+        # Pre-create a SlackApp so get_legacy_slack_app works.
+        app = SlackApp(
+            client_id="legacy-env-app",
+            name="Default",
+            setup_state="live",
+        )
+        db_session.add(app)
+        db_session.commit()
+
+        response = client.get(
+            "/slack/callback",
+            params={"code": "valid_code", "state": signed_state},
+        )
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"slack-oauth-{user.id}" in html
+    # The non-scoped 'slack-oauth' literal must NOT appear (would defeat
+    # the whole point of the per-user scoping).
+    # Note we substring-check the literal in the JS, not the marker text.
+    assert '"slack-oauth"' not in html
+    assert "'slack-oauth'" not in html
