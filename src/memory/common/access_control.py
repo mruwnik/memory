@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from sqlalchemy.orm.scoping import scoped_session
 
+    from memory.common.db.models.source_item import SourceItem
     from memory.common.db.models.users import User
 
 
@@ -197,6 +198,48 @@ def normalize_sensitivity(sensitivity: SensitivityLevel | str) -> str:
     if isinstance(sensitivity, SensitivityLevel):
         return sensitivity.value
     return str(sensitivity)
+
+
+def get_accessible_source_item_by_filename(
+    session: "Session | scoped_session[Session]",
+    user: UserLike,
+    filename: str,
+) -> "SourceItem":
+    """Look up a SourceItem by ``filename`` gated by the caller's access rights.
+
+    Centralises the "load file metadata + check ownership" pattern used by
+    every tool that serves user-supplied paths from FILE_STORAGE_DIR
+    (currently ``MCP/servers/email.py:_load_attachment`` and
+    ``MCP/servers/core.py:fetch_file``).  Without it, each call site had its
+    own copy of the query + admin check + project-role lookup, and they were
+    starting to drift on details like ``has_admin_scope`` placement.
+
+    Raises:
+        FileNotFoundError: if no SourceItem has this filename.
+        PermissionError:   if the SourceItem exists but the caller cannot
+                           read it.
+
+    Returns:
+        The SourceItem.
+    """
+    from memory.common.db.models.source_item import SourceItem  # avoid circular import
+
+    item = (
+        session.query(SourceItem)
+        .filter(SourceItem.filename == filename)
+        .one_or_none()
+    )
+    if item is None:
+        raise FileNotFoundError(filename)
+
+    if has_admin_scope(user):
+        return item
+
+    project_roles = get_user_project_roles(session, user)  # type: ignore[arg-type]
+    if not user_can_access(user, item, project_roles):
+        raise PermissionError(filename)
+
+    return item
 
 
 def user_can_access(

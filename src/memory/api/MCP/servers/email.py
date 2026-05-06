@@ -11,9 +11,9 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
-from memory.common.access_control import get_user_project_roles, user_can_access
+from memory.common.access_control import get_accessible_source_item_by_filename
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import SourceItem, User, UserSession
+from memory.common.db.models import User, UserSession
 from memory.common.scopes import SCOPE_EMAIL_WRITE
 from memory.common.email_sender import (
     EmailAttachmentData,
@@ -65,7 +65,10 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
     """Load an attachment from the file storage directory.
 
     Only allows files within FILE_STORAGE_DIR for security.
-    Performs an ownership check to prevent cross-user file exfiltration.
+    Delegates the SourceItem lookup + ownership check to
+    ``get_accessible_source_item_by_filename`` so this tool stays in sync
+    with other tools (e.g. ``core.fetch_file``) that serve user-supplied
+    file paths.
 
     Takes ``user_id`` rather than a User ORM instance so we don't rely on a
     caller's session lifetime — lazy-loaded relationships on a detached user
@@ -87,7 +90,6 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
             logger.warning(f"Attachment not found: {path}")
             return None
 
-        # Ownership check: require a SourceItem that the requesting user can access
         if user_id is None:
             logger.warning(f"Unauthenticated attachment request for: {path}")
             return None
@@ -97,12 +99,12 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
             if user is None:
                 logger.warning(f"User {user_id} not found for attachment: {path}")
                 return None
-            item = session.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
-            if item is None:
+            try:
+                get_accessible_source_item_by_filename(session, user, relative)
+            except FileNotFoundError:
                 logger.warning(f"No SourceItem found for attachment: {relative}")
                 return None
-            project_roles = get_user_project_roles(session, user)
-            if not user_can_access(user, item, project_roles):
+            except PermissionError:
                 logger.warning(f"Access denied to attachment {relative} for user {user_id}")
                 return None
 

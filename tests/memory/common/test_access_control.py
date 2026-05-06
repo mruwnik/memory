@@ -413,3 +413,104 @@ def test_get_max_sensitivity_invalid_role():
     project_roles = {1: "invalid"}
     result = get_max_sensitivity_for_project(project_roles, project_id=1)
     assert result is None
+
+
+# --- get_accessible_source_item_by_filename tests ---
+
+
+def test_get_accessible_source_item_raises_filenotfounderror_for_missing(
+    db_session, regular_user
+):
+    """Returns FileNotFoundError when no SourceItem has that filename."""
+    import pytest
+
+    from memory.common.access_control import (
+        get_accessible_source_item_by_filename,
+    )
+
+    with pytest.raises(FileNotFoundError):
+        get_accessible_source_item_by_filename(
+            db_session, regular_user, "does/not/exist.txt"
+        )
+
+
+def test_get_accessible_source_item_raises_permissionerror_for_denied(
+    db_session, regular_user, admin_user
+):
+    """Returns PermissionError when item exists but caller cannot access."""
+    import pytest
+
+    from memory.common.access_control import (
+        get_accessible_source_item_by_filename,
+    )
+    from memory.common.db.models import SourceItem
+
+    item = SourceItem(
+        sha256=b"a" * 32,
+        filename="someone-elses/secret.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="confidential",
+        size=10,
+        creator_id=admin_user.id,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    with pytest.raises(PermissionError):
+        get_accessible_source_item_by_filename(
+            db_session, regular_user, "someone-elses/secret.txt"
+        )
+
+
+def test_get_accessible_source_item_returns_item_for_creator(
+    db_session, regular_user
+):
+    """Creator can access their own item even if confidential."""
+    from memory.common.access_control import (
+        get_accessible_source_item_by_filename,
+    )
+    from memory.common.db.models import SourceItem
+
+    item = SourceItem(
+        sha256=b"b" * 32,
+        filename="mine/file.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="confidential",
+        size=10,
+        creator_id=regular_user.id,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    result = get_accessible_source_item_by_filename(
+        db_session, regular_user, "mine/file.txt"
+    )
+    assert result.id == item.id
+
+
+def test_get_accessible_source_item_returns_item_for_admin(
+    db_session, admin_user
+):
+    """Admin bypasses access checks even for items they didn't create."""
+    from memory.common.access_control import (
+        get_accessible_source_item_by_filename,
+    )
+    from memory.common.db.models import SourceItem
+
+    item = SourceItem(
+        sha256=b"c" * 32,
+        filename="someone/else.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="confidential",
+        size=10,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    result = get_accessible_source_item_by_filename(
+        db_session, admin_user, "someone/else.txt"
+    )
+    assert result.id == item.id

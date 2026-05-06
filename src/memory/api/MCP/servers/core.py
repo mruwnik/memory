@@ -23,7 +23,11 @@ from memory.api.MCP.access import (
     get_project_roles_by_user_id,
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.common.access_control import AccessFilter, has_admin_scope, user_can_access
+from memory.common.access_control import (
+    AccessFilter,
+    get_accessible_source_item_by_filename,
+    user_can_access,
+)
 from memory.common.scopes import (
     SCOPE_OBSERVE,
     SCOPE_OBSERVE_WRITE,
@@ -472,14 +476,12 @@ def fetch_file(filename: str) -> dict:
         raise PermissionError(f"Access denied: {filename}")
 
     with make_session() as session:
-        item = session.query(SourceItem).filter(SourceItem.filename == relative).one_or_none()
-        if item is None:
+        try:
+            get_accessible_source_item_by_filename(session, user, relative)
+        except FileNotFoundError:
             raise FileNotFoundError(f"File not found: {filename}")
-
-        if not has_admin_scope(user):
-            project_roles = get_project_roles_by_user_id(user.id, session) if user.id else {}
-            if not user_can_access(user, item, project_roles):  # type: ignore[arg-type]
-                raise PermissionError(f"Access denied: {filename}")
+        except PermissionError:
+            raise PermissionError(f"Access denied: {filename}")
 
     mime_type = extract.get_mime_type(path)
 
