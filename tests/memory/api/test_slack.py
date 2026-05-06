@@ -656,3 +656,130 @@ def test_html_template_uses_json_dumps(monkeypatch):
     assert hasattr(slack_api, "json")
     # The compile-time pattern is in the module.
     assert hasattr(slack_api, "_SLACK_TEAM_ID_PATTERN")
+
+
+# ====== OAuth login CSRF regression (SECURITY/HIGH a5c9746d) ======
+
+
+def _seed_signed_state_for_user(db_session, target_user_id: int) -> str:
+    """Mint a real OAuthClientState row and signed_state for a specific
+    user id. Returns the signed_state suitable for /slack/callback."""
+    from datetime import datetime, timedelta, timezone
+
+    from memory.common.oauth_client import generate_state, sign_state
+
+    raw_state = generate_state()
+    db_session.add(
+        OAuthClientState(
+            state=raw_state,
+            provider="slack",
+            user_id=target_user_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        )
+    )
+    db_session.commit()
+    return sign_state(raw_state, target_user_id)
+
+
+def test_slack_callback_rejects_state_minted_for_different_user(
+    client, db_session, user, other_user
+):
+    """CSRF regression: an attacker (`other_user`) mints a signed state
+    while logged in as themselves, then phishes the victim (`user`).
+    The victim's browser hits /slack/callback with the attacker's state.
+    Without browser-session binding this would silently capture the
+    victim's Slack tokens under the attacker's account.
+
+    Now: the callback is authenticated, and the authenticated user
+    (`user.id`) must match the state's user_id (`other_user.id`).
+    Mismatch → 403, no token exchange happens.
+    """
+    signed_state = _seed_signed_state_for_user(db_session, other_user.id)
+
+    response = client.get(
+        "/slack/callback",
+        params={"code": "fake_victim_code", "state": signed_state},
+    )
+
+    assert response.status_code == 403
+    assert "different session" in response.json()["detail"].lower()
+
+
+def test_slack_callback_rejects_unauthenticated(client, db_session, user):
+    """If get_current_user fails (no session), the callback must NOT proceed
+    even with a valid state. The Depends(get_current_user) hook handles this
+    by raising 401 before any state validation or token exchange.
+
+    Implementation note: the test client has get_current_user overridden to
+    always succeed, so this test verifies the dependency wiring rather than
+    the runtime auth check itself. We do that by inspecting the route's
+    declared dependencies.
+    """
+    from fastapi.routing import APIRoute
+
+    from memory.api.slack import router
+
+    callback_route = next(
+        r for r in router.routes if isinstance(r, APIRoute) and r.path == "/callback"
+    )
+    # FastAPI populates `dependant.dependencies` for each Depends() param.
+    dep_calls = [d.call for d in callback_route.dependant.dependencies]
+    from memory.api.auth import get_current_user
+
+    assert get_current_user in dep_calls, (
+        "/slack/callback must depend on get_current_user (CSRF binding)"
+    )
+
+
+@patch("memory.api.slack.httpx.AsyncClient")
+@patch("memory.api.slack.settings")
+def test_slack_callback_proceeds_when_session_matches_state(
+    mock_settings, mock_httpx, client, db_session, user
+):
+    """Happy path: matching session/state lets the callback continue past
+    the new CSRF check. We mock the Slack token-exchange call so we don't
+    actually need a real Slack to round-trip — the assertion is that we
+    DON'T get a 403 for session/state mismatch."""
+    import asyncio
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_settings.SLACK_CLIENT_ID = "test_id"
+    mock_settings.SLACK_CLIENT_SECRET = "test_secret"
+    mock_settings.SLACK_REDIRECT_URI = "http://localhost/callback"
+    mock_settings.SERVER_URL = "http://localhost:8000"
+
+    # Mock httpx response — Slack returns a deliberately malformed team_id
+    # so we get 400 (XSS guard) AFTER the CSRF check passes. That's the
+    # signal we wanted: the request advanced past auth/CSRF binding.
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "ok": True,
+            "authed_user": {
+                "access_token": "xoxp-fake",
+                "scope": "channels:history",
+            },
+            "team": {"id": "not-a-valid-team-id", "name": "Test"},
+        }
+    )
+
+    async_client_ctx = AsyncMock()
+    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+    async_client_ctx.post = AsyncMock(return_value=mock_response)
+    mock_httpx.return_value = async_client_ctx
+
+    # Mint a state for the SAME user that the test client is authenticated as.
+    signed_state = _seed_signed_state_for_user(db_session, user.id)
+
+    response = client.get(
+        "/slack/callback",
+        params={"code": "fake_code", "state": signed_state},
+    )
+
+    # Did NOT short-circuit at the CSRF check (would have been 403).
+    assert response.status_code != 403
+    # The XSS guard further down rejects the malformed team_id with 400.
+    assert response.status_code == 400
+    assert "team id" in response.json()["detail"].lower()

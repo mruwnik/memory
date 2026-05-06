@@ -282,12 +282,19 @@ async def slack_callback(
     code: str = Query(...),
     state: str = Query(...),
     error: str | None = Query(None),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
     """Handle Slack OAuth2 callback.
 
     Exchanges the authorization code for tokens and creates/updates credentials.
     If the workspace doesn't exist, creates it. If it does, just adds user's credentials.
+
+    Requires authentication (`get_current_user`) so the state value can be
+    bound to the user's browser session, not just a DB-stored user_id.
+    Without this binding an attacker can phish a victim with their own
+    pre-signed state and capture the victim's Slack tokens under the
+    attacker's Memory account — see SECURITY/HIGH a5c9746d (CWE-352).
     """
     logger.info(
         f"Slack OAuth callback received: code_corr={log_corr_id(code)}, "
@@ -306,13 +313,23 @@ async def slack_callback(
         logger.error(f"State validation failed: state_corr={log_corr_id(state)}")
         raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
 
-    logger.info(f"State validated successfully, user_id={user_id}")
+    # Browser-session binding: the authenticated user MUST match the user
+    # who initiated /slack/authorize (i.e. the user_id stored in the
+    # OAuthClientState row). Otherwise we'd be processing a state that
+    # was minted in a different browser session — the CSRF the task
+    # describes. validate_and_consume_state has already deleted the row,
+    # so the attacker also burns their own state when probing.
+    if user.id != user_id:
+        logger.warning(
+            f"Slack OAuth callback session/state user mismatch: "
+            f"session_user_id={user.id}, state_user_id={user_id}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="OAuth state was issued for a different session",
+        )
 
-    # Get user from the stored state
-    user = db.get(User, user_id)
-    if not user:
-        logger.error(f"User not found for user_id={user_id}")
-        raise HTTPException(status_code=400, detail="User not found")
+    logger.info(f"State validated successfully, user_id={user_id}")
 
     logger.info(f"Exchanging code for tokens with redirect_uri={settings.SLACK_REDIRECT_URI}")
     # Exchange code for tokens
