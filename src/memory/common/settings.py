@@ -172,6 +172,12 @@ GOOGLE_DRIVE_SYNC_INTERVAL = int(
     os.getenv("GOOGLE_DRIVE_SYNC_INTERVAL", 60 * 60)
 )  # 1 hour
 CALENDAR_SYNC_INTERVAL = int(os.getenv("CALENDAR_SYNC_INTERVAL", 60 * 60))  # 1 hour
+TRANSCRIPTS_SYNC_INTERVAL = int(
+    os.getenv("TRANSCRIPTS_SYNC_INTERVAL", 2 * 60 * 60)
+)  # 2 hours
+TRANSCRIPTS_RESCAN_LOOKBACK_DAYS = int(
+    os.getenv("TRANSCRIPTS_RESCAN_LOOKBACK_DAYS", 365)
+)  # how far back the weekly safety-net rescan looks
 
 # Metrics collection settings
 METRICS_COLLECTION_INTERVAL = int(

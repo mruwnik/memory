@@ -34,6 +34,23 @@ from memory.common.jobs import tracked_task
 logger = logging.getLogger(__name__)
 
 
+def close_open_repo_projects(session: Any, repo: GithubRepo) -> int:
+    """Close all open Project rows backed by this repo (repo-level and
+    milestone-level), e.g. when the repo is archived or removed on GitHub.
+    Returns the count closed.
+    """
+    now = datetime.now(timezone.utc)
+    open_children = (
+        session.query(Project)
+        .filter(Project.repo_id == repo.id, Project.state == "open")
+        .all()
+    )
+    for child in open_children:
+        child.state = "closed"
+        child.closed_at = now
+    return len(open_children)
+
+
 def _sync_milestone(
     session: Any,
     repo: GithubRepo,
@@ -469,7 +486,16 @@ def sync_github_item(
 @app.task(name=SYNC_GITHUB_REPO)
 @tracked_task
 def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
-    """Sync all issues and PRs for a repository."""
+    """Sync all issues and PRs for a repository.
+
+    Note: every invocation makes a `client.get_repo(owner, name)` REST call
+    up front to detect archived/missing repos. That's one extra REST hit
+    per sync cycle on top of the per-issue/PR/milestone fetches. For a
+    fleet of N tracked repos that's N extra calls per cycle. Acceptable
+    for current scale; consider plumbing the fetched repo metadata down
+    to avoid re-fetching, or doing the archival check on a slower cadence,
+    if API rate limits become a concern.
+    """
     logger.info(f"Syncing GitHub repo {repo_id}")
 
     with make_session() as session:
@@ -514,6 +540,30 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
 
         owner = cast(str, repo.owner)
         name = cast(str, repo.name)
+
+        # Check if repo is archived or missing on GitHub before doing any sync work
+        repo_data = client.get_repo(owner, name)
+        if repo_data is None:
+            logger.warning(f"Repo {repo.repo_path} no longer exists on GitHub")
+            repo.active = False  # type: ignore
+            close_open_repo_projects(session, repo)
+            session.commit()
+            return {
+                "status": "skipped_repo_missing",
+                "repo_id": repo_id,
+                "repo_path": repo.repo_path,
+            }
+        if repo_data.get("archived", False):
+            logger.warning(f"Repo {repo.repo_path} is archived on GitHub")
+            repo.active = False  # type: ignore
+            close_open_repo_projects(session, repo)
+            session.commit()
+            return {
+                "status": "skipped_repo_archived",
+                "repo_id": repo_id,
+                "repo_path": repo.repo_path,
+            }
+
         labels = cast(list[str], repo.labels_filter) or None
         state = cast(str | None, repo.state_filter) or "all"
 

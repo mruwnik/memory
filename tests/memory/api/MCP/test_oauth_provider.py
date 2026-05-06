@@ -339,3 +339,123 @@ async def test_verify_token_one_time_key_fails_on_second_use(db_session):
     # Second use should fail (key was deleted)
     result2 = await provider.verify_token(key_value)
     assert result2 is None
+
+
+# --- Connection pool / leak regression tests (issue #72) ---
+
+
+@pytest.mark.asyncio
+async def test_verify_token_does_not_leak_connections_under_load(db_session):
+    """Repeated verify_token() must not leak connections from the pool.
+
+    Regression for issue #72: chris-api saw 15 connections stuck
+    `idle in transaction` with `SELECT users` as the last query, traced to
+    handle_api_key_use committing inside `make_session` while user attrs
+    were read after the commit. With expire_on_commit=True (the old
+    default), that read auto-began a new transaction that could leak.
+    """
+    from memory.common.db.connection import get_engine
+
+    user = create_test_user(db_session, scopes=["read", "write"])
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=APIKeyType.INTERNAL,
+        name="Load Key",
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    key_value = api_key.key
+
+    provider = SimpleOAuthProvider()
+    engine = get_engine()
+    pool = engine.pool
+    baseline_checked_out = pool.checkedout()
+
+    # Hammer the auth path harder than the pool size (5 + 10 overflow = 15).
+    # If any iteration leaks a connection, we'd be stuck at >15 checkouts.
+    for _ in range(50):
+        result = await provider.verify_token(key_value)
+        assert result is not None
+
+    assert pool.checkedout() == baseline_checked_out, (
+        f"verify_token leaked connections: "
+        f"checked out went from {baseline_checked_out} to {pool.checkedout()}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_token_session_path_does_not_leak(db_session):
+    """Session-token path must not leak connections either.
+
+    Same regression as above, but for the OAuth session token flow rather
+    than the API key flow.
+    """
+    from memory.common.db.connection import get_engine
+
+    user = create_test_user(db_session, scopes=["read"])
+    session = UserSession(
+        user_id=user.id,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    session_id = str(session.id)
+
+    provider = SimpleOAuthProvider()
+    engine = get_engine()
+    pool = engine.pool
+    baseline_checked_out = pool.checkedout()
+
+    for _ in range(50):
+        result = await provider.verify_token(session_id)
+        assert result is not None
+
+    assert pool.checkedout() == baseline_checked_out
+
+
+def test_session_factory_uses_expire_on_commit_false():
+    """Sessions must NOT expire attributes on commit().
+
+    With expire_on_commit=True (SQLAlchemy default) any attribute read
+    after a mid-block commit triggers a fresh SELECT that auto-begins a
+    new transaction, which can leak as `idle in transaction` if the
+    surrounding code returns/raises before the session's own
+    commit/close. See issue #72.
+    """
+    from memory.common.db.connection import get_session_factory
+
+    factory = get_session_factory()
+    # sessionmaker stashes constructor kwargs on .kw
+    assert factory.kw.get("expire_on_commit") is False
+
+
+def test_attribute_read_after_commit_does_not_autobegin(db_session):
+    """Reading an attribute after commit() must not auto-begin a transaction.
+
+    This is the specific shape of the leak in issue #72. With the old
+    expire_on_commit=True default the read below would issue a SELECT
+    and leave the session `in transaction`; that transaction would then
+    be committed by make_session's exit but only after returning the
+    object — which is enough time to leak under load/cancellation.
+    """
+    from memory.common.db.connection import make_session
+
+    user = create_test_user(db_session)
+    user_id = user.id
+
+    with make_session() as session:
+        loaded = session.get(User, user_id)
+        assert loaded is not None
+        # Mid-block commit (mirrors handle_api_key_use)
+        loaded.name = "Updated Name"
+        session.commit()
+        # Post-commit attribute read — the hot spot. With expire_on_commit
+        # =True this issued a SELECT users; with False it must not.
+        _ = loaded.name
+        _ = loaded.email
+        # Session should be idle (no transaction) after the reads
+        assert not session.in_transaction(), (
+            "session auto-began a transaction on attribute read after commit "
+            "— expire_on_commit is not False"
+        )

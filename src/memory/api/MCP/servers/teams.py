@@ -33,7 +33,7 @@ from memory.common.db.models.sources import (
 from memory.common import discord as discord_client
 from memory.common.github import GithubClient
 from memory.api.MCP.servers.discord import resolve_bot_id, resolve_guild_id
-from memory.api.MCP.servers.github_helpers import get_github_client_for_org
+from memory.common.project.client import get_github_client_for_org
 
 logger = logging.getLogger(__name__)
 

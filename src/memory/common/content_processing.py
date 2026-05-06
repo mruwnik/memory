@@ -14,11 +14,18 @@ import traceback
 import logging
 from typing import Any, Callable, Sequence, TypeVar, cast
 
+from celery.exceptions import Retry, TaskPredicate
 from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
+
+# TaskPredicate is the common base for Celery's flow-control exceptions
+# (Retry, Reject, Ignore). They subclass Exception, so a broad `except
+# Exception` would catch and log them as errors — wrong: they're not
+# failures, they're control flow. Using the base class auto-covers any
+# future predicate Celery adds.
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +454,17 @@ def safe_task_execution(
 
         try:
             return func(*args, **kwargs)
+        except Retry:
+            # Celery scheduled a retry — task is in-progress, not done. Record
+            # as a separate metric status so retry attempts don't masquerade
+            # as fast successes in dashboards.
+            status = "retry"
+            raise
+        except TaskPredicate:
+            # Reject (workflow drop) and Ignore (silent skip) are terminal-
+            # by-design — count them as success-shaped. (Retry above is the
+            # only flow-control exception that's *not* terminal.)
+            raise
         except Exception as e:
             status = "failure"
             error_message = str(e)

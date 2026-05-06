@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from memory.common.db.models import GithubItem
 from memory.common.db.models.sources import GithubAccount, GithubRepo
@@ -1668,3 +1668,132 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
     assert item.pr_data is not None
     assert item.pr_data.additions == 10
     assert item.pr_data.diff == "the full diff"
+
+
+# =============================================================================
+# Repo archival/missing detection (Task 8)
+# =============================================================================
+
+
+def make_archive_test_repo(db_session) -> GithubRepo:
+    """Create a fresh user/account/repo for archive-detection tests.
+
+    # FIXME: This helper exists because the shared `test_user` fixture
+    # builds a bare `User()` row, which violates the `user_has_auth_method`
+    # check constraint introduced by user-auth refactors. The fixture
+    # should be repaired (use `HumanUser` so an auth method is present)
+    # and then this local workaround can be deleted in favour of the
+    # standard `github_repo` fixture chain. Until that's prioritised,
+    # build inline via `HumanUser` here.
+    """
+    import uuid as _uuid
+    from memory.common.db.models import HumanUser
+
+    suffix = _uuid.uuid4().hex[:8]
+    user = HumanUser(
+        name=f"Archive Test User {suffix}",
+        email=f"archive-test-{suffix}@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["*"],
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    account = GithubAccount(
+        user_id=user.id,
+        name=f"Archive Test Account {suffix}",
+        auth_type="pat",
+        active=True,
+    )
+    account.access_token = "ghp_archive_test_token"
+    db_session.add(account)
+    db_session.flush()
+
+    repo = GithubRepo(
+        account_id=account.id,
+        github_id=42_424_242,
+        owner=f"archive-test-{suffix}",
+        name="repo",
+        active=True,
+    )
+    db_session.add(repo)
+    db_session.commit()
+    return repo
+
+
+def test_sync_github_repo_archived_deactivates_and_closes_children(db_session):
+    """When repo is archived on GitHub, sync_github_repo deactivates the repo
+    and closes all open child Project rows."""
+    from memory.workers.tasks.github import sync_github_repo
+    from memory.common.db.models.sources import Project
+
+    repo = make_archive_test_repo(db_session)
+
+    open_project = Project(
+        repo_id=repo.id, github_id=1, number=1, title="ms", state="open"
+    )
+    closed_project = Project(
+        repo_id=repo.id,
+        github_id=2,
+        number=2,
+        title="ms2",
+        state="closed",
+        closed_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    db_session.add_all([open_project, closed_project])
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = {
+        "archived": True,
+        "id": repo.github_id,
+        "owner": {"login": repo.owner},
+        "name": repo.name,
+    }
+
+    with patch(
+        "memory.workers.tasks.github.GithubClient", return_value=mock_client
+    ):
+        result = sync_github_repo(repo.id)
+
+    assert result["status"] == "skipped_repo_archived"
+
+    db_session.refresh(repo)
+    assert repo.active is False
+
+    db_session.refresh(open_project)
+    assert open_project.state == "closed"
+    assert open_project.closed_at is not None
+
+    db_session.refresh(closed_project)
+    assert closed_project.state == "closed"
+
+
+def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
+    """When repo returns 404, behave the same as archived."""
+    from memory.workers.tasks.github import sync_github_repo
+    from memory.common.db.models.sources import Project
+
+    repo = make_archive_test_repo(db_session)
+
+    open_project = Project(
+        repo_id=repo.id, github_id=10, number=1, title="ms", state="open"
+    )
+    db_session.add(open_project)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.get_repo.return_value = None
+
+    with patch(
+        "memory.workers.tasks.github.GithubClient", return_value=mock_client
+    ):
+        result = sync_github_repo(repo.id)
+
+    assert result["status"] == "skipped_repo_missing"
+
+    db_session.refresh(repo)
+    assert repo.active is False
+
+    db_session.refresh(open_project)
+    assert open_project.state == "closed"

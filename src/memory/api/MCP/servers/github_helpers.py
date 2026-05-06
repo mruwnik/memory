@@ -2,14 +2,17 @@
 
 This module contains database queries, serialization, and GitHub API operations
 used by the MCP tool definitions in github.py.
+
+Project orchestration helpers (creation, attach, refresh, etc.) live in
+`memory.common.project` — import them directly from there, e.g.
+`from memory.common.project.client import get_github_client`.
 """
 
 import logging
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any
 
 from sqlalchemy import Text, any_, desc, func
-from sqlalchemy.orm import Session
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
@@ -18,12 +21,11 @@ from memory.common.db.models import (
     GithubItem,
     Project,
     GithubProject,
-    GithubTeam,
-    Team,
 )
-from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.db.models.sources import GithubRepo
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
 from memory.common.github import GithubClient, GithubCredentials, serialize_issue_data
+from memory.common.project.client import get_github_client_for_org
 
 logger = logging.getLogger(__name__)
 
@@ -596,220 +598,6 @@ def fetch_team(org: str, team_slug: str, user_id: int | None = None) -> dict:
 
 
 # =============================================================================
-# Client Factory Functions
-# =============================================================================
-
-
-def get_github_client(
-    session: Any, repo_path: str, user_id: int
-) -> tuple[GithubClient, GithubRepo | None]:
-    """Get authenticated GithubClient for a repository path.
-
-    Args:
-        session: Database session
-        repo_path: Repository path in "owner/repo" format
-        user_id: ID of the authenticated user
-
-    Returns:
-        Tuple of (GithubClient, GithubRepo or None). GithubRepo is None when
-        the repository is not explicitly tracked but the user has a GitHub account.
-
-    Raises:
-        ValueError: If credentials unavailable for user
-    """
-    parts = repo_path.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"Invalid repo path format: {repo_path}")
-
-    owner, name = parts
-
-    # Try to find the repo in the user's accounts first
-    repo = (
-        session.query(GithubRepo)
-        .join(GithubAccount)
-        .filter(
-            GithubRepo.owner == owner,
-            GithubRepo.name == name,
-            GithubAccount.user_id == user_id,
-        )
-        .first()
-    )
-
-    # If repo not tracked by user, find any active account for the user
-    if not repo:
-        # Get user's first active account
-        account = (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user_id,
-                GithubAccount.active == True,  # noqa: E712
-            )
-            .first()
-        )
-        if not account:
-            raise ValueError(
-                "No GitHub account configured. Please add a GitHub account first."
-            )
-
-        credentials = GithubCredentials(
-            auth_type=account.auth_type,
-            access_token=account.access_token,
-            app_id=account.app_id,
-            installation_id=account.installation_id,
-            private_key=account.private_key,
-        )
-        # Return None for repo since we're using a generic account
-        # The caller will need to handle this case
-        return GithubClient(credentials), None
-
-    account = repo.account
-    if not account or not account.active:
-        raise ValueError(f"No active credentials for {repo_path}")
-
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    return GithubClient(credentials), repo
-
-
-def get_github_client_for_org(
-    session: Any, org: str, user_id: int
-) -> GithubClient | None:
-    """Get authenticated GithubClient for an organization.
-
-    Finds a GitHub account that has access to the specified org.
-
-    Args:
-        session: Database session
-        org: Organization login name
-        user_id: ID of the authenticated user
-
-    Returns:
-        GithubClient or None if no suitable account found
-    """
-    # Find an account that has teams in this org, or just any active account
-    team_with_org = (
-        session.query(GithubTeam)
-        .join(GithubAccount)
-        .filter(
-            GithubTeam.org_login.ilike(org),
-            GithubAccount.user_id == user_id,
-            GithubAccount.active == True,  # noqa: E712
-        )
-        .first()
-    )
-
-    if team_with_org:
-        account = team_with_org.account
-    else:
-        # Fall back to any active account
-        account = (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user_id,
-                GithubAccount.active == True,  # noqa: E712
-            )
-            .first()
-        )
-
-    if not account:
-        return None
-
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    return GithubClient(credentials)
-
-
-def ensure_github_repo(
-    session: Any,
-    client: GithubClient,
-    account_id: int,
-    owner: str,
-    repo_name: str,
-    description: str | None = None,
-    create_if_missing: bool = False,
-    private: bool = True,
-) -> tuple[GithubRepo | None, bool, bool]:
-    """Ensure a GithubRepo tracking entry exists in the database.
-
-    Optionally creates the repo on GitHub if it doesn't exist.
-
-    Args:
-        session: Database session
-        client: Authenticated GitHub client
-        account_id: ID of the GithubAccount to associate with
-        owner: Repository owner (user or org)
-        repo_name: Repository name
-        description: Optional description (used if creating on GitHub)
-        create_if_missing: If True, creates the repo on GitHub if it doesn't exist
-        private: Whether to create as private (default: True)
-
-    Returns:
-        Tuple of (GithubRepo, repo_was_created_on_github, tracking_entry_was_created)
-        Returns (None, False, False) if the repo doesn't exist and create_if_missing=False
-    """
-    # Check if we already have a tracking entry (globally, not per-account)
-    # A repo should only be tracked once - access is controlled at project level
-    existing_repo = (
-        session.query(GithubRepo)
-        .filter(
-            GithubRepo.owner.ilike(owner),
-            GithubRepo.name.ilike(repo_name),
-        )
-        .first()
-    )
-    if existing_repo:
-        return existing_repo, False, False
-
-    # Check if repo exists on GitHub
-    github_repo_data = client.fetch_repository_info(owner, repo_name)
-    github_repo_created = False
-
-    if not github_repo_data:
-        if not create_if_missing:
-            return None, False, False
-
-        # Create the repo on GitHub
-        github_repo_data, github_repo_created = client.ensure_repository(
-            owner, repo_name, description=description, private=private
-        )
-        if not github_repo_data:
-            logger.error(f"Failed to create repository '{owner}/{repo_name}' on GitHub")
-            return None, False, False
-
-    # Create tracking entry in our database
-    new_repo = GithubRepo(
-        account_id=account_id,
-        github_id=github_repo_data.get("github_id"),
-        owner=github_repo_data.get("owner", owner),
-        name=github_repo_data.get("name", repo_name),
-        track_issues=True,
-        track_prs=True,
-        track_comments=True,
-        track_project_fields=True,
-        active=True,
-    )
-    session.add(new_repo)
-    session.flush()
-
-    logger.info(
-        f"Created GithubRepo tracking entry for {owner}/{repo_name} "
-        f"(github_created={github_repo_created})"
-    )
-
-    return new_repo, github_repo_created, True
-
-
-# =============================================================================
 # Issue Operation Helpers
 # =============================================================================
 
@@ -1115,152 +903,3 @@ def add_issue_comment(
         "author": comment_data.get("author", {}).get("login"),
         "created_at": comment_data.get("createdAt"),
     }
-
-
-# =============================================================================
-# Team-Repo Sync Helpers
-# =============================================================================
-
-
-class SyncResult(TypedDict):
-    """Result of a team-repo sync operation."""
-
-    synced: list[str]
-    skipped: list[str]
-    failed: list[str]
-
-
-VALID_GITHUB_PERMISSIONS = {"pull", "triage", "push", "maintain", "admin"}
-
-
-def sync_repo_teams_outbound(
-    client: GithubClient,
-    repo_owner: str,
-    repo_name: str,
-    teams: list[Team],
-    permission: str = "push",
-) -> SyncResult:
-    """Grant GitHub repo access to teams with github_team_id.
-
-    For each team that has GitHub integration configured (github_team_id,
-    github_team_slug, github_org), grants that GitHub team access to the
-    specified repository.
-
-    Args:
-        client: Authenticated GitHub client
-        repo_owner: Repository owner
-        repo_name: Repository name
-        teams: List of Team models to sync
-        permission: GitHub permission level ("pull", "triage", "push", "maintain", "admin")
-
-    Returns:
-        SyncResult with:
-        - synced: list of team slugs that were successfully synced
-        - skipped: list of team names that were skipped (no GitHub integration)
-        - failed: list of team slugs that failed to sync
-
-    Raises:
-        ValueError: If permission is not a valid GitHub permission level
-    """
-    if permission not in VALID_GITHUB_PERMISSIONS:
-        raise ValueError(
-            f"Invalid permission '{permission}'. Must be one of: {VALID_GITHUB_PERMISSIONS}"
-        )
-
-    synced: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-
-    for team in teams:
-        # Skip teams without GitHub integration
-        if not team.github_team_id or not team.github_team_slug or not team.github_org:
-            skipped.append(team.name)
-            continue
-
-        # Skip if team is in a different org than the repo owner
-        # (can't grant cross-org access)
-        if team.github_org.lower() != repo_owner.lower():
-            logger.info(
-                f"Skipping team {team.github_team_slug} (org '{team.github_org.lower()}') "
-                f"- repo owner is '{repo_owner.lower()}'"
-            )
-            skipped.append(team.name)
-            continue
-
-        success = client.add_team_to_repo(
-            org=team.github_org,
-            team_slug=team.github_team_slug,
-            owner=repo_owner,
-            repo=repo_name,
-            permission=permission,
-        )
-        if success:
-            synced.append(team.github_team_slug)
-        else:
-            failed.append(team.github_team_slug)
-
-    return {
-        "synced": synced,
-        "skipped": skipped,
-        "failed": failed,
-    }
-
-
-def sync_repo_teams_inbound(
-    session: Session,
-    client: GithubClient,
-    repo_owner: str,
-    repo_name: str,
-) -> list[Team]:
-    """Fetch repo teams from GitHub and return matching Team records.
-
-    Queries GitHub for all teams that have access to the repository,
-    then finds matching Team records in our database by github_team_id.
-
-    Args:
-        session: Database session
-        client: Authenticated GitHub client
-        repo_owner: Repository owner
-        repo_name: Repository name
-
-    Returns:
-        List of Team records that match GitHub teams with repo access.
-        Teams are matched by github_team_id. Returns empty list on API errors.
-
-    Note:
-        If get_repo_teams encounters a pagination failure, it may return
-        partial results. This function will process whatever teams are
-        returned, which may be incomplete. Check logs for warnings about
-        pagination failures if results seem incomplete.
-    """
-    # Fetch teams from GitHub
-    try:
-        github_teams = client.get_repo_teams(repo_owner, repo_name)
-    except Exception as e:
-        logger.warning(
-            f"Failed to fetch GitHub teams for {repo_owner}/{repo_name}: "
-            f"{type(e).__name__}: {e}"
-        )
-        return []
-    if not github_teams:
-        return []
-
-    # Extract GitHub team IDs
-    github_team_ids = [t["id"] for t in github_teams if t.get("id")]
-    if not github_team_ids:
-        return []
-
-    # Find matching Team records
-    matching_teams = (
-        session.query(Team)
-        .filter(Team.github_team_id.in_(github_team_ids))
-        .all()
-    )
-
-    if matching_teams:
-        logger.info(
-            f"Found {len(matching_teams)} matching teams for {repo_owner}/{repo_name}: "
-            f"{[t.name for t in matching_teams]}"
-        )
-
-    return matching_teams

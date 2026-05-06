@@ -29,6 +29,7 @@ PEOPLE_ROOT = "memory.workers.tasks.people"
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 CALENDAR_ROOT = "memory.workers.tasks.calendar"
 MEETINGS_ROOT = "memory.workers.tasks.meetings"
+TRANSCRIPTS_ROOT = "memory.workers.tasks.transcripts"
 REPORTS_ROOT = "memory.workers.tasks.reports"
 METRICS_ROOT = "memory.workers.tasks.metrics"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
@@ -113,6 +114,12 @@ SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
 REPROCESS_MEETING = f"{MEETINGS_ROOT}.reprocess_meeting"
 CLEANUP_STUCK_MEETINGS = f"{MEETINGS_ROOT}.cleanup_stuck_meetings"
+
+# Transcript provider sync tasks (Fireflies, Granola, ...)
+SYNC_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.sync_all_transcript_accounts"
+SYNC_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.sync_transcript_account"
+RESCAN_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.rescan_all_transcript_accounts"
+RESCAN_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.rescan_transcript_account"
 
 # Report tasks
 SYNC_REPORT = f"{REPORTS_ROOT}.sync_report"
@@ -290,6 +297,7 @@ app.conf.update(
         f"{GOOGLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-google"},
         f"{CALENDAR_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-calendar"},
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
+        f"{TRANSCRIPTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{REPORTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-reports"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         f"{VERIFICATION_ROOT}.*": {
@@ -388,6 +396,17 @@ def build_beat_schedule() -> dict:
         "cleanup-stuck-meetings": {
             "task": CLEANUP_STUCK_MEETINGS,
             "schedule": crontab(minute="45"),
+        },
+        "sync-all-transcript-accounts": {
+            "task": SYNC_ALL_TRANSCRIPT_ACCOUNTS,
+            "schedule": settings.TRANSCRIPTS_SYNC_INTERVAL,
+        },
+        "rescan-all-transcript-accounts": {
+            "task": RESCAN_ALL_TRANSCRIPT_ACCOUNTS,
+            # Weekly Sunday 03:13 UTC — keeps the steady-state polling cheap
+            # and uses the rescan as a backstop against missed meetings (e.g.
+            # >page-size bursts between polls, backdated uploads).
+            "schedule": crontab(day_of_week="sun", hour="3", minute="13"),
         },
         "summarize-stale-sessions": {
             "task": SUMMARIZE_STALE_SESSIONS,

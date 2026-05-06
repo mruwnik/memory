@@ -1166,6 +1166,105 @@ class CalendarAccount(Base):
     )
 
 
+class TranscriptAccount(Base):
+    """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
+
+    Stores per-user credentials and sync state for transcript ingestion.
+    Drives the periodic poll in workers/tasks/transcripts.py and produces
+    Meeting source items via the existing process_meeting pipeline.
+    """
+
+    __tablename__ = "transcript_accounts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+
+    api_key_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    webhook_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
+
+    @property
+    def api_key(self) -> str:
+        return decrypt_value(self.api_key_encrypted)
+
+    @api_key.setter
+    def api_key(self, value: str) -> None:
+        self.api_key_encrypted = encrypt_value(value)
+
+    @property
+    def webhook_secret(self) -> str | None:
+        if self.webhook_secret_encrypted is None:
+            return None
+        return decrypt_value(self.webhook_secret_encrypted)
+
+    @webhook_secret.setter
+    def webhook_secret(self, value: str | None) -> None:
+        if value is None:
+            self.webhook_secret_encrypted = None
+        else:
+            self.webhook_secret_encrypted = encrypt_value(value)
+
+    sync_state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
+
+    last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="basic"
+    )
+    config_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
+
+    user: Mapped[User] = relationship(
+        "User", foreign_keys=[user_id], backref="transcript_accounts"
+    )
+    project: Mapped["Project | None"] = relationship(
+        "Project", foreign_keys=[project_id]
+    )
+
+    # NOTE: provider validation is enforced at sync time via the PROVIDERS
+    # dispatch dict in workers/tasks/transcripts.py rather than a DB-level
+    # CHECK constraint. Adding a new provider then only requires updating
+    # the PROVIDERS dict (and CLI argparse choices), not a schema migration.
+    __table_args__ = (
+        CheckConstraint(
+            "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
+            name="valid_transcript_account_sensitivity",
+        ),
+        UniqueConstraint(
+            "user_id", "provider", "name", name="unique_transcript_account_per_user"
+        ),
+        Index("transcript_accounts_user_idx", "user_id"),
+        Index("transcript_accounts_active_idx", "active", "last_sync_at"),
+        Index("transcript_accounts_provider_idx", "provider"),
+        Index("transcript_accounts_project_idx", "project_id"),
+        Index("transcript_accounts_tags_idx", "tags", postgresql_using="gin"),
+    )
+
+
 class Person(Base):
     """A person you know or want to track.
 

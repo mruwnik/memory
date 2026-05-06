@@ -680,7 +680,7 @@ def test_process_content_item(
     with patch("memory.common.embedding.embed_source_item", return_value=mock_chunks):
         if qdrant_error:
             with patch(
-                "memory.common.content_processing.push_to_qdrant",
+                "memory.common.content_processing.push_chunks_to_qdrant",
                 side_effect=Exception("Qdrant error"),
             ):
                 result = process_content_item(mail_message, db_session)
@@ -755,3 +755,58 @@ def test_safe_task_execution_exception_logging(caplog):
 
     assert "Task failing_task failed:" in caplog.text
     assert "Test runtime error" in caplog.text
+
+
+def _retry_exc():
+    from celery.exceptions import Retry
+    return Retry(message="retrying", when=10)
+
+
+def _reject_exc():
+    from celery.exceptions import Reject
+    return Reject("rejecting")
+
+
+def _ignore_exc():
+    from celery.exceptions import Ignore
+    return Ignore()
+
+
+@pytest.mark.parametrize(
+    "exc_factory, expected_metric_status",
+    [
+        (_retry_exc, "retry"),
+        (_reject_exc, "success"),
+        (_ignore_exc, "success"),
+    ],
+    ids=["Retry", "Reject", "Ignore"],
+)
+def test_safe_task_execution_passes_celery_control_exceptions(
+    exc_factory, expected_metric_status
+):
+    """Celery's flow-control exceptions are subclasses of Exception but aren't
+    failures. The decorator must propagate them without firing
+    notify_task_failure, and must record the right metric status (retry for
+    Retry, success-shaped for terminal Reject/Ignore).
+    """
+    target_exc = exc_factory()
+    recorded_metrics: list[dict] = []
+
+    @safe_task_execution
+    def control_flow_task():
+        raise target_exc
+
+    with patch(
+        "memory.common.content_processing.notify_task_failure"
+    ) as notify, patch(
+        "memory.common.content_processing.record_metric",
+        side_effect=lambda *a, **kw: recorded_metrics.append(
+            {"args": a, "kwargs": kw}
+        ),
+    ):
+        with pytest.raises(type(target_exc)):
+            control_flow_task()
+
+    notify.assert_not_called()
+    assert recorded_metrics, "metric was not recorded for control exception"
+    assert recorded_metrics[-1]["kwargs"]["status"] == expected_metric_status

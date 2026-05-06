@@ -13,6 +13,12 @@ from memory.common import settings
 # This is useful because scoped_session proxies to Session but has a different type
 DBSession: TypeAlias = Session | scoped_session[Session]
 
+# Postgres-side safety net: any session that sits "idle in transaction" longer
+# than this gets killed by the server, so a leaked Session can't permanently
+# pin a pooled connection. Combined with pool_pre_ping below, the pool then
+# transparently replaces the dead connection on next checkout.
+IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000
+
 # Cached engine and session factory for connection pooling
 _engine = None
 _session_factory = None
@@ -27,20 +33,34 @@ def get_engine():
     """
     global _engine
     if _engine is None:
+        connect_args: dict = {}
+        if settings.DB_URL.startswith(("postgresql://", "postgresql+psycopg2://")):
+            # -c options=... is psycopg2's way to set GUCs at connect time
+            connect_args["options"] = (
+                f"-c idle_in_transaction_session_timeout={IDLE_IN_TRANSACTION_TIMEOUT_MS}"
+            )
         _engine = create_engine(
             settings.DB_URL,
             pool_pre_ping=True,  # Verify connections before use
             pool_recycle=3600,   # Recycle connections after 1 hour
+            connect_args=connect_args,
         )
     return _engine
 
 
 def get_session_factory():
-    """Get or create a cached session factory for SQLAlchemy sessions."""
+    """Get or create a cached session factory for SQLAlchemy sessions.
+
+    expire_on_commit=False: keep loaded attributes valid after commit().
+    The default (True) causes a subsequent attribute read to issue a fresh
+    SELECT which auto-begins a new transaction. If the surrounding code
+    then returns/raises before the session's own commit/close, that
+    transaction can leak as `idle in transaction` and pin the connection.
+    """
     global _session_factory
     if _session_factory is None:
         engine = get_engine()
-        _session_factory = sessionmaker(bind=engine)
+        _session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     return _session_factory
 
 

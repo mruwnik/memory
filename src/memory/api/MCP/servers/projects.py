@@ -4,19 +4,19 @@ Note on error response patterns:
 Each MCP tool returns a specific response schema. When returning errors,
 we include the expected fields with null/empty values to avoid breaking
 clients that expect certain keys.
+
+The orchestration layer in `memory.common.project` raises typed
+`ProjectError` subclasses. The MCP tools here translate those exceptions
+back into the legacy `{"error": str(e), "project": None}` dict shape.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal, cast
-from urllib.parse import urlparse
 
 from fastmcp import FastMCP
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
-
-from memory.common.github import GithubClient, GithubCredentials
+from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -24,19 +24,39 @@ from memory.common.access_control import (
     filter_projects_query,
     get_user_team_ids,
     has_admin_scope,
-    user_can_access_project,
 )
 from memory.common.scopes import SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubAccount, GithubRepo, Project, Team
-from memory.common.db.models.sources import Person
+from memory.common.db.models import Project, Team
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
-from memory.api.MCP.servers.github_helpers import (
-    SyncResult,
-    ensure_github_repo,
+from memory.common.project import (
+    ProjectCreationResult,
+    ProjectError,
+    create_milestone_project as _create_milestone_project,
+    create_repo_project as _create_repo_project,
+    create_standalone_project as _create_standalone_project,
+    find_existing_project_by_repo,
     get_github_client,
-    sync_repo_teams_inbound,
-    sync_repo_teams_outbound,
+    handle_attach,
+    handle_clear_milestone as _handle_clear_milestone,
+    handle_clear_repo as _handle_clear_repo,
+    handle_promote_to_milestone,
+    mark_repo_inactive,
+    perform_outbound_sync,
+    refresh_from_github,
+    sync_milestone_due_date,
+)
+from memory.common.project.errors import (
+    RepoArchivedError,
+    RepoMissingError,
+)
+from memory.api.MCP.servers.serializers import build_tree, project_to_dict
+from memory.api.MCP.servers.validation import (
+    parse_due_on,
+    validate_doc_url,
+    validate_owner,
+    validate_parent_project,
+    validate_teams_for_project,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,400 +71,39 @@ projects_mcp = FastMCP("memory-projects")
 _UNSET = "__UNSET__"
 
 
-# ============== Validation Helpers ==============
-
-ALLOWED_DOC_URL_SCHEMES = {"http", "https"}
-
-
-def validate_doc_url(url: str) -> str | None:
-    """Validate a doc_url has a safe scheme. Returns error message or None."""
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return f"Invalid doc_url: {url!r}"
-    if parsed.scheme not in ALLOWED_DOC_URL_SCHEMES:
-        return f"doc_url must use http or https scheme, got: {parsed.scheme!r}"
-    if not parsed.netloc:
-        return f"doc_url must include a host, got: {url!r}"
-    return None
+def _project_error_response(exc: ProjectError) -> dict:
+    """Translate a ProjectError to the legacy MCP error-dict shape."""
+    return {"error": str(exc), "project": None}
 
 
-def validate_teams_for_project(
-    session: Any,
-    user: Any,
-    team_ids: list[int] | None,
-    require_non_empty: bool = True,
-) -> tuple[list[Team] | None, dict | None]:
-    """Validate team_ids for project operations.
+def _creation_result_to_dict(
+    result: ProjectCreationResult,
+    *,
+    kind: str = "standalone",
+) -> dict:
+    """Convert a `ProjectCreationResult` to the MCP response dict.
 
     Args:
-        session: Database session
-        user: Current user
-        team_ids: List of team IDs to validate
-        require_non_empty: If True, empty team_ids returns an error
-
-    Returns:
-        Tuple of (teams list or None, error dict or None).
-        If error dict is returned, teams will be None.
+        kind: One of "standalone", "repo", "milestone". Determines which
+            extra keys (`github_repo_created`, `tracking_created`,
+            `milestone_created`) are always present in the response.
     """
-    if require_non_empty and not team_ids:
-        return None, {
-            "error": "team_ids must be a non-empty list for new projects",
-            "project": None,
-        }
-
-    if not team_ids:
-        return [], None
-
-    # Validate all specified teams exist
-    teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
-    found_ids = {t.id for t in teams}
-    missing_ids = set(team_ids) - found_ids
-
-    if missing_ids:
-        return None, {
-            "error": f"Invalid team_ids: teams {missing_ids} do not exist",
-            "project": None,
-        }
-
-    # Non-admins must be a member of at least one specified team
-    if not has_admin_scope(user):
-        user_teams = get_user_team_ids(session, user)
-        accessible_team_ids = set(team_ids) & user_teams
-        if not accessible_team_ids:
-            return None, {
-                "error": "You do not have access to any of the specified teams",
-                "project": None,
-            }
-
-    return teams, None
-
-
-def validate_parent_project(
-    session: Any,
-    user: Any,
-    parent_id: int | None,
-) -> dict | None:
-    """Validate that a parent project exists and user has access.
-
-    Args:
-        session: Database session
-        user: Current user
-        parent_id: Parent project ID to validate (None is valid)
-
-    Returns:
-        Error dict if validation fails, None if valid
-    """
-    if parent_id is None:
-        return None
-
-    parent = session.get(Project, parent_id)
-    if not parent:
-        return {"error": f"Parent project not found: {parent_id}", "project": None}
-
-    if not has_admin_scope(user) and not user_can_access_project(
-        session, user, parent_id
-    ):
-        return {"error": f"Parent project not found: {parent_id}", "project": None}
-
-    return None
-
-
-def generate_negative_project_id(
-    session: Any, max_retries: int = 3
-) -> tuple[int | None, dict | None]:
-    """Generate a unique negative project ID with retry logic.
-
-    Uses negative IDs to avoid collision with GitHub milestone IDs.
-    Retries on collision to handle concurrent inserts.
-
-    Args:
-        session: Database session
-        max_retries: Number of retries on collision
-
-    Returns:
-        Tuple of (generated ID or None, error dict or None)
-    """
-    for attempt in range(max_retries):
-        max_negative_id = (
-            session.query(func.min(Project.id)).filter(Project.id < 0).scalar()
-        )
-        new_id = (max_negative_id or 0) - 1
-
-        # Test uniqueness via savepoint
-        savepoint = session.begin_nested()
-        try:
-            # Just check if the ID exists - actual insert will be done by caller
-            existing = session.query(Project.id).filter(Project.id == new_id).first()
-            savepoint.rollback()  # We don't want to change anything
-            if not existing:
-                return new_id, None
-        except IntegrityError:
-            savepoint.rollback()
-
-        if attempt == max_retries - 1:
-            return None, {
-                "error": "Failed to generate unique project ID after retries",
-                "project": None,
-            }
-
-    return None, {"error": "Failed to generate unique project ID", "project": None}
-
-
-def create_project_with_retry(
-    session: Any,
-    teams: list[Team],
-    max_retries: int = 3,
-    **project_kwargs: Any,
-) -> tuple[Project | None, dict | None]:
-    """Create a project with negative ID, retrying on collision.
-
-    Args:
-        session: Database session
-        teams: Teams to assign to the project
-        max_retries: Number of retries on ID collision
-        **project_kwargs: Arguments to pass to Project constructor (except id)
-
-    Returns:
-        Tuple of (created Project or None, error dict or None)
-    """
-    for attempt in range(max_retries):
-        max_negative_id = (
-            session.query(func.min(Project.id)).filter(Project.id < 0).scalar()
-        )
-        new_id = (max_negative_id or 0) - 1
-
-        project = Project(id=new_id, **project_kwargs)
-
-        # Use savepoint to avoid rolling back the entire transaction
-        savepoint = session.begin_nested()
-        try:
-            session.add(project)
-            session.flush()
-
-            # Assign teams
-            for team in teams:
-                project.teams.append(team)
-
-            return project, None
-        except IntegrityError:
-            savepoint.rollback()
-            if attempt == max_retries - 1:
-                return None, {
-                    "error": "Failed to generate unique project ID after retries",
-                    "project": None,
-                }
-            continue
-
-    return None, {"error": "Failed to create project", "project": None}
-
-
-def sync_milestone_due_date(
-    project: Project,
-    new_due_on: datetime | None,
-) -> dict[str, Any] | None:
-    """Sync a project's due date to its GitHub milestone.
-
-    This function syncs the due_on date to GitHub for milestone-backed projects.
-    It should be called BEFORE updating the local database to ensure consistency
-    (if GitHub fails, we don't leave the local database in an inconsistent state).
-
-    Args:
-        project: The project to sync (must have repo and milestone number)
-        new_due_on: The new due date to set, or None to clear it
-
-    Returns:
-        Error dict if sync failed, None if successful or sync not needed
-    """
-    github_repo = project.repo
-    if not github_repo:
-        return None
-
-    account = github_repo.account
-    if not account:
-        logger.warning(
-            f"Cannot sync due_on to GitHub: repo {github_repo.owner}/{github_repo.name} "
-            "has no associated account"
-        )
-        return None
-
-    # Format for GitHub API (None clears the date)
-    github_due_on: str | None = None
-    if new_due_on is not None:
-        utc_due_on = new_due_on.astimezone(timezone.utc)
-        github_due_on = utc_due_on.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    client = GithubClient(credentials)
-    try:
-        if project.number is None:
-            return {
-                "error": "Project has no milestone number",
-                "project": None,
-            }
-        result = client.update_milestone(
-            owner=github_repo.owner,
-            repo=github_repo.name,
-            milestone_number=project.number,
-            due_on=github_due_on,
-        )
-        if result is None:
-            return {
-                "error": "Failed to update GitHub milestone due date",
-                "project": None,
-            }
-    except Exception as e:
-        logger.exception("Failed to sync due date to GitHub")
-        return {
-            "error": f"Failed to sync due date to GitHub: {e}",
-            "project": None,
-        }
-
-    return None
-
-
-def find_existing_project_by_repo(
-    session: Any,
-    repo_path: str,
-    milestone_title: str | None = None,
-) -> Project | None:
-    """Find an existing project by repo path and optional milestone title.
-
-    Args:
-        session: Database session
-        repo_path: GitHub repo path (e.g., "owner/name")
-        milestone_title: Optional milestone title to match. The match is
-            case-sensitive and exact - if the local project title was
-            modified after creation, it won't match the GitHub milestone.
-
-    Returns:
-        Existing Project if found, None otherwise
-    """
-    if "/" not in repo_path:
-        return None
-
-    owner, repo_name = repo_path.split("/", 1)
-
-    # Look up repo in database
-    repo_obj = (
-        session.query(GithubRepo)
-        .filter(GithubRepo.owner == owner, GithubRepo.name == repo_name)
-        .first()
-    )
-    if not repo_obj:
-        return None
-
-    if milestone_title is not None:
-        # Look for milestone project - match by title since we don't have the number yet
-        # This is a best-effort match; if title was overridden, it won't match
-        return (
-            session.query(Project)
-            .filter(
-                Project.repo_id == repo_obj.id,
-                Project.number.isnot(None),  # Has a milestone number
-                Project.title == milestone_title,
-            )
-            .first()
-        )
-    else:
-        # Look for repo-level project (no milestone)
-        return (
-            session.query(Project)
-            .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
-            .first()
-        )
-
-
-# ============== Response Helpers ==============
-
-
-def project_to_dict(
-    project: Project,
-    include_teams: bool = False,
-    include_owner: bool = False,
-    children_count: int = 0,
-) -> dict[str, Any]:
-    """Convert a Project model to a dictionary for API responses."""
-    repo_path = None
-    if project.repo:
-        repo_path = f"{project.repo.owner}/{project.repo.name}"
-
-    result: dict[str, Any] = {
-        "id": project.id,
-        "title": project.title,
-        "description": project.description,
-        "state": project.state,
-        "due_on": project.due_on.isoformat() if project.due_on else None,
-        "doc_url": project.doc_url,
-        "repo_path": repo_path,
-        "github_id": project.github_id,
-        "number": project.number,
-        "parent_id": project.parent_id,
-        "owner_id": project.owner_id,
-        "children_count": children_count,
+    response: dict[str, Any] = {
+        "success": True,
+        "created": result.created,
+        "project": project_to_dict(result.project, include_teams=True),
     }
-
-    if include_owner and project.owner:
-        result["owner"] = {
-            "id": project.owner.id,
-            "identifier": project.owner.identifier,
-            "display_name": project.owner.display_name,
-        }
-
-    if include_teams:
-        result["teams"] = [
-            {
-                "id": t.id,
-                "name": t.name,
-                "slug": t.slug,
-                "member_count": len(t.members) if t.members else None,
-            }
-            for t in project.teams
-        ]
-
-    return result
-
-
-def _build_tree(projects: list[Project]) -> list[dict[str, Any]]:
-    """Build a nested tree structure from a flat list of projects."""
-    # Build a map of id -> project
-    project_map: dict[int, Project] = {cast(int, p.id): p for p in projects}
-
-    # Build a map of parent_id -> children
-    # Projects with orphaned parent_id (parent not in project_map) are treated as top-level
-    children_map: dict[int | None, list[Project]] = {}
-    for p in projects:
-        parent = p.parent_id
-        # Treat orphaned projects (parent doesn't exist) as top-level
-        if parent is not None and parent not in project_map:
-            parent = None
-        if parent not in children_map:
-            children_map[parent] = []
-        children_map[parent].append(p)
-
-    def build_subtree(parent_id: int | None) -> list[dict[str, Any]]:
-        children = children_map.get(parent_id, [])
-        return [
-            {
-                "id": p.id,
-                "title": p.title,
-                "description": p.description,
-                "state": p.state,
-                "doc_url": p.doc_url,
-                "repo_path": f"{p.repo.owner}/{p.repo.name}" if p.repo else None,
-                "parent_id": p.parent_id,
-                "children": build_subtree(cast(int, p.id)),
-            }
-            for p in children
-        ]
-
-    return build_subtree(None)
+    if kind == "repo":
+        response["github_repo_created"] = result.github_repo_created
+        response["tracking_created"] = result.tracking_created
+    elif kind == "milestone":
+        response["github_repo_created"] = result.github_repo_created
+        response["milestone_created"] = result.milestone_created
+    if result.sync_result:
+        response["github_team_sync"] = result.sync_result
+    if result.inbound_teams:
+        response["teams_from_github"] = [t.name for t in result.inbound_teams]
+    return response
 
 
 # ============== Project CRUD ==============
@@ -522,7 +181,7 @@ async def list_all(
         # Pagination will be applied to root nodes
         if as_tree:
             all_projects = query.all()
-            tree = _build_tree(all_projects)
+            tree = build_tree(all_projects)
             # Apply pagination to root nodes
             paginated_tree = tree[offset : offset + limit]
             return {
@@ -634,6 +293,214 @@ async def fetch(
         return result
 
 
+# ----- MCP wrappers around the orchestration creators -----
+#
+# Each `create_*_project` MCP wrapper does the same five things:
+#   1. validate `team_ids`            -> Team[]
+#   2. validate `parent_id`           -> error dict or pass
+#   3. validate `owner_id`            -> error dict or pass
+#   4. parse `due_on` (ISO8601)       -> datetime | None
+#   5. call the orchestration-layer creator
+#   6. translate `ProjectError` -> legacy `{"error": ..., "project": None}`
+#   7. translate the result via `_creation_result_to_dict(kind=...)`
+#
+# The wrappers differ only in:
+#   - which orchestration-layer creator they call,
+#   - which extra kwargs that creator takes (repo_path, milestone_title, etc.),
+#   - the `kind` label on the response dict.
+#
+# `_run_create` factors out steps 1-4, 6-7. Each public wrapper supplies a
+# `create_call` closure for step 5 that captures its own extra args.
+
+
+def _validate_create_inputs(
+    session: Any,
+    user: Any,
+    team_ids: list[int] | None,
+    parent_id: int | None,
+    owner_id: int | None,
+    due_on: str | None,
+) -> tuple[list[Team] | None, datetime | None, dict | None]:
+    """Run the four MCP-shaped validations every create path shares.
+
+    Returns `(teams, due_on_dt, error_dict)`. If `error_dict` is non-None,
+    the caller should short-circuit and return it; `teams` and `due_on_dt`
+    are undefined in that case.
+    """
+    teams, error = validate_teams_for_project(session, user, team_ids)
+    if error:
+        return None, None, error
+
+    error = validate_parent_project(session, user, parent_id)
+    if error:
+        return None, None, error
+
+    _, error = validate_owner(session, owner_id)
+    if error:
+        return None, None, error
+
+    due_on_dt, error = parse_due_on(due_on)
+    if error:
+        return None, None, error
+
+    return teams, due_on_dt, None
+
+
+async def _run_create(
+    *,
+    session: Any,
+    user: Any,
+    kind: Literal["standalone", "repo", "milestone"],
+    team_ids: list[int] | None,
+    parent_id: int | None,
+    owner_id: int | None,
+    due_on: str | None,
+    create_call: Any,
+) -> dict:
+    """Shared dispatcher for the three MCP creation wrappers.
+
+    Validates the common inputs, calls `create_call(teams, due_on_dt)`,
+    translates `ProjectError` → error dict, and packages the
+    `ProjectCreationResult` with the right `kind` flag.
+    """
+    teams, due_on_dt, error = _validate_create_inputs(
+        session, user, team_ids, parent_id, owner_id, due_on
+    )
+    if error:
+        return error
+
+    try:
+        result = create_call(teams or [], due_on_dt)
+    except ProjectError as e:
+        return _project_error_response(e)
+
+    return _creation_result_to_dict(result, kind=kind)
+
+
+async def create_standalone_project(
+    session: Any,
+    user: Any,
+    title: str,
+    team_ids: list[int] | None,
+    description: str | None,
+    state: str,
+    parent_id: int | None,
+    owner_id: int | None = None,
+    due_on: str | None = None,
+    doc_url: str | None = None,
+) -> dict:
+    """MCP wrapper around `memory.common.project.create_standalone_project`.
+
+    Performs MCP-shaped validation (teams, parent, owner, due_on) up-front
+    and translates any orchestration-layer ProjectError to the legacy
+    error-dict shape.
+    """
+    return await _run_create(
+        session=session,
+        user=user,
+        kind="standalone",
+        team_ids=team_ids,
+        parent_id=parent_id,
+        owner_id=owner_id,
+        due_on=due_on,
+        create_call=lambda teams, due_on_dt: _create_standalone_project(
+            session,
+            teams,
+            title,
+            description,
+            state,
+            parent_id,
+            owner_id,
+            due_on_dt,
+            doc_url,
+        ),
+    )
+
+
+async def create_repo_project(
+    session: Any,
+    user: Any,
+    repo_path: str,
+    team_ids: list[int] | None,
+    description: str | None,
+    state: str,
+    parent_id: int | None,
+    title_override: str | None,
+    owner_id: int | None = None,
+    due_on: str | None = None,
+    doc_url: str | None = None,
+    create_repo: bool = False,
+    private: bool = True,
+) -> dict:
+    """MCP wrapper around `memory.common.project.create_repo_project`."""
+    return await _run_create(
+        session=session,
+        user=user,
+        kind="repo",
+        team_ids=team_ids,
+        parent_id=parent_id,
+        owner_id=owner_id,
+        due_on=due_on,
+        create_call=lambda teams, due_on_dt: _create_repo_project(
+            session,
+            user,
+            teams,
+            repo_path,
+            description,
+            state,
+            parent_id,
+            title_override,
+            owner_id,
+            due_on_dt,
+            doc_url,
+            create_repo=create_repo,
+            private=private,
+        ),
+    )
+
+
+async def create_milestone_project(
+    session: Any,
+    user: Any,
+    repo_path: str,
+    milestone_title: str,
+    team_ids: list[int] | None,
+    description: str | None,
+    parent_id: int | None,
+    title_override: str | None,
+    owner_id: int | None = None,
+    due_on: str | None = None,
+    doc_url: str | None = None,
+    create_repo: bool = False,
+    private: bool = True,
+) -> dict:
+    """MCP wrapper around `memory.common.project.create_milestone_project`."""
+    return await _run_create(
+        session=session,
+        user=user,
+        kind="milestone",
+        team_ids=team_ids,
+        parent_id=parent_id,
+        owner_id=owner_id,
+        due_on=due_on,
+        create_call=lambda teams, due_on_dt: _create_milestone_project(
+            session,
+            user,
+            teams,
+            repo_path,
+            milestone_title,
+            description,
+            parent_id,
+            title_override,
+            owner_id,
+            due_on_dt,
+            doc_url,
+            create_repo=create_repo,
+            private=private,
+        ),
+    )
+
+
 @projects_mcp.tool()
 @visible_when(require_scopes(SCOPE_PROJECTS_WRITE))
 async def upsert(
@@ -650,7 +517,11 @@ async def upsert(
     doc_url: str | None = _UNSET,
     repo: str | None = None,
     milestone: str | None = None,
+    clear_repo: bool = False,
+    clear_milestone: bool = False,
+    force: bool = False,
     create_repo: bool = False,
+    create_milestone: bool = False,
     private: bool = True,
 ) -> dict:
     """
@@ -689,6 +560,17 @@ async def upsert(
                    project. Created on GitHub if it doesn't exist.
         create_repo: If True and repo doesn't exist on GitHub, creates it (default: False)
         private: Whether to create repo as private if creating (default: True)
+        clear_repo: If True, detach this project from its GitHub repo. Project
+                    becomes standalone. Refused if linked GithubItems exist
+                    unless force=True. Cannot combine with repo.
+        clear_milestone: If True, demote a milestone-level project to repo-level.
+                         Refused if linked GithubItems exist unless force=True.
+                         Cannot combine with milestone.
+        force: When set with clear_repo or clear_milestone, allow detach even
+               if linked GithubItems exist. Items will keep their project_id
+               but the project will no longer be GitHub-backed.
+        create_milestone: If True and milestone doesn't exist on GitHub, create it.
+                          Default False.
 
     Returns:
         Created/updated project data, or error if validation fails
@@ -773,6 +655,14 @@ async def upsert(
                 due_on,
                 clear_due_on,
                 resolved_doc_url,
+                repo=repo,
+                milestone=milestone,
+                clear_repo=clear_repo,
+                clear_milestone=clear_milestone,
+                force=force,
+                create_repo=create_repo,
+                create_milestone=create_milestone,
+                private=private,
             )
 
         # For create paths, convert sentinel to None (new projects don't need "skip")
@@ -836,515 +726,32 @@ async def upsert(
         )
 
 
-def validate_owner(
-    session: Any, owner_id: int | None
-) -> tuple[Person | None, dict | None]:
-    """Validate that an owner exists.
+def handle_clear_repo(session: Any, project: Project, force: bool) -> dict | None:
+    """MCP-shaped wrapper for `memory.common.project.handle_clear_repo`.
 
-    Returns:
-        Tuple of (Person or None, error dict or None)
+    Returns an error dict to short-circuit `update_project`, or None to
+    indicate the detach was applied (caller should commit).
     """
-    if owner_id is None:
-        return None, None
-    owner = session.get(Person, owner_id)
-    if not owner:
-        return None, {"error": f"Owner not found: {owner_id}", "project": None}
-    return owner, None
-
-
-def parse_due_on(due_on_str: str | None) -> tuple[datetime | None, dict | None]:
-    """Parse a due_on ISO string to datetime.
-
-    Returns:
-        Tuple of (datetime or None, error dict or None)
-    """
-    if due_on_str is None:
-        return None, None
     try:
-        return datetime.fromisoformat(due_on_str.replace("Z", "+00:00")), None
-    except ValueError:
-        return None, {"error": "Invalid due_on format. Use ISO 8601.", "project": None}
+        _handle_clear_repo(session, project, force)
+    except ProjectError as e:
+        return _project_error_response(e)
+    return None
 
 
-async def create_standalone_project(
-    session: Any,
-    user: Any,
-    title: str,
-    team_ids: list[int] | None,
-    description: str | None,
-    state: str,
-    parent_id: int | None,
-    owner_id: int | None = None,
-    due_on: str | None = None,
-    doc_url: str | None = None,
-) -> dict:
-    """Create a new standalone project."""
-    logger.info(f"MCP: Creating project: {title}")
+def handle_clear_milestone(
+    session: Any, project: Project, force: bool
+) -> dict | None:
+    """MCP-shaped wrapper for `memory.common.project.handle_clear_milestone`.
 
-    # Validate teams
-    teams, error = validate_teams_for_project(session, user, team_ids)
-    if error:
-        return error
-
-    # Validate parent
-    error = validate_parent_project(session, user, parent_id)
-    if error:
-        return error
-
-    # Validate owner
-    _, error = validate_owner(session, owner_id)
-    if error:
-        return error
-
-    # Parse due_on
-    due_on_dt, error = parse_due_on(due_on)
-    if error:
-        return error
-
-    # Create project with unique negative ID
-    project, error = create_project_with_retry(
-        session,
-        teams,  # type: ignore[arg-type]
-        repo_id=None,
-        github_id=None,
-        number=None,
-        title=title,
-        description=description,
-        state=state,
-        parent_id=parent_id,
-        owner_id=owner_id,
-        due_on=due_on_dt,
-        doc_url=doc_url,
-    )
-    if error:
-        return error
-    assert project is not None  # error is None means project was created
-
-    session.commit()
-    session.refresh(project)
-
-    return {
-        "success": True,
-        "created": True,
-        "project": project_to_dict(project, include_teams=True),
-    }
-
-
-def get_inbound_teams(
-    session: Session,
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    existing_teams: list[Team],
-    github_repo_created: bool,
-) -> tuple[list[Team], list[Team]]:
-    """Fetch teams from GitHub repo that should be added to a project.
-
-    For existing repos (not newly created), fetches teams that have access
-    on GitHub and returns any matching local teams that aren't already assigned.
-
-    Args:
-        session: Database session
-        client: GitHub client
-        owner: Repo owner
-        repo_name: Repo name
-        existing_teams: Teams already assigned to the project (not modified)
-        github_repo_created: Whether the repo was just created (skip sync if so)
-
-    Returns:
-        Tuple of (teams_to_add, all_inbound_teams):
-        - teams_to_add: Teams from GitHub not in existing_teams (to be added)
-        - all_inbound_teams: All matching teams from GitHub (for reporting)
+    Returns an error dict to short-circuit `update_project`, or None to
+    indicate the demotion was applied (caller should commit).
     """
-    if github_repo_created:
-        return [], []
-
-    inbound_teams = sync_repo_teams_inbound(session, client, owner, repo_name)
-    existing_team_ids = {t.id for t in existing_teams}
-    teams_to_add = [t for t in inbound_teams if t.id not in existing_team_ids]
-    return teams_to_add, inbound_teams
-
-
-def perform_outbound_sync(
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    teams: list[Team],
-) -> SyncResult | None:
-    """Grant teams access to repo on GitHub.
-
-    Args:
-        client: Authenticated GitHub client
-        owner: Repository owner
-        repo_name: Repository name
-        teams: List of teams to sync
-
-    Returns:
-        SyncResult with synced/skipped/failed lists, or None if no teams provided.
-        Logs warnings for any failed syncs.
-    """
-    if not teams:
-        return None
-    sync_result = sync_repo_teams_outbound(client, owner, repo_name, teams)
-    if sync_result and sync_result.get("failed"):
-        logger.warning(
-            f"Some teams failed to sync to GitHub for {owner}/{repo_name}: "
-            f"{sync_result['failed']}"
-        )
-    return sync_result
-
-
-async def create_repo_project(
-    session: Any,
-    user: Any,
-    repo_path: str,
-    team_ids: list[int] | None,
-    description: str | None,
-    state: str,
-    parent_id: int | None,
-    title_override: str | None,
-    owner_id: int | None = None,
-    due_on: str | None = None,
-    doc_url: str | None = None,
-    create_repo: bool = False,
-    private: bool = True,
-) -> dict:
-    """Create a project at the repo level (linked to a GitHub repo, no milestone).
-
-    Optionally creates the repo on GitHub if it doesn't exist.
-    """
-    logger.info(f"MCP: Creating repo-level project: {repo_path}")
-
-    # Parse repo path
-    if "/" not in repo_path:
-        return {
-            "error": f"Invalid repo path '{repo_path}'. Expected format: owner/name",
-            "project": None,
-        }
-    owner, repo_name = repo_path.split("/", 1)
-
-    # Validate teams
-    teams, error = validate_teams_for_project(session, user, team_ids)
-    if error:
-        return error
-
-    # Validate parent
-    error = validate_parent_project(session, user, parent_id)
-    if error:
-        return error
-
-    # Validate owner
-    _, error = validate_owner(session, owner_id)
-    if error:
-        return error
-
-    # Parse due_on
-    due_on_dt, error = parse_due_on(due_on)
-    if error:
-        return error
-
-    # Get GitHub client
-    client, repo_obj = get_github_client(session, repo_path, user.id)
-    if not client:
-        return {
-            "error": f"No GitHub access configured for '{repo_path}'",
-            "project": None,
-        }
-
-    # If repo not tracked, ensure it exists (optionally creating on GitHub)
-    github_repo_created = False
-    tracking_created = False
-    if not repo_obj:
-        # Get user's account for tracking
-        account = (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user.id,
-                GithubAccount.active.is_(True),
-            )
-            .first()
-        )
-        if not account:
-            return {"error": "No GitHub account configured", "project": None}
-
-        repo_obj, github_repo_created, tracking_created = ensure_github_repo(
-            session,
-            client,
-            account.id,
-            owner,
-            repo_name,
-            description=description,
-            create_if_missing=create_repo,
-            private=private,
-        )
-        if not repo_obj:
-            if create_repo:
-                return {
-                    "error": f"Failed to create repository '{repo_path}' on GitHub. "
-                    "Check that the GitHub account has permission to create repositories in the org.",
-                    "project": None,
-                }
-            return {
-                "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
-                "project": None,
-            }
-
-    # Check if project already exists for this repo (without milestone)
-    existing_project = (
-        session.query(Project)
-        .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
-        .first()
-    )
-    if existing_project:
-        # Update teams if provided
-        existing_project.teams = teams  # type: ignore[assignment]
-        if parent_id is not None:
-            existing_project.parent_id = parent_id
-        if description is not None:
-            existing_project.description = description
-        session.commit()
-        session.refresh(existing_project)
-        return {
-            "success": True,
-            "created": False,
-            "github_repo_created": github_repo_created,
-            "tracking_created": tracking_created,
-            "project": project_to_dict(existing_project, include_teams=True),
-        }
-
-    # Inbound sync: add existing repo teams to project (for existing repos)
-    teams_to_add, inbound_teams = get_inbound_teams(
-        session, client, owner, repo_name, teams, github_repo_created  # type: ignore[arg-type]
-    )
-    all_teams = list(teams) + teams_to_add  # type: ignore[arg-type]
-
-    # Create project with unique negative ID (with retry for race conditions)
-    project, error = create_project_with_retry(
-        session,
-        all_teams,
-        repo_id=repo_obj.id,
-        github_id=repo_obj.github_id,
-        number=None,
-        title=title_override or repo_name,
-        description=description,
-        state=state,
-        parent_id=parent_id,
-        owner_id=owner_id,
-        due_on=due_on_dt,
-        doc_url=doc_url,
-    )
-    if error:
-        return error
-    assert project is not None  # error is None means project was created
-
-    session.commit()
-    session.refresh(project)
-
-    # Outbound sync: grant teams access to repo on GitHub (after commit)
-    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
-
-    result: dict[str, Any] = {
-        "success": True,
-        "created": True,
-        "github_repo_created": github_repo_created,
-        "tracking_created": tracking_created,
-        "project": project_to_dict(project, include_teams=True),
-    }
-    if sync_result:
-        result["github_team_sync"] = sync_result
-    if inbound_teams:
-        result["teams_from_github"] = [t.name for t in inbound_teams]
-    return result
-
-
-async def create_milestone_project(
-    session: Any,
-    user: Any,
-    repo_path: str,
-    milestone_title: str,
-    team_ids: list[int] | None,
-    description: str | None,
-    parent_id: int | None,
-    title_override: str | None,
-    owner_id: int | None = None,
-    due_on: str | None = None,
-    doc_url: str | None = None,
-    create_repo: bool = False,
-    private: bool = True,
-) -> dict:
-    """Create a project backed by a GitHub milestone.
-
-    The milestone is created if it doesn't exist.
-    Optionally creates the repo on GitHub if create_repo=True.
-    """
-    logger.info(
-        f"MCP: Creating milestone-level project: {repo_path} / {milestone_title}"
-    )
-
-    # Parse repo path
-    if "/" not in repo_path:
-        return {
-            "error": f"Invalid repo path '{repo_path}'. Expected format: owner/name",
-            "project": None,
-        }
-    owner, repo_name = repo_path.split("/", 1)
-
-    # Validate teams
-    teams, error = validate_teams_for_project(session, user, team_ids)
-    if error:
-        return error
-
-    # Validate parent
-    error = validate_parent_project(session, user, parent_id)
-    if error:
-        return error
-
-    # Validate owner
-    _, error = validate_owner(session, owner_id)
-    if error:
-        return error
-
-    # Parse due_on (may be overridden by milestone data)
-    due_on_dt, error = parse_due_on(due_on)
-    if error:
-        return error
-
-    # Get GitHub client
-    client, repo_obj = get_github_client(session, repo_path, user.id)
-    if not client:
-        return {
-            "error": f"No GitHub access configured for '{repo_path}'",
-            "project": None,
-        }
-
-    # If repo not tracked, ensure it exists (optionally creating on GitHub)
-    github_repo_created = False
-    if not repo_obj:
-        # Get user's account for tracking
-        account = (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user.id,
-                GithubAccount.active.is_(True),
-            )
-            .first()
-        )
-        if not account:
-            return {"error": "No GitHub account configured", "project": None}
-
-        repo_obj, github_repo_created, _ = ensure_github_repo(
-            session,
-            client,
-            account.id,
-            owner,
-            repo_name,
-            description=description,
-            create_if_missing=create_repo,
-            private=private,
-        )
-        if not repo_obj:
-            if create_repo:
-                return {
-                    "error": f"Failed to create repository '{repo_path}' on GitHub. "
-                    "Check that the GitHub account has permission to create repositories in the org.",
-                    "project": None,
-                }
-            return {
-                "error": f"Repository '{repo_path}' not found. Use create_repo=True to create it.",
-                "project": None,
-            }
-
-    # Ensure milestone exists (create if needed)
-    milestone_data, was_created = client.ensure_milestone(
-        owner, repo_name, milestone_title, description=description
-    )
-    if not milestone_data:
-        return {
-            "error": f"Failed to find or create milestone '{milestone_title}'",
-            "project": None,
-        }
-
-    # Auto-parent to repo project if no parent specified
-    if parent_id is None:
-        repo_project = (
-            session.query(Project)
-            .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
-            .first()
-        )
-        if repo_project:
-            parent_id = repo_project.id
-
-    # Check if project already exists for this milestone
-    existing_project = (
-        session.query(Project)
-        .filter(
-            Project.repo_id == repo_obj.id, Project.number == milestone_data["number"]
-        )
-        .first()
-    )
-    if existing_project:
-        # Update teams if provided
-        existing_project.teams = teams  # type: ignore[assignment]
-        if parent_id is not None:
-            existing_project.parent_id = parent_id
-        session.commit()
-        session.refresh(existing_project)
-        return {
-            "success": True,
-            "created": False,
-            "github_repo_created": github_repo_created,
-            "milestone_created": False,
-            "project": project_to_dict(existing_project, include_teams=True),
-        }
-
-    # Inbound sync: add existing repo teams to project (for existing repos)
-    teams_to_add, inbound_teams = get_inbound_teams(
-        session, client, owner, repo_name, teams, github_repo_created  # type: ignore[arg-type]
-    )
-    all_teams = list(teams) + teams_to_add  # type: ignore[arg-type]
-
-    # Use provided due_on if set, otherwise use milestone's due_on from GitHub
-    effective_due_on = (
-        due_on_dt if due_on_dt is not None else milestone_data.get("due_on")
-    )
-
-    # Create project with unique negative ID (with retry for race conditions)
-    project, error = create_project_with_retry(
-        session,
-        all_teams,
-        repo_id=repo_obj.id,
-        github_id=milestone_data["github_id"],
-        number=milestone_data["number"],
-        title=title_override or milestone_data["title"],
-        description=milestone_data.get("description") or description,
-        state=milestone_data.get("state", "open"),
-        due_on=effective_due_on,
-        parent_id=parent_id,
-        owner_id=owner_id,
-        doc_url=doc_url,
-    )
-    if error:
-        return error
-    assert project is not None  # error is None means project was created
-
-    session.commit()
-    session.refresh(project)
-
-    # Outbound sync: grant teams access to repo on GitHub (after commit)
-    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
-
-    result: dict[str, Any] = {
-        "success": True,
-        "created": True,
-        "github_repo_created": github_repo_created,
-        "milestone_created": was_created,
-        "project": project_to_dict(project, include_teams=True),
-    }
-    if sync_result:
-        result["github_team_sync"] = sync_result
-    if inbound_teams:
-        result["teams_from_github"] = [t.name for t in inbound_teams]
-    return result
+    try:
+        _handle_clear_milestone(session, project, force)
+    except ProjectError as e:
+        return _project_error_response(e)
+    return None
 
 
 async def update_project(
@@ -1361,6 +768,15 @@ async def update_project(
     due_on: str | None = None,
     clear_due_on: bool = False,
     doc_url: str | None = _UNSET,  # type: ignore[assignment]
+    *,
+    repo: str | None = None,
+    milestone: str | None = None,
+    clear_repo: bool = False,
+    clear_milestone: bool = False,
+    force: bool = False,
+    create_repo: bool = False,
+    create_milestone: bool = False,
+    private: bool = True,
 ) -> dict:
     """Update an existing project.
 
@@ -1378,10 +794,117 @@ async def update_project(
     if not project:
         return {"error": f"Project not found: {project_id}", "project": None}
 
+    # Conflict checks for new args
+    if clear_repo and repo is not None:
+        return {
+            "error": "Cannot combine clear_repo=True with repo=...",
+            "project": None,
+        }
+    if clear_milestone and milestone is not None:
+        return {
+            "error": "Cannot combine clear_milestone=True with milestone=...",
+            "project": None,
+        }
+    # Cross-clear conflicts: `clear_X=True` + a `Y=...` change (other axis) is
+    # ambiguous and would silently drop the `Y` arg via the early-return below.
+    # Reject explicitly so callers get a clear error.
+    if clear_repo and milestone is not None:
+        return {
+            "error": "Cannot combine clear_repo=True with milestone=...",
+            "project": None,
+        }
+    if clear_milestone and repo is not None:
+        return {
+            "error": "Cannot combine clear_milestone=True with repo=...",
+            "project": None,
+        }
+
+    # `clear_repo`/`clear_milestone` early-return commits and skips the rest of
+    # the function. Reject the combination with other mutating args up front so
+    # field edits aren't silently dropped.
+    if clear_repo or clear_milestone:
+        if (
+            title is not None
+            or description is not None
+            or state is not None
+            or team_ids is not None
+            or parent_id is not None
+            or clear_parent
+            or owner_id != 0
+            or due_on is not None
+            or clear_due_on
+            or doc_url is not _UNSET
+            or repo is not None
+            or milestone is not None
+        ):
+            verb = "clear_repo" if clear_repo else "clear_milestone"
+            return {
+                "error": (
+                    f"Cannot combine {verb}=True with other field changes. "
+                    f"Run {verb} as a standalone call, then update other fields."
+                ),
+                "project": None,
+            }
+
     is_standalone = project.repo_id is None
 
-    # For GitHub-backed projects, only allow parent_id, owner_id, and due_on changes
-    if not is_standalone:
+    # Detach branch — runs before sync-on-mutate (sync would fail anyway)
+    if clear_repo:
+        error = handle_clear_repo(session, project, force)
+        if error:
+            return error
+        session.commit()
+        session.refresh(project)
+        children_count = (
+            session.query(func.count(Project.id))
+            .filter(Project.parent_id == project_id)
+            .scalar()
+        ) or 0
+        return {
+            "success": True,
+            "created": False,
+            "project": project_to_dict(project, children_count=children_count),
+        }
+
+    # Demote branch — same shape as detach, runs before sync-on-mutate
+    if clear_milestone:
+        error = handle_clear_milestone(session, project, force)
+        if error:
+            return error
+        session.commit()
+        session.refresh(project)
+        children_count = (
+            session.query(func.count(Project.id))
+            .filter(Project.parent_id == project_id)
+            .scalar()
+        ) or 0
+        return {
+            "success": True,
+            "created": False,
+            "project": project_to_dict(project, children_count=children_count),
+        }
+
+    # ------------------------------------------------------------------
+    # PRE-MUTATION VALIDATION
+    # ------------------------------------------------------------------
+    # All cheap validations run BEFORE attach/promote/refresh. Validation
+    # failures after a mutation would otherwise commit partial state via
+    # `make_session`'s clean-exit commit (db/connection.py) — even though
+    # we return an error dict.
+    #
+    # Validations placed here (order roughly cheapest-first):
+    #   - title/description/state forbidden when GitHub-backed (current OR pending attach)
+    #   - parent_id existence + circular reference
+    #   - owner_id existence
+    #   - due_on parseability
+    #   - team_ids non-empty + existence + membership
+    # ------------------------------------------------------------------
+
+    # `repo`/`milestone` args mean a github-backing change is being applied
+    # in this call. Title/description/state edits are only valid for fully
+    # standalone projects that are STAYING standalone.
+    pending_github_attach = repo is not None or milestone is not None
+    if not is_standalone or pending_github_attach:
         if title is not None or description is not None or state is not None:
             return {
                 "error": "Cannot modify title/description/state of GitHub-backed projects. "
@@ -1454,6 +977,136 @@ async def update_project(
                     "project": None,
                 }
 
+    # Validate doc_url before any mutation. (`upsert` validates the user-supplied
+    # value upfront, but `update_project` may be called by non-MCP paths; keep
+    # one validation site here so the function is safe in isolation.)
+    if doc_url is not _UNSET and doc_url is not None:
+        error = validate_doc_url(doc_url)
+        if error:
+            return {"error": error, "project": None}
+
+    # Attach / promote / rebind branch
+    just_attached = False
+    repo_was_just_created = False
+    if repo is not None or milestone is not None:
+        # milestone alone on a standalone project is an error
+        if repo is None and milestone is not None and is_standalone:
+            return {
+                "error": (
+                    "Cannot set milestone on a standalone project without also "
+                    "specifying repo."
+                ),
+                "project": None,
+            }
+
+        # repo set: validate format up front so a malformed `repo=` (e.g. no
+        # slash) fails with a clear error instead of falling through into the
+        # already-attached comparison and producing a misleading
+        # "use clear_repo" message.
+        if repo is not None and "/" not in repo:
+            return {
+                "error": (
+                    f"Invalid repo path '{repo}'. Expected format: owner/name"
+                ),
+                "project": None,
+            }
+
+        # repo set: validate against current attachment
+        if repo is not None and not is_standalone:
+            target_owner, target_name = repo.split("/", 1)
+            if (
+                project.repo.owner.lower() != target_owner.lower()
+                or project.repo.name.lower() != target_name.lower()
+            ):
+                return {
+                    "error": (
+                        f"Project is already attached to "
+                        f"{project.repo.owner}/{project.repo.name}. "
+                        "Use clear_repo=True first to detach."
+                    ),
+                    "project": None,
+                }
+
+        # Attach if standalone
+        if repo is not None and is_standalone:
+            try:
+                repo_was_just_created = handle_attach(
+                    session, user, project, repo, create_repo, private
+                )
+            except ProjectError as e:
+                return _project_error_response(e)
+            is_standalone = False
+            just_attached = True
+
+        # Promote to milestone if requested. Re-pinning to the same milestone
+        # is treated as idempotent: we run the promote path again so a fresh
+        # GitHub-side rename overlays correctly. (Old behaviour rejected
+        # re-pin based on the locally-cached title, which goes stale after a
+        # rename and produces a misleading "already pinned" error.)
+        if milestone is not None:
+            try:
+                promote_client, _ = get_github_client(
+                    session,
+                    f"{project.repo.owner}/{project.repo.name}",
+                    user.id,
+                )
+            except ValueError as e:
+                return {
+                    "error": f"Could not get GitHub client: {e}",
+                    "project": None,
+                }
+            # If we just created the repo on GitHub, skip the post-promote
+            # `get_repo` round-trip — eventual consistency means it would
+            # return None and falsely deactivate the freshly-created repo.
+            try:
+                handle_promote_to_milestone(
+                    session,
+                    promote_client,
+                    project,
+                    milestone,
+                    create_milestone,
+                    skip_refresh=repo_was_just_created,
+                )
+            except ProjectError as e:
+                return _project_error_response(e)
+            just_attached = True
+
+    # Sync-on-mutate: refresh from GitHub before applying user edits
+    # (skip when detaching, since GitHub may be broken — that's why user is detaching)
+    # (skip when just_attached, because handle_attach already refreshed)
+    if not is_standalone and not just_attached:
+        try:
+            client, _ = get_github_client(
+                session, f"{project.repo.owner}/{project.repo.name}", user.id
+            )
+        except ValueError as e:
+            return {
+                "error": f"Could not get GitHub client: {e}",
+                "project": None,
+            }
+        try:
+            refresh_from_github(session, client, project)
+        except (RepoArchivedError, RepoMissingError) as e:
+            # Persist the deactivation side-effect explicitly so periodic
+            # sync sees the inactivation. Other in-memory project mutations
+            # are discarded by the lack of commit on this error path.
+            #
+            # Note: this only flips repo.active=False. The periodic sync
+            # (`workers/tasks/github.py:close_open_repo_projects`) is what
+            # transitions all open child projects of an inactive repo to
+            # state="closed". The MCP path here doesn't fan out that
+            # cleanup — child projects converge to closed on the next
+            # periodic sync cycle. If MCP-path symmetry is ever needed,
+            # call `close_open_repo_projects` here.
+            if project.repo is not None and project.repo.active is False:
+                mark_repo_inactive(session, project.repo)
+            else:
+                session.rollback()
+            return _project_error_response(e)
+        except ProjectError as e:
+            session.rollback()
+            return _project_error_response(e)
+
     # Sync due_on to GitHub for milestone-backed projects BEFORE local changes
     # This ensures that if GitHub fails, we don't leave the local database inconsistent
     if not is_standalone and project.repo and project.number:
@@ -1470,9 +1123,10 @@ async def update_project(
                 new_due_on_value = due_on_dt
 
         if due_on_changed:
-            sync_error = sync_milestone_due_date(project, new_due_on_value)
-            if sync_error:
-                return sync_error
+            try:
+                sync_milestone_due_date(project, new_due_on_value)
+            except ProjectError as e:
+                return _project_error_response(e)
 
     # Apply updates
     if clear_parent:
@@ -1492,12 +1146,10 @@ async def update_project(
     elif due_on_dt is not None:
         project.due_on = due_on_dt
 
-    # Doc URL: _UNSET = skip, None = clear, str = set
+    # Doc URL: _UNSET = skip, None = clear, str = set.
+    # Validation already ran upfront (see PRE-MUTATION VALIDATION above) and
+    # in `upsert`. Just apply the value here.
     if doc_url is not _UNSET:
-        if doc_url is not None:
-            error = validate_doc_url(doc_url)
-            if error:
-                return {"error": error, "project": None}
         project.doc_url = doc_url
 
     if is_standalone:
@@ -1520,20 +1172,34 @@ async def update_project(
     session.commit()
     session.refresh(project)
 
-    # Outbound sync: grant newly added teams access to repo on GitHub (after commit)
+    # Outbound sync: grant teams access to repo on GitHub (after commit).
+    # Two trigger conditions, ORed:
+    #   1. team_ids was supplied AND new teams were added (push only the diff).
+    #   2. The project was just attached/promoted on this call — we need to grant
+    #      every existing team access to the freshly-linked repo, regardless of
+    #      whether team_ids was passed. This mirrors create_repo_project's behaviour
+    #      and prevents the regression where `upsert(project_id=X, repo=...)` linked
+    #      the repo but left the project's existing teams without access on GitHub.
     sync_result = None
-    if teams is not None and project.repo:
-        new_team_ids = {t.id for t in teams}
-        added_team_ids = new_team_ids - old_team_ids
-        if added_team_ids:
-            added_teams = [t for t in teams if t.id in added_team_ids]
+    if project.repo:
+        teams_to_sync: list[Team] = []
+        if teams is not None:
+            new_team_ids = {t.id for t in teams}
+            added_team_ids = new_team_ids - old_team_ids
+            if added_team_ids:
+                teams_to_sync = [t for t in teams if t.id in added_team_ids]
+        if just_attached:
+            # Sync the full current team list — handle_attach/handle_promote may
+            # have left the project linked without granting any team access.
+            teams_to_sync = list(project.teams)
+        if teams_to_sync:
             try:
                 client, _ = get_github_client(
                     session, f"{project.repo.owner}/{project.repo.name}", user.id
                 )
                 if client:
                     sync_result = perform_outbound_sync(
-                        client, project.repo.owner, project.repo.name, added_teams
+                        client, project.repo.owner, project.repo.name, teams_to_sync
                     )
             except ValueError as e:
                 # GitHub client unavailable or not configured

@@ -397,7 +397,7 @@ async def input_handler_loop(
             try:
                 result = await relay.resize(cols, rows)
                 if result["status"] == "ok":
-                    del activity_state["pending_resize"]
+                    activity_state.pop("pending_resize", None)
                 else:
                     logger.debug(f"resize failed: {result.get('error')}")
             except RelayError as e:
