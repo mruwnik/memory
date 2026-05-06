@@ -144,37 +144,53 @@ async def test_note_files_blocks_path_traversal(mock_settings, malicious_path):
         await note_files.fn(path=malicious_path)
 
 
+def _make_note(db_session, user_id: int, filename: str, content: str = "x"):
+    from memory.common.db.models.source_items import Note
+
+    note = Note(
+        sha256=filename.encode() + b"\x00" + content.encode(),
+        content=content,
+        modality="note",
+        mime_type="text/markdown",
+        size=len(content),
+        filename=filename,
+        user_id=user_id,
+    )
+    db_session.add(note)
+    db_session.commit()
+    return note
+
+
 @pytest.mark.asyncio
-async def test_note_files_handles_absolute_paths(mock_settings, mock_notes_dir):
-    """Absolute paths are converted to relative paths within notes dir."""
+async def test_note_files_handles_absolute_paths(
+    mock_settings, db_session, admin_user, admin_session
+):
+    """Absolute paths are normalized to relative when filtering DB notes."""
     from memory.api.MCP.servers.notes import note_files
+    from tests.conftest import mcp_auth_context
 
-    # Create a test file
-    (mock_notes_dir / "note.md").write_text("content")
+    _make_note(db_session, admin_user.id, "note.md")
 
-    # /etc becomes etc inside notes dir - this is correct behavior
-    # The path validator strips leading slashes
-    result = await note_files.fn(path="/")  # Root becomes notes dir
+    with mcp_auth_context(admin_session.id):
+        result = await note_files.fn(path="/")
 
     assert any("note.md" in f for f in result)
 
 
 @pytest.mark.asyncio
-async def test_note_files_lists_markdown_files(mock_settings, mock_notes_dir):
-    """Lists markdown files in the notes directory."""
+async def test_note_files_lists_markdown_files(
+    mock_settings, db_session, admin_user, admin_session
+):
+    """Lists markdown notes for the current user."""
     from memory.api.MCP.servers.notes import note_files
+    from tests.conftest import mcp_auth_context
 
-    # Create some test files
-    (mock_notes_dir / "note1.md").write_text("content1")
-    (mock_notes_dir / "note2.md").write_text("content2")
-    (mock_notes_dir / "not_a_note.txt").write_text("ignored")
+    _make_note(db_session, admin_user.id, "note1.md", "content1")
+    _make_note(db_session, admin_user.id, "note2.md", "content2")
+    _make_note(db_session, admin_user.id, "subdir/nested.md", "nested")
 
-    subdir = mock_notes_dir / "subdir"
-    subdir.mkdir()
-    (subdir / "nested.md").write_text("nested content")
-
-    # Access underlying function via .fn since note_files is a FunctionTool
-    result = await note_files.fn(path="/")
+    with mcp_auth_context(admin_session.id):
+        result = await note_files.fn(path="/")
 
     assert len(result) == 3
     assert any("note1.md" in f for f in result)

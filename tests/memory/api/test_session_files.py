@@ -7,6 +7,7 @@ curl talks to with a presigned token. That's what this file exercises.
 """
 
 import time
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -30,7 +31,13 @@ def patch_secret():
 SESSION_ID = "u1-e6-deadbeefcafe"
 
 
-def make_token(action="read", session_id=SESSION_ID, path="/workspace/report.md", user_id=1, exp_offset=60):
+def make_token(
+    action: Literal["read", "write"] = "read",
+    session_id=SESSION_ID,
+    path="/workspace/report.md",
+    user_id=1,
+    exp_offset=60,
+):
     payload = TransferTokenPayload(
         user_id=user_id,
         session_id=session_id,

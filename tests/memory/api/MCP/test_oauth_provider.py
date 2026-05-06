@@ -2,6 +2,9 @@
 
 import pytest
 from datetime import datetime, timedelta
+from typing import cast
+
+from sqlalchemy.pool import QueuePool
 
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
@@ -465,7 +468,7 @@ async def test_verify_token_does_not_leak_connections_under_load(db_session):
 
     provider = SimpleOAuthProvider()
     engine = get_engine()
-    pool = engine.pool
+    pool = cast(QueuePool, engine.pool)
     baseline_checked_out = pool.checkedout()
 
     # Hammer the auth path harder than the pool size (5 + 10 overflow = 15).
@@ -500,7 +503,7 @@ async def test_verify_token_session_path_does_not_leak(db_session):
 
     provider = SimpleOAuthProvider()
     engine = get_engine()
-    pool = engine.pool
+    pool = cast(QueuePool, engine.pool)
     baseline_checked_out = pool.checkedout()
 
     for _ in range(50):
