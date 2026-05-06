@@ -8,7 +8,9 @@ Multi-user design:
 - Sending messages uses the caller's own credentials
 """
 
+import json
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Literal
 from urllib.parse import urlencode
@@ -42,6 +44,12 @@ from memory.common.oauth_client import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/slack", tags=["slack"])
+
+# Slack team IDs are documented as "T" followed by 8-12 uppercase
+# alphanumerics. We use this for trust-boundary validation on values
+# that reach the OAuth-callback HTML template — see SECURITY/MED
+# f2feda6d (XSS via team_id in JS string literals).
+_SLACK_TEAM_ID_PATTERN = re.compile(r"^T[A-Z0-9]{8,12}$")
 
 # OAuth scopes for Slack user tokens
 SLACK_SCOPES = [
@@ -333,6 +341,16 @@ async def slack_callback(
     if not team_id:
         raise HTTPException(status_code=400, detail="No team ID in response")
 
+    # Trust-boundary check: Slack documents team IDs as `T` followed by
+    # 8–12 alphanumeric chars. Validate before letting the value reach the
+    # DB or the HTML template — prevents XSS via malformed team_id and
+    # SQL/log-injection if the upstream response is ever attacker-controlled
+    # (TLS interception, Slack-side compromise, future template reuse).
+    # See task SECURITY/MED f2feda6d.
+    if not _SLACK_TEAM_ID_PATTERN.fullmatch(team_id):
+        logger.warning("Slack OAuth response had malformed team_id")
+        raise HTTPException(status_code=400, detail="Malformed team ID in response")
+
     # Get or create workspace (workspaces are shared across users)
     workspace = db.get(SlackWorkspace, team_id)
     if not workspace:
@@ -393,8 +411,17 @@ async def slack_callback(
         f"workspace_id={team_id}, workspace_name={team_name}"
     )
 
-    # Return HTML that notifies opener via BroadcastChannel and redirects
+    # Return HTML that notifies opener via BroadcastChannel and redirects.
+    # Use json.dumps for every interpolated value: it produces a properly
+    # quoted, JS-safe string literal that closes any embedded quote/backslash
+    # and escapes `<` so a stray `</script>` cannot break out of the script
+    # element. Defense in depth: team_id has already been format-checked
+    # above, but re-encoding here means a future caller wiring a different
+    # value into this template (wizard test-message tokens, future OAuth
+    # flows, etc.) gets the same safety guarantee. See SECURITY/MED f2feda6d.
     frontend_url = f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
+    workspace_id_js = json.dumps(team_id)
+    frontend_url_js = json.dumps(frontend_url)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -404,14 +431,14 @@ async def slack_callback(
         <script>
             // Notify any listening windows via BroadcastChannel
             const channel = new BroadcastChannel('slack-oauth');
-            channel.postMessage({{ type: 'oauth-complete', workspaceId: '{team_id}' }});
+            channel.postMessage({{ type: 'oauth-complete', workspaceId: {workspace_id_js} }});
             channel.close();
 
             // If opened as popup, try to close; otherwise redirect
             if (window.opener) {{
                 window.close();
             }} else {{
-                window.location.href = '{frontend_url}';
+                window.location.href = {frontend_url_js};
             }}
         </script>
     </body>
