@@ -190,13 +190,25 @@ class SlackAppResponse(BaseModel):
 
 
 def get_user_credentials(
-    db: Session, workspace_id: str, user: User
+    db: Session,
+    workspace_id: str,
+    user: User,
+    slack_app_id: int | None = None,
 ) -> SlackUserCredentials | None:
-    """Get the current user's credentials for a workspace."""
-    return db.query(SlackUserCredentials).filter(
+    """Get the current user's credentials for a workspace.
+
+    When ``slack_app_id`` is given, scopes to that SlackApp (multi-tenant
+    correctness — two SlackApps can legitimately share a workspace per
+    design doc §7 decision 5). When ``None``, returns any credential the
+    user has for the workspace (legacy single-app caller).
+    """
+    query = db.query(SlackUserCredentials).filter(
         SlackUserCredentials.workspace_id == workspace_id,
         SlackUserCredentials.user_id == user.id,
-    ).first()
+    )
+    if slack_app_id is not None:
+        query = query.filter(SlackUserCredentials.slack_app_id == slack_app_id)
+    return query.first()
 
 
 def get_workspace_with_access(
