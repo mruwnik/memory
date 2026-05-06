@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
+from memory.api.slack import get_legacy_slack_app
+from memory.common import settings
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackApp,
@@ -432,9 +435,6 @@ def test_get_legacy_slack_app_returns_matching_row(
 ):
     """Happy path: SlackApp row exists with client_id matching the
     SLACK_CLIENT_ID env var → returned to caller."""
-    from memory.api.slack import get_legacy_slack_app
-    from memory.common import settings
-
     monkeypatch.setattr(settings, "SLACK_CLIENT_ID", slack_app.client_id)
 
     result = get_legacy_slack_app(db_session)
@@ -448,11 +448,6 @@ def test_get_legacy_slack_app_raises_503_when_missing(db_session, monkeypatch):
     """Sad path: no SlackApp row matches the configured SLACK_CLIENT_ID →
     503 with documented detail (signals operator to re-run migrations or
     create the row manually)."""
-    from fastapi import HTTPException
-
-    from memory.api.slack import get_legacy_slack_app
-    from memory.common import settings
-
     monkeypatch.setattr(settings, "SLACK_CLIENT_ID", "no.such.client.id")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -470,11 +465,6 @@ def test_get_legacy_slack_app_does_not_match_unrelated_apps(
     """Defense-in-depth: even when other SlackApp rows exist, we only return
     the one whose client_id matches SLACK_CLIENT_ID exactly. Catches
     regressions that accidentally drop the WHERE clause or use ILIKE."""
-    from fastapi import HTTPException
-
-    from memory.api.slack import get_legacy_slack_app
-    from memory.common import settings
-
     other = SlackApp(client_id="someone.elses.client.id", name="Other App")
     db_session.add(other)
     db_session.commit()
@@ -809,8 +799,6 @@ def test_slack_callback_proceeds_when_session_matches_state(
     the new CSRF check. We mock the Slack token-exchange call so we don't
     actually need a real Slack to round-trip — the assertion is that we
     DON'T get a 403 for session/state mismatch."""
-    import asyncio
-
     from unittest.mock import AsyncMock, MagicMock
 
     mock_settings.SLACK_CLIENT_ID = "test_id"
@@ -1197,7 +1185,6 @@ def test_oauth_callback_uses_per_user_broadcast_channel(
     tenants. We reach the HTML branch by mocking the Slack token
     exchange to return a valid team_id.
     """
-    import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch as _patch
 
     with _patch("memory.api.slack.settings") as mock_settings, _patch(

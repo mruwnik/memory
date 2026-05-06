@@ -13,6 +13,7 @@ import hmac
 import json
 import logging
 import re
+import secrets
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Literal
@@ -63,6 +64,10 @@ router = APIRouter(prefix="/slack", tags=["slack"])
 # that reach the OAuth-callback HTML template — see SECURITY/MED
 # f2feda6d (XSS via team_id in JS string literals).
 _SLACK_TEAM_ID_PATTERN = re.compile(r"^T[A-Z0-9]{8,12}$")
+# Channel/DM/Group IDs: C=public channel, D=DM, G=private/group/MPIM.
+# Slack docs leave the suffix length open; allow up to 20 to cover newer
+# workspaces while still rejecting obvious garbage / injection payloads.
+_SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,20}$")
 
 # OAuth scopes for Slack user tokens
 SLACK_SCOPES = [
@@ -705,6 +710,11 @@ async def slack_callback_for_app(
     workspace_id_js = json.dumps(team_id)
     frontend_url_js = json.dumps(frontend_url)
     channel_name_js = json.dumps(f"slack-oauth-{user.id}")
+    # Even though `slack_app.id` is currently an int (safe to interpolate raw),
+    # use json.dumps so every interpolated value in this template inherits the
+    # same defense-in-depth contract — a future field-type change won't
+    # silently regress the safety story.
+    slack_app_id_js = json.dumps(slack_app.id)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -713,7 +723,7 @@ async def slack_callback_for_app(
         <p>Slack workspace connected successfully. Redirecting...</p>
         <script>
             const channel = new BroadcastChannel({channel_name_js});
-            channel.postMessage({{ type: 'oauth-complete', workspaceId: {workspace_id_js}, slackAppId: {slack_app.id} }});
+            channel.postMessage({{ type: 'oauth-complete', workspaceId: {workspace_id_js}, slackAppId: {slack_app_id_js} }});
             channel.close();
             if (window.opener) {{
                 window.close();
@@ -1203,11 +1213,17 @@ def _uniform_401() -> Response:
 def _client_ip(request: Request) -> str:
     """Best-effort client IP for per-IP rate limiting.
 
-    Trusts ``X-Forwarded-For`` only when explicitly enabled in settings —
-    spoofing this header is trivial otherwise. Falls back to the direct
-    peer address.
+    Trusts ``X-Forwarded-For`` only when ``settings.TRUST_PROXY_HEADERS`` is
+    explicitly enabled — spoofing the header is trivial otherwise. Falls back
+    to the direct peer address.
+
+    Note: when ``TRUST_PROXY_HEADERS`` is False (the default) and the service
+    is deployed behind a reverse proxy (cloudflare, nginx, ALB), this function
+    returns the *proxy's* IP — so the per-IP rate limit becomes effectively
+    per-LB-IP, not per-client. Operators behind a trusted proxy should flip
+    the toggle to get per-client granularity.
     """
-    if getattr(settings, "TRUST_PROXY_HEADERS", False):
+    if settings.TRUST_PROXY_HEADERS:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             # Leftmost is the original client per RFC 7239 convention.
@@ -1303,12 +1319,53 @@ def _dispatch_event_callback(
     """Branch on event.type and enqueue the right celery task.
 
     Returns a small status dict for logging — Slack only needs the 200.
+
+    Defense-in-depth: HMAC signature proves the body came from Slack with the
+    correct signing secret, but it does not prove the *content* is well-formed.
+    A Slack-side compromise, a replay against a stale signing secret in a
+    different format, or a malformed event from a buggy Slack app could put
+    arbitrary strings into our Celery task kwargs (workspace_id flows through
+    to a SlackMessage Text column with no DB-level shape constraint). We
+    validate workspace_id and channel_id here so garbage gets rejected at the
+    dispatcher rather than wasting Celery cycles + log spam in add_slack_message.
     """
     event = body.get("event") or {}
     event_type = event.get("type") or "unknown"
     subtype = event.get("subtype")
     workspace_id = body.get("team_id")
-    channel_id = event.get("channel")
+
+    # `event.channel` is sometimes a dict (channel_* events deliver a full
+    # channel object), sometimes a string (message events). Reactions carry
+    # their channel under `event.item.channel` instead. Normalize per source.
+    raw_channel = event.get("channel")
+    if isinstance(raw_channel, dict):
+        primary_channel_id = raw_channel.get("id")
+    else:
+        primary_channel_id = raw_channel
+    reaction_item = event.get("item") or {}
+    reaction_channel_id = (
+        reaction_item.get("channel") if isinstance(reaction_item, dict) else None
+    )
+    # Pick the right channel_id for this event type so the validation below
+    # rejects events that lack a usable channel_id at the right source.
+    if event_type in ("reaction_added", "reaction_removed"):
+        channel_id = reaction_channel_id
+    else:
+        channel_id = primary_channel_id
+
+    if not workspace_id or not _SLACK_TEAM_ID_PATTERN.fullmatch(workspace_id):
+        logger.warning(
+            f"Rejecting event with malformed team_id "
+            f"slack_app_id={slack_app_id} event_type={event_type}"
+        )
+        return {"dispatch": "rejected_team_id"}
+    # channel_id is required for every dispatched task type below.
+    if not channel_id or not _SLACK_CHANNEL_ID_PATTERN.fullmatch(channel_id):
+        logger.warning(
+            f"Rejecting event with malformed channel_id "
+            f"slack_app_id={slack_app_id} event_type={event_type}"
+        )
+        return {"dispatch": "rejected_channel_id"}
 
     if event_type == "message":
         if subtype == "message_deleted":
@@ -1345,13 +1402,12 @@ def _dispatch_event_callback(
         return {"dispatch": "add_message"}
 
     if event_type in ("reaction_added", "reaction_removed"):
-        item = event.get("item") or {}
         celery_app.send_task(
             UPDATE_SLACK_REACTIONS,
             kwargs={
                 "workspace_id": workspace_id,
-                "channel_id": item.get("channel"),
-                "message_ts": item.get("ts"),
+                "channel_id": channel_id,
+                "message_ts": reaction_item.get("ts"),
                 "reactions": event.get("reactions"),
                 "slack_app_id": slack_app_id,
             },
@@ -1359,14 +1415,16 @@ def _dispatch_event_callback(
         return {"dispatch": "update_reactions"}
 
     if event_type.startswith("channel_"):
+        # channel_id is already normalized at the top regardless of whether
+        # `event.channel` was a string or a dict. The full channel object
+        # (when present) still ships as channel_payload.
+        channel_payload = raw_channel if isinstance(raw_channel, dict) else {}
         celery_app.send_task(
             UPDATE_SLACK_CHANNEL,
             kwargs={
                 "workspace_id": workspace_id,
-                "channel_id": (event.get("channel") or {}).get("id")
-                if isinstance(event.get("channel"), dict)
-                else channel_id,
-                "channel_payload": event.get("channel") or {},
+                "channel_id": channel_id,
+                "channel_payload": channel_payload,
                 "slack_app_id": slack_app_id,
             },
         )
@@ -1643,9 +1701,11 @@ def issue_wizard_nonce(
     must echo it back, otherwise we won't advance setup_state.
     """
     app = get_slack_app_for_owner(db, app_id, user)
-    nonce = hashlib.sha256(
-        f"{app.id}:{user.id}:{time.time_ns()}".encode()
-    ).hexdigest()[:32]
+    # 128 bits from the OS CSPRNG. Do NOT derive from time/app.id/user.id —
+    # those are public/predictable and an attacker who can narrow time.time_ns()
+    # to ~10⁶ candidates can exhaust SHA-256 in well under a second, defeating
+    # the H1 binding between this wizard session and Slack's url_verification ping.
+    nonce = secrets.token_hex(16)
     redis_client = _slack_redis()
     redis_client.set(
         _wizard_nonce_redis_key(app.id),

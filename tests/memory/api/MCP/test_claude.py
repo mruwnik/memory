@@ -1,8 +1,7 @@
 """Tests for MCP claude (cloud-claude session files) server."""
 # pyright: reportFunctionMemberAccess=false
 
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
