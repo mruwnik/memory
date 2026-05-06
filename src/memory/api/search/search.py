@@ -8,9 +8,12 @@ import math
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
+
+from sqlalchemy import exists, select
+
 from memory.common import extract, settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk, SlackMessage, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.embeddings import search_chunks_embeddings
 from memory.api.search import scorer
@@ -473,9 +476,18 @@ def _fetch_chunks(
     top_ids = sorted_ids[:fetch_limit]
 
     with make_session() as db:
+        # Defense in depth: even if a soft-deleted SlackMessage chunk slipped
+        # through Qdrant or BM25, exclude it here at the result-merge layer.
         chunks = (
             db.query(Chunk)
             .filter(Chunk.id.in_(top_ids))
+            .filter(
+                ~exists(
+                    select(SlackMessage.id)
+                    .where(SlackMessage.id == Chunk.source_id)
+                    .where(SlackMessage.deleted_at.isnot(None))
+                )
+            )
             .all()
         )
 
