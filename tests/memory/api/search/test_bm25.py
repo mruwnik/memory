@@ -723,6 +723,44 @@ def test_apply_access_filter_superadmin_sees_all(db_session, source_items_with_a
     assert len(null_project_items) == 1
 
 
+def test_apply_access_filter_public_with_null_project_visible_to_all(db_session, project):
+    """Public sensitivity bypasses project membership even for NULL-project items.
+
+    Confirms the BM25 rewrite preserves the "public means everyone" rule from
+    the prior source_item_access_view: a public-sensitivity item with no
+    project assignment is visible to any non-superadmin with the public bypass
+    enabled (the default).
+    """
+    from memory.common.access_control import AccessCondition, AccessFilter
+    from memory.common.db.models import Note, SourceItem
+
+    public_unscoped = Note(
+        content="Public unscoped note",
+        modality="text",
+        sha256=b"public-null-project-1234567890abc"[:32].ljust(32, b"x"),
+        project_id=None,
+        sensitivity="public",
+    )
+    db_session.add(public_unscoped)
+    db_session.commit()
+
+    # Filter for a project the user has access to — but the public item is in
+    # NO project. include_public=True (default) lets it through anyway.
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(
+                project_id=project.id,
+                sensitivities=frozenset({"basic"}),
+            )
+        ],
+        include_public=True,
+    )
+
+    query = db_session.query(SourceItem).filter(SourceItem.id == public_unscoped.id)
+    filtered = apply_access_filter(query, access_filter).all()
+    assert len(filtered) == 1
+
+
 def test_apply_access_filter_cross_project_isolation(
     db_session, project, second_project, source_items_with_access
 ):

@@ -61,6 +61,17 @@ def apply_access_filter(query, access_filter: AccessFilter | None):
 
     Uses SourceItem columns directly — avoids the phantom source_item_access_view that
     does not exist in any migration and would cause BM25 filtering to silently fail.
+
+    NULL semantics:
+    - ``SourceItem.sensitivity`` is NOT NULL (default ``"basic"``), so the
+      ``IN (...)`` and ``== "public"`` checks are well-defined for every row.
+    - ``SourceItem.project_id`` is nullable.  A NULL ``project_id`` means
+      "superadmin only" per CLAUDE.md, and the project_condition below
+      naturally excludes such rows for non-admins because ``NULL == X`` is
+      NULL (not true).  Items with NULL project_id are still visible to
+      non-admins via the creator/person/public bypass conditions above.
+
+    This matches ``apply_access_control_to_query`` in MCP/servers/core.py.
     """
     if access_filter is None:
         # Superadmin - no filtering
