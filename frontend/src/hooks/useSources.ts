@@ -398,6 +398,46 @@ export interface CalendarAccountUpdate {
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
+// Types for Transcript Accounts (Fireflies, etc.)
+export interface TranscriptAccount {
+  id: number
+  name: string
+  provider: string
+  has_api_key: boolean
+  has_webhook_secret: boolean
+  tags: string[]
+  last_sync_at: string | null
+  sync_error: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+  // Access control
+  project_id: number | null
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+}
+
+export interface TranscriptAccountCreate {
+  name: string
+  provider: string
+  api_key: string
+  webhook_secret?: string
+  tags?: string[]
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+}
+
+export interface TranscriptAccountUpdate {
+  name?: string
+  // Omit to keep current; non-empty string to rotate.
+  api_key?: string
+  // Omit to keep current; "" to clear; non-empty string to set/rotate.
+  webhook_secret?: string
+  tags?: string[]
+  active?: boolean
+  project_id?: number
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+}
+
 // Access control projects (from GitHub milestones)
 export interface Project {
   id: number
@@ -861,6 +901,62 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  // === Transcript Accounts ===
+
+  const listTranscriptProviders = useCallback(async (): Promise<string[]> => {
+    const response = await apiCall('/transcript-accounts/providers')
+    if (!response.ok) throw new Error('Failed to fetch transcript providers')
+    return response.json()
+  }, [apiCall])
+
+  const listTranscriptAccounts = useCallback(async (userId?: number): Promise<TranscriptAccount[]> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/transcript-accounts${params}`)
+    if (!response.ok) throw new Error('Failed to fetch transcript accounts')
+    return response.json()
+  }, [apiCall])
+
+  const createTranscriptAccount = useCallback(async (data: TranscriptAccountCreate): Promise<TranscriptAccount> => {
+    const response = await apiCall('/transcript-accounts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to create transcript account')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const updateTranscriptAccount = useCallback(async (id: number, data: TranscriptAccountUpdate): Promise<TranscriptAccount> => {
+    const response = await apiCall(`/transcript-accounts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to update transcript account')
+    }
+    return response.json()
+  }, [apiCall])
+
+  const deleteTranscriptAccount = useCallback(async (id: number): Promise<void> => {
+    const response = await apiCall(`/transcript-accounts/${id}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Failed to delete transcript account')
+  }, [apiCall])
+
+  const syncTranscriptAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
+    const response = await apiCall(`/transcript-accounts/${id}/sync`, { method: 'POST' })
+    if (!response.ok) throw new Error('Failed to sync transcript account')
+    return response.json()
+  }, [apiCall])
+
+  const rescanTranscriptAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
+    const response = await apiCall(`/transcript-accounts/${id}/rescan`, { method: 'POST' })
+    if (!response.ok) throw new Error('Failed to rescan transcript account')
+    return response.json()
+  }, [apiCall])
+
   // === Photos ===
 
   const deletePhoto = useCallback(async (id: number): Promise<void> => {
@@ -925,6 +1021,14 @@ export const useSources = () => {
     updateCalendarAccount,
     deleteCalendarAccount,
     syncCalendarAccount,
+    // Transcript Accounts
+    listTranscriptProviders,
+    listTranscriptAccounts,
+    createTranscriptAccount,
+    updateTranscriptAccount,
+    deleteTranscriptAccount,
+    syncTranscriptAccount,
+    rescanTranscriptAccount,
     // Photos
     deletePhoto,
   }

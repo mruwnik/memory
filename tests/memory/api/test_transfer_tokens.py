@@ -1,6 +1,7 @@
 """Tests for short-lived HMAC tokens used by cloud-claude file transfer URLs."""
 
 import time
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -25,14 +26,15 @@ def patch_secret():
 
 
 def make_payload(**overrides) -> TransferTokenPayload:
-    base = dict(
+    fields: dict[str, Any] = dict(
         user_id=42,
         session_id="u42-e6-deadbeef0000",
         path="/workspace/report.md",
         action="read",
+        exp=int(time.time()) + 60,
     )
-    base.update(overrides)
-    return TransferTokenPayload(**base, exp=int(time.time()) + 60)
+    fields.update(overrides)
+    return TransferTokenPayload(**fields)
 
 
 def test_round_trip_returns_same_payload():
@@ -119,6 +121,7 @@ def test_mint_uses_default_ttl_when_exp_missing():
     before = int(time.time())
     token = mint_token(payload, ttl_seconds=120)
     decoded = verify_token(token)
+    assert decoded.exp is not None
     assert before + 110 < decoded.exp <= before + 121
 
 

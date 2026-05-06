@@ -211,6 +211,7 @@ def test_client_get_transcript():
         client = FirefliesClient("k")
         result = client.get_transcript("01KQCWVF0BCAD0C7Q5C6027BAS")
 
+    assert result is not None
     assert result["id"] == "01KQCWVF0BCAD0C7Q5C6027BAS"
     assert calls[0]["json"]["variables"] == {"id": "01KQCWVF0BCAD0C7Q5C6027BAS"}
 

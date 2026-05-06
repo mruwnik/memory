@@ -254,6 +254,7 @@ def list_milestones(
 
         results = []
         for ms in milestones:
+            assert ms.repo is not None  # joined with GithubRepo above
             open_count = (
                 session.query(func.count(GithubItem.id))
                 .filter(
@@ -515,6 +516,7 @@ def fetch_milestone(repo: str, number: int) -> dict:
 
         if not ms:
             raise ValueError(f"Milestone #{number} not found in {repo}")
+        assert ms.repo is not None  # joined with GithubRepo above
 
         # Count issues
         open_count = (

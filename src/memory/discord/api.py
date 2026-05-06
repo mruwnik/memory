@@ -633,7 +633,7 @@ async def remove_channel_permission(
     if target_type == "role":
         target = get_role_or_404(channel.guild, target_id)
     else:
-        target = get_member_or_404(channel.guild, target_id)
+        target = await get_member_or_404(channel.guild, target_id)
 
     async with discord_api_errors("manage channel permissions"):
         await channel.set_permissions(target, overwrite=None, reason="Removed via MCP")
