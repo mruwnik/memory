@@ -36,6 +36,7 @@ from memory.common.db.models.slack import (
 from memory.common.db.models.source_items import SlackMessage
 from memory.common.oauth_client import (
     generate_state,
+    log_corr_id,
     sign_state,
     validate_and_consume_state,
     store_state,
@@ -247,12 +248,15 @@ def authorize_slack(
 
     # Generate and store state for CSRF protection
     state = generate_state()
-    logger.info(f"Generated state: {state[:16]}...")
+    logger.info(f"Generated state: state_corr={log_corr_id(state)}")
     store_state(db, state, "slack", user.id)
 
     # Sign state with user-specific data to prevent interception attacks
     signed_state = sign_state(state, user.id)
-    logger.info(f"Signed state: {signed_state[:20]}... (len={len(signed_state)})")
+    logger.info(
+        f"Signed state: signed_corr={log_corr_id(signed_state)}, "
+        f"len={len(signed_state)}"
+    )
 
     # Build authorization URL
     params = {
@@ -265,7 +269,10 @@ def authorize_slack(
     logger.info(f"OAuth redirect_uri: {settings.SLACK_REDIRECT_URI}")
 
     auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
-    logger.info(f"Redirecting to Slack OAuth: {auth_url[:100]}...")
+    # The auth_url contains the full signed state in a query parameter; logging
+    # any prefix of it (even truncated) leaks state material. Confirm only that
+    # we built the URL — operators can reproduce it from settings if needed.
+    logger.info("Built Slack OAuth authorization URL")
 
     return {"authorization_url": auth_url, "state": signed_state}
 
@@ -283,8 +290,8 @@ async def slack_callback(
     If the workspace doesn't exist, creates it. If it does, just adds user's credentials.
     """
     logger.info(
-        f"Slack OAuth callback received: code={code[:10]}..., "
-        f"state={state[:20]}... (len={len(state)}), error={error}"
+        f"Slack OAuth callback received: code_corr={log_corr_id(code)}, "
+        f"state_corr={log_corr_id(state)}, len={len(state)}, error={error}"
     )
     require_slack_configured()
 
@@ -296,7 +303,7 @@ async def slack_callback(
     logger.info("Validating OAuth state...")
     user_id = validate_and_consume_state(db, state, "slack")
     if not user_id:
-        logger.error(f"State validation failed for state={state[:20]}...")
+        logger.error(f"State validation failed: state_corr={log_corr_id(state)}")
         raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
 
     logger.info(f"State validated successfully, user_id={user_id}")
@@ -323,8 +330,12 @@ async def slack_callback(
 
     logger.info(f"Token exchange response ok={data.get('ok')}")
     if not data.get("ok"):
+        # Don't log the full response body — it can include user-attributable
+        # metadata (provider, dialog_message, scopes) and on edge cases bot
+        # tokens or workspace info. The Slack-supplied `error` field is
+        # sufficient for debugging. See SECURITY/MED 7c02ac7c (CWE-532).
         error_msg = data.get("error", "Unknown error")
-        logger.error(f"Slack OAuth token exchange error: {error_msg}, full_response={data}")
+        logger.error(f"Slack OAuth token exchange error: {error_msg}")
         raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {error_msg}")
 
     # Extract user token (not bot token)

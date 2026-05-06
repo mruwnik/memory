@@ -22,6 +22,23 @@ from memory.common.db.models import OAuthClientState
 logger = logging.getLogger(__name__)
 
 
+def log_corr_id(value: str | None) -> str:
+    """Build a stable, non-reversible correlation id for logging secret values.
+
+    Returns the first 8 hex chars of SHA256(value). Two log lines for the
+    same secret produce the same correlation id (so traces can be joined
+    across components), but the id is computationally infeasible to invert,
+    so an operator with log access cannot recover the secret.
+
+    Used for OAuth `state`, signed_state, OAuth `code`, and similar values
+    that previously leaked into logs as raw prefixes — see SECURITY/MED
+    7c02ac7c (CWE-532). For non-secret values pass them in directly.
+    """
+    if not value:
+        return "<empty>"
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:8]
+
+
 def generate_state() -> str:
     """Generate a cryptographically secure random state string."""
     return secrets.token_urlsafe(32)
@@ -90,7 +107,7 @@ def store_state(
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
     logger.info(
         f"Storing OAuth state: provider={provider}, user_id={user_id}, "
-        f"state={state[:16]}..., expires_at={expires_at.isoformat()}"
+        f"state_corr={log_corr_id(state)}, expires_at={expires_at.isoformat()}"
     )
     oauth_state = OAuthClientState(
         state=state,
@@ -121,15 +138,17 @@ def validate_and_consume_state(
     """
     logger.info(
         f"Validating OAuth state: provider={provider}, "
-        f"signed_state={signed_state[:20]}... (len={len(signed_state)})"
+        f"signed_state_corr={log_corr_id(signed_state)}, len={len(signed_state)}"
     )
 
     if "." not in signed_state:
-        logger.warning(f"Invalid state format - no dot separator: {signed_state[:30]}...")
+        logger.warning(
+            f"Invalid state format - no dot separator: "
+            f"signed_state_corr={log_corr_id(signed_state)}"
+        )
         return None
 
     original_state = signed_state.rsplit(".", 1)[0]
-    logger.info(f"Extracted original state: {original_state[:16]}...")
 
     # Look up state in database
     oauth_state = db.query(OAuthClientState).filter(
@@ -138,13 +157,16 @@ def validate_and_consume_state(
     ).first()
 
     if not oauth_state:
-        # Log all states for this provider to help debug
-        all_states = db.query(OAuthClientState).filter(
+        # Don't enumerate other in-flight state values — that's an oracle
+        # for an attacker who can read logs (CWE-532). Log only the
+        # correlation id of the missing value plus a count of pending
+        # states for the provider, useful for ops without leaking secrets.
+        active_count = db.query(OAuthClientState).filter(
             OAuthClientState.provider == provider
-        ).all()
+        ).count()
         logger.warning(
-            f"State not found in database: state={original_state[:16]}..., provider={provider}. "
-            f"Existing states for provider: {[s.state[:16] + '...' for s in all_states]}"
+            f"State not found in database: state_corr={log_corr_id(original_state)}, "
+            f"provider={provider}, active_states_for_provider={active_count}"
         )
         return None
 
@@ -170,8 +192,8 @@ def validate_and_consume_state(
     if verified_state != original_state:
         logger.warning(
             f"Signature verification failed: user_id={user_id}, "
-            f"verified_state={verified_state[:16] + '...' if verified_state else 'None'}, "
-            f"expected={original_state[:16]}..."
+            f"verified_corr={log_corr_id(verified_state)}, "
+            f"expected_corr={log_corr_id(original_state)}"
         )
         db.delete(oauth_state)
         db.commit()
