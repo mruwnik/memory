@@ -1,6 +1,5 @@
 """Tests for Slack Celery tasks."""
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -465,6 +464,127 @@ def test_add_slack_message_creates_channel_if_missing(
     assert channel.workspace_id == slack_workspace.id
 
 
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_add_slack_message_race_merges_into_existing(
+    mock_build_cache,
+    mock_get_creds,
+    db_session,
+    sample_message_data,
+    slack_credentials,
+    slack_channel,
+    qdrant,
+):
+    """B-pre-1 regression: an IntegrityError race must roll back only the
+    message insert (not the surrounding work) and merge incoming fields
+    (reactions, files) into the existing row instead of returning a bare
+    `already_exists` that drops the loser's payload.
+    """
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {"U12345678": "Test User"}
+
+    # Insert the winner row normally.
+    slack.add_slack_message(**sample_message_data)
+
+    # Loser arrives with extra reactions/files and a different channel that
+    # didn't exist beforehand — this exercises both the race path AND the
+    # "channel auto-create must survive a rollback" guarantee.
+    new_channel_id = "C_RACE_NEW"
+    loser_data = dict(sample_message_data)
+    loser_data["channel_id"] = new_channel_id
+    loser_data["reactions"] = [{"name": "fire", "count": 1, "users": ["U_X"]}]
+    loser_data["files"] = [{"id": "F_X", "mimetype": "text/plain"}]
+
+    # Pre-insert the channel + a colliding message under the new channel id so
+    # the unique (message_ts, workspace_id, channel_id) index fires.
+    collision_channel = SlackChannel(
+        id=new_channel_id,
+        workspace_id=loser_data["workspace_id"],
+        name=new_channel_id,
+        channel_type="channel",
+    )
+    db_session.add(collision_channel)
+    db_session.commit()
+
+    winner = SlackMessage(
+        modality="message",
+        sha256=b"\x01" * 32,
+        content="winner content with enough text to be embedded properly",
+        message_ts=loser_data["message_ts"],
+        channel_id=new_channel_id,
+        workspace_id=loser_data["workspace_id"],
+        author_id=loser_data["author_id"],
+        message_type="message",
+    )
+    db_session.add(winner)
+    db_session.commit()
+
+    # Hide the winner from the first existence check to force the insert path,
+    # then let the unique index produce an IntegrityError. The race-recovery
+    # path should then re-fetch via a fresh `make_session` and merge.
+    real_get = slack._get_existing_slack_message
+    state = {"calls": 0}
+
+    def fake_get(session, kwargs):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return None
+        return real_get(session, kwargs)
+
+    with patch.object(slack, "_get_existing_slack_message", side_effect=fake_get):
+        result = slack.add_slack_message(**loser_data)
+
+    # Should not blow up the session — must report the merge cleanly.
+    assert result["status"] in {"already_exists", "updated"}, result
+
+    # Single row, with loser's reactions/files merged in.
+    db_session.expire_all()
+    rows = (
+        db_session.query(SlackMessage)
+        .filter_by(
+            message_ts=loser_data["message_ts"],
+            channel_id=new_channel_id,
+            workspace_id=loser_data["workspace_id"],
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].reactions == loser_data["reactions"]
+    assert rows[0].files == loser_data["files"]
+
+
+def test_ensure_slack_channel_commits_independently(
+    db_session, slack_workspace, qdrant
+):
+    """B-pre-1: ensure_slack_channel commits in its own transaction so the
+    channel row survives even if the caller's main transaction later rolls
+    back. Previously the channel auto-create lived in the same session as the
+    message insert and was lost on `session.rollback()`.
+    """
+    new_channel_id = "C_INDEPENDENT_COMMIT"
+    assert (
+        db_session.query(SlackChannel).filter_by(id=new_channel_id).first() is None
+    )
+
+    slack.ensure_slack_channel(slack_workspace.id, new_channel_id)
+
+    # Channel is visible from a different session immediately — proving the
+    # commit happened in ensure_slack_channel's own session.
+    db_session.expire_all()
+    channel = db_session.query(SlackChannel).filter_by(id=new_channel_id).first()
+    assert channel is not None
+    assert channel.workspace_id == slack_workspace.id
+
+
+def test_ensure_slack_channel_idempotent(db_session, slack_workspace, slack_channel, qdrant):
+    """ensure_slack_channel is safe to call when the channel already exists."""
+    # Calling twice should not raise or duplicate.
+    slack.ensure_slack_channel(slack_workspace.id, slack_channel.id)
+    slack.ensure_slack_channel(slack_workspace.id, slack_channel.id)
+    count = db_session.query(SlackChannel).filter_by(id=slack_channel.id).count()
+    assert count == 1
+
+
 def test_get_workspace_credentials_returns_valid(db_session, slack_workspace, slack_credentials):
     """Test that get_workspace_credentials returns valid credentials."""
     result = slack.get_workspace_credentials(db_session, slack_workspace.id)
@@ -479,6 +599,127 @@ def test_get_workspace_credentials_returns_none_when_no_creds(db_session, slack_
     result = slack.get_workspace_credentials(db_session, slack_workspace.id)
 
     assert result is None
+
+
+# =============================================================================
+# merge_slack_message_state — pure logic; B-pre-2 ordering discriminator tests
+# =============================================================================
+
+
+def _stub_slack_message(content: str = "", edited_ts: str | None = None) -> SlackMessage:
+    """Construct a SlackMessage in-memory only (no session attachment)."""
+    msg = SlackMessage(
+        modality="message",
+        sha256=b"\x00" * 32,
+        content=content,
+        message_ts="1700000000.000000",
+        channel_id="C_X",
+        workspace_id="T_X",
+        author_id="U_X",
+        message_type="message",
+        edited_ts=edited_ts,
+    )
+    return msg
+
+
+@pytest.mark.parametrize(
+    # name, existing_content, existing_edited_ts, in_content, in_edited_ts,
+    # expect_changed, expect_final_content, expect_final_edited_ts
+    "case",
+    [
+        # Case 1: incoming has no edited_ts and existing has none — idempotent
+        ("idempotent_no_edits", "v1", None, "v1", None, False, "v1", None),
+        # Case 1b: same identity but content differs (shouldn't happen for the
+        # same message_ts; if it does, take incoming so polling-emitted later
+        # corrects a half-applied earlier insert)
+        ("differing_content_no_edits", "v1", None, "v2", None, True, "v2", None),
+        # Case 2 (B-pre-2 fix): incoming = original, existing already has edit.
+        # Overwrite content (canonical pre-edit) but PRESERVE existing.edited_ts
+        # so we don't lose the marker that the message has been edited.
+        ("original_arrives_after_edit", "edited_v2", "1700000010.0", "original_v1", None, True, "original_v1", "1700000010.0"),
+        # Case 3: existing = original, incoming is a normal edit. Adopt new
+        # edited_ts and content.
+        ("edit_after_original", "v1", None, "v2", "1700000010.0", True, "v2", "1700000010.0"),
+        # Case 4 (newer wins): both have edited_ts; incoming is newer.
+        ("newer_edit_wins", "v1", "1700000010.0", "v2", "1700000020.0", True, "v2", "1700000020.0"),
+        # Case 4b (older edit is stale): both have edited_ts; incoming older.
+        ("stale_older_edit", "v2", "1700000020.0", "v_stale", "1700000010.0", False, "v2", "1700000020.0"),
+        # Case 4c (equal edit): idempotent — no change
+        ("duplicate_edit", "v2", "1700000020.0", "v2", "1700000020.0", False, "v2", "1700000020.0"),
+    ],
+    ids=lambda c: c[0],
+)
+def test_merge_slack_message_state_ordering(case):
+    """B-pre-2 discriminator: edit-prefer-older-edited_ts semantics.
+
+    Locks the four ordering cases enumerated in slack-changes.md §1.4 so
+    common mutations (e.g., always overwriting edited_ts, dropping the
+    pre-edit content branch, or flipping the older/newer comparator) are
+    detected.
+    """
+    (
+        _name,
+        existing_content,
+        existing_edited_ts,
+        in_content,
+        in_edited_ts,
+        expect_changed,
+        expect_final_content,
+        expect_final_edited_ts,
+    ) = case
+
+    existing = _stub_slack_message(existing_content, existing_edited_ts)
+    changed = slack.merge_slack_message_state(
+        existing, in_content, in_edited_ts, reactions=None, files=None
+    )
+
+    assert changed is expect_changed, (
+        f"changed={changed} expected {expect_changed} for case {_name}"
+    )
+    assert existing.content == expect_final_content
+    assert existing.edited_ts == expect_final_edited_ts
+
+
+def test_merge_slack_message_state_takes_incoming_reactions_when_provided():
+    """Reactions overwrite when incoming is non-None (Slack sends full list)."""
+    existing = _stub_slack_message("v1", None)
+    existing.reactions = [{"name": "old", "count": 1}]
+    new_reactions = [{"name": "fire", "count": 3}]
+    slack.merge_slack_message_state(
+        existing, "v1", None, reactions=new_reactions, files=None
+    )
+    assert existing.reactions == new_reactions
+
+
+def test_merge_slack_message_state_preserves_reactions_when_incoming_none():
+    """When incoming reactions is None (e.g., only edit event), keep existing."""
+    existing = _stub_slack_message("v1", None)
+    existing.reactions = [{"name": "fire", "count": 3}]
+    slack.merge_slack_message_state(
+        existing, "v2", "1700000020.0", reactions=None, files=None
+    )
+    assert existing.reactions == [{"name": "fire", "count": 3}]
+
+
+def test_merge_slack_message_state_takes_incoming_files_when_provided():
+    """Files overwrite when incoming is non-None."""
+    existing = _stub_slack_message("v1", None)
+    existing.files = [{"id": "F_OLD"}]
+    new_files = [{"id": "F_NEW"}]
+    slack.merge_slack_message_state(
+        existing, "v1", None, reactions=None, files=new_files
+    )
+    assert existing.files == new_files
+
+
+def test_merge_slack_message_state_preserves_files_when_incoming_none():
+    """When incoming files is None, keep existing."""
+    existing = _stub_slack_message("v1", None)
+    existing.files = [{"id": "F_OLD"}]
+    slack.merge_slack_message_state(
+        existing, "v2", "1700000020.0", reactions=None, files=None
+    )
+    assert existing.files == [{"id": "F_OLD"}]
 
 
 # =============================================================================
@@ -637,105 +878,3 @@ def test_sync_slack_workspace_triggers_unlocked_channels(
     mock_app.send_task.assert_called_once()
 
 
-def make_slack_app(
-    db_session, *, client_id: str, setup_state: str, age_hours: float
-) -> SlackApp:
-    """Insert a SlackApp with a backdated created_at for age tests."""
-    created_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
-    app_row = SlackApp(
-        client_id=client_id,
-        name=f"test-{client_id}",
-        setup_state=setup_state,
-        created_at=created_at,
-    )
-    db_session.add(app_row)
-    db_session.commit()
-    return app_row
-
-
-@pytest.mark.parametrize(
-    "setup_state, age_hours, should_delete",
-    [
-        # Drafts older than the 24h cutoff: deleted
-        ("draft", 25, True),
-        ("draft", 240, True),
-        # Drafts younger than the cutoff: retained
-        ("draft", 23, False),
-        ("draft", 0.1, False),
-        # Non-draft states: never auto-deleted regardless of age
-        ("signing_verified", 240, False),
-        ("live", 240, False),
-        ("degraded", 240, False),
-    ],
-)
-def test_cleanup_stale_slack_drafts_age_and_state(
-    db_session, setup_state, age_hours, should_delete
-):
-    """Only `draft` rows older than the cutoff are deleted."""
-    app_row = make_slack_app(
-        db_session,
-        client_id=f"cid.{setup_state}.{age_hours}",
-        setup_state=setup_state,
-        age_hours=age_hours,
-    )
-    app_id = app_row.id
-
-    result = slack.cleanup_stale_slack_drafts()
-
-    assert result["deleted"] == (1 if should_delete else 0)
-    survivor = db_session.query(SlackApp).filter(SlackApp.id == app_id).first()
-    if should_delete:
-        assert survivor is None
-    else:
-        assert survivor is not None
-
-
-def test_cleanup_stale_slack_drafts_partitions_correctly(db_session):
-    """A mixed set yields exactly the expected delete count."""
-    make_slack_app(db_session, client_id="old.1", setup_state="draft", age_hours=48)
-    make_slack_app(db_session, client_id="old.2", setup_state="draft", age_hours=72)
-    make_slack_app(db_session, client_id="fresh.1", setup_state="draft", age_hours=1)
-    make_slack_app(db_session, client_id="live.old", setup_state="live", age_hours=72)
-    make_slack_app(
-        db_session, client_id="verified.old", setup_state="signing_verified", age_hours=72
-    )
-
-    result = slack.cleanup_stale_slack_drafts()
-
-    assert result["deleted"] == 2
-    remaining_states = sorted(
-        row.setup_state for row in db_session.query(SlackApp).all()
-    )
-    assert remaining_states == ["draft", "live", "signing_verified"]
-
-
-def test_cleanup_stale_slack_drafts_respects_custom_max_age(db_session):
-    """Passing a smaller window deletes drafts that the default would keep."""
-    make_slack_app(db_session, client_id="five.h.draft", setup_state="draft", age_hours=5)
-    make_slack_app(db_session, client_id="one.h.draft", setup_state="draft", age_hours=1)
-
-    result = slack.cleanup_stale_slack_drafts(max_age_hours=2)
-
-    assert result["deleted"] == 1
-    survivor_ids = sorted(row.client_id for row in db_session.query(SlackApp).all())
-    assert survivor_ids == ["one.h.draft"]
-
-
-def test_cleanup_stale_slack_drafts_no_apps(db_session):
-    """No-op when the table is empty."""
-    result = slack.cleanup_stale_slack_drafts()
-    assert result == {"deleted": 0}
-
-
-def test_cleanup_stale_slack_drafts_frees_client_id(db_session):
-    """After cleanup, the squatted client_id can be re-registered."""
-    squatted = "victims.client.id"
-    make_slack_app(db_session, client_id=squatted, setup_state="draft", age_hours=48)
-
-    slack.cleanup_stale_slack_drafts()
-
-    # Legitimate owner can now claim the same client_id
-    legit = SlackApp(client_id=squatted, name="Legit App", setup_state="draft")
-    db_session.add(legit)
-    db_session.commit()
-    assert legit.id is not None

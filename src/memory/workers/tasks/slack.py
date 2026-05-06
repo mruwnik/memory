@@ -16,7 +16,7 @@ import json
 import logging
 import pathlib
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -26,7 +26,6 @@ from sqlalchemy.exc import IntegrityError
 from memory.common import settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
-    CLEANUP_STALE_SLACK_DRAFTS,
     SYNC_ALL_SLACK_WORKSPACES,
     SYNC_SLACK_CHANNEL,
     SYNC_SLACK_WORKSPACE,
@@ -35,7 +34,6 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import SlackMessage
 from memory.common.db.models.slack import (
-    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -50,6 +48,7 @@ from memory.common.slack import (
     iter_users,
 )
 from memory.common.content_processing import (
+    clear_item_chunks,
     process_content_item,
 )
 from memory.common.jobs import tracked_task
@@ -567,6 +566,274 @@ def fetch_thread_replies(
     return messages_queued
 
 
+def ensure_slack_channel(workspace_id: str, channel_id: str) -> None:
+    """Ensure a SlackChannel row exists for ``(workspace_id, channel_id)``.
+
+    Commits in its own transaction so the channel row survives even if the
+    caller's main transaction later rolls back (e.g. on an IntegrityError race
+    when inserting a SlackMessage). Tolerates concurrent inserts by another
+    worker.
+    """
+    with make_session() as session:
+        if session.get(SlackChannel, channel_id):
+            return
+        try:
+            channel = SlackChannel(
+                id=channel_id,
+                workspace_id=workspace_id,
+                name=channel_id,
+                channel_type="channel",
+            )
+            session.add(channel)
+            session.flush()
+        except IntegrityError:
+            # Another worker inserted the same channel row concurrently.
+            session.rollback()
+            logger.debug(
+                f"SlackChannel {channel_id} concurrently created by another worker"
+            )
+
+
+def _maybe_update_content(existing: SlackMessage, content: str) -> bool:
+    """Overwrite ``existing.content`` iff it differs. Returns True on change."""
+    if existing.content == content:
+        return False
+    existing.content = content
+    return True
+
+
+def merge_slack_message_state(
+    existing: SlackMessage,
+    content: str,
+    edited_ts: str | None,
+    reactions: list[dict] | None,
+    files: list[dict] | None,
+) -> bool:
+    """Apply incoming Slack message data onto an existing row.
+
+    Implements **edit-prefer-older-edited_ts** semantics for content/edited_ts
+    so that out-of-order delivery of ``message`` and ``message_changed`` events
+    doesn't drop the canonical pre-edit content (B-pre-2):
+
+    * Both ``edited_ts`` are None → idempotent (content overwritten only if
+      different — should not happen for the same ``message_ts``).
+    * Incoming has no ``edited_ts`` and existing does → incoming is the
+      canonical original; overwrite content but keep ``existing.edited_ts``
+      as the marker that the message has since been edited.
+    * Existing has no ``edited_ts`` and incoming does → normal flow; overwrite
+      both content and ``edited_ts``.
+    * Both have ``edited_ts`` → newer wins; equal/older is a no-op for content.
+
+    Reactions and files: Slack delivers the full current list with each event,
+    so we always take incoming when provided (per design doc §7 decision 1).
+
+    Returns True iff ``existing.content`` changed (caller may need to re-embed).
+    """
+    if reactions is not None:
+        existing.reactions = reactions
+    if files is not None:
+        existing.files = files
+
+    existing_edited_ts = existing.edited_ts
+
+    # Cases 1 & 4: incoming has no edited_ts. Overwrite content if different;
+    # leave existing.edited_ts untouched (None stays None; existing edit
+    # marker is preserved as the canonical "this message has been edited" hint).
+    if edited_ts is None:
+        return _maybe_update_content(existing, content)
+
+    # Existing has no edited_ts but incoming does: normal "edit after original"
+    # flow — adopt the new edited_ts and overwrite content.
+    if existing_edited_ts is None:
+        existing.edited_ts = edited_ts
+        return _maybe_update_content(existing, content)
+
+    # Both have edited_ts. Slack timestamps are fixed-width
+    # "<seconds>.<microseconds>" strings, so lexicographic comparison matches
+    # numeric comparison. Newer wins; equal/older is a no-op.
+    if edited_ts > existing_edited_ts:
+        existing.edited_ts = edited_ts
+        return _maybe_update_content(existing, content)
+
+    # Stale or duplicate edit — no change.
+    return False
+
+
+def _get_existing_slack_message(session, msg_kwargs: dict) -> SlackMessage | None:
+    """Fetch the SlackMessage row for the given identity tuple."""
+    return (
+        session.query(SlackMessage)
+        .filter(
+            SlackMessage.message_ts == msg_kwargs["message_ts"],
+            SlackMessage.workspace_id == msg_kwargs["workspace_id"],
+            SlackMessage.channel_id == msg_kwargs["channel_id"],
+        )
+        .first()
+    )
+
+
+def _reembed_existing_message(session, message: SlackMessage) -> dict[str, Any]:
+    """Re-embed an existing SlackMessage whose content was just updated."""
+    clear_item_chunks(message, session)
+    result = process_content_item(message, session)
+    result["status"] = "updated"
+    return result
+
+
+def _link_author_person(session, message: SlackMessage, workspace_id: str) -> None:
+    """Link ``message`` to a Person record matching the Slack author, if any."""
+    if not message.author_id:
+        return
+    person = find_person_by_slack_id(session, workspace_id, message.author_id)
+    if person and person not in message.people:
+        message.people.append(person)
+
+
+def _apply_merge(session, existing: SlackMessage, msg_kwargs: dict) -> dict[str, Any]:
+    """Merge incoming data into ``existing``; re-embed if content changed."""
+    content_changed = merge_slack_message_state(
+        existing,
+        msg_kwargs["content"],
+        msg_kwargs["edited_ts"],
+        msg_kwargs["reactions"],
+        msg_kwargs["files"],
+    )
+    _link_author_person(session, existing, msg_kwargs["workspace_id"])
+
+    if content_changed:
+        return _reembed_existing_message(session, existing)
+
+    return {
+        "status": "already_exists",
+        "message_ts": existing.message_ts,
+        "slackmessage_id": existing.id,
+    }
+
+
+def _download_message_images(
+    files: list[dict],
+    access_token: str,
+    message_ts: str,
+    workspace_id: str,
+) -> list[str]:
+    """Download image attachments for a Slack message; returns relative paths."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    saved: list[str] = []
+    for file_info in files:
+        if not file_info.get("mimetype", "").startswith("image/"):
+            continue
+        url = file_info.get("url_private_download") or file_info.get("url_private")
+        if not url:
+            continue
+        path = download_slack_file(url, headers, message_ts, workspace_id)
+        if path:
+            saved.append(path)
+    return saved
+
+
+def _build_slack_message(msg_kwargs: dict, author_name: str | None,
+                        resolved_content: str, saved_images: list) -> SlackMessage:
+    """Construct a fresh SlackMessage ORM object (not yet added to a session)."""
+    workspace_id = msg_kwargs["workspace_id"]
+    channel_id = msg_kwargs["channel_id"]
+    message_ts = msg_kwargs["message_ts"]
+    content = msg_kwargs["content"]
+
+    # Content hash deliberately includes content so edits hash differently.
+    # Row identity is (message_ts, workspace_id, channel_id) — see unique index.
+    content_hash = hashlib.sha256(
+        f"{workspace_id}:{channel_id}:{message_ts}:{content}".encode()
+    ).digest()
+
+    return SlackMessage(
+        modality="message",
+        sha256=content_hash,
+        content=content,
+        message_ts=message_ts,
+        channel_id=channel_id,
+        workspace_id=workspace_id,
+        author_id=msg_kwargs["author_id"],
+        author_name=author_name,
+        thread_ts=msg_kwargs["thread_ts"],
+        reply_count=msg_kwargs["reply_count"],
+        message_type=msg_kwargs["subtype"] or "message",
+        edited_ts=msg_kwargs["edited_ts"],
+        reactions=msg_kwargs["reactions"],
+        files=msg_kwargs["files"],
+        resolved_content=resolved_content if resolved_content != content else None,
+        images=saved_images or None,
+    )
+
+
+def _insert_new_slack_message(session, msg_kwargs: dict) -> dict[str, Any]:
+    """Insert a brand-new SlackMessage. May raise IntegrityError on race."""
+    workspace_id = msg_kwargs["workspace_id"]
+    message_ts = msg_kwargs["message_ts"]
+    content = msg_kwargs["content"]
+    author_id = msg_kwargs["author_id"]
+
+    credentials = get_workspace_credentials(session, workspace_id)
+    access_token = credentials.access_token if credentials else None
+
+    users_by_id: dict[str, str] = {}
+    if access_token:
+        users_by_id = get_cached_user_mapping(workspace_id, access_token)
+
+    resolved_content = resolve_mentions(content, users_by_id)
+    author_name = users_by_id.get(author_id) if author_id else None
+
+    saved_images: list[str] = []
+    if msg_kwargs["files"] and access_token:
+        saved_images = _download_message_images(
+            msg_kwargs["files"], access_token, message_ts, workspace_id
+        )
+
+    message = _build_slack_message(msg_kwargs, author_name, resolved_content, saved_images)
+    _link_author_person(session, message, workspace_id)
+    return process_content_item(message, session)
+
+
+def _try_add_slack_message(msg_kwargs: dict) -> dict[str, Any] | None:
+    """First attempt: insert or merge in a single session.
+
+    Returns the result dict on success, or None if a race was detected and
+    the caller should re-fetch in a fresh session and merge.
+    """
+    try:
+        with make_session() as session:
+            existing = _get_existing_slack_message(session, msg_kwargs)
+            if existing:
+                return _apply_merge(session, existing, msg_kwargs)
+            return _insert_new_slack_message(session, msg_kwargs)
+    except IntegrityError:
+        logger.info(
+            f"Race on SlackMessage ({msg_kwargs['workspace_id']}, "
+            f"{msg_kwargs['channel_id']}, {msg_kwargs['message_ts']}); "
+            f"will merge from a fresh session"
+        )
+        return None
+
+
+def _merge_after_race(msg_kwargs: dict) -> dict[str, Any]:
+    """Race recovery path: re-fetch the existing row in a fresh session and merge."""
+    with make_session() as session:
+        existing = _get_existing_slack_message(session, msg_kwargs)
+        if not existing:
+            # IntegrityError raised but no row visible — likely the winner's
+            # transaction hasn't committed yet, or a different constraint failed.
+            logger.error(
+                f"IntegrityError raced but no SlackMessage row visible for "
+                f"({msg_kwargs['workspace_id']}, {msg_kwargs['channel_id']}, "
+                f"{msg_kwargs['message_ts']})"
+            )
+            return {
+                "status": "error",
+                "reason": "race_detected_no_row",
+                "message_ts": msg_kwargs["message_ts"],
+            }
+        return _apply_merge(session, existing, msg_kwargs)
+
+
 @app.task(name=ADD_SLACK_MESSAGE)
 @tracked_task
 def add_slack_message(
@@ -582,8 +849,12 @@ def add_slack_message(
     reactions: list[dict] | None = None,
     files: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """
-    Add a Slack message to the database.
+    """Add or merge a Slack message in the database.
+
+    On the happy path, inserts a new ``SlackMessage`` row and embeds it.
+    If a row already exists (or appears mid-flight via a concurrent insert),
+    incoming data is merged in using ``merge_slack_message_state`` and the
+    embedding is regenerated when content changes.
     """
     logger.info(f"Adding Slack message {message_ts} from channel {channel_id}")
 
@@ -591,156 +862,27 @@ def add_slack_message(
         # Skip messages without an author (system messages, etc.)
         return {"status": "skipped", "reason": "no_author"}
 
-    with make_session() as session:
-        # Check if message exists (need AND logic for exact match)
-        # Messages are unique per workspace+channel+timestamp, not just workspace+timestamp
-        existing = (
-            session.query(SlackMessage)
-            .filter(
-                SlackMessage.message_ts == message_ts,
-                SlackMessage.workspace_id == workspace_id,
-                SlackMessage.channel_id == channel_id,
-            )
-            .first()
-        )
+    # Channel auto-create commits independently so it survives a later
+    # IntegrityError race on the message insert (B-pre-1).
+    ensure_slack_channel(workspace_id, channel_id)
 
-        if existing:
-            # Update if edited
-            if edited_ts:
-                existing.content = content
-                existing.edited_ts = edited_ts
-                existing.reactions = reactions
-                session.commit()
-                return {"status": "updated", "message_ts": message_ts}
-            return {"status": "already_exists", "message_ts": message_ts}
+    msg_kwargs: dict[str, Any] = {
+        "workspace_id": workspace_id,
+        "channel_id": channel_id,
+        "message_ts": message_ts,
+        "author_id": author_id,
+        "content": content,
+        "thread_ts": thread_ts,
+        "reply_count": reply_count,
+        "subtype": subtype,
+        "edited_ts": edited_ts,
+        "reactions": reactions,
+        "files": files,
+    }
 
-        # Get credentials for file downloads and user resolution
-        credentials = get_workspace_credentials(session, workspace_id)
-        access_token = credentials.access_token if credentials else None
+    result = _try_add_slack_message(msg_kwargs)
+    if result is not None:
+        return result
 
-        # Get user mapping with Redis caching (avoids N*M API calls)
-        users_by_id: dict[str, str] = {}
-        if access_token:
-            users_by_id = get_cached_user_mapping(workspace_id, access_token)
-
-        # Resolve mentions
-        resolved_content = resolve_mentions(content, users_by_id)
-
-        # Get author name from cache
-        author_name = users_by_id.get(author_id)
-
-        # Download images from files
-        saved_images = []
-        if files and access_token:
-            headers = {"Authorization": f"Bearer {access_token}"}
-            for file_info in files:
-                if not file_info.get("mimetype", "").startswith("image/"):
-                    continue
-                url = file_info.get("url_private_download") or file_info.get(
-                    "url_private"
-                )
-                if not url:
-                    continue
-                path = download_slack_file(url, headers, message_ts, workspace_id)
-                if path:
-                    saved_images.append(path)
-
-        # Ensure channel exists
-        channel = session.get(SlackChannel, channel_id)
-        if not channel:
-            channel = SlackChannel(
-                id=channel_id,
-                workspace_id=workspace_id,
-                name=channel_id,
-                channel_type="channel",
-            )
-            session.add(channel)
-            session.flush()
-
-        # Create content hash - includes content intentionally so edits create different hashes.
-        # Deduplication is handled via the unique index on (message_ts, workspace_id, channel_id),
-        # while the hash is used for content-based operations like embeddings.
-        content_hash = hashlib.sha256(
-            f"{workspace_id}:{channel_id}:{message_ts}:{content}".encode()
-        ).digest()
-
-        # Create message
-        message = SlackMessage(
-            modality="message",
-            sha256=content_hash,
-            content=content,
-            message_ts=message_ts,
-            channel_id=channel_id,
-            workspace_id=workspace_id,
-            author_id=author_id,
-            author_name=author_name,
-            thread_ts=thread_ts,
-            reply_count=reply_count,
-            message_type=subtype or "message",
-            edited_ts=edited_ts,
-            reactions=reactions,
-            files=files,
-            resolved_content=resolved_content if resolved_content != content else None,
-            images=saved_images or None,
-        )
-
-        # Link author to Person if found
-        if author_id:
-            if person := find_person_by_slack_id(session, workspace_id, author_id):
-                if person not in message.people:
-                    message.people.append(person)
-
-        try:
-            result = process_content_item(message, session)
-            return result
-        except IntegrityError:
-            # Race condition: another task inserted the same message
-            session.rollback()
-            logger.info(f"Message {message_ts} already exists (concurrent insert)")
-            return {"status": "already_exists", "message_ts": message_ts}
-
-
-# Default lifetime of an unfinished `SlackApp` row before it can be reclaimed.
-# Per slack-changes.md §3.1 squatting mitigation: a malicious user can claim a
-# victim's client_id by creating a draft row, but the wizard never advances
-# without the real signing/client secrets. After this window, drafts are
-# auto-cleared and the client_id becomes registerable again.
-STALE_SLACK_DRAFT_AGE_HOURS = 24
-
-
-@app.task(name=CLEANUP_STALE_SLACK_DRAFTS)
-@tracked_task
-def cleanup_stale_slack_drafts(
-    max_age_hours: int = STALE_SLACK_DRAFT_AGE_HOURS,
-) -> dict[str, Any]:
-    """Delete `SlackApp` rows stuck in `setup_state='draft'` past the TTL.
-
-    Squatting mitigation: a stale draft holds the unique `client_id` slot but
-    can never be promoted to `live` without the real signing secret. After
-    `max_age_hours`, the draft is dropped so the legitimate owner can register.
-
-    Only `setup_state='draft'` rows are eligible — once an app reaches
-    `signing_verified` or `live`, it has demonstrated possession of the real
-    secrets and is never auto-deleted.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-    logger.info(f"Cleaning up Slack draft apps created before {cutoff.isoformat()}")
-
-    with make_session() as session:
-        stale_drafts = (
-            session.query(SlackApp)
-            .filter(
-                SlackApp.setup_state == "draft",
-                SlackApp.created_at < cutoff,
-            )
-            .all()
-        )
-
-        deleted = 0
-        for draft in stale_drafts:
-            session.delete(draft)
-            deleted += 1
-
-        session.commit()
-
-    logger.info(f"Deleted {deleted} stale Slack draft apps")
+    # Race detected — re-fetch and merge in a fresh session.
+    return _merge_after_race(msg_kwargs)
