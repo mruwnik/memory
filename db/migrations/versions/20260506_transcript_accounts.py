@@ -1,8 +1,13 @@
 """Add transcript_accounts table for per-user transcript provider integrations.
 
 Revision ID: 20260506_transcript_accounts
-Revises: 20260216_report_connect_urls
+Revises: 20260501_discord_server_bot_id
 Create Date: 2026-05-06
+
+Note: parent revision was rebased from `20260216_report_connect_urls` to
+`20260501_discord_server_bot_id` after merging master, which introduced
+the discord migration on the same parent. Linearizing here keeps a single
+alembic head.
 """
 
 from typing import Sequence, Union
@@ -13,7 +18,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20260506_transcript_accounts"
-down_revision: Union[str, None] = "20260216_report_connect_urls"
+down_revision: Union[str, None] = "20260501_discord_server_bot_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
