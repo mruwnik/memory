@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
+    _resolve_session_scopes,
     make_token,
 )
 from memory.common.db.models.users import (
@@ -339,3 +340,98 @@ async def test_verify_token_one_time_key_fails_on_second_use(db_session):
     # Second use should fail (key was deleted)
     result2 = await provider.verify_token(key_value)
     assert result2 is None
+
+
+# --- _resolve_session_scopes tests ---
+
+
+def test_resolve_session_scopes_uses_oauth_state_when_present(db_session):
+    """When the session has an OAuthState, return its client_id and scopes."""
+    user = create_test_user(db_session, scopes=["organizer", "github"])
+
+    oauth_state = OAuthState(
+        client_id="my-mcp-client",
+        user_id=user.id,
+        scopes=["read"],
+        redirect_uri="http://localhost/callback",
+        code_challenge="abc",
+        code_challenge_method="S256",
+        state="state-token",
+    )
+    db_session.add(oauth_state)
+    db_session.commit()
+
+    session = UserSession(
+        user_id=user.id,
+        oauth_state_id=oauth_state.id,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    client_id, scopes = _resolve_session_scopes(session)
+
+    assert client_id == "my-mcp-client"
+    assert scopes == ["read"]
+    # OAuth-issued tokens must NOT silently get the user's full scopes.
+    assert "organizer" not in scopes
+    assert "github" not in scopes
+
+
+def test_resolve_session_scopes_falls_back_to_user_scopes_for_frontend(db_session):
+    """Sessions without OAuthState fall back to client_id='frontend' + user scopes."""
+    user = create_test_user(db_session, scopes=["organizer", "github"])
+
+    session = UserSession(
+        user_id=user.id,
+        oauth_state_id=None,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    client_id, scopes = _resolve_session_scopes(session)
+
+    assert client_id == "frontend"
+    assert sorted(scopes) == ["github", "organizer"]
+
+
+@pytest.mark.asyncio
+async def test_load_access_token_does_not_grant_user_scopes_to_oauth_session(db_session):
+    """Regression: load_access_token must NOT widen OAuth-issued tokens to user scopes.
+
+    A future change that creates UserSession rows with oauth_state_id=None and
+    expects them to be downscoped would break here — the right answer is an
+    explicit per-session scope column, not implicit user-scope grant.
+    """
+    user = create_test_user(db_session, scopes=["organizer", "people"])
+
+    oauth_state = OAuthState(
+        client_id="downscoped-client",
+        user_id=user.id,
+        scopes=["read"],
+        redirect_uri="http://localhost/callback",
+        code_challenge="abc",
+        code_challenge_method="S256",
+        state="state-token-2",
+    )
+    db_session.add(oauth_state)
+    db_session.commit()
+
+    session = UserSession(
+        user_id=user.id,
+        oauth_state_id=oauth_state.id,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    session_id = str(session.id)
+
+    provider = SimpleOAuthProvider()
+    result = await provider.load_access_token(session_id)
+
+    assert result is not None
+    assert result.client_id == "downscoped-client"
+    assert result.scopes == ["read"]
+    assert "organizer" not in result.scopes
+    assert "people" not in result.scopes

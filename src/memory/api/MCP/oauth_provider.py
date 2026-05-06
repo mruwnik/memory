@@ -81,6 +81,24 @@ def create_access_token_session(
     )
 
 
+def _resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
+    """Return ``(client_id, scopes)`` for a UserSession.
+
+    When the session has no associated OAuthState (frontend logins, scheduled-
+    task helper sessions, etc.), fall back to ``"frontend"`` as the client_id
+    and the user's own scopes.  This is the *intentional* fallback for
+    password-login sessions; if a future code path creates a UserSession with
+    ``oauth_state_id=None`` that should NOT receive the user's full scopes,
+    the right fix is to add an explicit per-session scope column rather than
+    rely on this implicit grant.
+    """
+    oauth_state = user_session.oauth_state
+    if oauth_state is not None:
+        return cast(str, oauth_state.client_id), list(cast(list[str], oauth_state.scopes) or [])
+    user_scopes = user_session.user.scopes if user_session.user else []
+    return "frontend", list(user_scopes or [])
+
+
 def create_refresh_token_record(
     client_id: str,
     user_id: int,
@@ -198,16 +216,9 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
-                # User's configured scopes define which MCP tools they can access
-                user_scopes = user_session.user.scopes if user_session.user else []
-                # Also include OAuth scopes (read, write) for FastMCP endpoint auth
-                scopes: list[str] = list(set(user_scopes or []) | {SCOPE_READ, SCOPE_WRITE})
-
-                # Get client_id from oauth_state if available
-                if user_session.oauth_state_id and user_session.oauth_state:
-                    client_id = user_session.oauth_state.client_id
-                else:
-                    client_id = "frontend"
+                client_id, base_scopes = _resolve_session_scopes(user_session)
+                # Always include SCOPE_READ/SCOPE_WRITE for FastMCP endpoint auth
+                scopes: list[str] = sorted(set(base_scopes) | {SCOPE_READ, SCOPE_WRITE})
 
                 logger.info(
                     f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}"
@@ -491,18 +502,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
-                # oauth_state_id is nullable — sessions created programmatically
-                # (e.g. create_access_token_session with no state_id) won't have one.
-                # Mirror verify_token's fallback to "frontend" as client_id.
-                oauth_state = user_session.oauth_state
-                if oauth_state is not None:
-                    client_id = oauth_state.client_id
-                    scopes = oauth_state.scopes
-                else:
-                    client_id = "frontend"
-                    # Fall back to the user's own scopes when no OAuth state
-                    user_scopes = user_session.user.scopes if user_session.user else []
-                    scopes = list(user_scopes or [])
+                client_id, scopes = _resolve_session_scopes(user_session)
                 return AccessToken(
                     token=token,
                     client_id=client_id,
