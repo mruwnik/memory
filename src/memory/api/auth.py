@@ -16,7 +16,7 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import get_user_project_roles, has_admin_scope
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
@@ -435,6 +435,29 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
     if account.user_id != user.id and not has_admin_scope(user):  # type: ignore[attr-defined]
         raise HTTPException(status_code=404, detail="Account not found")
     return account
+
+
+def assert_project_membership(
+    db: DBSession, user: User, project_id: int | None
+) -> None:
+    """Raise 403 unless `user` is admin or a member of `project_id`.
+
+    Mirrors the membership check PR #74 added to tidbit_add/tidbit_update.
+    Non-members assigning content to a project violates the access invariant
+    in both directions: (a) attacker plants content into a confidential
+    project, (b) the access-filter pipeline then surfaces it to legitimate
+    members. ``project_id=None`` is a no-op (NULL → admin-only by convention,
+    handled at read time).
+    """
+    if project_id is None:
+        return
+    if has_admin_scope(user):
+        return
+    roles = get_user_project_roles(db, user)
+    if project_id not in roles:
+        raise HTTPException(
+            status_code=403, detail="Not a member of target project"
+        )
 
 
 def resolve_user_filter(

@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.api.auth import (
+    assert_project_membership,
+    get_current_user,
+    get_user_account,
+    resolve_user_filter,
+)
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
@@ -155,6 +160,9 @@ def create_account(
         if not google_account or google_account.user_id != user.id:
             raise HTTPException(status_code=400, detail="Google account not found")
 
+    # Block non-admins from tagging accounts into projects they aren't in.
+    assert_project_membership(db, user, data.project_id)
+
     account = CalendarAccount(
         user_id=user.id,
         name=data.name,
@@ -229,6 +237,7 @@ def update_account(
     if updates.active is not None:
         account.active = updates.active
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity

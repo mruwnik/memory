@@ -9,7 +9,11 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import (
+    assert_project_membership,
+    get_current_user,
+    resolve_user_filter,
+)
 from memory.common import discord as discord_client
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
@@ -487,6 +491,7 @@ def update_server(
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         server.project_id = updates.project_id
     if updates.sensitivity is not None:
         server.sensitivity = updates.sensitivity
@@ -524,6 +529,7 @@ def update_channel(
     # Allow setting to None (inherit) - check if key is present, not if value is None
     channel.collect_messages = updates.collect_messages
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         channel.project_id = updates.project_id
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity

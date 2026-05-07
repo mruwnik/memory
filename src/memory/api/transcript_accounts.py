@@ -8,7 +8,12 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.api.auth import (
+    assert_project_membership,
+    get_current_user,
+    get_user_account,
+    resolve_user_filter,
+)
 from memory.common.celery_app import (
     RESCAN_TRANSCRIPT_ACCOUNT,
     SYNC_TRANSCRIPT_ACCOUNT,
@@ -141,6 +146,9 @@ def create_account(
             detail="A transcript account with this name and provider already exists",
         )
 
+    # Block non-admins from tagging accounts into projects they aren't in.
+    assert_project_membership(db, user, data.project_id)
+
     account = TranscriptAccount(
         user_id=user.id,
         name=data.name,
@@ -210,6 +218,7 @@ def update_account(
     # the request body has no separate sentinel for "clear it". Fix belongs
     # in a project-wide PR introducing an explicit sentinel.
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
