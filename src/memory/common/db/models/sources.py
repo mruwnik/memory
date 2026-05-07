@@ -511,7 +511,7 @@ class Project(Base):
     )
 
     # Relationships
-    repo: Mapped[GithubRepo] = relationship(
+    repo: Mapped[GithubRepo | None] = relationship(
         "GithubRepo", backref=backref("milestones", passive_deletes=True)
     )
     # foreign_keys needed because SourceItem.project_id also references projects

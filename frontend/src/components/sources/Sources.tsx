@@ -23,15 +23,16 @@ import { FeedsPanel } from './panels/FeedsPanel'
 import { GitHubPanel } from './panels/GitHubPanel'
 import { GoogleDrivePanel } from './panels/GoogleDrivePanel'
 import { CalendarPanel } from './panels/CalendarPanel'
+import { TranscriptsPanel } from './panels/TranscriptsPanel'
 import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
 import { SecretsPanel } from './panels/SecretsPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
-type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'books' | 'forums' | 'photos' | 'discord' | 'slack' | 'secrets'
+type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'transcripts' | 'books' | 'forums' | 'photos' | 'discord' | 'slack' | 'secrets'
 
-const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'books', 'forums', 'photos', 'discord', 'slack', 'secrets']
+const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'transcripts', 'books', 'forums', 'photos', 'discord', 'slack', 'secrets']
 
 const Sources = () => {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -93,6 +94,9 @@ const Sources = () => {
         <button className={tabClass('calendar')} onClick={() => setActiveTab('calendar')}>
           Calendar
         </button>
+        <button className={tabClass('transcripts')} onClick={() => setActiveTab('transcripts')}>
+          Transcripts
+        </button>
         <button className={tabClass('books')} onClick={() => setActiveTab('books')}>
           Books
         </button>
@@ -120,6 +124,7 @@ const Sources = () => {
         {activeTab === 'github' && <GitHubPanel />}
         {activeTab === 'drive' && <GoogleDrivePanel />}
         {activeTab === 'calendar' && <CalendarPanel />}
+        {activeTab === 'transcripts' && <TranscriptsPanel />}
         {activeTab === 'books' && <BooksPanel />}
         {activeTab === 'forums' && <ForumsPanel />}
         {activeTab === 'photos' && <PhotosPanel />}

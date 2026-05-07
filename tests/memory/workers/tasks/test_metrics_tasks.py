@@ -68,6 +68,7 @@ def test_collect_system_metrics_success():
             return_value=Mock(
                 percent=60.0,
                 available=8 * 1024 * 1024 * 1024,  # 8 GB
+                total=16 * 1024 * 1024 * 1024,  # 16 GB
             ),
         ),
         patch(
@@ -75,6 +76,7 @@ def test_collect_system_metrics_success():
             return_value=Mock(
                 percent=70.0,
                 free=100 * 1024 * 1024 * 1024,  # 100 GB
+                total=500 * 1024 * 1024 * 1024,  # 500 GB
             ),
         ),
         patch("memory.workers.tasks.metrics.record_gauge") as mock_gauge,
@@ -103,6 +105,7 @@ def test_collect_system_metrics_process_error():
             return_value=Mock(
                 percent=60.0,
                 available=8 * 1024 * 1024 * 1024,
+                total=16 * 1024 * 1024 * 1024,
             ),
         ),
         patch(
@@ -110,6 +113,7 @@ def test_collect_system_metrics_process_error():
             return_value=Mock(
                 percent=70.0,
                 free=100 * 1024 * 1024 * 1024,
+                total=500 * 1024 * 1024 * 1024,
             ),
         ),
         patch("memory.workers.tasks.metrics.record_gauge") as mock_gauge,

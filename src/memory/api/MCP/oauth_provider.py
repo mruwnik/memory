@@ -17,7 +17,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from memory.common import settings
-from sqlalchemy.orm import scoped_session
+from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import (
@@ -165,7 +165,7 @@ def create_oauth_token(
 
 
 def make_token_from_data(
-    db: scoped_session,
+    db: Session,
     oauth_state_id: int | None,
     user_id: int,
     client_id: str,
@@ -198,7 +198,7 @@ def make_token_from_data(
 
 
 def make_token(
-    db: scoped_session,
+    db: Session,
     auth_state: TokenBase,
     scopes: list[str],
 ) -> OAuthToken:

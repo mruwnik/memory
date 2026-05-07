@@ -616,8 +616,9 @@ def _get_celery_task_id(task_self: Any) -> str | None:
             return tid
     try:
         from celery import current_task
-        if current_task and current_task.request:
-            return current_task.request.id
+        request = getattr(current_task, "request", None)
+        if request is not None:
+            return getattr(request, "id", None)
     except Exception:
         pass
     return None

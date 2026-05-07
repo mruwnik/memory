@@ -571,10 +571,28 @@ async def test_search_observations_handles_null_created_at(
 # ====== fetch_file tests ======
 
 
+@pytest.fixture
+def mock_fetch_file_auth():
+    """Bypass the ownership check added in fetch_file so the existing
+    transport-level tests still exercise the read paths.
+
+    Auth + ownership are covered separately by integration-style tests."""
+    with patch(
+        "memory.api.MCP.servers.core.get_mcp_current_user",
+        return_value=MagicMock(),
+    ), patch(
+        "memory.api.MCP.servers.core.get_accessible_source_item_by_filename",
+        return_value=MagicMock(),
+    ), patch("memory.api.MCP.servers.core.make_session") as mock_make_session:
+        mock_make_session.return_value.__enter__.return_value = MagicMock()
+        yield
+
+
 @pytest.mark.parametrize(
     "mime_type",
     ["text/plain", "text/html", "text/markdown"],
 )
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -603,6 +621,7 @@ def test_fetch_file_text_type_detection(
     "mime_type",
     ["image/jpeg", "image/png"],
 )
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -628,6 +647,7 @@ def test_fetch_file_image_type_detection(
     assert result["content"][0]["mime_type"] == mime_type
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -650,6 +670,7 @@ def test_fetch_file_text_content(mock_settings, mock_paths, mock_extract):
     mock_extract.extract_data_chunks.assert_not_called()
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -677,6 +698,7 @@ def test_fetch_file_image_content_base64(mock_settings, mock_paths, mock_extract
     assert isinstance(decoded, bytes)
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -735,6 +757,7 @@ def test_fetch_file_blocks_path_traversal(
         fetch_file.fn(filename=malicious_filename)
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -756,6 +779,7 @@ def test_fetch_file_strips_whitespace(mock_settings, mock_paths, mock_extract):
     assert call_args[1] == "test.txt"
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
@@ -780,6 +804,7 @@ def test_fetch_file_unicode_decode_error(mock_settings, mock_paths, mock_extract
     mock_path.read_text.assert_called_with(errors="replace")
 
 
+@pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")

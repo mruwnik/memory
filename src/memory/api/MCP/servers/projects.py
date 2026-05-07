@@ -1013,6 +1013,7 @@ async def update_project(
 
         # repo set: validate against current attachment
         if repo is not None and not is_standalone:
+            assert project.repo is not None  # is_standalone False ⇒ repo attached
             target_owner, target_name = repo.split("/", 1)
             if (
                 project.repo.owner.lower() != target_owner.lower()
@@ -1044,6 +1045,7 @@ async def update_project(
         # re-pin based on the locally-cached title, which goes stale after a
         # rename and produces a misleading "already pinned" error.)
         if milestone is not None:
+            assert project.repo is not None  # repo must be attached to promote
             try:
                 promote_client, _ = get_github_client(
                     session,
@@ -1075,6 +1077,7 @@ async def update_project(
     # (skip when detaching, since GitHub may be broken — that's why user is detaching)
     # (skip when just_attached, because handle_attach already refreshed)
     if not is_standalone and not just_attached:
+        assert project.repo is not None  # is_standalone False ⇒ repo attached
         try:
             client, _ = get_github_client(
                 session, f"{project.repo.owner}/{project.repo.name}", user.id
