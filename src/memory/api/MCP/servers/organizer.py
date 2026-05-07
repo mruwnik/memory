@@ -164,12 +164,19 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
 
         if include_journal:
             user_id = getattr(user, "id", None) if user else None
-            # Note: 'task' is not currently a valid target_type in the journal system.
-            # This query will return empty until 'task' support is added.
+            # Task is a polymorphic SourceItem (polymorphic_identity="task"),
+            # so its rows live in the source_item table. The journal system's
+            # CheckConstraint rejects target_type='task' at the DB level
+            # ('source_item', 'project', 'team', 'poll' are the only allowed
+            # values), so journal entries about a task are stored with
+            # target_type='source_item' + target_id=<task_id> — the same
+            # convention used by SourceItem.journal_entries elsewhere. The
+            # previous filter (`target_type == "task"`) silently returned
+            # an empty list.
             journal_query = (
                 session.query(JournalEntry)
                 .filter(
-                    JournalEntry.target_type == "task",
+                    JournalEntry.target_type == "source_item",
                     JournalEntry.target_id == task_id,
                 )
             )

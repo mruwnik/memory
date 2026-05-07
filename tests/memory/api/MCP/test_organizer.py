@@ -459,19 +459,22 @@ async def test_fetch_not_found(db_session, sample_tasks):
 
 @pytest.mark.asyncio
 async def test_fetch_with_journal_entries(db_session, sample_tasks):
-    """Test fetching a task with include_journal=True returns journal_entries key.
+    """fetch(include_journal=True) must return entries attached to the
+    Task via the SourceItem polymorphic-identity convention.
 
-    Note: 'task' is not currently a valid target_type in the journal system.
-    The journal feature for tasks is a placeholder - this test verifies the
-    include_journal parameter adds the journal_entries key to the response,
-    but returns empty results until task support is added to the journal system.
+    Regression: the previous implementation filtered on
+    target_type='task', but the JournalEntry CheckConstraint only
+    permits ('source_item', 'project', 'team', 'poll') — so the query
+    always returned an empty list and silently misled callers into
+    thinking the task had no notes. Task is a polymorphic SourceItem,
+    so its journal entries live with target_type='source_item' and
+    target_id=<task_id>.
     """
     from memory.api.MCP.servers.organizer import fetch
-    from memory.common.db.models import HumanUser
+    from memory.common.db.models import HumanUser, JournalEntry
 
     task = sample_tasks[0]
 
-    # Create a user for the test
     user = HumanUser(
         name="Test Admin",
         email="admin-journal@example.com",
@@ -481,9 +484,20 @@ async def test_fetch_with_journal_entries(db_session, sample_tasks):
     db_session.add(user)
     db_session.commit()
 
+    # Attach a journal entry to the task using the canonical
+    # source_item target_type. With the wrong filter this entry was
+    # invisible; with the fix it surfaces.
+    entry = JournalEntry(
+        target_type="source_item",
+        target_id=task.id,
+        content="Investigated this task; root cause was foo.",
+        creator_id=user.id,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
     fetch_fn = get_fn(fetch)
 
-    # Mock make_session and get_mcp_current_user for the test
     with (
         patch(
             "memory.api.MCP.servers.organizer.make_session",
@@ -498,8 +512,9 @@ async def test_fetch_with_journal_entries(db_session, sample_tasks):
 
     assert result["success"] is True
     assert "journal_entries" in result
-    # Empty because 'task' is not a valid target_type in the journal system yet
-    assert len(result["journal_entries"]) == 0
+    # Must surface the source_item-targeted entry (was 0 under the bug).
+    assert len(result["journal_entries"]) == 1
+    assert "Investigated this task" in result["journal_entries"][0]["content"]
 
 
 @pytest.mark.asyncio
