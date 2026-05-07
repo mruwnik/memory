@@ -193,7 +193,6 @@ CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 
 # Embedding settings
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
-EMBEDDING_MAX_WORKERS = int(os.getenv("EMBEDDING_MAX_WORKERS", 50))
 
 # VoyageAI max context window
 EMBEDDING_MAX_TOKENS = int(os.getenv("EMBEDDING_MAX_TOKENS", 32000))
@@ -207,7 +206,6 @@ OPENAI_API_KEY = secret_env("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = secret_env("ANTHROPIC_API_KEY")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-4-5")
 RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", 200000))
 
 DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
     os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)
@@ -222,7 +220,6 @@ LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 
 
 # Search settings
-ENABLE_EMBEDDING_SEARCH = boolean_env("ENABLE_EMBEDDING_SEARCH", True)
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
 ENABLE_HYDE_EXPANSION = boolean_env("ENABLE_HYDE_EXPANSION", True)
@@ -249,18 +246,16 @@ OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = [
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)
-HTTPS = boolean_env("HTTPS", False)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
-SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", 30 * 24 * 60 * 60))
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
 # API Rate limiting settings
 API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
 # Default rate limit: 100 requests per minute
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
-# Search endpoints have a lower limit to prevent abuse
-API_RATE_LIMIT_SEARCH = os.getenv("API_RATE_LIMIT_SEARCH", "30/minute")
-# Auth endpoints have stricter limits to prevent brute force
+# Auth endpoints have stricter limits to prevent brute force.
+# Used by /oauth/login and /users/me/change-password — see
+# `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
 # rate limiter should trust. Anything else falls back to the direct
@@ -286,7 +281,6 @@ MAX_TRANSFER_PUSH_BYTES = int(
     os.getenv("MAX_TRANSFER_PUSH_BYTES", 256 * 1024 * 1024)
 )
 
-REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False)
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 STATIC_DIR = pathlib.Path(
     os.getenv(
@@ -351,12 +345,10 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
-# Google Drive sync settings
-GOOGLE_DRIVE_STORAGE_DIR = pathlib.Path(
-    os.getenv("GOOGLE_DRIVE_STORAGE_DIR", str(FILE_STORAGE_DIR / "google_drive"))
-)
-GOOGLE_DRIVE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-GOOGLE_SYNC_INTERVAL = int(os.getenv("GOOGLE_SYNC_INTERVAL", 60 * 60))  # 1 hour default
+# Google Drive sync interval is configured at GOOGLE_DRIVE_SYNC_INTERVAL
+# (see "Source-syncing intervals" near the top of the file). The
+# previously-defined GOOGLE_SYNC_INTERVAL and GOOGLE_DRIVE_STORAGE_DIR
+# were never read from anywhere; deleted.
 
 # Orphan verification settings
 VERIFICATION_BATCH_SIZE = int(os.getenv("VERIFICATION_BATCH_SIZE", 100))

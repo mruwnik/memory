@@ -22,8 +22,6 @@ from memory.common import settings
         "/",
         "/health",
         "/health/metrics",
-        "/register",
-        "/register/finish",
         "/authorize",
         "/authorize/code",
         "/token",
@@ -55,6 +53,8 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/healthcheck",
         "/health-secret",
         "/healthxxx",
+        "/register",  # /register entry was removed — must require auth now
+        "/register/finish",
         "/registerme",
         "/registers",
         "/authorize-anything",

@@ -33,10 +33,12 @@ _auth_disabled_warning_logged = False
 # Create router
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Endpoints that don't require authentication (prefix matching)
+# Endpoints that don't require authentication (prefix matching).
+# Note: `/register` previously sat here even though no endpoint registers
+# that path. A future, well-meaning addition of a `/register` route
+# would have inherited the auth bypass — removed.
 WHITELIST = {
     "/health",
-    "/register",
     "/authorize",
     "/token",
     "/mcp",
