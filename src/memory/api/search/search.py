@@ -13,6 +13,7 @@ from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from memory.common import extract, settings
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
@@ -640,14 +641,44 @@ async def search_chunks(
 
 
 async def search_sources(
-    chunks: Sequence[Chunk], previews: bool = False
+    chunks: Sequence[Chunk],
+    previews: bool = False,
+    filters: "SearchFilters | None" = None,
 ) -> list[SearchResult]:
+    """Load SourceItems for a fused set of chunks.
+
+    Final-merge layer of the documented three-layer access control:
+    Qdrant payload filter, BM25 SQL filter, AND this final query. Pre-fix,
+    this layer skipped the access check, so any future regression in the
+    upstream layers (e.g. an as_payload() refactor that drops project_id,
+    a stale-sensitivity ingestion race, or a Qdrant filter shape change)
+    would silently exfiltrate the parent SourceItem rows. The chunk-level
+    access filter is reused here verbatim so the three layers stay in
+    lock-step.
+    """
     by_source = defaultdict(list)
     for chunk in chunks:
         by_source[chunk.source_id].append(chunk)
 
+    if not by_source:
+        return []
+
     with make_session() as db:
-        sources = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys())).all()
+        query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
+        # Defense-in-depth: re-apply the access filter at the final merge.
+        # ``filters`` may be None (legacy callers) — treat that as
+        # "trust the upstream" for backwards compat, but log so misuse
+        # surfaces during code review. The MCP search wrapper now passes
+        # filters through.
+        if filters is not None and "access_filter" in filters:
+            query = apply_access_filter_to_query(query, filters["access_filter"])
+        else:
+            logger.debug(
+                "search_sources called without filters — relying on upstream "
+                "access control (defense-in-depth invariant skipped)"
+            )
+
+        sources = query.all()
         return [
             SearchResult.from_source_item(source, by_source[source.id], previews)
             for source in sources
@@ -688,6 +719,6 @@ async def search(
         else:
             logger.debug(f"Skipping scoring: query is {type(query_item).__name__}, not str")
 
-    sources = await search_sources(chunks, config.previews)
+    sources = await search_sources(chunks, config.previews, filters=filters)
     sources.sort(key=lambda x: x.search_score or 0, reverse=True)
     return sources[: config.limit]

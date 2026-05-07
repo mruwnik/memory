@@ -609,3 +609,134 @@ def test_recency_boost_ordering(mock_make_session):
 
     # Newer content should have higher score
     assert chunks[0].relevance_score > chunks[1].relevance_score
+
+
+# =============================================================================
+# Defense-in-depth regression: search_sources final-merge access filter
+# =============================================================================
+
+
+def test_search_sources_applies_final_access_filter_when_filters_provided():
+    """When ``filters['access_filter']`` is provided, search_sources must
+    apply it. This is the third layer of the documented three-layer
+    defense-in-depth (Qdrant payload + BM25 SQL + final merge).
+
+    Pre-fix the final-merge query had no filter: a regression in the
+    upstream Qdrant/BM25 layer would leak SourceItem rows here.
+    """
+    import asyncio
+    import sys
+
+    # Sidestep the package-shadowing trap: the package's __init__ does
+    # ``from .search import search``, which rebinds ``memory.api.search.search``
+    # to the function. The submodule is still importable as a string key.
+    search_module = sys.modules["memory.api.search.search"]
+
+    # A chunk-shaped stub. search_sources only reads ``source_id`` from
+    # each chunk, so a MagicMock with that attribute is sufficient.
+    chunk = MagicMock()
+    chunk.source_id = 42
+
+    fake_filter_arg_seen = []
+    fake_query = MagicMock()
+    fake_query.filter.return_value = fake_query
+    # Simulate "the access filter dropped every row"
+    fake_query.all.return_value = []
+
+    fake_db = MagicMock()
+    fake_db.__enter__ = lambda self: fake_db
+    fake_db.__exit__ = lambda *args: False
+    fake_db.query.return_value = fake_query
+
+    sentinel_access_filter = MagicMock(name="sentinel_access_filter")
+
+    def fake_apply(query, access_filter):
+        fake_filter_arg_seen.append(access_filter)
+        # Simulate the access filter further restricting; return a query
+        # whose .all() yields nothing.
+        return query
+
+    with (
+        patch(
+            "memory.api.search.search.make_session",
+            return_value=fake_db,
+        ),
+        patch(
+            "memory.api.search.search.apply_access_filter_to_query",
+            side_effect=fake_apply,
+        ) as mock_apply,
+    ):
+        result = asyncio.run(
+            search_module.search_sources(
+                chunks=[chunk],
+                previews=False,
+                filters={"access_filter": sentinel_access_filter},  # type: ignore
+            )
+        )
+
+    assert result == []
+    # The same access_filter the caller passed is what we applied.
+    mock_apply.assert_called_once()
+    assert fake_filter_arg_seen == [sentinel_access_filter]
+
+
+def test_search_sources_no_filter_skips_final_layer_with_log():
+    """Legacy callers that don't pass ``filters`` skip the final-merge
+    filter (backwards-compatible) but log a debug warning so misuse
+    surfaces during code review.
+    """
+    import asyncio
+    import sys
+
+    # Sidestep the package-shadowing trap: the package's __init__ does
+    # ``from .search import search``, which rebinds ``memory.api.search.search``
+    # to the function. The submodule is still importable as a string key.
+    search_module = sys.modules["memory.api.search.search"]
+
+    chunk = MagicMock()
+    chunk.source_id = 42
+
+    fake_query = MagicMock()
+    fake_query.filter.return_value = fake_query
+    fake_query.all.return_value = []
+
+    fake_db = MagicMock()
+    fake_db.__enter__ = lambda self: fake_db
+    fake_db.__exit__ = lambda *args: False
+    fake_db.query.return_value = fake_query
+
+    with (
+        patch(
+            "memory.api.search.search.make_session",
+            return_value=fake_db,
+        ),
+        patch(
+            "memory.api.search.search.apply_access_filter_to_query",
+        ) as mock_apply,
+    ):
+        result = asyncio.run(
+            search_module.search_sources(chunks=[chunk], previews=False)
+        )
+
+    assert result == []
+    # No filter passed → no apply call.
+    mock_apply.assert_not_called()
+
+
+def test_search_sources_empty_chunks_returns_empty():
+    """Empty input must short-circuit before hitting the DB."""
+    import asyncio
+    import sys
+
+    # Sidestep the package-shadowing trap: the package's __init__ does
+    # ``from .search import search``, which rebinds ``memory.api.search.search``
+    # to the function. The submodule is still importable as a string key.
+    search_module = sys.modules["memory.api.search.search"]
+
+    with patch("memory.api.search.search.make_session") as mock_session:
+        result = asyncio.run(
+            search_module.search_sources(chunks=[], previews=False)
+        )
+
+    assert result == []
+    mock_session.assert_not_called()
