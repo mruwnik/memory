@@ -309,9 +309,10 @@ def test_extract_metadata():
     assert isinstance(metadata, dict)
 
 
+@patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.requests.get")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_success(mock_pil_open, mock_requests_get):
+def test_process_image_success(mock_pil_open, mock_requests_get, mock_is_safe):
     # Setup mocks
     mock_response = MagicMock()
     mock_response.headers = {"Content-Length": "100"}
@@ -343,8 +344,9 @@ def test_process_image_success(mock_pil_open, mock_requests_get):
         assert result == mock_image
 
 
+@patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.requests.get")
-def test_process_image_http_error(mock_requests_get):
+def test_process_image_http_error(mock_requests_get, mock_is_safe):
     # Setup mock to raise HTTP error
     mock_requests_get.side_effect = requests.RequestException("Network error")
 
@@ -357,9 +359,10 @@ def test_process_image_http_error(mock_requests_get):
         assert result is None
 
 
+@patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.requests.get")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_pil_error(mock_pil_open, mock_requests_get):
+def test_process_image_pil_error(mock_pil_open, mock_requests_get, mock_is_safe):
     # Setup mocks
     mock_response = MagicMock()
     mock_response.headers = {"Content-Length": "100"}
@@ -377,9 +380,46 @@ def test_process_image_pil_error(mock_pil_open, mock_requests_get):
         assert result is None
 
 
+# is_safe_url is now a thin wrapper over validate_public_url; add a regression
+# test that the SSRF-bypass cases the previous gethostbyname-based impl missed
+# are now rejected. These piggyback on test_ssrf.py for the underlying matrix
+# but pin the wrapper's behaviour at the parser layer.
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/",
+        "http://localhost/",
+        "http://[::1]/",
+        "http://0.0.0.0/",
+        "http://169.254.169.254/",  # AWS IMDS
+        "http://10.0.0.1/",  # RFC1918
+        "http://192.168.0.1/",  # RFC1918
+        "http://172.16.0.1/",  # RFC1918
+        "http://[fc00::1]/",  # IPv6 ULA — old gethostbyname check missed this
+        "http://[fe80::1]/",  # IPv6 link-local
+        "http://224.0.0.1/",  # Multicast — old impl didn't reject is_multicast
+        "ftp://example.com/file",  # Wrong scheme
+        "file:///etc/passwd",  # Wrong scheme
+        "javascript:alert(1)",  # Wrong scheme
+    ],
+)
+def test_is_safe_url_rejects_ssrf_targets(url):
+    """Direct-IP / disallowed-scheme cases must be blocked.
+
+    These don't require DNS resolution so they're deterministic in any
+    environment, including sandboxes with no DNS.
+    """
+    from memory.parsers.html import is_safe_url
+
+    assert is_safe_url(url) is False
+
+
+@patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.requests.get")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_cached(mock_pil_open, mock_requests_get):
+def test_process_image_cached(mock_pil_open, mock_requests_get, mock_is_safe):
     # Create a temporary file to simulate cached image
     with tempfile.TemporaryDirectory() as temp_dir:
         image_dir = pathlib.Path(temp_dir)
