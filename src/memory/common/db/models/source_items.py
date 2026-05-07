@@ -442,31 +442,22 @@ class DiscordMessage(SourceItem):
             return []  # Don't embed short messages
         return extract.extract_text(text, modality="message")
 
-    def get_data_source(self) -> Any:
-        """Get the data source for access control inheritance.
+    def get_data_source_chain(self) -> list[Any]:
+        """Return [channel, server] (filtered for None) for access-control resolution.
 
-        Hierarchical resolution: channel -> server -> None
-
-        Returns the most specific data source with access control settings:
-        1. Channel if it has explicit project_id
-        2. Server if channel exists and server is linked
-        3. None if no channel exists
-
-        Note: If channel exists but has no server link, we return None rather
-        than the channel, since a channel without project_id provides no useful
-        access control inheritance. The caller (resolve_access_control) will
-        then fall back to class defaults.
+        Returning the chain rather than a single source lets
+        :meth:`resolve_access_control` pick ``project_id`` and
+        ``sensitivity`` independently — a channel with
+        ``sensitivity=confidential`` but no ``project_id`` no longer
+        silently drops its sensitivity intent in favour of the server's
+        looser default.
         """
         if not self.channel:
-            return None
-        # Prefer channel if it has explicit access control
-        if self.channel.project_id is not None:
-            return self.channel
-        # Fall back to server if available
-        if self.channel.server:
-            return self.channel.server
-        # Channel has no project_id and no server - return None to use class defaults
-        return None
+            return []
+        chain: list[Any] = [self.channel]
+        if self.channel.server is not None:
+            chain.append(self.channel.server)
+        return chain
 
 
 class SlackMessage(SourceItem):
@@ -575,31 +566,22 @@ class SlackMessage(SourceItem):
             return []  # Don't embed short messages
         return extract.extract_text(text, modality="message")
 
-    def get_data_source(self) -> Any:
-        """Get the data source for access control inheritance.
+    def get_data_source_chain(self) -> list[Any]:
+        """Return [channel, workspace] (filtered for None) for access-control resolution.
 
-        Hierarchical resolution: channel -> workspace -> None
-
-        Returns the most specific data source with access control settings:
-        1. Channel if it has explicit project_id
-        2. Workspace if channel exists and workspace is linked
-        3. None if no channel exists
-
-        Note: If channel exists but has no workspace link, we return None rather
-        than the channel, since a channel without project_id provides no useful
-        access control inheritance. The caller (resolve_access_control) will
-        then fall back to class defaults.
+        Returning the chain rather than a single source lets
+        :meth:`resolve_access_control` pick ``project_id`` and
+        ``sensitivity`` independently — a channel with
+        ``sensitivity=confidential`` but no ``project_id`` no longer
+        silently drops its sensitivity intent in favour of the workspace's
+        looser default.
         """
         if not self.channel:
-            return None
-        # Prefer channel if it has explicit access control
-        if self.channel.project_id is not None:
-            return self.channel
-        # Fall back to workspace if available
-        if self.channel.workspace:
-            return self.channel.workspace
-        # Channel has no project_id and no workspace - return None to use class defaults
-        return None
+            return []
+        chain: list[Any] = [self.channel]
+        if self.channel.workspace is not None:
+            chain.append(self.channel.workspace)
+        return chain
 
 
 class GitCommit(SourceItem):

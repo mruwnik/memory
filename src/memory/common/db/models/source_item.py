@@ -614,44 +614,79 @@ class SourceItem(Base):
 
     def get_data_source(self) -> Any:
         """
-        Get the data source for this item (e.g., EmailAccount, SlackWorkspace).
+        Get the primary data source for this item (e.g., EmailAccount, SlackWorkspace).
 
         Subclasses override to return their specific data source.
         Used for resolving inherited project_id and sensitivity.
+
+        Note: prefer overriding :meth:`get_data_source_chain` when the item
+        has a hierarchy (e.g. channel→workspace) so the channel's
+        sensitivity override doesn't get silently dropped just because
+        ``project_id`` was set at the workspace level.
 
         Returns:
             The data source object, or None if no data source.
         """
         return None
 
+    def get_data_source_chain(self) -> list[Any]:
+        """Return the ordered chain of data sources for access-control resolution.
+
+        Most specific first. The default delegates to :meth:`get_data_source`
+        so subclasses that only have a single source keep working without
+        change. Subclasses with hierarchical sources (Slack: channel→
+        workspace, Discord: channel→server) should override this method to
+        return every level — :meth:`resolve_access_control` then picks
+        ``project_id`` and ``sensitivity`` *independently*, so a channel
+        can carry an explicit confidential sensitivity override while
+        letting the workspace supply ``project_id`` for example.
+        """
+        source = self.get_data_source()
+        return [source] if source is not None else []
+
     def resolve_access_control(self) -> tuple[int | None, str]:
         """
-        Resolve project_id and sensitivity from item, data source, or class defaults.
+        Resolve project_id and sensitivity from item, data sources, or class defaults.
 
-        Resolution order (first non-None wins):
+        Resolution order (first non-None / non-empty wins, evaluated
+        independently for each field):
         1. Item's own project_id/sensitivity
-        2. Data source's project_id/sensitivity (e.g., EmailAccount, SlackChannel)
+        2. Each level of the data-source chain (e.g. channel, then workspace)
         3. Class-level defaults (default_project_id, default_sensitivity)
+
+        Resolving the two fields independently is what fixes the
+        access-control regression where a channel's explicit
+        ``sensitivity=confidential`` was silently dropped because the
+        channel had no ``project_id`` and the chain consumer picked the
+        workspace as the single source for both fields.
 
         Returns:
             Tuple of (resolved_project_id, resolved_sensitivity)
         """
-        source = self.get_data_source()
+        chain = self.get_data_source_chain()
 
-        # Resolve project_id: item -> source -> class default
+        # Resolve project_id: item -> walk chain -> class default.
         project_id = self.project_id
-        if project_id is None and source is not None:
-            project_id = getattr(source, "project_id", None)
+        if project_id is None:
+            for source in chain:
+                candidate = getattr(source, "project_id", None)
+                if candidate is not None:
+                    project_id = candidate
+                    break
         if project_id is None:
             project_id = self.default_project_id
 
-        # Resolve sensitivity: item -> source -> class default
-        # Note: sensitivity column is NOT NULL with server_default="basic", but SQLAlchemy
-        # may not apply defaults until flush. For in-memory objects before commit, sensitivity
-        # could be None. We also check for empty string as an additional safety measure.
+        # Resolve sensitivity independently. Note: sensitivity column is
+        # NOT NULL with server_default="basic", but SQLAlchemy may not
+        # apply defaults until flush — so for in-memory pre-commit
+        # objects sensitivity can be None or empty.
         sensitivity = self.sensitivity
-        if not sensitivity and source is not None:
-            sensitivity = getattr(source, "sensitivity", None)
+        if not sensitivity:
+            for source in chain:
+                candidate = getattr(source, "sensitivity", None)
+                if candidate:
+                    sensitivity = candidate
+                    break
         if not sensitivity:
             sensitivity = self.default_sensitivity
 

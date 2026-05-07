@@ -722,6 +722,119 @@ def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: S
     assert db_session.info.get("expunged_dupes") == []
 
 
+# ====== resolve_access_control independent-resolution regression ======
+
+
+# Build a non-ORM stand-in for the algorithm: SourceItem.resolve_access_control
+# walks self.get_data_source_chain() and picks project_id and sensitivity
+# independently. We test the algorithm itself by binding the unbound
+# SourceItem.resolve_access_control method to a plain attribute container,
+# bypassing SQLAlchemy's ORM descriptors. The behaviour we care about
+# (chain walking + independent field resolution) is in the BASE class —
+# subclasses just provide the chain.
+
+
+class _FakeMessage:
+    """Plain Python stand-in for a SourceItem subclass with hierarchical sources.
+
+    Has the same surface that resolve_access_control reads (project_id,
+    sensitivity, default_project_id, default_sensitivity, get_data_source_chain).
+    """
+
+    default_project_id: int | None = None
+    default_sensitivity: str = "basic"
+
+    def __init__(self, project_id, sensitivity, chain):
+        self.project_id = project_id
+        self.sensitivity = sensitivity
+        self._chain = chain
+
+    def get_data_source_chain(self):
+        return self._chain
+
+    # Bind the real method off SourceItem so we test the actual algorithm,
+    # not a hand-rolled clone.
+    def resolve_access_control(self):
+        from memory.common.db.models.source_item import SourceItem
+
+        return SourceItem.resolve_access_control(self)  # type: ignore[arg-type]
+
+
+class _FakeSource:
+    def __init__(self, project_id, sensitivity):
+        self.project_id = project_id
+        self.sensitivity = sensitivity
+
+
+@pytest.mark.parametrize(
+    "item_project,item_sensitivity,chain_specs,expected",
+    [
+        # Channel sets sensitivity but not project_id; workspace supplies project.
+        # Pre-fix: channel was dropped from consideration because the older
+        # get_data_source returned workspace whenever channel.project_id was
+        # None — so the channel's sensitivity override was lost. Post-fix:
+        # the chain walk picks each field independently.
+        (
+            None,
+            None,
+            [(None, "confidential"), (10, "basic")],
+            (10, "confidential"),
+        ),
+        # Channel has both → channel wins for both fields.
+        (
+            None,
+            None,
+            [(99, "confidential"), (10, "basic")],
+            (99, "confidential"),
+        ),
+        # Channel has neither → workspace supplies both.
+        (None, None, [(None, None), (10, "basic")], (10, "basic")),
+        # Item-level sensitivity wins over chain regardless.
+        (
+            None,
+            "internal",
+            [(None, "confidential"), (10, "basic")],
+            (10, "internal"),
+        ),
+        # Item-level project_id wins over chain regardless.
+        (
+            42,
+            None,
+            [(None, "confidential"), (10, "basic")],
+            (42, "confidential"),
+        ),
+        # Empty chain → class defaults (None / "basic").
+        (None, None, [], (None, "basic")),
+    ],
+)
+def test_resolve_access_control_walks_chain_independently(
+    item_project, item_sensitivity, chain_specs, expected
+):
+    chain = [_FakeSource(p, s) for p, s in chain_specs]
+    msg = _FakeMessage(item_project, item_sensitivity, chain)
+    assert msg.resolve_access_control() == expected
+
+
+def test_resolve_access_control_skips_chain_entries_without_either_field():
+    """Chain entries with both project_id=None and sensitivity=None are
+    transparent to the walk — the algorithm continues to the next entry."""
+    chain = [
+        _FakeSource(None, None),  # Empty entry — should be skipped
+        _FakeSource(7, "internal"),  # This one supplies both
+    ]
+    msg = _FakeMessage(None, None, chain)
+    assert msg.resolve_access_control() == (7, "internal")
+
+
+def test_resolve_access_control_field_resolution_uses_first_non_empty():
+    """Each field stops at the first non-empty source independently. So a
+    chain of [(None, 'X'), (P, 'Y')] gives (P, 'X') — the second source's
+    sensitivity is ignored because the first already supplied one."""
+    chain = [_FakeSource(None, "X"), _FakeSource(99, "Y")]
+    msg = _FakeMessage(None, None, chain)
+    assert msg.resolve_access_control() == (99, "X")
+
+
 def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     """Pure-unit regression: previously the dead ``if not new_items: return``
     after the loop never short-circuited because ``new_items`` is computed
