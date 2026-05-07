@@ -19,8 +19,10 @@ from memory.workers.tasks.maintenance import (
     reingest_empty_source_items,
     update_metadata_for_item,
     update_metadata_for_source_items,
+    get_item_class,
     _payloads_equal,
 )
+import memory.workers.tasks.maintenance as maintenance_module
 
 
 @pytest.fixture
@@ -977,3 +979,63 @@ def test_update_metadata_for_source_items_invalid_type(db_session):
     assert result["status"] == "error"
     assert "Unsupported item type invalid_type" in result["error"]
     assert "Available types:" in result["error"]
+
+
+# ====== get_item_class lookup tests ======
+
+
+@pytest.fixture(autouse=True)
+def reset_item_class_cache():
+    """Force the item-class lookup map to rebuild between tests."""
+    maintenance_module._ITEM_CLASSES = None
+    yield
+    maintenance_module._ITEM_CLASSES = None
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        # Polymorphic identity (snake_case) — what process_raw_items dispatches with.
+        "mail_message",
+        "blog_post",
+        # Class name (CapsCase) — what api/source_items.py:reingest_item dispatches with.
+        "MailMessage",
+        "BlogPost",
+    ],
+)
+def test_get_item_class_accepts_both_naming_conventions(key):
+    """get_item_class must resolve both polymorphic identity and class name.
+
+    The codebase has two callers using different conventions
+    (api/source_items.py uses __class__.__name__; process_raw_items uses
+    SourceItem.type which is the polymorphic discriminator). Both must
+    work — otherwise one of the dispatch paths is silently broken.
+    """
+    cls = get_item_class(key)
+    # Both naming conventions must resolve to a real SourceItem subclass.
+    assert issubclass(cls, SourceItem)
+
+
+def test_get_item_class_resolves_to_same_class_for_both_keys():
+    """Class-name lookup and polymorphic-identity lookup must agree."""
+    by_identity = get_item_class("mail_message")
+    by_classname = get_item_class("MailMessage")
+    assert by_identity is by_classname is MailMessage
+
+
+def test_get_item_class_rejects_unknown_type():
+    """Unknown type raises ValueError listing available types."""
+    with pytest.raises(ValueError, match="Unsupported item type"):
+        get_item_class("definitely_not_a_real_type")
+
+
+def test_get_item_class_does_not_use_private_class_registry():
+    """Regression: lookup must NOT rely on SourceItem.registry._class_registry,
+    which is a SQLAlchemy private attribute that has been reorganised
+    across versions and is keyed only by class name."""
+    # Build the public-API map and assert polymorphic identities are
+    # present — _class_registry only contains class names, so if anyone
+    # reverts to it these polymorphic-identity keys disappear.
+    m = maintenance_module._build_item_class_map()
+    assert "mail_message" in m
+    assert "blog_post" in m

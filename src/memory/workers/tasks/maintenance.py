@@ -128,16 +128,49 @@ def reingest_chunk(chunk_id: str, collection: str):
             session.commit()
 
 
+_ITEM_CLASSES: dict[str, type[SourceItem]] | None = None
+
+
+def _build_item_class_map() -> dict[str, type[SourceItem]]:
+    """Build a lookup table of {polymorphic_identity OR class name -> class}.
+
+    Uses SQLAlchemy's public ``inspect()`` API rather than the private
+    ``registry._class_registry`` (which is keyed only by class name and
+    has shifted across SQLAlchemy minor versions). Accepts both
+    polymorphic identities (e.g. ``"mail_message"``) and class names
+    (e.g. ``"MailMessage"``) because the codebase has historically passed
+    both — the API endpoint at api/source_items.py uses class name, the
+    Celery dispatch loop in process_raw_items uses polymorphic identity.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    mapper = sa_inspect(SourceItem)
+    out: dict[str, type[SourceItem]] = {}
+    for ident, sub_mapper in mapper.polymorphic_map.items():
+        cls = sub_mapper.class_
+        if not hasattr(cls, "chunks"):
+            continue
+        out[ident] = cls
+        out[cls.__name__] = cls
+    return out
+
+
 def get_item_class(item_type: str) -> type[SourceItem]:
-    class_ = SourceItem.registry._class_registry.get(item_type)
-    if not class_:
-        available_types = ", ".join(sorted(SourceItem.registry._class_registry.keys()))
+    """Resolve an item-type string to its SourceItem subclass.
+
+    Accepts either the polymorphic identity (``"mail_message"``) or the
+    class name (``"MailMessage"``).
+    """
+    global _ITEM_CLASSES
+    if _ITEM_CLASSES is None:
+        _ITEM_CLASSES = _build_item_class_map()
+    cls = _ITEM_CLASSES.get(item_type)
+    if cls is None:
+        available = sorted(set(_ITEM_CLASSES.keys()))
         raise ValueError(
-            f"Unsupported item type {item_type}. Available types: {available_types}"
+            f"Unsupported item type {item_type}. Available types: {', '.join(available)}"
         )
-    if not hasattr(class_, "chunks"):
-        raise ValueError(f"Item type {item_type} does not have chunks")
-    return cast(type[SourceItem], class_)
+    return cast(type[SourceItem], cls)
 
 
 @app.task(name=REINGEST_ITEM)
@@ -184,8 +217,27 @@ def reingest_empty_source_items(item_type: str):
 @tracked_task
 def reingest_all_empty_source_items():
     logger.info("Reingesting all empty source items")
-    for item_type in SourceItem.registry._class_registry.keys():
-        reingest_empty_source_items.delay(item_type)  # type: ignore
+    # Iterate over polymorphic identities (the public API) rather than
+    # SourceItem.registry._class_registry, which is a SQLAlchemy private
+    # attribute keyed by class names and has shifted across versions.
+    global _ITEM_CLASSES
+    if _ITEM_CLASSES is None:
+        _ITEM_CLASSES = _build_item_class_map()
+    # _ITEM_CLASSES has both polymorphic identity AND class name keys
+    # mapping to the same classes; dedupe by class then pick a single
+    # canonical key (the polymorphic identity is preferred — it's what
+    # process_raw_items dispatches with).
+    seen_classes: set[type[SourceItem]] = set()
+    for key, cls in _ITEM_CLASSES.items():
+        if cls in seen_classes:
+            continue
+        # Polymorphic identities are the lower_snake_case keys; class
+        # names are CapsCase. Prefer polymorphic identity by spotting
+        # the snake_case form (no uppercase letters).
+        if key != key.lower():
+            continue
+        seen_classes.add(cls)
+        reingest_empty_source_items.delay(key)  # type: ignore
 
 
 @app.task(name=PROCESS_RAW_ITEM)
