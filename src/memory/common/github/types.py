@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TypedDict
 
+from memory.common.dates import parse_iso_datetime
+
 # GitHub REST API base URL
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
@@ -181,11 +183,13 @@ class GithubIssueData(TypedDict):
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:
-    """Parse ISO date string from GitHub API to datetime."""
-    if not date_str:
-        return None
-    # GitHub uses ISO format with Z suffix
-    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    """Parse ISO date string from GitHub API to datetime.
+
+    Thin wrapper around the canonical
+    :func:`memory.common.dates.parse_iso_datetime` so all GitHub callers
+    pick up future format-handling tweaks for free.
+    """
+    return parse_iso_datetime(date_str)
 
 
 def compute_content_hash(body: str, comments: list[GithubComment]) -> str:

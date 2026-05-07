@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from dateutil.rrule import rrulestr
 
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
@@ -173,17 +174,15 @@ def parse_date_range(
         ValueError: If date format is invalid
     """
     if start_date:
-        try:
-            range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
+        range_start = parse_iso_datetime(start_date)
+        if range_start is None:
             raise ValueError(f"Invalid start_date format: {start_date}")
     else:
         range_start = datetime.now(timezone.utc)
 
     if end_date:
-        try:
-            range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
+        range_end = parse_iso_datetime(end_date)
+        if range_end is None:
             raise ValueError(f"Invalid end_date format: {end_date}")
     else:
         range_end = range_start + timedelta(days=days)

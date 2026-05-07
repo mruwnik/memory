@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
 
@@ -270,16 +271,11 @@ def extract_tool_calls_from_message(message: dict[str, Any]) -> list[ToolCall]:
 
 
 def parse_event_timestamp(timestamp_str: str | None) -> datetime | None:
-    """Parse an ISO-8601 timestamp; returns None on missing/invalid.
-
-    Accepts the trailing-Z form used by Anthropic transcripts.
+    """Thin wrapper around :func:`memory.common.dates.parse_iso_datetime`
+    kept for callers that imported the local name. Returns None on
+    missing/invalid input.
     """
-    if not timestamp_str:
-        return None
-    try:
-        return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
+    return parse_iso_datetime(timestamp_str)
 
 
 def count_transcript_events(transcript_path: str) -> int:

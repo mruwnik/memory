@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import has_admin_scope
+from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import SCOPE_ORGANIZER, SCOPE_ORGANIZER_WRITE
 from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
@@ -167,12 +168,9 @@ async def create_task(
 
     Returns: The created task with id, task_title, due_date, priority, status, etc.
     """
-    parsed_due_date = None
-    if due_date:
-        try:
-            parsed_due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid due_date format: {due_date}")
+    parsed_due_date = parse_iso_datetime(due_date)
+    if due_date and parsed_due_date is None:
+        raise ValueError(f"Invalid due_date format: {due_date}")
 
     # Hash based on title - same title means same task
     task_sha256 = hashlib.sha256(f"task:{title}".encode()).digest()
@@ -230,10 +228,10 @@ async def update_task(
         if title is not None:
             task.task_title = title
         if due_date is not None:
-            try:
-                task.due_date = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
-            except ValueError:
+            parsed = parse_iso_datetime(due_date)
+            if parsed is None:
                 raise ValueError(f"Invalid due_date format: {due_date}")
+            task.due_date = parsed
         if priority is not None:
             task.priority = priority
         if status is not None:
