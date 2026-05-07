@@ -143,40 +143,100 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
-# Validation error handler with detailed logging
+# Field names whose values must never be logged or echoed in 422 responses.
+# Validation errors fire on auth, password change, secrets, API key creation,
+# and account-credential endpoints — the offending value is exactly the secret
+# the user just typed, so Pydantic's default `input` echo is a credential leak.
+SENSITIVE_VALIDATION_FIELDS = frozenset({
+    "password",
+    "current_password",
+    "new_password",
+    "old_password",
+    "confirm_password",
+    "token",
+    "refresh_token",
+    "access_token",
+    "api_key",
+    "client_secret",
+    "secret",
+    "value",  # /secrets endpoint
+    "caldav_password",
+    "webhook_secret",
+})
+
+# Query-param names whose values must be redacted before logging. Tokens
+# typically arrive as cookies/headers, but legacy callers sometimes pass them
+# in the URL (e.g. one-time keys in Discord redirect flows).
+SENSITIVE_QUERY_PARAMS = frozenset({
+    "token",
+    "api_key",
+    "key",
+    "access_token",
+    "refresh_token",
+    "code",  # OAuth authorization codes
+    "state",  # may carry signed session state
+    "password",
+})
+
+
+def redact_validation_errors(errors: list[dict]) -> list[dict]:
+    """Return validation errors with sensitive `input`/`ctx` values stripped.
+
+    Pydantic includes the raw offending value under each error's `input` key
+    (and sometimes inside `ctx`). For auth/secret endpoints that's the user's
+    plaintext credential. Drop those fields whenever the error's `loc` path
+    mentions a known sensitive field, and always drop `input` for body-level
+    errors (we can't always know the schema).
+    """
+    redacted: list[dict] = []
+    for err in errors:
+        loc = err.get("loc") or ()
+        loc_names = {str(part).lower() for part in loc}
+        clean = {k: v for k, v in err.items() if k not in {"input", "ctx"}}
+        # Keep ctx only when it doesn't reference the sensitive value
+        if "ctx" in err and not (loc_names & SENSITIVE_VALIDATION_FIELDS):
+            ctx = err["ctx"]
+            if isinstance(ctx, dict):
+                clean["ctx"] = {
+                    k: v for k, v in ctx.items() if k.lower() not in SENSITIVE_VALIDATION_FIELDS
+                }
+        redacted.append(clean)
+    return redacted
+
+
+def redact_query_params(params: dict) -> dict:
+    """Return query params with sensitive values masked."""
+    return {
+        k: ("***" if k.lower() in SENSITIVE_QUERY_PARAMS else v)
+        for k, v in params.items()
+    }
+
+
+# Validation error handler.
+#
+# Security: we deliberately do NOT log the raw request body and we do NOT
+# echo `exc.body` back to the caller. Validation failures on auth / password
+# / secret / API-key endpoints would otherwise drop the user's plaintext
+# credential into log files (CWE-532) and into the 422 response body. The
+# structured `loc`/`msg`/`type` from `errors()` is enough to debug client
+# bugs without exposing the value the validator rejected.
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    # Log detailed validation error info
+    safe_errors = redact_validation_errors(list(exc.errors()))
+
     logger.warning(
         "Validation error on %s %s: %s",
         request.method,
         request.url.path,
-        exc.errors(),
+        safe_errors,
     )
 
-    # Log query parameters if present
     if request.query_params:
-        logger.warning("Query params: %s", dict(request.query_params))
+        logger.warning("Query params: %s", redact_query_params(dict(request.query_params)))
 
-    # Try to log the request body for debugging (may fail for large bodies)
-    try:
-        body = await request.body()
-        if body:
-            # Truncate large bodies
-            body_preview = body[:2000].decode("utf-8", errors="replace")
-            if len(body) > 2000:
-                body_preview += f"... ({len(body)} bytes total)"
-            logger.warning("Request body: %s", body_preview)
-    except Exception as e:
-        logger.warning("Could not read request body: %s", e)
-
-    # Return detailed error response
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": exc.errors(),
-            "body": exc.body if hasattr(exc, "body") else None,
-        },
+        content={"detail": safe_errors},
     )
 
 
