@@ -9,7 +9,74 @@ import pytest
 from starlette.requests import Request
 
 from memory.api import auth
+from memory.api.auth import is_whitelisted_path
 from memory.common import settings
+
+
+# --- AuthenticationMiddleware whitelist matching ----------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/health",
+        "/health/metrics",
+        "/register",
+        "/register/finish",
+        "/authorize",
+        "/authorize/code",
+        "/token",
+        "/token/refresh",
+        "/mcp",
+        "/mcp/tools",
+        "/ui",
+        "/ui/index.html",
+        "/oauth/login",
+        "/oauth/callback/google",
+        "/.well-known/openid-configuration",
+        "/admin/statics/css/main.css",
+        "/google-drive/callback",
+        "/polls/respond",
+        "/polls/respond/abc-123",
+        "/claude/transfer/pull",
+        "/claude/transfer/push",
+    ],
+)
+def test_is_whitelisted_path_lets_real_routes_through(path):
+    assert is_whitelisted_path(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Latent prefix-overrun footguns: any one of these added as a real
+        # route would bypass auth in the old `startswith` impl.
+        "/healthcheck",
+        "/health-secret",
+        "/healthxxx",
+        "/registerme",
+        "/registers",
+        "/authorize-anything",
+        "/tokens",
+        "/tokenrevoke",
+        "/mcphidden",
+        "/mcp-admin",
+        "/uiAttacker",
+        "/uiconfig",
+        # Real-but-not-whitelisted endpoints
+        "/users",
+        "/secrets",
+        "/teams/1",
+        "/calendar-accounts",
+        "/google-drive/config",  # admin-gated; must NOT be whitelisted
+        "/polls",  # the public list endpoint is /polls/respond, /polls itself is auth'd
+        "/claude/u1-x-deadbeef/logs",  # gated by route-level user check
+        "",
+    ],
+)
+def test_is_whitelisted_path_blocks_prefix_overrun(path):
+    assert is_whitelisted_path(path) is False
 
 
 def make_request(query: str) -> Request:

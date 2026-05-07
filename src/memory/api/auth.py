@@ -51,6 +51,28 @@ WHITELIST = {
     "/claude/transfer/",
 }
 
+
+def is_whitelisted_path(path: str) -> bool:
+    """Decide whether ``path`` should bypass the AuthenticationMiddleware.
+
+    Trailing-slash whitelist entries (``/oauth/``, ``/.well-known/``)
+    match anything below them. Bare entries (``/health``, ``/mcp``,
+    ``/ui``, …) match the exact path or a child segment delimited by
+    ``/`` — they deliberately do NOT match ``/healthcheck`` or
+    ``/mcphidden``. The previous ``str.startswith`` everywhere version
+    was a latent auth-bypass any time someone added a sibling route
+    sharing a prefix with one of the bare entries.
+    """
+    if path == "/":
+        return True
+    for entry in WHITELIST:
+        if entry.endswith("/"):
+            if path.startswith(entry):
+                return True
+        elif path == entry or path.startswith(entry + "/"):
+            return True
+    return False
+
 # Claude WebSocket session path pattern - more specific than prefix matching
 # Session IDs have format: u{user_id}-{source}-{hex} where source is:
 #   e{env_id}  for environment-based sessions   (e.g. u123-e456-abc123)
@@ -588,12 +610,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
 
-        # Skip authentication for whitelisted endpoints
-        if (
-            any(path.startswith(whitelist_path) for whitelist_path in WHITELIST)
-            or path == "/"
-            or _CLAUDE_SESSION_PATTERN.match(path)  # Claude WebSocket sessions
-        ):
+        # Skip authentication for whitelisted endpoints. Use the explicit
+        # exact-or-child-segment matcher rather than a raw `startswith` so
+        # adding a future route like `/mcphost` doesn't accidentally
+        # whitelist itself.
+        if is_whitelisted_path(path) or _CLAUDE_SESSION_PATTERN.match(path):
             return await call_next(request)
 
         # Check for session ID in header or cookie
