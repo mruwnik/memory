@@ -185,11 +185,20 @@ class GithubIssueData(TypedDict):
 def parse_github_date(date_str: str | None) -> datetime | None:
     """Parse ISO date string from GitHub API to datetime.
 
-    Thin wrapper around the canonical
-    :func:`memory.common.dates.parse_iso_datetime` so all GitHub callers
-    pick up future format-handling tweaks for free.
+    Falsy input (``None`` or ``""``) passes through as ``None`` — some
+    GitHub fields like ``closedAt`` legitimately come back null/empty.
+    A *non-empty* string that fails to parse raises ``ValueError``:
+    callers in ``common/github/issues.py`` rely on this for fields the
+    schema treats as required (``createdAt``, ``updatedAt``); silently
+    inserting NULL would either crash on a NOT NULL constraint at flush
+    time or poison downstream code that assumes the field is present.
     """
-    return parse_iso_datetime(date_str)
+    if not date_str:
+        return None
+    parsed = parse_iso_datetime(date_str)
+    if parsed is None:
+        raise ValueError(f"Unparseable GitHub date string: {date_str!r}")
+    return parsed
 
 
 def compute_content_hash(body: str, comments: list[GithubComment]) -> str:

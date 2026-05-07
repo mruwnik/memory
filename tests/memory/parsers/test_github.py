@@ -63,6 +63,23 @@ def test_parse_github_date(date_str, expected):
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    "bad_input",
+    ["not-a-date", "yesterday", "2024-13-99T00:00:00Z", "garbage"],
+)
+def test_parse_github_date_raises_on_malformed(bad_input):
+    """A non-empty unparseable string must raise, not silently return None.
+
+    Callers in ``common/github/issues.py`` use this for fields the
+    schema treats as required (``createdAt``, ``updatedAt``) and would
+    otherwise crash at flush time on a NOT NULL constraint or poison
+    downstream code that assumes the value is present. Loud-fast
+    failure is the right contract here.
+    """
+    with pytest.raises(ValueError, match="Unparseable GitHub date string"):
+        parse_github_date(bad_input)
+
+
 def test_compute_content_hash_body_only():
     """Test content hash with body only."""
     hash1 = compute_content_hash("This is the body", [])
