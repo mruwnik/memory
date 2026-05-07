@@ -5,6 +5,7 @@ Provides functions to create, update, and query pending jobs.
 Includes the @tracked_task decorator for automatic PendingJob lifecycle.
 """
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +25,49 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import PendingJob, JobStatus, JobType
 
 logger = logging.getLogger(__name__)
+
+
+# Kwargs that the dispatcher injects after the params snapshot is taken.
+# They are required by the task signature but are NOT user-supplied data, so
+# excluding them from the persisted params is fine — they're reconstructed
+# from the row itself at retry time.
+_DISPATCHER_INJECTED_KWARGS = frozenset({"job_id"})
+
+
+def get_required_task_kwargs(task_name: str) -> set[str]:
+    """Return the set of required kwarg names for a registered Celery task.
+
+    A kwarg is "required" if its parameter has no default and is not the
+    bound-task ``self``. Returns an empty set if the task isn't registered
+    yet (e.g. validating during a unit test that doesn't import workers) so
+    we degrade to "trust the caller" rather than blowing up on validation.
+
+    Used by ``dispatch_job`` to fail-fast when ``exclude_from_params`` would
+    strip a parameter the worker actually needs at retry time.
+    """
+    task = celery_app.tasks.get(task_name)
+    if task is None:
+        return set()
+
+    # Celery wraps the user function as ``task.run``; inspect that.
+    fn = getattr(task, "run", task)
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return set()
+
+    required: set[str] = set()
+    for param in sig.parameters.values():
+        if param.name == "self":
+            continue
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if param.default is inspect.Parameter.empty:
+            required.add(param.name)
+    return required
 
 _R = TypeVar("_R")
 
@@ -299,8 +343,27 @@ def dispatch_job(
                     message=f"Job already exists with status: {existing.status}",
                 )
 
-    # Derive params from task_kwargs, excluding large fields
+    # Derive params from task_kwargs, excluding large fields.
     exclude_set = set(exclude_from_params or [])
+
+    # Fail-fast: if a caller tries to exclude a *required* kwarg from the
+    # persisted params, retry would later crash with a TypeError because
+    # ``retry_failed_job`` reconstructs ``task_kwargs`` from ``params``
+    # alone. Catch that at dispatch time so the bug surfaces with the
+    # offending caller, not with a stranger hitting the retry button. The
+    # dispatcher also injects ``job_id`` itself, so an exclusion of that
+    # kwarg is harmless and explicitly allowed.
+    required = get_required_task_kwargs(task_name)
+    bad_excludes = (exclude_set & required) - _DISPATCHER_INJECTED_KWARGS
+    if bad_excludes:
+        raise ValueError(
+            f"Cannot exclude required kwargs {sorted(bad_excludes)} from "
+            f"params for task {task_name!r} — retry_failed_job reconstructs "
+            "task_kwargs from params and would crash with TypeError. Either "
+            "stop excluding them, store a reference (e.g. a file path), or "
+            "make the kwarg optional on the task signature."
+        )
+
     params = {k: v for k, v in task_kwargs.items() if k not in exclude_set}
     # Store task_name for retry capability
     params["_task_name"] = task_name

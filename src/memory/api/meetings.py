@@ -66,6 +66,11 @@ def create_meeting(
             detail=f"Transcript exceeds maximum size of {MAX_TRANSCRIPT_SIZE} bytes",
         )
 
+    # NOTE: we deliberately do NOT exclude ``transcript`` from params.
+    # ``retry_failed_job`` reconstructs the worker's kwargs from
+    # ``PendingJob.params`` alone, and ``process_meeting.transcript`` has no
+    # default, so excluding it would make retries crash with TypeError and
+    # silently lose the user's data. The size cap above bounds storage cost.
     result = dispatch_job(
         session=db,
         job_type=JobType.MEETING,
@@ -82,7 +87,6 @@ def create_meeting(
         },
         external_id=data.external_id,
         user_id=user.id,
-        exclude_from_params=["transcript"],  # Don't store full transcript in job params
     )
 
     return MeetingQueued(
