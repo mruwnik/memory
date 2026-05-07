@@ -12,7 +12,7 @@ The new uniqueness constraint on slack_user_credentials becomes
 provision Slack apps through the UI, not env vars.
 
 Revision ID: 20260506_slack_apps
-Revises: 20260507_calendar_account_user_id
+Revises: 20260507_calendar_acct_user_id
 Create Date: 2026-05-06
 """
 
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260506_slack_apps"
-down_revision: Union[str, None] = "20260507_calendar_account_user_id"
+down_revision: Union[str, None] = "20260507_calendar_acct_user_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

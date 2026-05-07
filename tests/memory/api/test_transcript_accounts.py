@@ -123,7 +123,9 @@ def test_list_accounts_admin_filter_by_user_id(client, user, db_session):
     assert data[0]["name"] == "Theirs"
 
 
-def test_list_accounts_non_admin_user_id_filter_ignored(regular_client, user, db_session):
+def test_list_accounts_non_admin_user_id_filter_ignored(
+    regular_client, user, db_session
+):
     """Non-admin's ?user_id= is ignored — they always see only their own accounts."""
     other = make_other_user(db_session)
 
@@ -343,9 +345,7 @@ def test_update_account_fields(client, user, db_session, field, value):
     """PATCH should update simple fields."""
     account = make_account(db_session, user.id, name="x", api_key="k")
 
-    response = client.patch(
-        f"/transcript-accounts/{account.id}", json={field: value}
-    )
+    response = client.patch(f"/transcript-accounts/{account.id}", json={field: value})
 
     assert response.status_code == 200
     assert response.json()[field] == value
@@ -384,9 +384,7 @@ def test_update_account_empty_api_key_returns_400(client, user, db_session):
     """PATCH api_key="" should return 400."""
     account = make_account(db_session, user.id, name="emp", api_key="k")
 
-    response = client.patch(
-        f"/transcript-accounts/{account.id}", json={"api_key": ""}
-    )
+    response = client.patch(f"/transcript-accounts/{account.id}", json={"api_key": ""})
 
     assert response.status_code == 400
     assert "empty" in response.json()["detail"].lower()
@@ -478,10 +476,7 @@ def test_delete_account_success(client, user, db_session):
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
 
-    assert (
-        db_session.query(TranscriptAccount).filter_by(id=account_id).first()
-        is None
-    )
+    assert db_session.query(TranscriptAccount).filter_by(id=account_id).first() is None
 
 
 def test_delete_account_not_owned(regular_client, user, db_session):
@@ -563,9 +558,7 @@ def test_trigger_sync_not_owned(mock_app, regular_client, user, db_session):
     other = make_other_user(db_session)
     other_account = make_account(db_session, other.id, name="theirs", api_key="k")
 
-    response = regular_client.post(
-        f"/transcript-accounts/{other_account.id}/sync"
-    )
+    response = regular_client.post(f"/transcript-accounts/{other_account.id}/sync")
 
     assert response.status_code == 404
     mock_app.send_task.assert_not_called()
@@ -577,9 +570,7 @@ def test_trigger_rescan_not_owned(mock_app, regular_client, user, db_session):
     other = make_other_user(db_session)
     other_account = make_account(db_session, other.id, name="theirs", api_key="k")
 
-    response = regular_client.post(
-        f"/transcript-accounts/{other_account.id}/rescan"
-    )
+    response = regular_client.post(f"/transcript-accounts/{other_account.id}/rescan")
 
     assert response.status_code == 404
     mock_app.send_task.assert_not_called()

@@ -9,16 +9,21 @@ import pytest
 
 from memory.api.MCP.base import SUBSERVER_PREFIXES
 from memory.api.MCP.servers.books import books_mcp
+from memory.api.MCP.servers.claude import claude_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.discord import discord_mcp
 from memory.api.MCP.servers.email import email_mcp
 from memory.api.MCP.servers.forecast import forecast_mcp
 from memory.api.MCP.servers.github import github_mcp
+from memory.api.MCP.servers.journal import journal_mcp
 from memory.api.MCP.servers.meta import meta_mcp
+from memory.api.MCP.servers.notes import notes_mcp
 from memory.api.MCP.servers.organizer import organizer_mcp
 from memory.api.MCP.servers.people import people_mcp
 from memory.api.MCP.servers.polling import polling_mcp
 from memory.api.MCP.servers.projects import projects_mcp
+from memory.api.MCP.servers.reports import reports_mcp
+from memory.api.MCP.servers.scheduler import scheduler_mcp
 from memory.api.MCP.servers.slack import slack_mcp
 from memory.api.MCP.servers.teams import teams_mcp
 
@@ -26,16 +31,21 @@ from memory.api.MCP.servers.teams import teams_mcp
 # Map prefixes to their FastMCP instances
 SUBSERVERS = {
     "books": books_mcp,
+    "claude": claude_mcp,
     "core": core_mcp,
     "discord": discord_mcp,
     "email": email_mcp,
     "forecast": forecast_mcp,
     "github": github_mcp,
+    "journal": journal_mcp,
     "meta": meta_mcp,
+    "notes": notes_mcp,
     "organizer": organizer_mcp,
     "people": people_mcp,
     "polling": polling_mcp,
     "projects": projects_mcp,
+    "reports": reports_mcp,
+    "scheduler": scheduler_mcp,
     "slack": slack_mcp,
     "teams": teams_mcp,
 }

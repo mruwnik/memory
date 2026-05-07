@@ -598,7 +598,9 @@ def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
 def test_parse_event_timestamp_accepts_valid(raw, expected_iso):
     from memory.api.sessions import parse_event_timestamp
 
-    assert parse_event_timestamp(raw).isoformat() == expected_iso
+    parsed = parse_event_timestamp(raw)
+    assert parsed is not None
+    assert parsed.isoformat() == expected_iso
 
 
 @pytest.mark.parametrize(

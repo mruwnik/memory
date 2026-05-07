@@ -40,14 +40,16 @@ def _make_request(ip: str = "1.2.3.4") -> MagicMock:
 
 
 def test_oversized_request_400():
-    too_many = PollResponseRequest(
-        availabilities=[
-            {
-                "slot_start": "2026-01-01T00:00:00+00:00",
-                "slot_end": "2026-01-01T00:30:00+00:00",
-            }
-            for _ in range(MAX_POLL_AVAILABILITIES_PER_REQUEST + 1)
-        ]
+    too_many = PollResponseRequest.model_validate(
+        {
+            "availabilities": [
+                {
+                    "slot_start": "2026-01-01T00:00:00+00:00",
+                    "slot_end": "2026-01-01T00:30:00+00:00",
+                }
+                for _ in range(MAX_POLL_AVAILABILITIES_PER_REQUEST + 1)
+            ]
+        }
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -57,14 +59,16 @@ def test_oversized_request_400():
 
 
 def test_at_cap_request_passes():
-    at_cap = PollResponseRequest(
-        availabilities=[
-            {
-                "slot_start": "2026-01-01T00:00:00+00:00",
-                "slot_end": "2026-01-01T00:30:00+00:00",
-            }
-            for _ in range(MAX_POLL_AVAILABILITIES_PER_REQUEST)
-        ]
+    at_cap = PollResponseRequest.model_validate(
+        {
+            "availabilities": [
+                {
+                    "slot_start": "2026-01-01T00:00:00+00:00",
+                    "slot_end": "2026-01-01T00:30:00+00:00",
+                }
+                for _ in range(MAX_POLL_AVAILABILITIES_PER_REQUEST)
+            ]
+        }
     )
     # No exception
     reject_oversized_poll_request(at_cap)

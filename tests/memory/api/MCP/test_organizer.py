@@ -20,35 +20,87 @@ class MockFastMCP:
         return decorator
 
 
-# Mock the fastmcp module before importing anything that uses it
-_mock_fastmcp = MagicMock()
-_mock_fastmcp.FastMCP = MockFastMCP
-_mock_fastmcp.server = MagicMock()
-_mock_fastmcp.server.dependencies = MagicMock()
-_mock_fastmcp.server.dependencies.get_access_token = MagicMock(return_value=None)
-sys.modules["fastmcp"] = _mock_fastmcp
-sys.modules["fastmcp.server"] = _mock_fastmcp.server
-sys.modules["fastmcp.server.dependencies"] = _mock_fastmcp.server.dependencies
+# The fastmcp/mcp/memory.api.MCP.base modules are mocked in an autouse
+# fixture below — NOT at module load time. Doing it at module load would
+# pollute sys.modules globally during pytest's collection phase, breaking
+# any subsequent test module that imports the real mcp symbols (notably
+# test_oauth_provider.py's `from mcp.server.auth.provider import
+# AuthorizationCode`). The fixture sets the mocks up before each test
+# in this file runs and restores the originals afterward.
+_MODULES_TO_MOCK = (
+    "fastmcp",
+    "fastmcp.server",
+    "fastmcp.server.dependencies",
+    "mcp",
+    "mcp.types",
+    "mcp.server",
+    "mcp.server.auth",
+    "mcp.server.auth.handlers",
+    "mcp.server.auth.handlers.authorize",
+    "mcp.server.auth.handlers.token",
+    "mcp.server.auth.provider",
+    "mcp.server.fastmcp",
+    "mcp.server.fastmcp.server",
+    "memory.api.MCP.base",
+    # memory.api.MCP.servers.organizer caches the mocked FastMCP at first
+    # import, so we have to invalidate its cache entry too — otherwise the
+    # second call site picks up the stale module from a prior real import.
+    "memory.api.MCP.servers.organizer",
+)
 
-# Mock the mcp module and all its submodules
-_mock_mcp = MagicMock()
-_mock_mcp.tool = lambda: lambda f: f
-sys.modules["mcp"] = _mock_mcp
-sys.modules["mcp.types"] = MagicMock()
-sys.modules["mcp.server"] = MagicMock()
-sys.modules["mcp.server.auth"] = MagicMock()
-sys.modules["mcp.server.auth.handlers"] = MagicMock()
-sys.modules["mcp.server.auth.handlers.authorize"] = MagicMock()
-sys.modules["mcp.server.auth.handlers.token"] = MagicMock()
-sys.modules["mcp.server.auth.provider"] = MagicMock()
-sys.modules["mcp.server.fastmcp"] = MagicMock()
-sys.modules["mcp.server.fastmcp.server"] = MagicMock()
 
-# Also mock the memory.api.MCP.base module to avoid MCP imports
-_mock_base = MagicMock()
-_mock_base.mcp = MagicMock()
-_mock_base.mcp.tool = lambda: lambda f: f
-sys.modules["memory.api.MCP.base"] = _mock_base
+def _build_mocks():
+    mock_fastmcp = MagicMock()
+    mock_fastmcp.FastMCP = MockFastMCP
+    mock_fastmcp.server = MagicMock()
+    mock_fastmcp.server.dependencies = MagicMock()
+    mock_fastmcp.server.dependencies.get_access_token = MagicMock(return_value=None)
+
+    mock_mcp = MagicMock()
+    mock_mcp.tool = lambda: lambda f: f
+
+    mock_base = MagicMock()
+    mock_base.mcp = MagicMock()
+    mock_base.mcp.tool = lambda: lambda f: f
+
+    return {
+        "fastmcp": mock_fastmcp,
+        "fastmcp.server": mock_fastmcp.server,
+        "fastmcp.server.dependencies": mock_fastmcp.server.dependencies,
+        "mcp": mock_mcp,
+        "mcp.types": MagicMock(),
+        "mcp.server": MagicMock(),
+        "mcp.server.auth": MagicMock(),
+        "mcp.server.auth.handlers": MagicMock(),
+        "mcp.server.auth.handlers.authorize": MagicMock(),
+        "mcp.server.auth.handlers.token": MagicMock(),
+        "mcp.server.auth.provider": MagicMock(),
+        "mcp.server.fastmcp": MagicMock(),
+        "mcp.server.fastmcp.server": MagicMock(),
+        "memory.api.MCP.base": mock_base,
+        # Force a re-import of the organizer module under our mocks.
+        "memory.api.MCP.servers.organizer": None,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _mock_mcp_modules():
+    """Per-test scope so cleanup is reliable even if a test pollutes state."""
+    originals = {name: sys.modules.get(name) for name in _MODULES_TO_MOCK}
+    mocks = _build_mocks()
+    for name, mock in mocks.items():
+        if mock is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mock
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 from memory.common.db import connection as db_connection  # noqa: E402
 from memory.common.db.models import CalendarEvent, Task  # noqa: E402

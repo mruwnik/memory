@@ -708,9 +708,10 @@ def test_parse_iso_datetime_query_preserves_explicit_offset():
     the tz when the input is naive, never relabels."""
     parsed = parse_iso_datetime_query("x", "2025-01-02T03:04:05+05:00")
     assert parsed is not None
-    assert parsed.utcoffset() is not None
+    offset = parsed.utcoffset()
+    assert offset is not None
     # +05:00 is 18000s, must NOT be relabeled to UTC.
-    assert parsed.utcoffset().total_seconds() == 5 * 3600
+    assert offset.total_seconds() == 5 * 3600
 
 
 def test_parse_iso_datetime_query_garbage_raises_400():
