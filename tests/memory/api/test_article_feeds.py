@@ -503,3 +503,209 @@ def test_trigger_sync_rejects_ssrf_url(
     assert response.status_code == 400
     # Celery task must NOT have been dispatched.
     mock_app.send_task.assert_not_called()
+
+
+# ====== Cross-tenant ownership tests ======
+
+
+def test_list_feeds_filters_by_owner_for_non_admin(regular_client, db_session, user):
+    """Non-admin users see only their own feeds."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feeds@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    own = ArticleFeed(
+        user_id=user.id,
+        url="https://my-feed.example.com/rss.xml",
+        title="Mine",
+    )
+    other_feed = ArticleFeed(
+        user_id=other.id,
+        url="https://other-feed.example.com/rss.xml",
+        title="Theirs",
+    )
+    legacy = ArticleFeed(
+        user_id=None,
+        url="https://legacy.example.com/rss.xml",
+        title="Pre-ownership",
+    )
+    db_session.add_all([own, other_feed, legacy])
+    db_session.commit()
+
+    response = regular_client.get("/article-feeds")
+
+    assert response.status_code == 200
+    urls = {f["url"] for f in response.json()}
+    assert urls == {"https://my-feed.example.com/rss.xml"}
+
+
+def test_list_feeds_admin_sees_all(client, db_session, user):
+    """Admin (the default test client) sees every feed including legacy."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feeds-admin@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    db_session.add_all([
+        ArticleFeed(user_id=user.id, url="https://a.example.com/rss.xml"),
+        ArticleFeed(user_id=other.id, url="https://b.example.com/rss.xml"),
+        ArticleFeed(user_id=None, url="https://legacy.example.com/rss.xml"),
+    ])
+    db_session.commit()
+
+    response = client.get("/article-feeds")
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+
+
+def test_get_feed_404_for_other_users_feed(regular_client, db_session, user):
+    """Cross-tenant get must 404 (not 200, not 403)."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feed-get@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    feed = ArticleFeed(
+        user_id=other.id,
+        url="https://victim.example.com/rss.xml",
+    )
+    db_session.add(feed)
+    db_session.commit()
+
+    response = regular_client.get(f"/article-feeds/{feed.id}")
+    assert response.status_code == 404
+
+
+def test_get_feed_404_for_legacy_null_owner_non_admin(regular_client, db_session, user):
+    """Legacy rows (user_id IS NULL) are admin-only."""
+    feed = ArticleFeed(
+        user_id=None,
+        url="https://legacy-get.example.com/rss.xml",
+    )
+    db_session.add(feed)
+    db_session.commit()
+
+    response = regular_client.get(f"/article-feeds/{feed.id}")
+    assert response.status_code == 404
+
+
+def test_update_feed_404_for_other_users_feed(regular_client, db_session, user):
+    """Cross-tenant patch must 404 — and must NOT mutate the feed."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feed-patch@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    feed = ArticleFeed(
+        user_id=other.id,
+        url="https://target.example.com/rss.xml",
+        title="Original",
+        active=True,
+    )
+    db_session.add(feed)
+    db_session.commit()
+    original_id = feed.id
+
+    response = regular_client.patch(
+        f"/article-feeds/{original_id}",
+        json={"title": "Hijacked", "active": False},
+    )
+
+    assert response.status_code == 404
+    db_session.expire_all()
+    refreshed = db_session.get(ArticleFeed, original_id)
+    assert refreshed is not None
+    assert refreshed.title == "Original"
+    assert refreshed.active is True
+
+
+def test_delete_feed_404_for_other_users_feed(regular_client, db_session, user):
+    """Cross-tenant delete must 404 — and the feed must survive."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feed-delete@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    feed = ArticleFeed(
+        user_id=other.id,
+        url="https://victim-delete.example.com/rss.xml",
+    )
+    db_session.add(feed)
+    db_session.commit()
+    feed_id = feed.id
+
+    response = regular_client.delete(f"/article-feeds/{feed_id}")
+    assert response.status_code == 404
+
+    # Row must still exist.
+    db_session.expire_all()
+    assert db_session.get(ArticleFeed, feed_id) is not None
+
+
+def test_create_feed_attributes_to_caller(client, db_session, user):
+    """Creating a feed sets user_id to the caller's id."""
+    response = client.post(
+        "/article-feeds",
+        json={"url": "https://owned.example.com/rss.xml"},
+    )
+    assert response.status_code == 200
+    feed = (
+        db_session.query(ArticleFeed)
+        .filter_by(url="https://owned.example.com/rss.xml")
+        .first()
+    )
+    assert feed is not None
+    assert feed.user_id == user.id
+
+
+@patch("memory.common.celery_app.app")
+def test_trigger_sync_404_for_other_users_feed(
+    mock_app, regular_client, db_session, user
+):
+    """Cross-tenant sync trigger must 404 — Celery must not be called."""
+    from memory.common.db.models import HumanUser
+
+    other = HumanUser(
+        name="Other",
+        email="other-feed-sync@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    feed = ArticleFeed(
+        user_id=other.id,
+        url="https://other-sync.example.com/rss.xml",
+    )
+    db_session.add(feed)
+    db_session.commit()
+
+    response = regular_client.post(f"/article-feeds/{feed.id}/sync")
+    assert response.status_code == 404
+    mock_app.send_task.assert_not_called()
