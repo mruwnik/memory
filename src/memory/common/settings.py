@@ -262,6 +262,17 @@ API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
 API_RATE_LIMIT_SEARCH = os.getenv("API_RATE_LIMIT_SEARCH", "30/minute")
 # Auth endpoints have stricter limits to prevent brute force
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+# Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
+# rate limiter should trust. Anything else falls back to the direct
+# connection IP — preventing a remote attacker from rotating XFF to mint
+# fresh per-request buckets and bypass the limiter. Default is loopback
+# only (safe everywhere); set this to your reverse-proxy / load-balancer
+# IPs in production. Use ``*`` to trust every immediate hop (matches the
+# ``--forwarded-allow-ips=*`` default in docker/api/Dockerfile, but
+# disables the spoofing protection).
+RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
+    "RATE_LIMIT_TRUSTED_PROXIES", "127.0.0.1,::1"
+)
 
 # Claude scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))

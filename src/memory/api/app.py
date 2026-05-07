@@ -12,7 +12,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from memory.common import extract, paths, settings
@@ -58,9 +57,41 @@ from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
 
+
+def _trusted_proxies() -> set[str]:
+    """Parse RATE_LIMIT_TRUSTED_PROXIES at call time so tests can patch it."""
+    raw = settings.RATE_LIMIT_TRUSTED_PROXIES or ""
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def rate_limit_key(request: Request) -> str:
+    """Bucket key for SlowAPI.
+
+    SlowAPI's bundled ``get_remote_address`` honors ``X-Forwarded-For``
+    whenever Uvicorn was started with ``--proxy-headers``, which means a
+    remote attacker can rotate ``X-Forwarded-For`` to mint a fresh
+    bucket per request and defeat every rate limit.
+
+    Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
+    configured trusted proxy (see ``RATE_LIMIT_TRUSTED_PROXIES``). The
+    ``"*"`` wildcard exists for parity with the existing
+    ``--forwarded-allow-ips=*`` Uvicorn default but explicitly opts out
+    of the spoofing protection — operators behind a real proxy should
+    list its IP instead.
+    """
+    immediate = request.client.host if request.client else "unknown"
+    trusted = _trusted_proxies()
+    if "*" in trusted or immediate in trusted:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            # Left-most entry is the original client per RFC 7239 §5.2.
+            return xff.split(",")[0].strip() or immediate
+    return immediate
+
+
 # Rate limiter setup
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=rate_limit_key,
     default_limits=[settings.API_RATE_LIMIT_DEFAULT]
     if settings.API_RATE_LIMIT_ENABLED
     else [],
