@@ -181,7 +181,9 @@ def safe_loads(file: Path, start=0, end=None):
     for i, line in enumerate(file.read_text().splitlines()):
         if i < start or not line.strip():
             continue
-        if end is not None and i > end:
+        # `end` is exclusive (read_transcript passes offset+limit). Using `>`
+        # here was off-by-one and returned one extra row per request.
+        if end is not None and i >= end:
             return items
 
         try:

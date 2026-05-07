@@ -1,5 +1,10 @@
 fastapi>=0.115.12
-uvicorn[standard]==0.29.0  # [standard] includes websockets support
+# Pin >=0.31 for CIDR support in --forwarded-allow-ips (ProxyHeadersMiddleware
+# switched from plain set-membership to ip_network matching there). Earlier
+# versions silently ignore CIDR strings, which makes deploying behind a
+# reverse proxy painful — see README "Running behind a reverse proxy".
+# [standard] includes websockets support.
+uvicorn[standard]>=0.34,<1.0
 python-jose==3.3.0
 python-multipart==0.0.9
 mcp==1.10.0

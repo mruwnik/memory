@@ -4,7 +4,7 @@ import logging
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy.orm import Session
 
 from memory.api.auth import (
@@ -34,7 +34,7 @@ class EmailAccountCreate(BaseModel):
     use_ssl: bool = True
     # SMTP fields (optional - inferred from IMAP if not set)
     smtp_server: str | None = None
-    smtp_port: int | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
@@ -70,7 +70,7 @@ class EmailAccountUpdate(BaseModel):
     use_ssl: bool | None = None
     # SMTP fields (optional - inferred from IMAP if not set)
     smtp_server: str | None = None
-    smtp_port: int | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
