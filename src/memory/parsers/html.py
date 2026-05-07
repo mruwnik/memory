@@ -13,6 +13,7 @@ from markdownify import markdownify as md
 from PIL import Image as PILImage
 
 from memory.common import settings
+from memory.common.downloads import stream_download_to_path
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -229,37 +230,13 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
 
     # Download if not already cached
     if not local_path.exists():
-        try:
-            # Check Content-Length before downloading to avoid large files
-            response = requests.get(
-                url,
-                timeout=30,
-                headers={"User-Agent": "Mozilla/5.0"},
-                stream=True,
-            )
-            response.raise_for_status()
-
-            content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > MAX_IMAGE_SIZE:
-                logger.warning(
-                    f"Image too large ({content_length} bytes > {MAX_IMAGE_SIZE}): {url}"
-                )
-                return None
-
-            # Stream download with size limit (using list to avoid O(n^2) concatenation)
-            chunks = []
-            size = 0
-            for chunk in response.iter_content(chunk_size=8192):
-                size += len(chunk)
-                if size > MAX_IMAGE_SIZE:
-                    logger.warning(f"Image exceeded size limit during download: {url}")
-                    return None
-                chunks.append(chunk)
-            content = b"".join(chunks)
-
-            local_path.write_bytes(content)
-        except requests.RequestException as e:
-            logger.warning(f"Failed to download image {url}: {e}")
+        ok = stream_download_to_path(
+            url,
+            local_path,
+            MAX_IMAGE_SIZE,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if not ok:
             return None
 
     try:

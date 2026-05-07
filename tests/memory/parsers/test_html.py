@@ -310,14 +310,16 @@ def test_extract_metadata():
 
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
-@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.stream_download_to_path")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_success(mock_pil_open, mock_requests_get, mock_is_safe):
-    # Setup mocks
-    mock_response = MagicMock()
-    mock_response.headers = {"Content-Length": "100"}
-    mock_response.iter_content.return_value = [b"fake image data"]
-    mock_requests_get.return_value = mock_response
+def test_process_image_success(mock_pil_open, mock_stream_download, mock_is_safe):
+    # Helper writes the file and returns True on success — mimic that.
+    def fake_download(url, dest, max_bytes, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake image data")
+        return True
+
+    mock_stream_download.side_effect = fake_download
 
     mock_image = MagicMock(spec=PILImage.Image)
     mock_pil_open.return_value = mock_image
@@ -328,46 +330,41 @@ def test_process_image_success(mock_pil_open, mock_requests_get, mock_is_safe):
 
         result = process_image(url, image_dir)
 
-        # Verify HTTP request was made with streaming
-        mock_requests_get.assert_called_once_with(
-            url,
-            timeout=30,
-            headers={"User-Agent": "Mozilla/5.0"},
-            stream=True,
-        )
-        mock_response.raise_for_status.assert_called_once()
+        # Verify the helper was called with the User-Agent header preserved.
+        assert mock_stream_download.call_count == 1
+        call_args = mock_stream_download.call_args
+        assert call_args.args[0] == url
+        assert call_args.kwargs["headers"] == {"User-Agent": "Mozilla/5.0"}
 
         # Verify image was opened
         mock_pil_open.assert_called_once()
 
-        # Verify result
         assert result == mock_image
 
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
-@patch("memory.parsers.html.requests.get")
-def test_process_image_http_error(mock_requests_get, mock_is_safe):
-    # Setup mock to raise HTTP error
-    mock_requests_get.side_effect = requests.RequestException("Network error")
-
+@patch("memory.parsers.html.stream_download_to_path", return_value=False)
+def test_process_image_http_error(mock_stream_download, mock_is_safe):
+    """When the download helper returns False (cap exceeded, network error, etc.)
+    process_image returns None."""
     with tempfile.TemporaryDirectory() as temp_dir:
         image_dir = pathlib.Path(temp_dir)
         url = "https://example.com/image.jpg"
 
-        # Function catches the exception and returns None
         result = process_image(url, image_dir)
         assert result is None
 
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
-@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.stream_download_to_path")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_pil_error(mock_pil_open, mock_requests_get, mock_is_safe):
-    # Setup mocks
-    mock_response = MagicMock()
-    mock_response.headers = {"Content-Length": "100"}
-    mock_response.iter_content.return_value = [b"fake image data"]
-    mock_requests_get.return_value = mock_response
+def test_process_image_pil_error(mock_pil_open, mock_stream_download, mock_is_safe):
+    def fake_download(url, dest, max_bytes, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake image data")
+        return True
+
+    mock_stream_download.side_effect = fake_download
 
     # PIL open raises IOError
     mock_pil_open.side_effect = IOError("Cannot open image")
@@ -417,9 +414,9 @@ def test_is_safe_url_rejects_ssrf_targets(url):
 
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
-@patch("memory.parsers.html.requests.get")
+@patch("memory.parsers.html.stream_download_to_path")
 @patch("memory.parsers.html.PILImage.open")
-def test_process_image_cached(mock_pil_open, mock_requests_get, mock_is_safe):
+def test_process_image_cached(mock_pil_open, mock_stream_download, mock_is_safe):
     # Create a temporary file to simulate cached image
     with tempfile.TemporaryDirectory() as temp_dir:
         image_dir = pathlib.Path(temp_dir)
@@ -436,7 +433,7 @@ def test_process_image_cached(mock_pil_open, mock_requests_get, mock_is_safe):
         result = process_image(url, image_dir)
 
         # Should not make HTTP request since file exists
-        mock_requests_get.assert_not_called()
+        mock_stream_download.assert_not_called()
 
         # Should open the cached file
         mock_pil_open.assert_called_once_with(cached_file)

@@ -14,16 +14,17 @@ Note: User data is not stored in a separate SlackUser table. Instead:
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import re
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 import redis
 from sqlalchemy.exc import IntegrityError
 
 from memory.common import settings
+from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
@@ -65,6 +66,13 @@ USER_CACHE_TTL_SECONDS = 300
 
 # Lock TTL for channel sync (10 minutes) - safety timeout if task crashes
 CHANNEL_SYNC_LOCK_TTL_SECONDS = 600
+
+# Hard cap for downloaded Slack files. Slack itself allows up to 1 GB
+# uploads which would OOM the worker if we buffered the body. 100 MiB is
+# plenty for typical attachments (slides, PDFs, transcripts) and bounds
+# memory + disk pressure regardless of what users upload. Override via
+# SLACK_FILE_MAX_BYTES env var if you need to ingest larger files.
+SLACK_FILE_MAX_BYTES = int(os.getenv("SLACK_FILE_MAX_BYTES", 100 * 1024 * 1024))
 
 
 def get_redis_client() -> redis.Redis:
@@ -155,40 +163,35 @@ def resolve_mentions(content: str, users_by_id: dict[str, str]) -> str:
 def download_slack_file(
     url: str, headers: dict, message_ts: str, workspace_id: str
 ) -> str | None:
-    """Download a Slack file and save to disk. Returns relative path."""
-    try:
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
-            response = client.get(url, headers=headers)
-            response.raise_for_status()
+    """Download a Slack file and save to disk. Returns relative path.
 
-            # Create directory for this message
-            file_dir = (
-                settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
-            )
-            file_dir.mkdir(parents=True, exist_ok=True)
+    Uses streaming with a hard size cap so a single large upload (Slack's
+    1 GB max) can't OOM the worker. Pre-fix the call buffered the entire
+    body in RAM and held a second copy via ``response.content``.
+    """
+    file_dir = (
+        settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
+    )
 
-            # Generate filename from URL hash (SHA256 truncated for shorter filenames)
-            url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-            ext = pathlib.Path(url).suffix or ".dat"
-            ext = ext.split("?")[0][:10]  # Limit extension length
-            filename = f"{url_hash}{ext}"
-            local_path = file_dir / filename
+    url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+    ext = pathlib.Path(url).suffix or ".dat"
+    ext = ext.split("?")[0][:10]
+    filename = f"{url_hash}{ext}"
+    local_path = file_dir / filename
 
-            local_path.write_bytes(response.content)
-
-            # Return relative path
-            return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
-
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"Failed to download Slack file from {url}: HTTP {e.response.status_code}"
-        )
+    # httpx is required because the Slack download includes the bot token
+    # in the Authorization header — ``stream_download_to_path`` accepts a
+    # mapping just like the inline httpx call did.
+    if not stream_download_to_path(
+        url,
+        local_path,
+        SLACK_FILE_MAX_BYTES,
+        headers=headers,
+        use_httpx=True,
+    ):
         return None
-    except Exception as e:
-        logger.error(
-            f"Failed to download Slack file from {url}: {type(e).__name__}: {e}"
-        )
-        return None
+
+    return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
 
 
 def get_workspace_credentials(

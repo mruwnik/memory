@@ -13,10 +13,10 @@ import pathlib
 from datetime import datetime
 from typing import Any, cast
 
-import requests
 from sqlalchemy import exc as sqlalchemy_exc
 
 from memory.common import settings
+from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
     EDIT_DISCORD_MESSAGE,
@@ -42,47 +42,27 @@ MAX_IMAGE_SIZE = 50 * 1024 * 1024
 
 
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
-    """Download images from URLs and save to disk. Returns relative file paths."""
+    """Download images from URLs and save to disk. Returns relative file paths.
+
+    Filenames are SHA-256 truncated to match the convention in
+    parsers/html.py — pre-fix this site used MD5, an inconsistency that
+    showed the three sites had drifted independently.
+    """
     image_dir = settings.DISCORD_STORAGE_DIR / str(message_id)
     image_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths = []
     for url in image_urls:
-        try:
-            # Stream download with size limit to prevent OOM
-            with requests.get(url, timeout=30, stream=True) as response:
-                response.raise_for_status()
+        # SHA-256 truncated, matches parsers/html.py (was MD5 before).
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:32]
+        ext = pathlib.Path(url).suffix or ".jpg"
+        ext = ext.split("?")[0][:10]
+        filename = f"{url_hash}{ext}"
+        local_path = image_dir / filename
 
-                # Check Content-Length if available
-                content_length = response.headers.get("Content-Length")
-                if content_length and int(content_length) > MAX_IMAGE_SIZE:
-                    logger.warning(f"Skipping large image ({content_length} bytes): {url}")
-                    continue
-
-                # Generate filename from URL hash
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                ext = pathlib.Path(url).suffix or ".jpg"
-                ext = ext.split("?")[0]
-                filename = f"{url_hash}{ext}"
-                local_path = image_dir / filename
-
-                # Stream to file with size tracking
-                downloaded = 0
-                with local_path.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        downloaded += len(chunk)
-                        if downloaded > MAX_IMAGE_SIZE:
-                            logger.warning(f"Image exceeded size limit during download: {url}")
-                            local_path.unlink(missing_ok=True)
-                            break
-                        f.write(chunk)
-                    else:
-                        # Loop completed without break - download successful
-                        relative_path = local_path.relative_to(settings.FILE_STORAGE_DIR)
-                        saved_paths.append(str(relative_path))
-
-        except Exception as e:
-            logger.error(f"Failed to download/save image from {url}: {e}")
+        if not stream_download_to_path(url, local_path, MAX_IMAGE_SIZE):
+            continue
+        saved_paths.append(str(local_path.relative_to(settings.FILE_STORAGE_DIR)))
 
     return saved_paths
 
