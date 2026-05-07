@@ -1,6 +1,6 @@
 """Tests for People MCP tools."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -1378,3 +1378,126 @@ async def test_merge_three_people(db_session, admin_session, sample_people):
     # Verify primary has contact info from all
     assert "field1" in primary.contact_info
     assert "field2" in primary.contact_info
+
+
+# =============================================================================
+# require_can_write_at_sensitivity / sensitivity-vs-role enforcement
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "sensitivity,project_role,user_is_admin,expected_raises",
+    [
+        # Admin scope wins regardless
+        ("confidential", "contributor", True, False),
+        ("confidential", None, True, False),
+        # Contributor: only public/basic
+        ("public", "contributor", False, False),
+        ("basic", "contributor", False, False),
+        ("internal", "contributor", False, True),
+        ("confidential", "contributor", False, True),
+        # Manager: also internal
+        ("internal", "manager", False, False),
+        ("confidential", "manager", False, True),
+        # Admin (project role): all four
+        ("confidential", "admin", False, False),
+        # Non-member of the project: rejected even at public
+        ("public", None, False, True),
+        # Typo / attacker-supplied sensitivity: ValueError, not PermissionError
+    ],
+)
+def test_require_can_write_at_sensitivity_matrix(
+    sensitivity, project_role, user_is_admin, expected_raises
+):
+    """Pure-unit test of the sensitivity-vs-role gate."""
+    from unittest.mock import patch
+
+    from memory.api.MCP.servers.people import require_can_write_at_sensitivity
+
+    user = MagicMock()
+    user.id = 7
+    user.scopes = ["*"] if user_is_admin else ["people:write"]
+
+    project_roles = {} if project_role is None else {42: project_role}
+
+    with patch(
+        "memory.api.MCP.servers.people.get_project_roles_by_user_id",
+        return_value=project_roles,
+    ):
+        if expected_raises:
+            with pytest.raises(PermissionError):
+                require_can_write_at_sensitivity(user, 42, sensitivity)
+        else:
+            require_can_write_at_sensitivity(user, 42, sensitivity)
+
+
+def test_require_can_write_at_sensitivity_rejects_typoed_value():
+    """Typo'd / attacker-supplied sensitivity strings must be rejected up front."""
+    from memory.api.MCP.servers.people import require_can_write_at_sensitivity
+
+    user = MagicMock()
+    user.id = 7
+    user.scopes = ["*"]  # admin would otherwise bypass
+
+    # Even an admin must get a ValueError for an unrecognised string —
+    # it's a shape error, not a privilege error.
+    with pytest.raises(ValueError, match="Invalid sensitivity"):
+        require_can_write_at_sensitivity(user, 42, "TOP_SECRET")
+
+
+@pytest.mark.asyncio
+async def test_tidbit_add_rejects_contributor_setting_confidential(
+    db_session, regular_user, sample_people
+):
+    """Regression: a `member` (contributor) must NOT be able to plant a
+    `confidential` tidbit. Previously the only check was project membership;
+    the sensitivity-vs-role matrix was enforced only at read time, which
+    let a low-role user seed misinformation into the high-role tier.
+    """
+    from datetime import datetime, timedelta
+    from memory.common.db.models import Project, Team, UserSession
+    from memory.common.db.models.sources import (
+        Person,
+        project_teams,
+        team_members,
+    )
+
+    # Build a person -> team membership (member role) -> project pipeline
+    person = Person(identifier="reg-person", display_name="Reg")
+    db_session.add(person)
+    db_session.flush()
+    regular_user.person = person
+
+    team = Team(name="t", slug="t", is_active=True)
+    db_session.add(team)
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=person.id, role="member"
+        )
+    )
+
+    project = Project(id=-77, title="P", state="open")
+    db_session.add(project)
+    db_session.flush()
+    db_session.execute(
+        project_teams.insert().values(project_id=project.id, team_id=team.id)
+    )
+
+    sess = UserSession(
+        id="reg-session",
+        user_id=regular_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(sess)
+    db_session.commit()
+
+    tidbit_add_fn = get_fn(tidbit_add)
+    with mcp_auth_context(sess.id):
+        with pytest.raises(PermissionError, match="confidential"):
+            await tidbit_add_fn(
+                identifier="alice_chen",
+                content="planted confidential note",
+                project_id=project.id,
+                sensitivity="confidential",
+            )
