@@ -911,6 +911,118 @@ def test_update_metadata_for_item_missing_chunks_in_qdrant(db_session, qdrant):
     assert mock_set_payload.call_count == 1
 
 
+def test_update_metadata_for_item_per_chunk_failure_does_not_abort_loop(
+    db_session, qdrant
+):
+    """A transient failure on one chunk MUST NOT strand the rest with stale payload.
+
+    Pre-fix the try/except wrapped the whole loop, so a single failed
+    set_payload call left every chunk after it with stale ``project_id`` /
+    ``sensitivity`` — an access-control consistency bug when sources get
+    reprojected. The error count was also pegged to 1 regardless of how
+    many chunks actually went unprocessed.
+    """
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk_ids = [str(uuid.uuid4()) for _ in range(5)]
+    chunks = [
+        Chunk(
+            id=chunk_id,
+            source=item,
+            content=f"Test chunk content {i}",
+            embedding_model="test-model",
+        )
+        for i, chunk_id in enumerate(chunk_ids)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+
+    payloads = {
+        cid: {"tags": ["existing"], "source_id": item.id, "old_field": "x"}
+        for cid in chunk_ids
+    }
+
+    # Make set_payload fail on the middle chunk only.
+    failing_chunk = chunk_ids[2]
+
+    def fake_set_payload(client, collection, chunk_id, payload):
+        if chunk_id == failing_chunk:
+            raise RuntimeError("simulated qdrant blip")
+
+    with (
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.get_payloads",
+            return_value=payloads,
+        ),
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.set_payload",
+            side_effect=fake_set_payload,
+        ) as mock_set_payload,
+    ):
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    # All 5 chunks were attempted (the loop did not abort on the failure).
+    assert mock_set_payload.call_count == 5
+    # 4 succeeded, 1 errored — the dashboard sees the true failure count.
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 4
+    assert result["errors"] == 1
+
+
+def test_update_metadata_for_item_setup_failure_returns_error(db_session):
+    """Failing get_payloads for the whole item is correctly reported as an error."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=item,
+        content="Test chunk content",
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+
+    with patch(
+        "memory.workers.tasks.maintenance.qdrant.get_payloads",
+        side_effect=RuntimeError("qdrant unreachable"),
+    ):
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    assert result["status"] == "error"
+    assert result["errors"] == 1
+    assert "qdrant unreachable" in result["error"]
+
+
 @pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
 def test_update_metadata_for_source_items_success(db_session, item_type):
     """Test updating metadata for all items of a given type."""

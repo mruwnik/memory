@@ -451,39 +451,62 @@ def update_metadata_for_item(item_id: str, item_type: str):
 
         collection = item.modality
 
+        # Setup is genuinely all-or-nothing: if get_payloads / as_payload
+        # fails we have no work to do for this item. Per-chunk failures
+        # below get their own try/except so a single network blip on one
+        # chunk doesn't strand the rest with stale payloads.
         try:
             current_payloads = qdrant.get_payloads(client, collection, chunk_ids)
-
-            # Get new metadata from source item
-            # Note: as_payload() triggers a lazy load of item.people. For single-item
-            # operations this N+1 cost is acceptable. Bulk operations should eager-load.
+            # Note: as_payload() triggers a lazy load of item.people. For
+            # single-item operations this N+1 cost is acceptable. Bulk
+            # operations should eager-load.
             new_metadata: dict[str, Any] = dict(item.as_payload())
             new_tags: set[str] = set(new_metadata.get("tags", []))
+        except Exception as e:
+            logger.error(f"Error preparing metadata update for item {item.id}: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "updated_chunks": 0,
+                "errors": 1,
+            }
 
-            for chunk_id in chunk_ids:
-                if chunk_id not in current_payloads:
-                    logger.warning(
-                        f"Chunk {chunk_id} not found in Qdrant collection {collection}"
-                    )
-                    continue
+        for chunk_id in chunk_ids:
+            if chunk_id not in current_payloads:
+                logger.warning(
+                    f"Chunk {chunk_id} not found in Qdrant collection {collection}"
+                )
+                continue
 
-                current_payload = current_payloads[chunk_id]
-                current_tags: set[str] = set(current_payload.get("tags", []))
+            current_payload = current_payloads[chunk_id]
+            current_tags: set[str] = set(current_payload.get("tags", []))
 
-                # Merge tags (combine existing and new tags)
-                merged_tags: list[str] = list(current_tags | new_tags)
-                updated_metadata: dict[str, Any] = dict(new_metadata)
-                updated_metadata["tags"] = merged_tags
+            # Merge tags (combine existing and new tags)
+            merged_tags: list[str] = list(current_tags | new_tags)
+            updated_metadata: dict[str, Any] = dict(new_metadata)
+            updated_metadata["tags"] = merged_tags
 
-                if _payloads_equal(current_payload, updated_metadata):
-                    continue
+            if _payloads_equal(current_payload, updated_metadata):
+                continue
 
+            # Per-chunk error handling: a transient failure on one chunk
+            # MUST NOT abort the loop. Otherwise items end up with mixed-
+            # state metadata — half the chunks have the new payload, half
+            # have stale ``project_id`` / ``sensitivity`` — which is an
+            # access-control consistency bug when sources get reprojected.
+            # Each error counts as one toward the returned ``errors`` so
+            # the dashboard sees the true failure count, not just "1".
+            try:
                 qdrant.set_payload(client, collection, chunk_id, updated_metadata)
                 updated_chunks += 1
-
-        except Exception as e:
-            logger.error(f"Error updating metadata for item {item.id}: {e}")
-            errors += 1
+            except Exception as e:
+                logger.error(
+                    "Failed to update chunk %s of item %s: %s",
+                    chunk_id,
+                    item.id,
+                    e,
+                )
+                errors += 1
 
     return {"status": "success", "updated_chunks": updated_chunks, "errors": errors}
 
