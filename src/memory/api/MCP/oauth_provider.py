@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -43,6 +45,33 @@ def token_id(token: str) -> str:
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
+
+
+def compute_pkce_challenge(code_verifier: str) -> str:
+    """Compute the S256 PKCE code_challenge from a code_verifier.
+
+    Per RFC 7636 §4.2, the S256 transformation is::
+
+        code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
+
+    where the base64url encoding has trailing ``=`` padding stripped.
+    """
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def verify_pkce(code_verifier: str, expected_challenge: str) -> bool:
+    """Constant-time PKCE S256 verification.
+
+    Returns True iff ``compute_pkce_challenge(code_verifier) == expected_challenge``
+    using ``hmac.compare_digest`` to avoid timing oracles. Both sides being
+    fixed-length base64url SHA256 outputs makes the timing-channel risk small,
+    but compare_digest is the cheap right answer.
+    """
+    if not expected_challenge or not code_verifier:
+        return False
+    actual = compute_pkce_challenge(code_verifier)
+    return hmac.compare_digest(actual, expected_challenge)
 
 
 def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
@@ -366,6 +395,20 @@ class SimpleOAuthProvider(OAuthProvider):
             )
             raise ValueError(f"Invalid redirect_uri: {redirect_uri_str}")
 
+        # PKCE is mandatory (RFC 7636; OAuth 2.1). Reject empty/missing
+        # code_challenge here so a malicious client can't strip PKCE by
+        # submitting an empty value at /authorize and later exchanging the
+        # auth code with no verifier. Upstream TokenHandler does compare
+        # SHA256(code_verifier) to code_challenge, but its Pydantic schema
+        # accepts an empty string, and an empty stored code_challenge would
+        # only fail-closed by accident (no SHA256 output equals ""). We
+        # fail-closed by intent instead.
+        code_challenge = (params.code_challenge or "").strip()
+        if not code_challenge:
+            raise ValueError(
+                "Missing PKCE code_challenge — PKCE is required (RFC 7636)"
+            )
+
         # Determine which scopes to grant
         requested_scopes = getattr(params, "scopes", None) or []
 
@@ -406,7 +449,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     params.redirect_uri_provided_explicitly
                 ).lower()
                 == "true",
-                code_challenge=params.code_challenge or "",
+                code_challenge=code_challenge,
                 scopes=requested_scopes,
                 expires_at=create_expiration(600),  # 10 min expiry
             )
@@ -554,6 +597,23 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 raise ValueError("Authorization code expired")
 
+            # RFC 7636 PKCE defence-in-depth. The upstream MCP TokenHandler
+            # already verifies SHA256(code_verifier) == code_challenge before
+            # this method is called, but we fail-closed on an empty stored
+            # code_challenge here too: if we ever load an AuthorizationCode
+            # with an empty challenge (e.g. legacy row, future library
+            # change), do NOT exchange it. authorize() now refuses to store
+            # an empty challenge in the first place; this check guards the
+            # bottom of the funnel.
+            if not (authorization_code.code_challenge or "").strip():
+                logger.warning(
+                    "Authorization code id=%s has empty code_challenge — refusing exchange",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError(
+                    "Authorization code is missing PKCE code_challenge"
+                )
+
             # Extract data needed for token creation
             auth_code_id = auth_code.id
             user_id = auth_code.user_id
@@ -566,13 +626,17 @@ class SimpleOAuthProvider(OAuthProvider):
             # UserSession references it for client_id/scopes lookup in
             # load_access_token() — clearing the code is enough to prevent
             # replay. (CWE-367 single-use enforcement.)
+            #
+            # We also clear ``code_challenge`` so the row can't be re-used as
+            # a PKCE oracle if a new ``code`` is ever forged into this id by
+            # a future bug — defence in depth, cheap to do.
             consumed = session.execute(
                 update(OAuthState)
                 .where(
                     OAuthState.id == auth_code_id,
                     OAuthState.code == authorization_code.code,
                 )
-                .values(code=None)
+                .values(code=None, code_challenge=None)
                 .returning(OAuthState.id)
             ).scalar_one_or_none()
             if consumed is None:

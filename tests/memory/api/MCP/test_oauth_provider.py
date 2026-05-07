@@ -650,7 +650,7 @@ async def test_exchange_authorization_code_rejects_expired_hermetic():
         redirect_uri=AnyUrl("http://localhost/cb"),
         redirect_uri_provided_explicitly=True,
         scopes=["read"],
-        code_challenge="",
+        code_challenge="ch_test",
         expires_at=(now_naive_utc() - timedelta(minutes=5)).timestamp(),
     )
 
@@ -694,7 +694,7 @@ async def test_exchange_authorization_code_race_loser_rejected_hermetic():
         redirect_uri=AnyUrl("http://localhost/cb"),
         redirect_uri_provided_explicitly=True,
         scopes=["read"],
-        code_challenge="",
+        code_challenge="ch_test",
         expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
     )
 
@@ -796,7 +796,7 @@ async def test_exchange_authorization_code_rejects_expired_code(db_session):
         redirect_uri=AnyUrl("http://localhost/callback"),
         redirect_uri_provided_explicitly=True,
         scopes=["read"],
-        code_challenge="",
+        code_challenge="ch_test",
         expires_at=(now_naive_utc() - timedelta(minutes=5)).timestamp(),
     )
 
@@ -841,7 +841,7 @@ async def test_exchange_authorization_code_atomic_single_use(db_session):
         redirect_uri=AnyUrl("http://localhost/callback"),
         redirect_uri_provided_explicitly=True,
         scopes=["read"],
-        code_challenge="",
+        code_challenge="ch_test",
         expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
     )
 
@@ -853,6 +853,188 @@ async def test_exchange_authorization_code_atomic_single_use(db_session):
     # the first exchange). Either way: not a successful token.
     with pytest.raises(ValueError):
         await provider.exchange_authorization_code(client, auth_code)
+
+
+# ====== PKCE enforcement (RFC 7636) ======
+
+
+def test_compute_pkce_challenge_matches_rfc7636_test_vector():
+    """RFC 7636 Appendix B test vector for S256."""
+    from memory.api.MCP.oauth_provider import compute_pkce_challenge
+
+    # From RFC 7636 §4.2 / Appendix B
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    expected = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+    assert compute_pkce_challenge(verifier) == expected
+
+
+def test_verify_pkce_constant_time_compare():
+    """verify_pkce returns True for matching pair, False otherwise."""
+    from memory.api.MCP.oauth_provider import (
+        compute_pkce_challenge,
+        verify_pkce,
+    )
+
+    verifier = "a" * 64
+    challenge = compute_pkce_challenge(verifier)
+
+    assert verify_pkce(verifier, challenge) is True
+    assert verify_pkce(verifier, challenge + "x") is False
+    assert verify_pkce(verifier + "x", challenge) is False
+    # Empty inputs always fail closed
+    assert verify_pkce("", challenge) is False
+    assert verify_pkce(verifier, "") is False
+
+
+@pytest.mark.asyncio
+async def test_authorize_rejects_empty_code_challenge():
+    """RFC 7636 / OAuth 2.1: authorize() must require non-empty PKCE challenge."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationParams
+    from pydantic import AnyUrl
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+
+    # Empty code_challenge — must be rejected so a public client can't
+    # silently strip PKCE binding.
+    params_empty = AuthorizationParams(
+        state="state-xyz",
+        scopes=["read"],
+        code_challenge="",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+    )
+    with pytest.raises(ValueError, match="PKCE"):
+        await provider.authorize(client, params_empty)
+
+    # Whitespace-only — same fail-closed behaviour.
+    params_ws = AuthorizationParams(
+        state="state-xyz",
+        scopes=["read"],
+        code_challenge="   ",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+    )
+    with pytest.raises(ValueError, match="PKCE"):
+        await provider.authorize(client, params_ws)
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_rejects_empty_code_challenge(db_session):
+    """Defense-in-depth: an AuthorizationCode without a code_challenge must not exchange.
+
+    Belt-and-suspenders: upstream TokenHandler should already verify
+    SHA256(code_verifier) == code_challenge before this point, but if the
+    challenge is empty no verifier could have produced it (SHA256 base64url
+    output is never empty), so any code arriving with empty challenge is
+    suspect — fail closed regardless of upstream.
+    """
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+    from pydantic import AnyUrl
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    state = OAuthState(
+        state="empty-challenge-state",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="",  # legacy / unsafe row
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(minutes=5),
+        code="code_no_pkce",
+        user_id=user.id,
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    auth_code = AuthorizationCode(
+        code="code_no_pkce",
+        client_id="test-client",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="",  # the gap
+        expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
+    )
+
+    with pytest.raises(ValueError, match="PKCE"):
+        await provider.exchange_authorization_code(client, auth_code)
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_clears_code_challenge_on_consume(db_session):
+    """Single-use defence: after exchange, code_challenge must be cleared too.
+
+    If a future bug let a stale OAuthState row's code_challenge be used as a
+    PKCE oracle for a forged code, we'd be exposed. Clearing it on consume
+    eliminates that surface.
+    """
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+    from pydantic import AnyUrl
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    state = OAuthState(
+        state="clear-challenge",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="ch_test_value",
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(minutes=5),
+        code="code_clears_challenge",
+        user_id=user.id,
+    )
+    db_session.add(state)
+    db_session.commit()
+    state_id = state.id
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    auth_code = AuthorizationCode(
+        code="code_clears_challenge",
+        client_id="test-client",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="ch_test_value",
+        expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
+    )
+
+    await provider.exchange_authorization_code(client, auth_code)
+
+    # Re-load the row and confirm both the code AND the code_challenge are gone.
+    db_session.expire_all()
+    row = db_session.get(OAuthState, state_id)
+    assert row is not None
+    assert row.code is None, "code must be cleared on consume"
+    assert row.code_challenge is None, (
+        "code_challenge must be cleared on consume to avoid replay-into-stale-row"
+    )
 
 
 def test_attribute_read_after_commit_does_not_autobegin(db_session):
