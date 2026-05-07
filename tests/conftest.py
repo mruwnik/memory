@@ -12,8 +12,9 @@ import anthropic
 import openai
 import pytest
 import qdrant_client
+import qdrant_client.models as qdrant_models
 import voyageai
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
@@ -56,13 +57,71 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_slow)
 
 
+class _MockRedisPipeline:
+    """No-op pipeline that delegates to the underlying mock."""
+
+    def __init__(self, client: "MockRedis"):
+        self._client = client
+        self._results: list = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def __getattr__(self, name):
+        # Buffer operations and return self to support method chaining; on
+        # execute() we return the recorded results.
+        method = getattr(self._client, name, None)
+        if method is None:
+            raise AttributeError(name)
+
+        def wrapper(*args, **kwargs):
+            self._results.append(method(*args, **kwargs))
+            return self
+
+        return wrapper
+
+    def execute(self):
+        results = self._results
+        self._results = []
+        return results
+
+
 class MockRedis:
     """In-memory mock of Redis for testing."""
 
     _shared_data: dict = {}  # Shared across instances for test isolation
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        # Accept and ignore real-Redis kwargs (host, port, connection_pool, etc.)
         pass
+
+    def ping(self):
+        return True
+
+    def info(self, *args, **kwargs):
+        return {}
+
+    def keys(self, pattern: str = "*"):
+        return list(self.scan_iter(pattern))
+
+    def expire(self, key: str, seconds: int) -> int:
+        return 1 if key in self._data else 0
+
+    def ttl(self, key: str) -> int:
+        return -1 if key in self._data else -2
+
+    def incr(self, key: str, amount: int = 1) -> int:
+        current = int(self._data.get(key, 0))
+        current += amount
+        self._data[key] = current
+        return current
+
+    def pipeline(self, *args, **kwargs):
+        # Simple no-op pipeline that just executes commands directly.
+        return _MockRedisPipeline(self)
 
     @property
     def _data(self):
@@ -104,6 +163,28 @@ class MockRedis:
         for key in self._data.keys():
             if fnmatch.fnmatch(key, pattern):
                 yield key
+
+    def eval(self, script: str, numkeys: int, *args):
+        """Minimal Lua-script emulation for the CAS-delete and CAS-extend
+        patterns used by lock-release helpers. Parses the script text for
+        the operation keyword rather than running real Lua."""
+        keys = args[:numkeys]
+        argv = args[numkeys:]
+        key = keys[0]
+        expected_value = argv[0]
+        current = self._data.get(key)
+        if current is None or str(current) != str(expected_value):
+            return 0
+        # Distinguish del vs expire/pexpire by inspecting the script body
+        s = script.lower()
+        if "del" in s and "expire" not in s:
+            del self._data[key]
+            return 1
+        if "expire" in s or "pexpire" in s:
+            # TTL is a no-op in the mock
+            return 1
+        # Unknown script — be conservative and return 0
+        return 0
 
     @classmethod
     def from_url(cls, url: str):
@@ -229,9 +310,11 @@ def test_db():
     """
     from memory.common.db import connection as db_connection
 
-    # Use a fixed name for session-scoped DB (with worker suffix for xdist)
+    # Unique DB per pytest invocation (PID-suffixed) so concurrent runs don't
+    # drop each other's databases via the create_test_database cleanup. Also
+    # carries the xdist worker id for parallel runs within a single invocation.
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
-    test_db_name = f"test_memory_session_{worker_id}"
+    test_db_name = f"test_memory_session_{worker_id}_{os.getpid()}"
 
     # Create test database
     try:
@@ -258,63 +341,82 @@ def test_db():
 
 @pytest.fixture(scope="session")
 def db_engine(test_db):
+    """Create a SQLAlchemy engine for the test DB (session-scoped).
+
+    Uses NullPool so each test connection is closed for real (not returned to a
+    pool). This matters with the SAVEPOINT-rollback pattern in db_session: if a
+    test's inner make_session() leaves the connection in "idle in transaction
+    (aborted)" state, a pooled connection would carry that bad state into the
+    next test and eventually deadlock on row locks.
     """
-    Create a SQLAlchemy engine connected to the test database (session-scoped).
-    """
-    engine = create_engine(test_db)
+    from sqlalchemy.pool import NullPool
+
+    engine = create_engine(test_db, poolclass=NullPool)
     yield engine
     engine.dispose()
 
 
-# Cache table list for faster truncation (populated once per session)
-_TABLES_TO_TRUNCATE: list[str] | None = None
-
-
-def get_tables_to_truncate(conn) -> list[str]:
-    """Get list of tables to truncate, cached for performance."""
-    global _TABLES_TO_TRUNCATE
-    if _TABLES_TO_TRUNCATE is None:
-        result = conn.execute(
-            text("""
-                SELECT tablename FROM pg_tables
-                WHERE schemaname = 'public'
-                AND tablename != 'alembic_version'
-            """)
-        )
-        _TABLES_TO_TRUNCATE = [row[0] for row in result]
-    return _TABLES_TO_TRUNCATE
-
-
 @pytest.fixture
 def db_session(db_engine):
-    """
-    Create a new database session for a test.
+    """Create a session for a test, with isolation via transaction rollback.
 
-    After the test completes, all tables are truncated to ensure isolation.
-    This is much faster than creating a new database for each test.
+    Wraps the test in an outer transaction; test code's session.commit() lands
+    on a SAVEPOINT (begin_nested) so commits don't escape. The connection
+    module's session factory is redirected to the same connection so that code
+    paths using make_session() share the test transaction. Teardown is
+    effectively free, vs ~2s for TRUNCATE-all-60-tables.
     """
+    from memory.common.db import connection as db_connection
 
-    SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    connection = db_engine.connect()
+    transaction = connection.begin()
+    SessionLocal = sessionmaker(bind=connection, autocommit=False, autoflush=False)
     session = SessionLocal()
+
+    nested = connection.begin_nested()
+
+    # Listen on the sessionmaker so the savepoint restarts after *any*
+    # session bound to this connection ends a transaction — including inner
+    # sessions opened by production code via make_session(). Without this,
+    # the inner commit consumes the savepoint and subsequent statements on
+    # the connection fail with "nested transaction already deassociated".
+    #
+    # Only restart when the outermost SAVEPOINT-level transaction ends, so
+    # we don't recursively restart while production code is mid-flush.
+    @event.listens_for(session, "after_transaction_end")
+    def restart_savepoint(sess, trans):
+        nonlocal nested
+        if not nested.is_active:
+            try:
+                nested = connection.begin_nested()
+            except Exception:
+                pass
+
+    saved_factory = db_connection._session_factory
+    saved_engine = db_connection._engine
+    saved_scoped = db_connection._scoped_session
+    db_connection._session_factory = SessionLocal
+    db_connection._engine = None
+    db_connection._scoped_session = None
 
     try:
         yield session
     finally:
-        session.rollback()
-        session.close()
-
-        # Truncate all tables for test isolation (faster than checking which are non-empty)
-        with db_engine.connect() as conn:
-            tables = get_tables_to_truncate(conn)
-            if tables:
-                # Batch truncate all tables in one statement
-                conn.execute(text("SET session_replication_role = 'replica'"))
-                table_list = ", ".join(f'"{t}"' for t in tables)
-                conn.execute(
-                    text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE")
-                )
-                conn.execute(text("SET session_replication_role = 'origin'"))
-                conn.commit()
+        db_connection._session_factory = saved_factory
+        db_connection._engine = saved_engine
+        db_connection._scoped_session = saved_scoped
+        try:
+            session.close()
+        except Exception:
+            pass
+        try:
+            if transaction.is_active:
+                transaction.rollback()
+        except Exception:
+            # Connection may already be in an unrecoverable state if a savepoint
+            # was deassociated; closing still releases it.
+            pass
+        connection.close()
 
 
 # =============================================================================
@@ -496,31 +598,136 @@ def mock_file_storage(tmp_path: Path):
         yield
 
 
+class _ResilientQdrantContainer:
+    """Wraps a QdrantContainer and lazily (re)starts the underlying Docker
+    container if it dies between tests. Long test runs were hitting transient
+    container failures that cascaded into 200+ setup errors otherwise."""
+
+    def __init__(self):
+        self._container: QdrantContainer | None = None
+        self._client = None
+
+    def _start(self):
+        self._container = QdrantContainer()
+        self._container.__enter__()
+        self._client = self._container.get_client()
+        from memory.common.collections import ALL_COLLECTIONS
+        from memory.common.qdrant import ensure_collection_exists
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Wipe any pre-existing collections left from a prior container life.
+        for col in self._client.get_collections().collections:
+            self._client.delete_collection(col.name)
+
+        def _init(name_params):
+            name, params = name_params
+            ensure_collection_exists(
+                self._client,
+                collection_name=name,
+                dimension=params["dimension"],
+                distance=params.get("distance", "Cosine"),
+                on_disk=params.get("on_disk", True),
+                shards=params.get("shards", 1),
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(_init, ALL_COLLECTIONS.items()))
+
+    def get_client(self):
+        if self._client is None:
+            self._start()
+        else:
+            try:
+                self._client.get_collections()
+            except Exception:
+                # Container died — tear down and rebuild.
+                try:
+                    if self._container is not None:
+                        self._container.__exit__(None, None, None)
+                except Exception:
+                    pass
+                self._container = None
+                self._client = None
+                self._start()
+        return self._client
+
+    def stop(self):
+        if self._container is not None:
+            try:
+                self._container.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._container = None
+            self._client = None
+
+
 @pytest.fixture(scope="session")
 def qdrant_container():
-    """Session-scoped Qdrant container - started once per test session.
+    """Session-scoped Qdrant container with auto-restart on death."""
+    container = _ResilientQdrantContainer()
+    yield container
+    container.stop()
 
-    This avoids the ~2s overhead of starting a new Docker container per test.
-    """
-    with QdrantContainer() as container:
-        yield container
+
+@pytest.fixture(scope="session")
+def _qdrant_initialized(qdrant_container):
+    """Initialize collections once per session — recreating ~17 collections
+    per test was costing 9–20 s of setup time per qdrant-using test."""
+    return qdrant_container.get_client()
+
+
+def _ensure_qdrant_alive(client) -> bool:
+    """Quick liveness probe. Returns False if the qdrant container is gone."""
+    try:
+        client.get_collections()
+        return True
+    except Exception:
+        return False
 
 
 @pytest.fixture
 def qdrant(qdrant_container):
-    """Function-scoped Qdrant client that cleans collections between tests.
+    """Function-scoped Qdrant client. Collections persist across tests; we
+    just clear points between tests for isolation.
 
-    Uses the session-scoped container but ensures test isolation by
-    deleting and recreating all collections for each test.
+    Calls back into ``qdrant_container.get_client()`` so that a container
+    that died between tests is rebuilt (collections re-initialized) before
+    the test sees it.
     """
     client = qdrant_container.get_client()
 
-    # Clean up any existing collections from previous tests
     for collection in client.get_collections().collections:
-        client.delete_collection(collection.name)
+        try:
+            info = client.get_collection(collection.name)
+        except Exception:
+            continue  # transient; will be re-checked next test
+        if info.points_count == 0:
+            continue
+        # Capped scroll: gather point IDs in batches, delete in batches.
+        offset = None
+        while True:
+            try:
+                points, offset = client.scroll(
+                    collection_name=collection.name,
+                    limit=1024,
+                    offset=offset,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+            except Exception:
+                break
+            if not points:
+                break
+            client.delete(
+                collection_name=collection.name,
+                points_selector=qdrant_models.PointIdsList(
+                    points=[p.id for p in points]
+                ),
+            )
+            if offset is None:
+                break
 
     with patch.object(qdrant_client, "QdrantClient", return_value=client):
-        initialize_collections(client)
         yield client
 
 
@@ -530,7 +737,7 @@ def mock_voyage_client():
         return Mock(embeddings=[[0.1] * 1024] * len(chunks))
 
     real_client = voyageai.Client  # type: ignore[reportPrivateImportUsage]
-    with patch.object(voyageai, "Client", autospec=True) as mock_client:
+    with patch.object(voyageai, "Client") as mock_client:
         client = mock_client()
         client.real_client = real_client
         client.embed = embeder
@@ -553,7 +760,7 @@ def mock_api_keys():
 
 @pytest.fixture(autouse=True)
 def mock_openai_client():
-    with patch.object(openai, "OpenAI", autospec=True) as mock_client:
+    with patch.object(openai, "OpenAI") as mock_client:
         client = mock_client()
         client.chat = Mock()
 
@@ -620,7 +827,7 @@ def mock_openai_client():
 def mock_anthropic_client():
     from unittest.mock import AsyncMock
 
-    with patch.object(anthropic, "Anthropic", autospec=True) as mock_client:
+    with patch.object(anthropic, "Anthropic") as mock_client:
         client = mock_client()
         client.messages = Mock()
 
@@ -712,6 +919,64 @@ def mock_redis():
 @pytest.fixture(autouse=True)
 def mock_discord_client():
     with patch.object(settings, "DISCORD_NOTIFICATIONS_ENABLED", False):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _stub_ssrf_validation():
+    """Stub validate_public_url so tests don't hit real DNS resolution.
+
+    Production blocks non-public IPs; in tests every URL we use is fictitious
+    so the check would always reject — turn it into a no-op. Tests that
+    specifically want to verify SSRF rejection patch the function themselves
+    at their own call site (which takes precedence over this autouse stub).
+    """
+    import importlib
+    from memory.common import ssrf
+
+    noop = lambda url: None
+    # Patch every module that imports it by-name so the binding inside that
+    # module sees the no-op (`from memory.common.ssrf import validate_public_url`
+    # is the common pattern).
+    targets = [
+        (ssrf, "validate_public_url"),
+    ]
+    for module_name in (
+        "memory.api.article_feeds",
+        "memory.workers.tasks.blogs",
+    ):
+        try:
+            mod = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if hasattr(mod, "validate_public_url"):
+            targets.append((mod, "validate_public_url"))
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for mod, attr in targets:
+            stack.enter_context(patch.object(mod, attr, noop))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fast_bcrypt():
+    """Drop bcrypt cost factor from 12 (production) to 4 (test).
+
+    240ms -> 1ms per hash. The hash output remains a valid $2b$ bcrypt string
+    so the format and verification tests still pass. Real cost-factor behavior
+    is untested, but those bytes-correct properties aren't what test_users
+    is exercising — it's verifying API surface (verify roundtrip, format).
+    """
+    import bcrypt
+
+    real_gensalt = bcrypt.gensalt
+
+    def fast_gensalt(rounds: int = 12, **kwargs):
+        return real_gensalt(rounds=4, **kwargs)
+
+    with patch.object(bcrypt, "gensalt", fast_gensalt):
         yield
 
 

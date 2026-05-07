@@ -21,6 +21,7 @@ def other_user(db_session):
         id=999,
         name="Other User",
         email="other@example.com",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(other)
     db_session.commit()
@@ -114,9 +115,11 @@ def test_list_workspaces_empty_when_no_credentials(client, db_session, user):
 
 
 def test_list_workspaces_excludes_workspaces_without_credentials(
-    client, db_session, user, other_user, slack_app
+    regular_client, db_session, user, other_user, slack_app
 ):
-    """List workspaces doesn't return workspaces the user doesn't have credentials for."""
+    """A non-admin user sees only workspaces they have credentials for. The
+    one workspace created here belongs to other_user, so the calling user's
+    list is empty."""
     # Create workspace with credentials for other user only
     workspace = SlackWorkspace(
         id="T_OTHER",
@@ -134,7 +137,7 @@ def test_list_workspaces_excludes_workspaces_without_credentials(
     db_session.add(other_creds)
     db_session.commit()
 
-    response = client.get("/slack/workspaces")
+    response = regular_client.get("/slack/workspaces")
 
     assert response.status_code == 200
     assert response.json() == []
@@ -367,7 +370,7 @@ def test_update_channel_not_found(client, db_session, user):
 # ====== POST /slack/workspaces/{workspace_id}/sync tests ======
 
 
-@patch("memory.api.slack.app")
+@patch("memory.api.slack.celery_app")
 def test_trigger_sync_success(
     mock_app, client, db_session, user, slack_workspace, slack_credentials
 ):

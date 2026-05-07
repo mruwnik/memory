@@ -474,7 +474,7 @@ def test_discover_feed_rejects_ssrf_url(
 
     response = client.post(
         "/article-feeds/discover",
-        json="http://10.0.0.5/admin",
+        params={"url": "http://10.0.0.5/admin"},
     )
 
     assert response.status_code == 400

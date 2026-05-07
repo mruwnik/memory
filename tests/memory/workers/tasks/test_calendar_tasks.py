@@ -451,7 +451,9 @@ def test_sync_calendar_account_inactive(inactive_account, db_session):
         (30, 2000, False),  # 30min interval, checked 33min ago -> don't skip
     ],
 )
+@patch("memory.workers.tasks.calendar.fetch_caldav_events", return_value=[])
 def test_sync_calendar_account_check_interval(
+    mock_fetch,
     check_interval_minutes,
     seconds_since_check,
     should_skip,
@@ -491,7 +493,8 @@ def test_sync_calendar_account_check_interval(
         assert "status" in result
 
 
-def test_sync_calendar_account_force_full_bypasses_interval(db_session):
+@patch("memory.workers.tasks.calendar.fetch_caldav_events", return_value=[])
+def test_sync_calendar_account_force_full_bypasses_interval(mock_fetch, db_session):
     """Test force_full bypasses check interval."""
     from sqlalchemy import text
 
@@ -543,7 +546,7 @@ def test_sync_calendar_account_incomplete_caldav_credentials(db_session):
     assert "incomplete" in result["error"].lower()
 
 
-@patch("memory.workers.tasks.calendar._fetch_caldav_events")
+@patch("memory.workers.tasks.calendar.fetch_caldav_events")
 @patch("memory.workers.tasks.calendar.sync_calendar_event")
 def test_sync_calendar_account_caldav_success(
     mock_sync_event, mock_fetch, caldav_account, db_session
@@ -604,7 +607,7 @@ def test_sync_calendar_account_google_success(
 
 def test_sync_calendar_account_updates_timestamp(caldav_account, db_session):
     """Test that sync updates last_sync_at timestamp."""
-    with patch("memory.workers.tasks.calendar._fetch_caldav_events") as mock_fetch:
+    with patch("memory.workers.tasks.calendar.fetch_caldav_events") as mock_fetch:
         mock_fetch.return_value = []
 
         assert caldav_account.last_sync_at is None

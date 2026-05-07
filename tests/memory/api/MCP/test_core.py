@@ -150,11 +150,11 @@ def _make_note(db_session, user_id: int, filename: str, content: str = "x"):
     note = Note(
         sha256=filename.encode() + b"\x00" + content.encode(),
         content=content,
-        modality="note",
+        modality="text",
         mime_type="text/markdown",
         size=len(content),
         filename=filename,
-        user_id=user_id,
+        creator_id=user_id,
     )
     db_session.add(note)
     db_session.commit()

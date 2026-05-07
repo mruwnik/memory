@@ -19,7 +19,7 @@ def _make_mock_chunk(source_id: int) -> Chunk:
         embedding_model="test-model",
         vector=[0.1] * 1024,
         item_metadata={"source_id": source_id, "tags": ["test"]},
-        collection_name="note",
+        collection_name="text",
     )
 
 
@@ -119,7 +119,7 @@ def test_sync_note_success(mock_note_data, mock_make_session, qdrant):
         note.content
         == "This is test note content with enough text to be processed and embedded."
     )
-    assert note.modality == "note"
+    assert note.modality == "text"
     assert note.mime_type == "text/markdown"
     assert note.note_type == "observation"
     assert note.confidence_dict == {"observation_accuracy": 0.8}
@@ -193,7 +193,7 @@ def test_sync_note_already_exists(mock_note_data, mock_make_session):
         subject="Existing Note",
         content=mock_note_data["content"],
         sha256=sha256,
-        modality="note",
+        modality="text",
         tags=["existing"],
         mime_type="text/markdown",
         size=len(text.encode("utf-8")),
@@ -230,7 +230,7 @@ def test_sync_note_edit(mock_note_data, mock_make_session):
         subject="Existing Note",
         content=mock_note_data["content"],
         sha256=sha256,
-        modality="note",
+        modality="text",
         tags=["existing"],
         mime_type="text/markdown",
         size=len(text.encode("utf-8")),
@@ -375,7 +375,7 @@ def test_sync_notes_with_existing_notes(
         subject="note1",
         content="Content of note 1",
         sha256=b"existing_hash" + bytes(24),
-        modality="note",
+        modality="text",
         tags=["existing"],
         mime_type="text/markdown",
         size=100,
@@ -489,24 +489,19 @@ def test_sync_notes_recursive_discovery(mock_sync_note, mock_make_session):
 
 
 @patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_handles_file_read_errors(mock_sync_note, mock_make_session):
-    """Test sync_notes handles file read errors gracefully."""
-    # Create a markdown file
+def test_sync_notes_propagates_file_read_errors(mock_sync_note, mock_make_session):
+    """sync_notes does not swallow per-file errors — they propagate so the
+    Celery wrapper can record the failure and retry."""
     notes_dir = pathlib.Path(settings.NOTES_STORAGE_DIR)
     notes_dir.mkdir(parents=True, exist_ok=True)
 
     test_file = notes_dir / "test.md"
     test_file.write_text("Test content")
 
-    # Mock sync_note to raise an exception
     mock_sync_note.delay.side_effect = Exception("File read error")
 
-    # This should not crash the whole operation
-    result = notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-    # Should catch the error and return error status
-    assert result["status"] == "error"
-    assert "File read error" in str(result.get("error", ""))
+    with pytest.raises(Exception, match="File read error"):
+        notes.sync_notes(settings.NOTES_STORAGE_DIR)
 
 
 @patch("memory.workers.tasks.notes.git_command")

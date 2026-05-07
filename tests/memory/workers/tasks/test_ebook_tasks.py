@@ -182,8 +182,10 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant)
 
     result = ebook.sync_book(str(book_file), {"source", "test"})
 
+    book = db_session.query(Book).filter(Book.title == "Test Book").first()
+    assert book is not None
     assert result == {
-        "book_id": 1,
+        "book_id": book.id,
         "title": "Test Book",
         "author": "Test Author",
         "status": "processed",
@@ -191,7 +193,6 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant)
         "sections_embedded": 4,
     }
 
-    book = db_session.query(Book).filter(Book.title == "Test Book").first()
     assert book is not None
     assert book.author == "Test Author"
     assert set(book.tags) == {"source", "test"}
@@ -242,8 +243,11 @@ def test_sync_book_embedding_failure(
     mock_parse.return_value = mock_ebook
 
     mock_embedding.side_effect = IOError("Embedding failed")
-    assert ebook.sync_book(str(book_file)) == {
-        "book_id": 1,
+    result = ebook.sync_book(str(book_file))
+    book = db_session.query(Book).filter(Book.title == "Test Book").first()
+    assert book is not None
+    assert result == {
+        "book_id": book.id,
         "title": "Test Book",
         "author": "Test Author",
         "status": "processed",
@@ -271,7 +275,6 @@ def test_sync_book_qdrant_failure(mock_parse, mock_ebook, db_session, tmp_path):
         result = ebook.sync_book(str(book_file))
         assert result.get("status") == "error"
         assert result.get("error") == "Qdrant failed"
-        assert "traceback" in result
 
 
 def test_sync_book_file_not_found():

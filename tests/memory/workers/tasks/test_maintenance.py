@@ -205,6 +205,7 @@ def test_check_batch(db_session, qdrant):
             content="Test content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=datetime(2025, 1, 1),
         )
         for modality in modalities
@@ -261,6 +262,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
             content="Old content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=old_time,
         )
         for modality in modalities
@@ -276,6 +278,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
             content="Recent content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=now,
         )
         for modality in modalities

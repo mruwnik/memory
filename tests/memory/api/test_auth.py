@@ -26,6 +26,11 @@ from memory.common import settings
         "/authorize/code",
         "/token",
         "/token/refresh",
+        # OAuth Dynamic Client Registration (RFC 7591) and Token Revocation
+        # (RFC 7009) endpoints exposed by the MCP SDK. Clients haven't been
+        # issued credentials at /register time, so they CANNOT authenticate.
+        "/register",
+        "/revoke",
         "/mcp",
         "/mcp/tools",
         "/ui",
@@ -53,10 +58,12 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/healthcheck",
         "/health-secret",
         "/healthxxx",
-        "/register",  # /register entry was removed — must require auth now
-        "/register/finish",
+        # /register and /revoke ARE whitelisted (covered above) — but
+        # prefix-overrun siblings must still be blocked.
         "/registerme",
         "/registers",
+        "/revoked",
+        "/revokeall",
         "/authorize-anything",
         "/tokens",
         "/tokenrevoke",
@@ -77,6 +84,48 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
 )
 def test_is_whitelisted_path_blocks_prefix_overrun(path):
     assert is_whitelisted_path(path) is False
+
+
+# --- AuthenticationMiddleware end-to-end ------------------------------------
+#
+# is_whitelisted_path() is just a helper. The bug we're guarding against is
+# the middleware's dispatch() returning 401 before the handler runs, so we
+# drive the real app + middleware here and assert the request reaches a
+# downstream handler instead of being short-circuited.
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        # OAuth Dynamic Client Registration (RFC 7591). Brand-new MCP
+        # clients have no credentials yet — middleware MUST let this
+        # through or enrollment is impossible.
+        ("POST", "/register"),
+        # OAuth Token Revocation (RFC 7009). Revoking a stolen token
+        # by definition can't require that token to authenticate.
+        ("POST", "/revoke"),
+        # Discovery + flow endpoints, also pre-auth by spec.
+        ("GET", "/.well-known/oauth-authorization-server"),
+        ("GET", "/.well-known/oauth-protected-resource"),
+        ("GET", "/authorize"),
+        ("POST", "/token"),
+    ],
+)
+def test_oauth_public_endpoints_bypass_auth_middleware(
+    client, monkeypatch, method, path
+):
+    """The middleware must not return 401 for unauthenticated OAuth-public paths.
+
+    We don't care what the OAuth handler returns (400/422 for missing params is
+    fine) — only that the middleware passed the request along. A 401 here
+    means the middleware blocked it before the handler ran.
+    """
+    monkeypatch.setattr(settings, "DISABLE_AUTH", False)
+    response = client.request(method, path)
+    assert response.status_code != 401, (
+        f"{method} {path} returned 401 from AuthenticationMiddleware; "
+        f"OAuth-public endpoints must be in WHITELIST. Body: {response.text!r}"
+    )
 
 
 def make_request(query: str) -> Request:

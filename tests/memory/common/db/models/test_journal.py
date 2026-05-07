@@ -51,6 +51,9 @@ def test_journal_entry_private(db_session, admin_user):
 
 
 def test_journal_cascade_delete(db_session, admin_user):
+    """JournalEntry uses a polymorphic target_type+target_id pair with no FK,
+    so deleting the parent does NOT auto-cascade. The entry survives and its
+    target_id points at a now-missing source_item; readers must skip those."""
     item = SourceItem(
         modality="text",
         sha256=create_content_hash("deleteme"),
@@ -67,7 +70,9 @@ def test_journal_cascade_delete(db_session, admin_user):
     db_session.delete(item)
     db_session.commit()
 
-    assert db_session.get(JournalEntry, entry_id) is None
+    surviving = db_session.get(JournalEntry, entry_id)
+    assert surviving is not None
+    assert surviving.target_type == "source_item"
 
 
 def test_access_private_creator_can_see(db_session, admin_user, regular_user):

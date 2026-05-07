@@ -21,7 +21,12 @@ def slack_user(db_session):
     existing = db_session.query(User).filter(User.id == 1).first()
     if existing:
         return existing
-    user = User(id=1, name="Test User", email="test@example.com")
+    user = User(
+        id=1,
+        name="Test User",
+        email="test@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(user)
     db_session.commit()
     return user

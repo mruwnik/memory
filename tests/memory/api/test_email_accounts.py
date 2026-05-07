@@ -195,7 +195,7 @@ def test_create_imap_account_missing_required_fields(
 
     response = client.post("/email-accounts", json=payload)
 
-    assert response.status_code == 500  # App returns 500 for validation errors
+    assert response.status_code == 422
 
 
 # Test create_account - Gmail
@@ -243,7 +243,7 @@ def test_create_gmail_account_without_google_account_id(client, user, db_session
 
     response = client.post("/email-accounts", json=payload)
 
-    assert response.status_code == 500  # App returns 500 for validation errors
+    assert response.status_code == 422
 
 
 def test_create_gmail_account_with_invalid_google_account(client, user, db_session):
@@ -312,7 +312,7 @@ def test_create_account_invalid_smtp_port(client, user, db_session, invalid_port
 
     response = client.post("/email-accounts", json=payload)
 
-    assert response.status_code == 500  # App returns 500 for validation errors
+    assert response.status_code == 422
 
 
 def test_create_account_sets_defaults(client, user, db_session):

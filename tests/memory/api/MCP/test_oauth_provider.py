@@ -160,13 +160,69 @@ async def test_verify_token_combines_user_scopes_with_oauth_scopes(db_session):
 
 
 @pytest.mark.asyncio
+async def test_verify_token_uses_user_scopes_not_oauth_state_scopes(db_session):
+    """OAuth-authenticated users get their admin-configured system scopes,
+    not the narrower scopes the OAuth client requested at registration.
+
+    Regression guard for the bug introduced by PR #76 and reverted later:
+    an admin user (``user.scopes == ["*"]``) authenticating via an MCP client
+    that only requested ``["read"]`` would briefly lose access to every
+    scope-gated tool because verify_token was sourcing scopes from
+    ``OAuthState.scopes`` rather than ``User.scopes``. OAuth scopes gate the
+    handshake; system scopes (admin-set on the user) gate tool visibility.
+    They are distinct concepts and the user has no say in the latter.
+    """
+    user = create_test_user(db_session, scopes=["*"])
+    create_oauth_client(db_session, client_id="some-mcp-client")
+
+    oauth_state = OAuthState(
+        state="state-token",
+        client_id="some-mcp-client",
+        user_id=user.id,
+        # MCP client only asked for read at registration time.
+        scopes=["read"],
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="abc",
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(oauth_state)
+    db_session.commit()
+
+    session = UserSession(
+        user_id=user.id,
+        oauth_state_id=oauth_state.id,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    session_id = str(session.id)
+
+    provider = SimpleOAuthProvider()
+    result = await provider.verify_token(session_id)
+
+    assert result is not None
+    # Admin scope must reach the visibility middleware so admin users see
+    # every tool, even when the OAuth client only requested read.
+    assert "*" in result.scopes
+    # And the OAuth-flow scopes are still present so FastMCP's auth gate
+    # accepts the token.
+    assert "read" in result.scopes
+    assert "write" in result.scopes
+    # client_id still comes from the OAuth state (audit trail).
+    assert result.client_id == "some-mcp-client"
+
+
+@pytest.mark.asyncio
 async def test_verify_token_returns_none_for_expired_session(db_session):
     """Test that verify_token returns None for expired sessions."""
     user = create_test_user(db_session)
 
     session = UserSession(
         user_id=user.id,
-        expires_at=datetime.now() - timedelta(hours=1),
+        # Production compares against naive UTC (now_naive_utc); match that
+        # so the test isn't dependent on the local timezone.
+        expires_at=datetime.utcnow() - timedelta(hours=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -410,14 +466,27 @@ async def test_load_access_token_does_not_grant_user_scopes_to_oauth_session(db_
     """
     user = create_test_user(db_session, scopes=["organizer", "people"])
 
+    # OAuthClientInformation is the FK target for OAuthState.client_id; create it.
+    from memory.common.db.models import OAuthClientInformation
+    from decimal import Decimal
+
+    db_session.add(
+        OAuthClientInformation(
+            client_id="downscoped-client",
+            client_id_issued_at=Decimal(int(datetime.utcnow().timestamp())),
+            redirect_uris=["http://localhost/callback"],
+        )
+    )
+    db_session.flush()
     oauth_state = OAuthState(
         client_id="downscoped-client",
         user_id=user.id,
         scopes=["read"],
         redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=False,
         code_challenge="abc",
-        code_challenge_method="S256",
         state="state-token-2",
+        expires_at=datetime.utcnow() + timedelta(hours=1),
     )
     db_session.add(oauth_state)
     db_session.commit()
@@ -591,6 +660,121 @@ async def test_register_client_inserts_when_client_id_is_new():
 
     fake_session.add.assert_called_once()
     fake_session.commit.assert_called_once()
+
+
+# ====== register_client redirect_uri allowlist (no DB) ======
+
+
+def _fake_session_no_existing_client():
+    """Build a make_session() mock that pretends no row exists for any client_id."""
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.get.return_value = None
+    return fake_session
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        # RFC 8252 §7.3 native-app loopback: OS-assigned ephemeral port.
+        # Claude Code, Claude Desktop, mcp-inspector all do this — the
+        # port changes every connection, so it can't be in any static
+        # allowlist.
+        "http://localhost:57573/callback",
+        "http://127.0.0.1:49152/callback",
+        "http://[::1]:65000/callback",
+        # Bare host (no port) must also still work.
+        "http://localhost/callback",
+        "http://127.0.0.1/cb",
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_client_accepts_loopback_with_any_port(redirect_uri):
+    """Loopback hosts get port-agnostic matching against the allowlist.
+
+    The default allowlist is ``http://localhost,http://127.0.0.1`` (no ports).
+    Native-app OAuth clients per RFC 8252 §7.3 must spawn an ephemeral
+    listener and use it as the redirect URI; the port is unknowable at
+    allowlist-config time. Treat loopback as port-agnostic to support them.
+    """
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+    from mcp.shared.auth import OAuthClientInformationFull
+    from memory.common import settings as common_settings
+
+    provider = SimpleOAuthProvider()
+    payload = OAuthClientInformationFull(
+        client_id="loopback-client",
+        client_secret="s",
+        redirect_uris=cast(list, [redirect_uri]),
+        scope="read",
+    )
+
+    with patch.object(
+        common_settings,
+        "OAUTH_REDIRECT_URI_ALLOWLIST",
+        ["http://localhost", "http://127.0.0.1", "http://[::1]"],
+    ), patch(
+        "memory.api.MCP.oauth_provider.make_session",
+        return_value=_fake_session_no_existing_client(),
+    ):
+        # Must NOT raise — loopback ephemeral ports are part of the
+        # native-app OAuth contract.
+        await provider.register_client(payload)
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        # The original attack the strict-tuple allowlist was designed to
+        # defeat: a hostname that *looks* like localhost but isn't.
+        "http://localhost.evil.com/cb",
+        "http://127.0.0.1.evil.com/cb",
+        # Non-loopback must still require exact port: an attacker who
+        # registered app.example.com:443 must not be able to redirect to
+        # an attacker-controlled port on the same host.
+        "http://app.example.com:8080/cb",
+        # Non-loopback HTTP scheme on an unrelated host.
+        "https://evil.com/cb",
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_client_rejects_non_loopback_or_lookalikes(redirect_uri):
+    """The loopback exception must NOT loosen non-loopback enforcement.
+
+    Allowlist contains: ``http://localhost``, ``http://127.0.0.1``,
+    ``http://app.example.com:443``. Any URI whose origin doesn't exactly
+    match (post-loopback-relaxation) must still be rejected.
+    """
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import RegistrationError
+    from memory.common import settings as common_settings
+
+    provider = SimpleOAuthProvider()
+    payload = OAuthClientInformationFull(
+        client_id="bad-client",
+        client_secret="s",
+        redirect_uris=cast(list, [redirect_uri]),
+        scope="read",
+    )
+
+    with patch.object(
+        common_settings,
+        "OAUTH_REDIRECT_URI_ALLOWLIST",
+        ["http://localhost", "http://127.0.0.1", "http://app.example.com:443"],
+    ), patch(
+        "memory.api.MCP.oauth_provider.make_session",
+        return_value=_fake_session_no_existing_client(),
+    ):
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(payload)
+
+    # RFC 7591 §3.2.2: invalid_redirect_uri is the right error code, and
+    # the SDK's RegistrationError gets translated to a 400 with the
+    # standard OAuth error-response body. Raising plain ValueError became
+    # an unhandled 500.
+    assert exc_info.value.error == "invalid_redirect_uri"
 
 
 # ====== Authorization-code expiry — hermetic (no DB) ======

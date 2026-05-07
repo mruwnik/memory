@@ -1,5 +1,6 @@
 import hashlib
 import itertools
+import os
 from datetime import datetime
 from unittest.mock import patch
 
@@ -15,6 +16,14 @@ from memory.common.db.models.source_items import (
 from memory.common.embedding import embed_source_item, embed_text
 from memory.common.content_processing import push_to_qdrant
 from tests.data.contents import SAMPLE_MARKDOWN
+
+# These tests hit the real Voyage API: they need a valid VOYAGE_API_KEY and
+# can hang or rate-limit if run accidentally. Gate the whole module on an
+# explicit env var so --run-slow alone won't trigger them.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("VOYAGE_API_KEY") or os.environ.get("RUN_REAL_API") != "1",
+    reason="Set VOYAGE_API_KEY and RUN_REAL_API=1 to run live Voyage tests",
+)
 
 
 @pytest.fixture

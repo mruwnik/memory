@@ -131,6 +131,7 @@ def test_user(db_session):
     user = User(
         name="Test User",
         email="testuser@example.com",
+        password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(user)
     db_session.commit()
@@ -597,10 +598,8 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
         author="user",
         labels=["bug"],
         assignees=[],
-        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        comment_count=0,
         content_hash="originalhash",
         modality="text",
         mime_type="text/markdown",
@@ -661,6 +660,7 @@ def test_sync_github_repo_success(
 ):
     """Test successful repo sync."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([mock_issue_data])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -687,6 +687,7 @@ def test_sync_github_repo_with_prs(
 ):
     """Test repo sync with both issues and PRs."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([mock_issue_data])
     mock_client.fetch_prs.return_value = iter([mock_pr_data])
     mock_client_class.return_value = mock_client
@@ -758,6 +759,7 @@ def test_sync_github_repo_check_interval(
 
     # Setup mock client for non-skipped cases
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -798,6 +800,7 @@ def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session)
     from sqlalchemy import text
 
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -822,6 +825,7 @@ def test_sync_github_repo_full_sync_for_project_fields(
 ):
     """Test full sync triggered for project fields when never synced before."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client.fetch_project_fields.return_value = None
@@ -843,6 +847,7 @@ def test_sync_github_repo_full_sync_for_project_fields(
 def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_session):
     """Test that sync updates last_sync_at timestamp."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -861,6 +866,7 @@ def test_sync_github_repo_with_labels_filter(
 ):
     """Test sync passes labels filter to client."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -889,6 +895,7 @@ def test_sync_github_repo_with_labels_filter(
 def test_sync_github_repo_issues_only(mock_client_class, github_account, db_session):
     """Test sync with only issues tracking enabled."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -914,6 +921,7 @@ def test_sync_github_repo_issues_only(mock_client_class, github_account, db_sess
 def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session):
     """Test sync with only PRs tracking enabled."""
     mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -941,13 +949,15 @@ def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session
 
 
 @patch("memory.workers.tasks.github.sync_github_repo")
-def test_sync_all_github_repos(mock_sync_repo, db_session):
+def test_sync_all_github_repos(mock_sync_repo, db_session, test_user):
     """Test syncing all active repos."""
     # Create accounts and repos
     account1 = GithubAccount(
+        user_id=test_user.id,
         name="Account 1", auth_type="pat", access_token="token1", active=True
     )
     account2 = GithubAccount(
+        user_id=test_user.id,
         name="Account 2", auth_type="pat", access_token="token2", active=True
     )
     db_session.add_all([account1, account2])
@@ -977,12 +987,14 @@ def test_sync_all_github_repos(mock_sync_repo, db_session):
 
 
 @patch("memory.workers.tasks.github.sync_github_repo")
-def test_sync_all_github_repos_inactive_account(mock_sync_repo, db_session):
+def test_sync_all_github_repos_inactive_account(mock_sync_repo, db_session, test_user):
     """Test that repos with inactive accounts are not synced."""
     active_account = GithubAccount(
+        user_id=test_user.id,
         name="Active", auth_type="pat", access_token="token", active=True
     )
     inactive_account = GithubAccount(
+        user_id=test_user.id,
         name="Inactive", auth_type="pat", access_token="token", active=False
     )
     db_session.add_all([active_account, inactive_account])
@@ -1005,10 +1017,11 @@ def test_sync_all_github_repos_inactive_account(mock_sync_repo, db_session):
     assert result[0]["repo_path"] == "org/repo1"
 
 
-def test_sync_all_github_repos_no_active_repos(db_session):
+def test_sync_all_github_repos_no_active_repos(db_session, test_user):
     """Test sync_all when no active repos exist."""
     # Create only inactive repo
     account = GithubAccount(
+        user_id=test_user.id,
         name="Account", auth_type="pat", access_token="token", active=True
     )
     db_session.add(account)
@@ -1502,7 +1515,6 @@ def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdra
         author="user",
         labels=[],
         assignees=[],
-        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         comment_count=0,
@@ -1609,7 +1621,6 @@ def test_sync_github_item_creates_pr_data_for_existing_pr_without(
         author="user",
         labels=[],
         assignees=[],
-        milestone_number=None,
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         github_updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         comment_count=0,

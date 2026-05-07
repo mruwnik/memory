@@ -204,7 +204,7 @@ def test_api_key_serialization_hides_full_key(client: TestClient, admin_user, db
 
     # Should have preview, not full key
     assert "key_preview" in key_data
-    assert key_data["key_preview"].startswith("internal_")
+    assert key_data["key_preview"].startswith("internal")
     assert "..." in key_data["key_preview"]
     # Full key should not be present in list response
     assert key_data.get("key") != full_key

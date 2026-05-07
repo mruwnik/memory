@@ -51,8 +51,15 @@ def app_client():
 
 
 @pytest.fixture
-def client(app_client, db_session):
-    """Get the test client and configure DB session for each test."""
+def client(app_client, db_session, user):
+    """Get the test client and configure DB session for each test.
+
+    Returns a real DB-backed admin User as the auth user (rather than the
+    plain MagicMock from ``app_client``) so endpoints that touch
+    relationships (e.g., ``user.api_keys``) don't blow up with mock
+    proliferation.
+    """
+    from memory.api.auth import get_current_user
     from memory.common.db.connection import get_session
 
     test_client, app = app_client
@@ -63,15 +70,29 @@ def client(app_client, db_session):
         finally:
             pass
 
+    # `user` is created with id=1 by the fixture; promote it to admin scopes
+    # so the existing tests that rely on full access keep working.
+    user.scopes = ["*"]
+    db_session.flush()
+
+    saved_auth = app.dependency_overrides.get(get_current_user)
     app.dependency_overrides[get_session] = get_test_session
+    app.dependency_overrides[get_current_user] = lambda: user
+
     yield test_client
-    # Only remove the session override, not the auth override
+
     app.dependency_overrides.pop(get_session, None)
+    if saved_auth is not None:
+        app.dependency_overrides[get_current_user] = saved_auth
+    else:
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.fixture
 def user(db_session):
     """Create a test user matching the mock auth user."""
+    from sqlalchemy import text
+
     existing = db_session.query(User).filter(User.id == 1).first()
     if existing:
         return existing
@@ -82,6 +103,12 @@ def user(db_session):
         password_hash="bcrypt_hash_placeholder",
     )
     db_session.add(test_user)
+    db_session.commit()
+    # Advance the users.id sequence past the explicit id=1 so subsequent
+    # auto-id inserts in the same test don't collide.
+    db_session.execute(
+        text("SELECT setval(pg_get_serial_sequence('users', 'id'), 1000, false)")
+    )
     db_session.commit()
     return test_user
 

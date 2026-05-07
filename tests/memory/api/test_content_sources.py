@@ -118,7 +118,7 @@ def test_upload_report_admin_can_set_allow_scripts(
         mock_settings.REPORT_STORAGE_DIR = tmp_path
 
         response = client.post(
-            "/content-sources/reports/upload",
+            "/reports/upload",
             files={"file": ("evil.html", BytesIO(html), "text/html")},
             data={"allow_scripts": "true"},
         )
@@ -138,7 +138,7 @@ def test_upload_report_non_admin_rejected_with_allow_scripts(
         mock_settings.REPORT_STORAGE_DIR = tmp_path
 
         response = regular_client.post(
-            "/content-sources/reports/upload",
+            "/reports/upload",
             files={"file": ("evil.html", BytesIO(html), "text/html")},
             data={"allow_scripts": "true"},
         )
@@ -159,7 +159,7 @@ def test_upload_report_non_admin_default_allow_scripts_false(
         mock_settings.REPORT_STORAGE_DIR = tmp_path
 
         response = regular_client.post(
-            "/content-sources/reports/upload",
+            "/reports/upload",
             files={"file": ("plain.html", BytesIO(html), "text/html")},
         )
 
@@ -178,7 +178,7 @@ def test_upload_report_non_admin_allowed_connect_urls_dropped(
         mock_settings.REPORT_STORAGE_DIR = tmp_path
 
         response = regular_client.post(
-            "/content-sources/reports/upload",
+            "/reports/upload",
             files={"file": ("plain.html", BytesIO(html), "text/html")},
             data={"allowed_connect_urls": "https://attacker.example.com,https://evil.test"},
         )
@@ -199,7 +199,7 @@ def test_upload_report_admin_can_set_allowed_connect_urls(
         mock_settings.REPORT_STORAGE_DIR = tmp_path
 
         response = client.post(
-            "/content-sources/reports/upload",
+            "/reports/upload",
             files={"file": ("plain.html", BytesIO(html), "text/html")},
             data={
                 "allow_scripts": "true",
