@@ -267,6 +267,14 @@ API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 
+# Maximum allowed body size for `/claude/transfer/push` (tar uploads to a
+# Claude container). The endpoint buffers the body in API memory before
+# proxying to the orchestrator, so an unbounded read is a single-request
+# OOM vector. Default 256 MB; raise if you need to push larger artifacts.
+MAX_TRANSFER_PUSH_BYTES = int(
+    os.getenv("MAX_TRANSFER_PUSH_BYTES", 256 * 1024 * 1024)
+)
+
 REGISTER_ENABLED = boolean_env("REGISTER_ENABLED", False)
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 STATIC_DIR = pathlib.Path(

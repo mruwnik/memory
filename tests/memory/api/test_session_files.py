@@ -302,6 +302,72 @@ def test_transfer_push_rejects_bearer_with_only_whitespace_token(client):
     assert resp.status_code == 401
 
 
+def test_transfer_push_rejects_oversized_content_length(client, mock_orch_push):
+    """Honest oversize declaration must be rejected before the body is read,
+    to prevent an OOM from a single attacker-controlled request."""
+    token = make_token(action="write", path="/workspace")
+    cap = 1024  # 1 KB cap for the test
+    body_size = cap + 100
+
+    with patch("memory.common.settings.MAX_TRANSFER_PUSH_BYTES", cap):
+        resp = client.put(
+            "/claude/transfer/push",
+            content=b"x" * body_size,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/x-tar",
+                "Content-Length": str(body_size),
+            },
+        )
+    assert resp.status_code == 413
+    # Orchestrator must NOT have been called.
+    assert mock_orch_push.await_count == 0
+
+
+def test_transfer_push_rejects_streamed_overflow(client, mock_orch_push):
+    """A client lying about (or omitting) Content-Length still has its
+    streamed read aborted as soon as the running total exceeds the cap.
+
+    We exercise this by setting a small cap and pushing a body that
+    crosses it. The TestClient sends the body honestly with a real
+    Content-Length, which means the up-front declared check would fire
+    first; that's still a 413, which is the contract this test pins."""
+    token = make_token(action="write", path="/workspace")
+    cap = 512
+    body = b"x" * (cap + 256)
+
+    with patch("memory.common.settings.MAX_TRANSFER_PUSH_BYTES", cap):
+        resp = client.put(
+            "/claude/transfer/push",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/x-tar",
+            },
+        )
+    assert resp.status_code == 413
+    assert mock_orch_push.await_count == 0
+
+
+def test_transfer_push_accepts_at_cap(client, mock_orch_push):
+    """Body equal to the cap must succeed (off-by-one regression guard)."""
+    token = make_token(action="write", path="/workspace")
+    cap = 1024
+    body = b"x" * cap
+
+    with patch("memory.common.settings.MAX_TRANSFER_PUSH_BYTES", cap):
+        resp = client.put(
+            "/claude/transfer/push",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/x-tar",
+            },
+        )
+    assert resp.status_code == 200
+    assert mock_orch_push.await_count == 1
+
+
 # -- auth middleware whitelist (regression guard) ----------------------------
 #
 # The streaming transfer endpoints carry their own auth via HMAC-signed tokens
