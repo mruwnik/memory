@@ -169,6 +169,7 @@ class TestSearchBm25:
         mock_query = mock_db.query.return_value
 
         # Make the filter chain return empty results
+        # Chain: filter (initial) → filter (source_ids)
         mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
@@ -186,6 +187,7 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
+        # Chain: filter (initial) → filter (observation_types)
         mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
@@ -200,6 +202,7 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
+        # Chain: single filter (initial)
         mock_limit = mock_query.filter.return_value.order_by.return_value.limit
         mock_limit.return_value.all.return_value = []
 
@@ -238,6 +241,7 @@ class TestSearchBm25:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
+        # Chain: single filter (initial)
         mock_query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
             []
         )
@@ -423,15 +427,16 @@ class TestSearchBm25PersonFilter:
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
-        mock_filter = mock_query.filter.return_value
-        mock_join = mock_filter.join.return_value
-        mock_join.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        # Chain: filter (initial) → join → filter (person)
+        mock_after_initial = mock_query.filter.return_value
+        mock_join = mock_after_initial.join.return_value
+        mock_join.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
 
         filters = SearchFilters(person_id=42)
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         # Verify join was called (person_id requires source join)
-        assert mock_filter.join.called
+        assert mock_after_initial.join.called
 
     @patch("memory.api.search.bm25.make_session")
     async def test_person_id_filter_applied(self, mock_make_session):
@@ -440,9 +445,9 @@ class TestSearchBm25PersonFilter:
         mock_make_session.return_value.__enter__.return_value = mock_db
         mock_query = mock_db.query.return_value
 
-        # Setup the chain for source join + person filter
-        mock_base_filter = mock_query.filter.return_value
-        mock_join = mock_base_filter.join.return_value
+        # Setup the chain: filter (initial) → join → filter (person)
+        mock_after_initial = mock_query.filter.return_value
+        mock_join = mock_after_initial.join.return_value
         mock_person_filter = mock_join.filter.return_value
         mock_person_filter.order_by.return_value.limit.return_value.all.return_value = []
 

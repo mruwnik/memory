@@ -4,11 +4,10 @@ title boosting, and source deduplication.
 """
 
 import sys
-
-import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from datetime import datetime, timedelta, timezone
+import pytest
 
 from memory.api.search.constants import (
     POPULARITY_BOOST,
@@ -20,10 +19,10 @@ from memory.api.search.constants import (
     TITLE_MATCH_BOOST,
 )
 from memory.api.search.search import (
-    extract_query_terms,
     apply_query_term_boost,
-    deduplicate_by_source,
     apply_source_boosts,
+    deduplicate_by_source,
+    extract_query_terms,
     fuse_scores_rrf,
 )
 

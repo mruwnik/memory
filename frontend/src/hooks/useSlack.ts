@@ -65,17 +65,6 @@ export interface SlackUser {
 export const useSlack = () => {
   const { apiCall } = useAuth()
 
-  // === OAuth Operations ===
-
-  const getAuthorizeUrl = useCallback(async (): Promise<{ authorization_url: string; state: string }> => {
-    const response = await apiCall('/slack/authorize')
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to get authorization URL')
-    }
-    return response.json()
-  }, [apiCall])
-
   // === Workspace Operations ===
 
   const listWorkspaces = useCallback(async (userId?: number): Promise<SlackWorkspace[]> => {
@@ -159,8 +148,6 @@ export const useSlack = () => {
   }, [apiCall])
 
   return {
-    // OAuth
-    getAuthorizeUrl,
     // Workspaces
     listWorkspaces,
     getWorkspace,

@@ -26,6 +26,10 @@ docker-compose.override.yml
 docker/pgadmin
 tester.py
 
+# Internal team coordination logs — kept locally for ongoing work,
+# never committed (leaks worker codenames, internal task IDs, process state).
+team-logs/
+
 # Secret/credential files - never commit
 *-secret.json
 google-secret.json

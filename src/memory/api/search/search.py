@@ -8,6 +8,8 @@ import math
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
+
+
 from memory.common import extract, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
