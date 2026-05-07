@@ -894,9 +894,7 @@ SLACK_EVENT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 SLACK_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60  # 5 min — Slack's documented window
 SLACK_EVENT_REPLAY_TTL_SECONDS = 6 * 60  # 6 min — slightly larger than skew
 
-# Per-app rate limit (per slack-changes.md §3.3 step 4). No per-IP bucket
-# because the endpoint is fronted by a reverse proxy that handles IP-level
-# limiting upstream.
+# Per-app rate limit (per slack-changes.md §3.3 step 4).
 SLACK_EVENT_PER_APP_BURST = 50
 
 UNIFORM_REJECT_BODY = b"invalid request"
@@ -1056,11 +1054,10 @@ class _InMemoryPipeline:
 _slack_inmem_store = _InMemorySlackStore()
 
 
-def _slack_redis() -> _InMemorySlackStore:
+def _slack_store() -> _InMemorySlackStore:
     """Process-local in-memory store used for replay cache, token buckets,
-    wizard nonces, and the rolling event counter. Named ``_slack_redis`` for
-    historical reasons — no actual Redis is involved. See
-    ``_InMemorySlackStore`` for the deployment scope this assumes.
+    wizard nonces, and the rolling event counter. See ``_InMemorySlackStore``
+    for the deployment scope this assumes.
     """
     return _slack_inmem_store
 
@@ -1330,7 +1327,7 @@ async def slack_events(
       3. Dispatch — url_verification or event_callback fan-out to celery.
     """
     log = _events_logger()
-    redis_client = _slack_redis()
+    redis_client = _slack_store()
 
     # 1. Body size cap (must read body to count, but we cap the read).
     body = await request.body()
@@ -1348,8 +1345,6 @@ async def slack_events(
         return _uniform_401()
 
     # 3. Per-app token bucket (well above Slack's normal delivery rate).
-    # No per-IP bucket: this endpoint is fronted by a reverse proxy
-    # (nginx/cloudflare) which already does IP-level rate limiting.
     app_ok = _check_token_bucket(
         redis_client,
         f"slack_event_app_bucket:{slack_app_id}",
@@ -1545,7 +1540,7 @@ def issue_wizard_nonce(
     # to ~10⁶ candidates can exhaust SHA-256 in well under a second, defeating
     # the H1 binding between this wizard session and Slack's url_verification ping.
     nonce = secrets.token_hex(16)
-    redis_client = _slack_redis()
+    redis_client = _slack_store()
     redis_client.set(
         _wizard_nonce_redis_key(app.id),
         nonce,
@@ -1576,7 +1571,7 @@ def wizard_status(
         .first()
         is not None
     )
-    test_pending = _slack_redis().get(f"slack_wizard_test_token:{app.id}") is not None
+    test_pending = _slack_store().get(f"slack_wizard_test_token:{app.id}") is not None
     return SlackWizardStatus(
         setup_state=app.setup_state,
         has_credentials=has_credentials,
@@ -1612,7 +1607,7 @@ def begin_test_message(
         raise HTTPException(
             status_code=400, detail="token must be at least 8 chars"
         )
-    redis_client = _slack_redis()
+    redis_client = _slack_store()
     redis_client.set(
         f"slack_wizard_test_token:{app.id}",
         token,
@@ -1635,6 +1630,6 @@ def poll_test_message(
     app = get_slack_app_for_authorized_user(db, app_id, user)
     if app.setup_state == "live":
         return SlackTestMessageStatus(status="matched")
-    if _slack_redis().get(f"slack_wizard_test_token:{app.id}") is not None:
+    if _slack_store().get(f"slack_wizard_test_token:{app.id}") is not None:
         return SlackTestMessageStatus(status="waiting")
     return SlackTestMessageStatus(status="expired")
