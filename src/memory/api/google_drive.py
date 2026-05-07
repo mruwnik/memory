@@ -22,10 +22,6 @@ from memory.common.db.models.sources import (
     GoogleOAuthConfig,
 )
 from memory.common.scopes import SCOPE_ADMIN
-from memory.api.access_control_propagation import (
-    access_fields_changed,
-    bump_and_enqueue_propagation,
-)
 from memory.api.auth import (
     assert_project_membership,
     get_current_user,
@@ -728,19 +724,13 @@ def update_folder(
     if updates.exclude_folder_ids is not None:
         folder.exclude_folder_ids = updates.exclude_folder_ids
 
-    needs_propagation = access_fields_changed(
-        folder, updates.project_id, updates.sensitivity
-    )
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
         folder.project_id = updates.project_id
     if updates.sensitivity is not None:
         folder.sensitivity = updates.sensitivity
 
-    if needs_propagation:
-        bump_and_enqueue_propagation(db, folder, "google_folder")
-    else:
-        db.commit()
+    db.commit()
     db.refresh(folder)
 
     return FolderResponse(

@@ -7,10 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, model_validator
 from sqlalchemy.orm import Session
 
-from memory.api.access_control_propagation import (
-    access_fields_changed,
-    bump_and_enqueue_propagation,
-)
 from memory.api.auth import (
     assert_project_membership,
     get_current_user,
@@ -285,19 +281,13 @@ def update_account(
         account.active = updates.active
     if updates.send_enabled is not None:
         account.send_enabled = updates.send_enabled
-    needs_propagation = access_fields_changed(
-        account, updates.project_id, updates.sensitivity
-    )
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
 
-    if needs_propagation:
-        bump_and_enqueue_propagation(db, account, "email_account")
-    else:
-        db.commit()
+    db.commit()
     db.refresh(account)
 
     return account_to_response(account, db)
