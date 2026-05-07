@@ -256,6 +256,8 @@ def sync_website_archive(
                     title=url,
                     active=True,
                 )
+                session.add(feed)
+                session.commit()
 
     # Get archive fetcher for the website
     fetcher = get_archive_fetcher(url)

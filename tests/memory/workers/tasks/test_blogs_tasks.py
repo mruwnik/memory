@@ -370,6 +370,84 @@ def test_sync_website_archive_no_fetcher(mock_get_fetcher, db_session):
 
 
 @patch("memory.workers.tasks.blogs.get_archive_fetcher")
+def test_sync_website_archive_persists_feed_when_add_feed_true(
+    mock_get_fetcher, mock_archive_fetcher, db_session
+):
+    """add_feed=True must register a new ArticleFeed row when none exists.
+
+    Regression test: the `if add_feed` branch previously constructed the feed
+    in memory but never called `session.add()` / `session.commit()`, so the
+    row was discarded when the context manager exited. This is the
+    "register feed for ongoing sync" feature being silently broken.
+    """
+    mock_get_fetcher.return_value = mock_archive_fetcher
+    url = "https://example.com"
+
+    # Sanity: no feed for this URL exists yet.
+    assert (
+        db_session.query(ArticleFeed).filter(ArticleFeed.url == url).first() is None
+    )
+
+    with patch("memory.workers.tasks.blogs.sync_webpage") as mock_sync_webpage:
+        mock_sync_webpage.delay.side_effect = [Mock(id="t-1"), Mock(id="t-2")]
+        blogs.sync_website_archive(url, ["archive"], 50, add_feed=True)
+
+    db_session.expire_all()
+    feed = db_session.query(ArticleFeed).filter(ArticleFeed.url == url).first()
+    assert feed is not None
+    assert feed.url == url
+    assert feed.title == url
+    assert feed.active is True
+
+
+@patch("memory.workers.tasks.blogs.get_archive_fetcher")
+def test_sync_website_archive_does_not_duplicate_existing_feed(
+    mock_get_fetcher, mock_archive_fetcher, db_session
+):
+    """When a feed already exists, add_feed=True must be a no-op for the row."""
+    mock_get_fetcher.return_value = mock_archive_fetcher
+    url = "https://example.com"
+
+    # Pre-existing feed with a custom title — must not be overwritten.
+    existing = ArticleFeed(
+        url=url,
+        title="Pre-existing Feed",
+        active=True,
+        check_interval=60,
+        tags=["pre"],
+    )
+    db_session.add(existing)
+    db_session.commit()
+    existing_id = existing.id
+
+    with patch("memory.workers.tasks.blogs.sync_webpage") as mock_sync_webpage:
+        mock_sync_webpage.delay.side_effect = [Mock(id="t-1"), Mock(id="t-2")]
+        blogs.sync_website_archive(url, ["archive"], 50, add_feed=True)
+
+    feeds = db_session.query(ArticleFeed).filter(ArticleFeed.url == url).all()
+    assert len(feeds) == 1
+    assert feeds[0].id == existing_id
+    assert feeds[0].title == "Pre-existing Feed"
+
+
+@patch("memory.workers.tasks.blogs.get_archive_fetcher")
+def test_sync_website_archive_skips_feed_creation_when_add_feed_false(
+    mock_get_fetcher, mock_archive_fetcher, db_session
+):
+    """add_feed=False must leave ArticleFeed table untouched."""
+    mock_get_fetcher.return_value = mock_archive_fetcher
+    url = "https://example.com"
+
+    with patch("memory.workers.tasks.blogs.sync_webpage") as mock_sync_webpage:
+        mock_sync_webpage.delay.side_effect = [Mock(id="t-1"), Mock(id="t-2")]
+        blogs.sync_website_archive(url, ["archive"], 50, add_feed=False)
+
+    assert (
+        db_session.query(ArticleFeed).filter(ArticleFeed.url == url).first() is None
+    )
+
+
+@patch("memory.workers.tasks.blogs.get_archive_fetcher")
 def test_sync_website_archive_with_existing_articles(mock_get_fetcher, db_session):
     """Test archive sync when some articles already exist."""
     # Create existing blog post
