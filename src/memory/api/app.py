@@ -224,12 +224,16 @@ def redact_validation_errors(errors: list[dict]) -> list[dict]:
         loc = err.get("loc") or ()
         loc_names = {str(part).lower() for part in loc}
         clean = {k: v for k, v in err.items() if k not in {"input", "ctx"}}
-        # Keep ctx only when it doesn't reference the sensitive value
+        # Keep ctx only when it doesn't reference the sensitive value.
+        # Pydantic stores raw Python objects (e.g. ValueError) under ctx;
+        # stringify them so the dict is JSON-serializable.
         if "ctx" in err and not (loc_names & SENSITIVE_VALIDATION_FIELDS):
             ctx = err["ctx"]
             if isinstance(ctx, dict):
                 clean["ctx"] = {
-                    k: v for k, v in ctx.items() if k.lower() not in SENSITIVE_VALIDATION_FIELDS
+                    k: (v if isinstance(v, (str, int, float, bool, type(None))) else str(v))
+                    for k, v in ctx.items()
+                    if k.lower() not in SENSITIVE_VALIDATION_FIELDS
                 }
         redacted.append(clean)
     return redacted

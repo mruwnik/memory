@@ -12,6 +12,7 @@ import {
   type SlackAppResponse,
   useSlackWizard,
 } from '../../../hooks/useSlackWizard'
+import {styles} from '../styles'
 
 interface SlackAppWizardProps {
   initialApp?: SlackAppResponse | null
@@ -270,109 +271,204 @@ export const SlackAppWizard = ({
     return order.indexOf(step)
   }, [step])
 
+  const codeBlock = 'block w-full break-all whitespace-pre-wrap font-mono text-xs bg-slate-100 border border-slate-200 rounded px-3 py-2 text-slate-800'
+
   return (
-    <div className="slack-app-wizard">
-      <h2>Connect a Slack app ({stepIndex + 1}/7)</h2>
-      {error && <div className="error">{error}</div>}
+    <div className="border border-slate-200 rounded-lg p-5 my-4 bg-slate-50/50 space-y-4">
+      <div className="flex items-baseline justify-between">
+        <h4 className="text-base font-semibold text-slate-800">
+          Connect a Slack app
+        </h4>
+        <span className="text-xs text-slate-500">Step {stepIndex + 1} of 7</span>
+      </div>
+
+      <div className="h-1 w-full bg-slate-200 rounded overflow-hidden">
+        <div
+          className="h-full bg-primary transition-all"
+          style={{width: `${((stepIndex + 1) / 7) * 100}%`}}
+        />
+      </div>
+
+      {error && <div className={styles.formError}>{error}</div>}
 
       {step === 'register' && (
-        <div>
-          <p>
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
             Create a new Slack app at{' '}
-            <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">
+            <a
+              className="text-primary hover:underline"
+              href="https://api.slack.com/apps"
+              target="_blank"
+              rel="noreferrer"
+            >
               api.slack.com/apps
             </a>
             , then paste its Client ID below.
           </p>
-          <label>
-            Display name
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Display name</label>
             <input
               type="text"
+              className={styles.formInput}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="My team's Slack"
               disabled={busy}
             />
-          </label>
-          <label>
-            Client ID
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Client ID</label>
             <input
               type="text"
+              className={styles.formInput}
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               placeholder="1234567890.1234567890"
               disabled={busy}
             />
-          </label>
-          <button onClick={handleRegister} disabled={busy}>
-            {busy ? 'Creating…' : 'Create app'}
-          </button>
-          {onCancel && <button onClick={onCancel}>Cancel</button>}
+          </div>
+          <div className={styles.formActions}>
+            {onCancel && (
+              <button
+                type="button"
+                className={styles.btnCancel}
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={handleRegister}
+              disabled={busy}
+            >
+              {busy ? 'Creating…' : 'Create app'}
+            </button>
+          </div>
         </div>
       )}
 
       {step === 'client-secret' && app && (
-        <div>
-          <p>Paste the Client Secret from Slack's "Basic Information" page.</p>
-          <label>
-            Client Secret
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
+            Paste the Client Secret from Slack's "Basic Information" page.
+          </p>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Client Secret</label>
             <input
               type="password"
+              className={styles.formInput}
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               disabled={busy}
             />
-          </label>
-          <button onClick={handleClientSecret} disabled={busy}>
-            {busy ? 'Storing…' : 'Save and continue'}
-          </button>
+          </div>
+          <div className={styles.formActions}>
+            {onCancel && (
+              <button
+                type="button"
+                className={styles.btnCancel}
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={handleClientSecret}
+              disabled={busy}
+            >
+              {busy ? 'Storing…' : 'Save and continue'}
+            </button>
+          </div>
         </div>
       )}
 
       {step === 'oauth' && app && callbackUrl && (
-        <div>
-          <p>
-            On Slack's "OAuth &amp; Permissions" page, set your <strong>Redirect
-            URL</strong> to:
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
+            On Slack's "OAuth &amp; Permissions" page, set your{' '}
+            <strong>Redirect URL</strong> to:
           </p>
-          <pre>{callbackUrl}</pre>
-          <p>Then click below to launch the OAuth flow:</p>
-          <button onClick={handleOpenOAuth} disabled={busy}>
-            Authorize workspace
-          </button>
-          <p className="hint">
+          <code className={codeBlock}>{callbackUrl}</code>
+          <p className="text-sm text-slate-600">
+            Then click below to launch the OAuth flow:
+          </p>
+          <div className={styles.formActions}>
+            {onCancel && (
+              <button
+                type="button"
+                className={styles.btnCancel}
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={handleOpenOAuth}
+              disabled={busy}
+            >
+              Authorize workspace
+            </button>
+          </div>
+          <p className={styles.formHint}>
             We'll advance automatically once you complete OAuth.
           </p>
         </div>
       )}
 
       {step === 'signing-secret' && app && (
-        <div>
-          <p>Paste the Signing Secret from Slack's "Basic Information" page.</p>
-          <label>
-            Signing Secret
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
+            Paste the Signing Secret from Slack's "Basic Information" page.
+          </p>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Signing Secret</label>
             <input
               type="password"
+              className={styles.formInput}
               value={signingSecret}
               onChange={(e) => setSigningSecret(e.target.value)}
               disabled={busy}
             />
-          </label>
-          <button onClick={handleSigningSecret} disabled={busy}>
-            {busy ? 'Storing…' : 'Save and continue'}
-          </button>
+          </div>
+          <div className={styles.formActions}>
+            {onCancel && (
+              <button
+                type="button"
+                className={styles.btnCancel}
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={handleSigningSecret}
+              disabled={busy}
+            >
+              {busy ? 'Storing…' : 'Save and continue'}
+            </button>
+          </div>
         </div>
       )}
 
       {step === 'events-url' && app && eventsUrl && (
-        <div>
-          <p>
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
             On Slack's "Event Subscriptions" page, enable events and set the{' '}
             <strong>Request URL</strong> to:
           </p>
-          <pre>{eventsUrl}</pre>
-          <p>Subscribe to bot events:</p>
-          <ul>
+          <code className={codeBlock}>{eventsUrl}</code>
+          <p className="text-sm font-medium text-slate-700">
+            Subscribe to bot events:
+          </p>
+          <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5 ml-2">
             <li>message.channels</li>
             <li>message.groups</li>
             <li>message.im</li>
@@ -381,36 +477,55 @@ export const SlackAppWizard = ({
             <li>reaction_removed</li>
             <li>channel_created / channel_renamed / channel_archived</li>
           </ul>
-          <p>
+          <p className="text-sm text-slate-600">
             Click "Save Changes" in Slack — we'll detect the verification ping
             and advance automatically.
           </p>
-          <p className="hint">Polling…</p>
+          <p className={styles.formHint}>Polling…</p>
         </div>
       )}
 
       {step === 'test-message' && app && (
-        <div>
-          <p>
+        <div className={styles.form}>
+          <p className="text-sm text-slate-600">
             Almost done. Post the following token in any Slack channel the
             connected user can see:
           </p>
-          <pre>{testToken}</pre>
-          <button onClick={handleBeginTestMessage} disabled={busy}>
-            {busy ? 'Starting…' : 'Start 60-second window'}
-          </button>
-          {testStatus && <p>Status: {testStatus}</p>}
-          <p className="hint">
+          <code className={codeBlock}>{testToken}</code>
+          <div className={styles.formActions}>
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={handleBeginTestMessage}
+              disabled={busy}
+            >
+              {busy ? 'Starting…' : 'Start 60-second window'}
+            </button>
+          </div>
+          {testStatus && (
+            <p className="text-sm text-slate-600">Status: {testStatus}</p>
+          )}
+          <p className={styles.formHint}>
             Once the message arrives, the app moves to "live" automatically.
           </p>
         </div>
       )}
 
       {step === 'done' && app && (
-        <div>
-          <p>Your Slack app is configured and live.</p>
-          <p>State: {app.setup_state}</p>
-          <button onClick={onCancel}>Close</button>
+        <div className={styles.form}>
+          <p className="text-sm text-slate-700">
+            Your Slack app is configured and live.
+          </p>
+          <p className="text-sm text-slate-600">State: {app.setup_state}</p>
+          <div className={styles.formActions}>
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={onCancel}
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
     </div>

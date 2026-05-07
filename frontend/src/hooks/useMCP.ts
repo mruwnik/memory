@@ -85,8 +85,15 @@ const parseJsonRpcResponse = async (response: Response): Promise<any> => {
   const contentType = response.headers.get('content-type')
   if (contentType?.includes('text/event-stream')) {
     return parseServerSentEvents(response)
-  } else {
-    return response.json()
+  }
+  const text = await response.text()
+  if (!text) {
+    throw new Error('MCP server returned an empty response')
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`MCP server returned non-JSON response: ${text.slice(0, 200)}`)
   }
 }
 
@@ -111,14 +118,35 @@ export const useMCP = () => {
     })
 
     if (!response.ok) {
-      throw new Error(`MCP call failed: ${response.statusText}`)
+      let detail = response.statusText
+      try {
+        const body = await response.text()
+        if (body) detail = `${detail}: ${body.slice(0, 200)}`
+      } catch {
+        // body already consumed or unreadable — fall back to statusText
+      }
+      throw new Error(`MCP call ${method} failed (${response.status}) ${detail}`)
     }
 
     const resp = await parseJsonRpcResponse(response)
-    if (resp?.result?.isError) {
-      throw new Error(resp?.result?.content[0].text)
+
+    // JSON-RPC error envelope: {jsonrpc, id, error: {code, message, data}}
+    if (resp?.error) {
+      const {code, message, data} = resp.error
+      throw new Error(`MCP ${method} error${code != null ? ` ${code}` : ''}: ${message ?? data ?? 'unknown error'}`)
     }
-    return resp?.result?.content.map((item: any) => {
+
+    const content = resp?.result?.content
+    if (!Array.isArray(content)) {
+      throw new Error(`MCP ${method} returned malformed response (no result.content)`)
+    }
+
+    if (resp.result.isError) {
+      const text = content[0]?.text ?? 'unknown error'
+      throw new Error(`MCP ${method} tool error: ${text}`)
+    }
+
+    return content.map((item: any) => {
       try {
         return JSON.parse(item.text)
       } catch (e) {

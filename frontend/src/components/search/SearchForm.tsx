@@ -68,7 +68,9 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
         }
-        setupFilters()
+        setupFilters().catch((e) => {
+            console.error('Failed to load search filters:', e)
+        })
     }, [getMetadataSchemas, getTags])
 
     const handleFilterChange = (field: string, value: any) =>

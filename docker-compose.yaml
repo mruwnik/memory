@@ -234,6 +234,15 @@ services:
       ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
       MEMORY_STACK: ${MEMORY_STACK:-prod}
       HOST_STORAGE_DIR: ${PWD}/memory_files
+      # Reverse-proxy trust: which upstream IPs may set X-Forwarded-* headers.
+      # Compose's --env-file only feeds YAML interpolation, not container env;
+      # without explicit pass-through here the Dockerfile default (loopback)
+      # wins and Uvicorn ignores Traefik's X-Forwarded-Proto, so HTTPS clients
+      # get http:// in redirect Location headers and the request fails. Same
+      # story for the SlowAPI bucket-key proxy list. Defaults are loopback so
+      # operators not behind a proxy stay secure-by-default.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1}
+      RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
     secrets: [postgres_password, openai_key, anthropic_key, secrets_encryption_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
