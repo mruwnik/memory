@@ -530,6 +530,69 @@ def test_session_factory_uses_expire_on_commit_false():
     assert factory.kw.get("expire_on_commit") is False
 
 
+# ====== register_client squatting protection (no DB) ======
+
+
+@pytest.mark.asyncio
+async def test_register_client_rejects_duplicate_client_id():
+    """RFC 7591 / RFC 7592: an unauthenticated DCR call must not be able to
+    overwrite an existing client's secret, scope, or redirect_uris by
+    submitting a colliding client_id. Reject with ValueError instead.
+    """
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    provider = SimpleOAuthProvider()
+
+    payload = OAuthClientInformationFull(
+        client_id="public-client-id",
+        client_secret="attacker_secret",
+        redirect_uris=cast(list, ["http://localhost/cb"]),
+        scope="read write admin",
+    )
+
+    fake_existing = MagicMock()  # any non-None marks "already exists"
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.get.return_value = fake_existing
+
+    with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
+        with pytest.raises(ValueError, match="already registered"):
+            await provider.register_client(payload)
+
+    # And critically: no commit happened — the existing row is untouched.
+    fake_session.commit.assert_not_called()
+    fake_session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_register_client_inserts_when_client_id_is_new():
+    """Happy path: a fresh client_id passes through to a normal insert."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    provider = SimpleOAuthProvider()
+
+    payload = OAuthClientInformationFull(
+        client_id="brand-new-client",
+        client_secret="legit_secret",
+        redirect_uris=cast(list, ["http://localhost/cb"]),
+        scope="read",
+    )
+
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.get.return_value = None  # no existing row
+
+    with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
+        await provider.register_client(payload)
+
+    fake_session.add.assert_called_once()
+    fake_session.commit.assert_called_once()
+
+
 # ====== Authorization-code expiry — hermetic (no DB) ======
 
 

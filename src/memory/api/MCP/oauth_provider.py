@@ -322,10 +322,25 @@ class SimpleOAuthProvider(OAuthProvider):
                     )
 
         with make_session() as session:
-            client = session.get(OAuthClientInformation, client_info.client_id)
-            if not client:
-                client = OAuthClientInformation(client_id=client_info.client_id)
+            existing = session.get(OAuthClientInformation, client_info.client_id)
+            if existing is not None:
+                # Squatting protection (RFC 7591 §3 / RFC 7592):
+                # dynamic registration is for *creating* clients. Updates
+                # require a registration access token (which we don't issue
+                # here). Without auth on the update path, anyone who can
+                # guess a client_id (e.g. a publicly-known name like
+                # "cursor-mcp" or "claude-desktop") could overwrite the
+                # legitimate client's secret/scope/redirect_uris and either
+                # DoS the real client or impersonate it.
+                logger.warning(
+                    "Rejected duplicate OAuth client registration for client_id=%r",
+                    client_info.client_id,
+                )
+                raise ValueError(
+                    f"client_id {client_info.client_id!r} is already registered"
+                )
 
+            client = OAuthClientInformation(client_id=client_info.client_id)
             for key, value in client_info.model_dump().items():
                 if key == "redirect_uris":
                     value = [str(uri) for uri in value]
