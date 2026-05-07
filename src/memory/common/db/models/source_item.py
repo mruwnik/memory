@@ -101,22 +101,16 @@ def handle_duplicate_sha256(session, flush_context, instances):
     expunged: list[SourceItem] = []
     items: dict[bytes, SourceItem] = {}
     for item in new_items:
-        try:
-            sha256 = item.sha256
-        except (AttributeError, TypeError) as exc:
-            # An attribute/type error here means a SourceItem subclass has a
-            # broken sha256 descriptor — a real bug we should surface, not
-            # silently skip. Log loudly and continue so the rest of the batch
-            # still processes (matching the old swallow-and-continue behavior
-            # for resilience, but not silently).
-            logger.warning(
-                "handle_duplicate_sha256: could not read sha256 from %r (%s); "
-                "skipping. This usually indicates a SourceItem subclass bug.",
-                type(item).__name__,
-                exc,
-            )
-            continue
-
+        # ``getattr`` with default eliminates the AttributeError path
+        # entirely (a missing ``sha256`` attribute now silently skips,
+        # which is the correct behaviour: rows without a hash can't
+        # collide). Anything else raised from the descriptor (a broken
+        # subclass with custom logic, etc.) propagates and aborts the
+        # flush — those errors *should* be loud, since they signal a
+        # real bug. Parvati flagged in PR #77 that the old try/except
+        # shape mixed both cases; this is the cleaner version they
+        # suggested.
+        sha256 = getattr(item, "sha256", None)
         if sha256 is None:
             continue
 
