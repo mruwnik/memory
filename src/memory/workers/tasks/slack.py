@@ -703,10 +703,11 @@ def merge_slack_message_state(
         existing.edited_ts = edited_ts
         return _maybe_update_content(existing, content)
 
-    # Both have edited_ts. Slack timestamps are fixed-width
-    # "<seconds>.<microseconds>" strings, so lexicographic comparison matches
-    # numeric comparison. Newer wins; equal/older is a no-op.
-    if edited_ts > existing_edited_ts:
+    # Both have edited_ts. Compare numerically — Slack timestamps are
+    # decimal strings ("<seconds>.<microseconds>"); float() avoids the
+    # lexicographic-vs-numeric pitfall if the integer-seconds part ever
+    # gains a digit (year 2286). Newer wins; equal/older is a no-op.
+    if float(edited_ts) > float(existing_edited_ts):
         existing.edited_ts = edited_ts
         return _maybe_update_content(existing, content)
 

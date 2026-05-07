@@ -1320,9 +1320,13 @@ async def slack_events(
                 "body_sha256": body_sha[:16],
             },
         )
-        # Test-message wizard hook (step 6).
-        _check_test_message_token(slack_app_id, envelope)
-        _dispatch_event_callback(envelope, slack_app_id)
+        # Run dispatch first so its team_id/channel_id regex checks gate the
+        # test-message hook too — otherwise an event with a valid HMAC but
+        # malformed identifiers would advance setup_state without ever
+        # exercising the dispatcher's defense-in-depth.
+        dispatch_result = _dispatch_event_callback(envelope, slack_app_id)
+        if not dispatch_result["dispatch"].startswith("rejected"):
+            _check_test_message_token(slack_app_id, envelope)
         return PlainTextResponse(content="", status_code=200)
 
     # Unknown envelope type — accept (Slack expects 200) but don't dispatch.
