@@ -207,3 +207,90 @@ async def test_stats_history_400_raises_with_status():
             await OrchestratorClient().stats_history(max_points=99999)
     assert exc_info.value.status_code == 400
     assert "max out of range" in str(exc_info.value)
+
+
+# =============================================================================
+# tail_log_text seek-from-end (the audit fix)
+# =============================================================================
+
+
+def test_tail_log_text_short_file(tmp_path):
+    """Files smaller than one chunk read everything and tail correctly."""
+    from memory.api.orchestrator_client import tail_log_text
+
+    log = tmp_path / "short.log"
+    log.write_text("a\nb\nc\nd\ne\n")
+
+    assert tail_log_text(log, tail=2) == "d\ne"
+    assert tail_log_text(log, tail=10) == "a\nb\nc\nd\ne"
+
+
+def test_tail_log_text_seeks_for_long_file(tmp_path, monkeypatch):
+    """A file larger than _TAIL_READ_CHUNK must use the seek-loop, not slurp."""
+    import memory.api.orchestrator_client as oc
+
+    # Force a tiny chunk so the seek loop actually runs even on small fixtures.
+    monkeypatch.setattr(oc, "_TAIL_READ_CHUNK", 16)
+
+    log = tmp_path / "long.log"
+    # 200 lines of "lineN\n" — well over a 16-byte chunk.
+    log.write_text("".join(f"line{i:03d}\n" for i in range(200)))
+
+    assert oc.tail_log_text(log, tail=3) == "line197\nline198\nline199"
+    assert oc.tail_log_text(log, tail=1) == "line199"
+
+
+def test_tail_log_text_caps_response_size(tmp_path, monkeypatch):
+    """Even a huge tail request is bounded by LOG_TAIL_MAX_BYTES."""
+    import memory.api.orchestrator_client as oc
+
+    # 200 bytes of cap is enough to clearly bound the result.
+    monkeypatch.setattr(oc, "LOG_TAIL_MAX_BYTES", 200)
+    monkeypatch.setattr(oc, "_TAIL_READ_CHUNK", 64)
+
+    log = tmp_path / "big.log"
+    # 1000 bytes of content — caller asks for everything.
+    log.write_text("x" * 1000 + "\n")
+
+    result = oc.tail_log_text(log, tail=10_000_000)
+    # Must be at most LOG_TAIL_MAX_BYTES.
+    assert len(result.encode()) <= 200
+
+
+def test_tail_log_text_with_tail_zero_returns_whole_capped_file(
+    tmp_path, monkeypatch
+):
+    """tail=0 means "give me the file" but still subject to the size cap."""
+    import memory.api.orchestrator_client as oc
+
+    monkeypatch.setattr(oc, "LOG_TAIL_MAX_BYTES", 50)
+
+    log = tmp_path / "all.log"
+    log.write_text("\n".join(f"line{i}" for i in range(20)))
+
+    result = oc.tail_log_text(log, tail=0)
+    # Must be at most LOG_TAIL_MAX_BYTES — the cap is on bytes, not lines.
+    assert len(result.encode()) <= 50
+
+
+def test_tail_log_text_handles_no_trailing_newline(tmp_path):
+    """A log with no trailing newline must still tail correctly."""
+    from memory.api.orchestrator_client import tail_log_text
+
+    log = tmp_path / "no_newline.log"
+    log.write_text("a\nb\nc")  # no \n at end
+
+    assert tail_log_text(log, tail=2) == "b\nc"
+
+
+def test_tail_log_text_handles_invalid_utf8(tmp_path):
+    """Binary garbage in the log shouldn't crash the tail."""
+    from memory.api.orchestrator_client import tail_log_text
+
+    log = tmp_path / "binary.log"
+    log.write_bytes(b"line1\n\xff\xfe garbage\nline3\n")
+
+    result = tail_log_text(log, tail=3)
+    # \xff\xfe gets replaced with U+FFFD; structure is preserved.
+    assert "line1" in result
+    assert "line3" in result
