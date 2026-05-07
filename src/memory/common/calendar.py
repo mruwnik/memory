@@ -110,6 +110,14 @@ def get_events_in_range(
 
     Returns:
         List of event dictionaries, sorted by start_time
+
+    Note (operator-visible breaking change):
+        Pre-migration ``20260507_calendar_account_user_id``, this filter
+        returned every CalDAV event to every user. The new filter scopes by
+        ``CalendarAccount.user_id``; legacy CalDAV rows with NULL user_id
+        are excluded from non-admin views ("my CalDAV events disappeared"
+        on upgrade). Admins can reassign each row via
+        ``PATCH /calendar-accounts/{id}`` to restore visibility.
     """
     # Build base query with optional user filtering
     def apply_user_filter(query):  # type: ignore[no-untyped-def]
