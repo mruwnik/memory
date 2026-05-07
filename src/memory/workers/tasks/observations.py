@@ -24,11 +24,13 @@ def sync_observation(
     content: str,
     observation_type: str,
     evidence: dict | None = None,
-    confidences: dict[str, float] = {},
+    confidences: dict[str, float] | None = None,
     session_id: str | None = None,
     agent_model: str = "unknown",
-    tags: list[str] = [],
+    tags: list[str] | None = None,
 ):
+    confidences = confidences or {}
+    tags = tags or []
     logger.info(f"Syncing observation {subject}")
     sha256 = create_content_hash(f"{content}{subject}{observation_type}")
 
@@ -37,7 +39,7 @@ def sync_observation(
         subject=subject,
         observation_type=observation_type,
         evidence=evidence,
-        tags=tags or [],
+        tags=tags,
         session_id=session_id,
         agent_model=agent_model,
         size=len(content),
