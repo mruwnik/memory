@@ -19,10 +19,14 @@ from __future__ import annotations
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 
 import redis
 
 from memory.common import settings
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
 
@@ -112,3 +116,38 @@ def check_rate_limit_spec(key: str, spec: str) -> bool:
     """Convenience wrapper: parse the SlowAPI-style spec then enforce."""
     limit, window = parse_limit(spec)
     return check_rate_limit(key, limit, window)
+
+
+def _trusted_proxies() -> set[str]:
+    """Parse RATE_LIMIT_TRUSTED_PROXIES at call time so tests can patch it."""
+    raw = settings.RATE_LIMIT_TRUSTED_PROXIES or ""
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def rate_limit_key(request: "Request") -> str:
+    """Bucket key for rate limiting that respects only trusted proxies.
+
+    SlowAPI's bundled ``get_remote_address`` (and any Uvicorn started with
+    ``--proxy-headers``) honors ``X-Forwarded-For`` regardless of the
+    immediate TCP peer — so a remote attacker can rotate XFF to mint a
+    fresh bucket per request and defeat the rate limit.
+
+    Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
+    configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``). The
+    ``"*"`` wildcard exists for parity with Uvicorn's
+    ``--forwarded-allow-ips=*`` default but explicitly opts out of the
+    spoofing protection — operators behind a real proxy should list its
+    IP instead.
+
+    Use this everywhere a rate-limit bucket is keyed on client IP. Do
+    NOT call ``slowapi.util.get_remote_address`` directly — that helper
+    silently inherits the spoofing bypass.
+    """
+    immediate = request.client.host if request.client else "unknown"
+    trusted = _trusted_proxies()
+    if "*" in trusted or immediate in trusted:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            # Left-most entry is the original client per RFC 7239 §5.2.
+            return xff.split(",")[0].strip() or immediate
+    return immediate
