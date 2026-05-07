@@ -455,6 +455,35 @@ def _seed_state_for_user(db_session, user_id: int) -> str:
     return sign_state(raw_state, user_id)
 
 
+def _mock_slack_token_exchange(team_id: str, **authed_user_overrides):
+    """Build the AsyncClient context manager that returns a fake Slack
+    oauth.v2.access response with the given team_id. Use as:
+
+        with patch("memory.api.slack.httpx.AsyncClient") as m:
+            m.return_value = _mock_slack_token_exchange(team_id="T1234ABCD")
+            ...
+
+    ``authed_user_overrides`` lets tests vary access_token/scope/expires_in/etc.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    authed_user = {"access_token": "xoxp-fake", "scope": "channels:history"}
+    authed_user.update(authed_user_overrides)
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "ok": True,
+            "authed_user": authed_user,
+            "team": {"id": team_id, "name": "Test"},
+        }
+    )
+    async_client_ctx = AsyncMock()
+    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+    async_client_ctx.post = AsyncMock(return_value=mock_response)
+    return async_client_ctx
+
+
 def test_callback_unknown_slack_app_id_returns_404(client, db_session, user):
     """Hitting /slack/callback/{id} for a non-existent app id returns 404
     (uniformly, so existence isn't probable from outside)."""
@@ -554,25 +583,11 @@ def test_callback_malformed_team_id_returns_400(
     doesn't match `_SLACK_TEAM_ID_PATTERN`, we 400 before letting the value
     reach the DB or the HTML template. Catches XSS via team_id if the
     regex is ever loosened."""
-    from unittest.mock import AsyncMock, MagicMock
-
     signed_state = _seed_state_for_user(db_session, user.id)
-
-    mock_response = MagicMock()
-    mock_response.json = MagicMock(
-        return_value={
-            "ok": True,
-            "authed_user": {"access_token": "xoxp-fake", "scope": "channels:history"},
-            "team": {"id": "<script>alert(1)</script>", "name": "Test"},
-        }
-    )
-    async_client_ctx = AsyncMock()
-    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
-    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
-    async_client_ctx.post = AsyncMock(return_value=mock_response)
-
     with patch("memory.api.slack.httpx.AsyncClient") as mock_httpx:
-        mock_httpx.return_value = async_client_ctx
+        mock_httpx.return_value = _mock_slack_token_exchange(
+            team_id="<script>alert(1)</script>"
+        )
         response = client.get(
             f"/slack/callback/{authorized_slack_app.id}",
             params={"code": "fake_code", "state": signed_state},
@@ -587,34 +602,19 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
     """Full successful flow: callback exchanges code, persists a
     `SlackUserCredentials` row scoped to (slack_app_id, workspace_id,
     user_id), and returns the BroadcastChannel HTML."""
-    from unittest.mock import AsyncMock, MagicMock
-
     signed_state = _seed_state_for_user(db_session, user.id)
-
-    mock_response = MagicMock()
-    mock_response.json = MagicMock(
-        return_value={
-            "ok": True,
-            "authed_user": {
-                "access_token": "xoxp-test-access",
-                "refresh_token": "xoxr-test-refresh",
-                "scope": "channels:history,chat:write",
-                "id": "U_TESTUSER",
-                "expires_in": 3600,
-            },
-            "team": {"id": "T0123ABCDE", "name": "Test Workspace"},
-        }
-    )
-    async_client_ctx = AsyncMock()
-    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
-    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
-    async_client_ctx.post = AsyncMock(return_value=mock_response)
-
     with (
         patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
         patch("memory.api.slack.celery_app.send_task"),
     ):
-        mock_httpx.return_value = async_client_ctx
+        mock_httpx.return_value = _mock_slack_token_exchange(
+            team_id="T0123ABCDE",
+            access_token="xoxp-test-access",
+            refresh_token="xoxr-test-refresh",
+            scope="channels:history,chat:write",
+            id="U_TESTUSER",
+            expires_in=3600,
+        )
         response = client.get(
             f"/slack/callback/{authorized_slack_app.id}",
             params={"code": "fake_code", "state": signed_state},
@@ -643,28 +643,12 @@ def test_callback_html_response_uses_json_dumps_for_slack_app_id(
     a future change reintroduces raw `{slack_app.id}` interpolation while
     relying on the team-id regex to keep things safe, this test catches it
     by verifying the JS literal is properly quoted."""
-    from unittest.mock import AsyncMock, MagicMock
-
     signed_state = _seed_state_for_user(db_session, user.id)
-
-    mock_response = MagicMock()
-    mock_response.json = MagicMock(
-        return_value={
-            "ok": True,
-            "authed_user": {"access_token": "xoxp-fake", "scope": "channels:read"},
-            "team": {"id": "T98765ABCD", "name": "Test"},
-        }
-    )
-    async_client_ctx = AsyncMock()
-    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
-    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
-    async_client_ctx.post = AsyncMock(return_value=mock_response)
-
     with (
         patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
         patch("memory.api.slack.celery_app.send_task"),
     ):
-        mock_httpx.return_value = async_client_ctx
+        mock_httpx.return_value = _mock_slack_token_exchange(team_id="T98765ABCD")
         response = client.get(
             f"/slack/callback/{authorized_slack_app.id}",
             params={"code": "fake_code", "state": signed_state},

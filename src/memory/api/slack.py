@@ -319,48 +319,30 @@ def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
     )
 
 
-@router.get("/callback/{slack_app_id}")
-async def slack_callback_for_app(
-    slack_app_id: int,
-    code: str = Query(...),
-    state: str = Query(...),
-    error: str | None = Query(None),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-):
-    """Multi-tenant OAuth callback (slack-changes.md §3.2 / §3.4 row 4).
+def _resolve_callback_app(db: Session, slack_app_id: int, user: User) -> SlackApp:
+    """Look up the SlackApp and verify the caller is allowed to OAuth into it.
 
-    Looks up the SlackApp from the URL path and uses ITS encrypted
-    client_id/client_secret for the token exchange — not the env-var
-    credentials. State is bound to the user's session via the same
-    ``Depends(get_current_user)`` rule used by /slack/callback (CSRF fix
-    a5c9746d). Stored credentials carry the path's ``slack_app_id``.
+    Raises 404 (missing/inactive — same status to avoid existence probing),
+    403 (caller not owner or in authorized_users), or 503 (the app exists
+    but its wizard hasn't finished — no client credentials to exchange with).
     """
-    logger.info(
-        f"Slack OAuth callback received (multi-app): slack_app_id={slack_app_id}, "
-        f"code_corr={log_corr_id(code)}, "
-        f"state_corr={log_corr_id(state)}, len={len(state)}, error={error}"
-    )
-
-    if error:
-        logger.warning(f"Slack OAuth error from provider: {error}")
-        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
-
     slack_app = db.get(SlackApp, slack_app_id)
     if slack_app is None or not slack_app.is_active:
         raise HTTPException(status_code=404, detail="Slack app not found")
     if not slack_app.is_authorized(user):
-        # Authorized users (and the owner) are the only ones who may complete
-        # OAuth into this app's tenant.
         raise HTTPException(status_code=403, detail="Not authorized for this Slack app")
-    client_id = slack_app.client_id
-    client_secret = slack_app.client_secret
-    if not client_id or not client_secret:
+    if not slack_app.client_id or not slack_app.client_secret:
         raise HTTPException(
             status_code=503,
             detail="Slack app client credentials not configured",
         )
+    return slack_app
 
+
+def _consume_oauth_state(db: Session, state: str, user: User) -> None:
+    """Validate the OAuth state row + signature + one-time consumption, and
+    confirm the authenticated session matches the user the state was issued
+    for (CSRF binding fix a5c9746d). Raises 400 / 403 on mismatch."""
     state_user_id = validate_and_consume_state(db, state, "slack")
     if not state_user_id:
         raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
@@ -369,13 +351,19 @@ async def slack_callback_for_app(
             status_code=403, detail="OAuth state was issued for a different session"
         )
 
-    redirect_uri = _callback_url_for(slack_app_id)
+
+async def _exchange_slack_oauth_code(
+    slack_app: SlackApp, code: str, redirect_uri: str
+) -> dict:
+    """POST to Slack's oauth.v2.access. Returns the parsed authed_user payload
+    plus the validated team. Raises 400 on Slack-reported errors, missing
+    user token, or malformed team_id."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             "https://slack.com/api/oauth.v2.access",
             data={
-                "client_id": client_id,
-                "client_secret": client_secret,
+                "client_id": slack_app.client_id,
+                "client_secret": slack_app.client_secret,
                 "code": code,
                 "redirect_uri": redirect_uri,
             },
@@ -388,18 +376,34 @@ async def slack_callback_for_app(
         raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {error_msg}")
 
     authed_user = data.get("authed_user", {})
-    access_token = authed_user.get("access_token")
-    if not access_token:
+    if not authed_user.get("access_token"):
         raise HTTPException(status_code=400, detail="No user access token received")
 
     team = data.get("team", {})
     team_id = team.get("id")
-    team_name = team.get("name", "Unknown Workspace")
     if not team_id or not _SLACK_TEAM_ID_PATTERN.fullmatch(team_id):
         raise HTTPException(status_code=400, detail="Malformed team ID in response")
 
+    return {
+        "authed_user": authed_user,
+        "team_id": team_id,
+        "team_name": team.get("name", "Unknown Workspace"),
+    }
+
+
+def _persist_oauth_credentials(
+    db: Session,
+    slack_app: SlackApp,
+    user: User,
+    team_id: str,
+    team_name: str,
+    authed_user: dict,
+) -> None:
+    """Upsert the SlackWorkspace + SlackUserCredentials row from a successful
+    Slack token-exchange response. Computes token expiry with a 5-minute
+    buffer, splits scopes, stores encrypted access/refresh tokens."""
     workspace = db.get(SlackWorkspace, team_id)
-    if not workspace:
+    if workspace is None:
         workspace = SlackWorkspace(id=team_id, name=team_name)
         db.add(workspace)
         db.flush()
@@ -413,7 +417,7 @@ async def slack_callback_for_app(
             microsecond=0
         ) + timedelta(seconds=expires_in - 300)
 
-    existing_creds = (
+    creds = (
         db.query(SlackUserCredentials)
         .filter(
             SlackUserCredentials.slack_app_id == slack_app.id,
@@ -422,45 +426,40 @@ async def slack_callback_for_app(
         )
         .first()
     )
-    if existing_creds:
-        existing_creds.access_token = access_token
-        existing_creds.refresh_token = authed_user.get("refresh_token")
-        existing_creds.scopes = authed_user.get("scope", "").split()
-        existing_creds.token_expires_at = token_expires_at
-        existing_creds.slack_user_id = authed_user.get("id")
-    else:
-        credentials = SlackUserCredentials(
+    if creds is None:
+        creds = SlackUserCredentials(
             slack_app_id=slack_app.id,
             workspace_id=team_id,
             user_id=user.id,
-            scopes=authed_user.get("scope", "").split(),
-            token_expires_at=token_expires_at,
-            slack_user_id=authed_user.get("id"),
         )
-        credentials.access_token = access_token
-        credentials.refresh_token = authed_user.get("refresh_token")
-        db.add(credentials)
+        db.add(creds)
+
+    creds.access_token = authed_user["access_token"]
+    creds.refresh_token = authed_user.get("refresh_token")
+    creds.scopes = authed_user.get("scope", "").split()
+    creds.token_expires_at = token_expires_at
+    creds.slack_user_id = authed_user.get("id")
 
     workspace.sync_error = None
     db.commit()
 
-    # Trigger an immediate workspace sync (slack-changes.md §3.7 backfill).
-    celery_app.send_task(
-        SYNC_SLACK_WORKSPACE,
-        kwargs={"workspace_id": team_id, "slack_app_id": slack_app.id},
-    )
 
-    frontend_url = (
-        f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
-    )
+def _render_oauth_complete_html(
+    user_id: int, slack_app_id: int, team_id: str
+) -> HTMLResponse:
+    """Render the post-callback HTML that posts to the wizard's per-user
+    BroadcastChannel and either closes the popup or redirects.
+
+    Every interpolated value goes through ``json.dumps`` so the JS string
+    literals stay safely quoted regardless of the field's runtime type —
+    ``team_id`` already passed the regex check upstream, but the encoding
+    is the contract a future caller inherits.
+    """
+    frontend_url = f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
     workspace_id_js = json.dumps(team_id)
     frontend_url_js = json.dumps(frontend_url)
-    channel_name_js = json.dumps(f"slack-oauth-{user.id}")
-    # Even though `slack_app.id` is currently an int (safe to interpolate raw),
-    # use json.dumps so every interpolated value in this template inherits the
-    # same defense-in-depth contract — a future field-type change won't
-    # silently regress the safety story.
-    slack_app_id_js = json.dumps(slack_app.id)
+    channel_name_js = json.dumps(f"slack-oauth-{user_id}")
+    slack_app_id_js = json.dumps(slack_app_id)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -481,6 +480,55 @@ async def slack_callback_for_app(
     </html>
     """
     return HTMLResponse(content=html_content)
+
+
+@router.get("/callback/{slack_app_id}")
+async def slack_callback_for_app(
+    slack_app_id: int,
+    code: str = Query(...),
+    state: str = Query(...),
+    error: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Multi-tenant OAuth callback (slack-changes.md §3.2 / §3.4 row 4).
+
+    Looks up the SlackApp from the URL path and uses ITS encrypted
+    client_id/client_secret for the token exchange — not the env-var
+    credentials. State is bound to the user's session (CSRF fix
+    a5c9746d). Stored credentials carry the path's ``slack_app_id``.
+    """
+    logger.info(
+        f"Slack OAuth callback received (multi-app): slack_app_id={slack_app_id}, "
+        f"code_corr={log_corr_id(code)}, "
+        f"state_corr={log_corr_id(state)}, len={len(state)}, error={error}"
+    )
+
+    if error:
+        logger.warning(f"Slack OAuth error from provider: {error}")
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
+
+    slack_app = _resolve_callback_app(db, slack_app_id, user)
+    _consume_oauth_state(db, state, user)
+    exchange = await _exchange_slack_oauth_code(
+        slack_app, code, _callback_url_for(slack_app_id)
+    )
+    _persist_oauth_credentials(
+        db,
+        slack_app,
+        user,
+        team_id=exchange["team_id"],
+        team_name=exchange["team_name"],
+        authed_user=exchange["authed_user"],
+    )
+
+    # Trigger an immediate workspace sync (slack-changes.md §3.7 backfill).
+    celery_app.send_task(
+        SYNC_SLACK_WORKSPACE,
+        kwargs={"workspace_id": exchange["team_id"], "slack_app_id": slack_app.id},
+    )
+
+    return _render_oauth_complete_html(user.id, slack_app.id, exchange["team_id"])
 
 
 # --- Workspace Endpoints ---

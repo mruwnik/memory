@@ -37,6 +37,26 @@ const SETUP_STATE_TO_STEP: Record<string, Step> = {
 
 const POLL_INTERVAL_MS = 3000
 
+// OAuth scopes requested for both bot and user tokens. Read-only across
+// the workspace surface (channels/groups/im/mpim history + read), users +
+// emails for mention resolution, reactions/files for the existing message
+// processing pipeline. Keep aligned with the backend's expectations.
+const SLACK_OAUTH_SCOPES = [
+  'channels:history',
+  'groups:history',
+  'im:history',
+  'mpim:history',
+  'channels:read',
+  'groups:read',
+  'im:read',
+  'mpim:read',
+  'users:read',
+  'users:read.email',
+  'team:read',
+  'reactions:read',
+  'files:read',
+].join(' ')
+
 const generateRandomToken = () => {
   // 24 chars of base32-like alphabet — wide enough that a chatty channel
   // is exceedingly unlikely to contain it by accident, and short enough to
@@ -190,25 +210,10 @@ export const SlackAppWizard = ({
     setBusy(true)
     try {
       const state = await wizard.issueOAuthState(app.id)
-      const scopes = [
-        'channels:history',
-        'groups:history',
-        'im:history',
-        'mpim:history',
-        'channels:read',
-        'groups:read',
-        'im:read',
-        'mpim:read',
-        'users:read',
-        'users:read.email',
-        'team:read',
-        'reactions:read',
-        'files:read',
-      ].join(' ')
       const params = new URLSearchParams({
         client_id: app.client_id,
-        scope: scopes,
-        user_scope: scopes,
+        scope: SLACK_OAUTH_SCOPES,
+        user_scope: SLACK_OAUTH_SCOPES,
         redirect_uri: callbackUrl,
         state,
       })
