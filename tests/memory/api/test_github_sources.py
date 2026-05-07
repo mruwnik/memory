@@ -425,3 +425,150 @@ def test_list_repos_empty_when_no_repos(client, db_session, user):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ====== /github/projects access-control tests ======
+#
+# `GithubProject.account_id -> GithubAccount.user_id` is the ownership
+# chain. Three sibling endpoints used to ignore it: list, get, delete
+# all walked the table by primary key with no filter, which let any
+# authenticated user read or destroy any other user's tracked GitHub
+# Projects (including titles, descriptions, and READMEs that may have
+# been pulled from private repos).
+
+
+from memory.common.db.models import GithubProject  # noqa: E402
+
+
+def _make_project(db_session, account: GithubAccount, *, title: str) -> GithubProject:
+    project = GithubProject(
+        account_id=account.id,
+        node_id=f"node-{title}",
+        number=1,
+        owner_type="user",
+        owner_login="someone",
+        title=title,
+        url=f"https://github.com/orgs/someone/projects/1#{title}",
+    )
+    db_session.add(project)
+    db_session.commit()
+    db_session.refresh(project)
+    return project
+
+
+def test_list_projects_returns_only_callers_projects(
+    regular_client, db_session, user, other_user
+):
+    """Non-admin GET /github/projects must omit other users' projects."""
+    mine = GithubAccount(
+        user_id=user.id,
+        name="Mine",
+        auth_type="pat",
+        access_token="t1",
+    )
+    theirs = GithubAccount(
+        user_id=other_user.id,
+        name="Theirs",
+        auth_type="pat",
+        access_token="t2",
+    )
+    db_session.add_all([mine, theirs])
+    db_session.commit()
+    _make_project(db_session, mine, title="Mine-Project")
+    _make_project(db_session, theirs, title="Theirs-Project")
+
+    response = regular_client.get("/github/projects")
+
+    assert response.status_code == 200
+    titles = {p["title"] for p in response.json()}
+    assert titles == {"Mine-Project"}
+
+
+def test_list_projects_admin_sees_all_users(
+    client, db_session, user, other_user
+):
+    """Admin (default test client) sees every user's projects with no user_id filter."""
+    mine = GithubAccount(
+        user_id=user.id,
+        name="Mine",
+        auth_type="pat",
+        access_token="t1",
+    )
+    theirs = GithubAccount(
+        user_id=other_user.id,
+        name="Theirs",
+        auth_type="pat",
+        access_token="t2",
+    )
+    db_session.add_all([mine, theirs])
+    db_session.commit()
+    _make_project(db_session, mine, title="Mine-Project")
+    _make_project(db_session, theirs, title="Theirs-Project")
+
+    response = client.get("/github/projects")
+
+    assert response.status_code == 200
+    titles = {p["title"] for p in response.json()}
+    assert titles == {"Mine-Project", "Theirs-Project"}
+
+
+def test_get_project_404_when_not_owner(
+    regular_client, db_session, other_user
+):
+    """GET /github/projects/<id> for another user's project returns 404."""
+    theirs = GithubAccount(
+        user_id=other_user.id,
+        name="Theirs",
+        auth_type="pat",
+        access_token="t",
+    )
+    db_session.add(theirs)
+    db_session.commit()
+    project = _make_project(db_session, theirs, title="Theirs-Project")
+
+    response = regular_client.get(f"/github/projects/{project.id}")
+
+    assert response.status_code == 404
+    # Must not surface ownership info via the body either.
+    assert "Theirs-Project" not in response.text
+
+
+def test_delete_project_404_when_not_owner(
+    regular_client, db_session, other_user
+):
+    """DELETE /github/projects/<id> for another user's project must 404 and not delete."""
+    theirs = GithubAccount(
+        user_id=other_user.id,
+        name="Theirs",
+        auth_type="pat",
+        access_token="t",
+    )
+    db_session.add(theirs)
+    db_session.commit()
+    project = _make_project(db_session, theirs, title="Theirs-Project")
+
+    response = regular_client.delete(f"/github/projects/{project.id}")
+
+    assert response.status_code == 404
+    # Project must still exist.
+    db_session.expire_all()
+    assert db_session.get(GithubProject, project.id) is not None
+
+
+def test_delete_project_succeeds_for_owner(client, db_session, user):
+    """Owner can delete their own project."""
+    mine = GithubAccount(
+        user_id=user.id,
+        name="Mine",
+        auth_type="pat",
+        access_token="t",
+    )
+    db_session.add(mine)
+    db_session.commit()
+    project = _make_project(db_session, mine, title="Mine-Project")
+
+    response = client.delete(f"/github/projects/{project.id}")
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(GithubProject, project.id) is None

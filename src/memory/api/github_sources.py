@@ -855,11 +855,23 @@ def add_project(
 def list_projects(
     owner: str | None = None,
     include_closed: bool = False,
+    user_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[GithubProjectResponse]:
-    """List all synced GitHub projects."""
-    query = db.query(GithubProject)
+    """List synced GitHub projects.
+
+    Non-admin users only see projects belonging to their own GitHub
+    accounts. Admins can pass `user_id` to scope to a specific user, or
+    omit it to see every user's projects.
+    """
+    resolved_user_id = resolve_user_filter(user_id, user, db)
+    query = db.query(GithubProject).join(
+        GithubAccount, GithubProject.account_id == GithubAccount.id
+    )
+
+    if resolved_user_id is not None:
+        query = query.filter(GithubAccount.user_id == resolved_user_id)
 
     if owner:
         query = query.filter(GithubProject.owner_login == owner)
@@ -872,6 +884,24 @@ def list_projects(
     return [project_to_response(project) for project in projects]
 
 
+def _get_owned_project(
+    db: Session, project_id: int, user: User
+) -> GithubProject:
+    """Fetch a project, returning 404 if it doesn't belong to ``user``.
+
+    Mirrors ``get_user_account`` but ownership is reached through the
+    project's account FK rather than a direct ``user_id`` column.
+    Returns 404 for both "not found" and "not yours" to avoid info leak.
+    Admins bypass the ownership check.
+    """
+    project = db.get(GithubProject, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.account.user_id != user.id and not has_admin_scope(user):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
 @router.get("/projects/{project_id}")
 def get_project(
     project_id: int,
@@ -879,9 +909,7 @@ def get_project(
     db: Session = Depends(get_session),
 ) -> GithubProjectResponse:
     """Get a single GitHub project."""
-    project = db.get(GithubProject, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _get_owned_project(db, project_id, user)
     return project_to_response(project)
 
 
@@ -921,9 +949,7 @@ def delete_project(
     db: Session = Depends(get_session),
 ):
     """Delete a synced GitHub project."""
-    project = db.get(GithubProject, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = _get_owned_project(db, project_id, user)
 
     db.delete(project)
     db.commit()
