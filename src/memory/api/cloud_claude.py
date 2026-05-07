@@ -10,10 +10,12 @@ Session IDs are prefixed with user_id to enable authorization filtering:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import secrets
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote, unquote, urlencode
@@ -134,6 +136,49 @@ def user_owns_session(user: User, session_id: str) -> bool:
     """Check if a session belongs to a user."""
     owner_id = get_user_id_from_session(session_id)
     return owner_id == user.id
+
+
+@contextlib.asynccontextmanager
+async def map_orchestrator_errors(
+    *,
+    log_msg: str | None = None,
+    log_level: int = logging.ERROR,
+    status_code: int | None = None,
+    detail_template: str | None = None,
+) -> AsyncIterator[None]:
+    """Translate ``OrchestratorError`` raised inside the block into ``HTTPException``.
+
+    Args:
+        log_msg: If set, log this prefix at ``log_level`` along with the
+            error before re-raising.
+        log_level: Log level for ``log_msg`` (default ERROR).
+        status_code: HTTP status to use. ``None`` (the default) means use
+            ``e.status_code`` if set, otherwise 502 — i.e. pass through
+            whatever the orchestrator told us.
+        detail_template: Template string for the HTTP detail; ``{e}`` is
+            substituted with the OrchestratorError instance. ``None``
+            means use ``str(e)``.
+
+    Use the ``with`` form at every previous copy of the
+    "try/except OrchestratorError -> HTTPException" pattern; the only
+    site this helper is *not* suitable for is the snapshot-cleanup
+    case in ``spawn_session``, which has bespoke teardown logic
+    interleaved with the re-raise.
+    """
+    try:
+        yield
+    except OrchestratorError as e:
+        if log_msg is not None:
+            logger.log(log_level, "%s: %s", log_msg, e)
+        final_status = (
+            status_code
+            if status_code is not None
+            else (e.status_code or 502)
+        )
+        final_detail = (
+            detail_template.format(e=e) if detail_template else str(e)
+        )
+        raise HTTPException(status_code=final_status, detail=final_detail) from e
 
 
 # Strict session-id regex used by both is_valid_session_id and the
@@ -314,11 +359,8 @@ async def session_stats(
     operator concern, not a user-facing one).
     """
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         snapshot = await client.stats()
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     if has_admin_scope(user):
         return snapshot
@@ -360,13 +402,10 @@ async def session_stats_history(
             require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         result = await client.stats_history(
             session_id=session_id, since=since, max_points=max_points
         )
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     return result
 
@@ -390,11 +429,8 @@ async def container_stats(
         require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         data = await client.container_stats(session_id)
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     if data is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -694,11 +730,12 @@ async def list_sessions(
     """List active Claude sessions owned by the current user."""
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to list sessions",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         containers = await client.list_containers()
-    except OrchestratorError as e:
-        logger.error(f"Failed to list sessions: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     # Filter to only sessions owned by this user
     return [
@@ -724,11 +761,12 @@ async def get_session_info(
 
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to get session",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         container = await client.get_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to get session: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -752,11 +790,12 @@ async def kill_session(
 
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to stop session",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         success = await client.delete_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to stop session: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -777,11 +816,13 @@ async def list_panes(
     require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors(
+        log_msg=f"Failed to list panes for {session_id}",
+        log_level=logging.WARNING,
+        status_code=502,
+        detail_template="Failed to list panes: {e}",
+    ):
         return await client.relay_list_panes(session_id)
-    except OrchestratorError as e:
-        logger.warning(f"Failed to list panes for {session_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"Failed to list panes: {e}")
 
 
 @router.get("/{session_id}/attach")
@@ -799,11 +840,12 @@ async def get_attach_commands(
 
     # Verify the container exists
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to get session for attach",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         container = await client.get_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to get session for attach: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
