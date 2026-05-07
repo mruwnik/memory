@@ -281,6 +281,16 @@ MAX_TRANSFER_PUSH_BYTES = int(
     os.getenv("MAX_TRANSFER_PUSH_BYTES", 256 * 1024 * 1024)
 )
 
+# Maximum allowed body size for `/telemetry/ingest` and the OTLP
+# fan-out routes (`/v1/metrics`, `/v1/logs`, `/v1/traces`). The handler
+# buffers the body in API memory and runs `parse_otlp_json` against it
+# synchronously, so an unbounded read is the same OOM vector as
+# transfer/push. Default 5 MiB — well above any sane batch from an
+# in-process OTLP exporter.
+MAX_TELEMETRY_PAYLOAD_BYTES = int(
+    os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
+)
+
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 STATIC_DIR = pathlib.Path(
     os.getenv(
