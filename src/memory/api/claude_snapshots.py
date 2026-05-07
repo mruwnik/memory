@@ -266,9 +266,15 @@ async def upload_snapshot(
 
     content_hash = hashlib.sha256(content).hexdigest()
 
+    # Dedup is per-user: a global dedup would leak the original uploader's
+    # metadata (e.g. claude_account_email, summary) to anyone who can guess /
+    # obtain matching tarball bytes. See CWE-200.
     existing = (
         db.query(ClaudeConfigSnapshot)
-        .filter(ClaudeConfigSnapshot.content_hash == content_hash)
+        .filter(
+            ClaudeConfigSnapshot.content_hash == content_hash,
+            ClaudeConfigSnapshot.user_id == user.id,
+        )
         .first()
     )
     if existing:
