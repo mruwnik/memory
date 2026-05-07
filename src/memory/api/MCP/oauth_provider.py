@@ -12,6 +12,7 @@ from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
+    RegistrationError,
 )
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -56,6 +57,37 @@ def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
     """
     parsed = urlparse(uri)
     return (parsed.scheme, parsed.hostname or "", parsed.port)
+
+
+# Per RFC 8252 §7.3, native-app OAuth clients (Claude Code, Claude Desktop,
+# mcp-inspector, …) bind a loopback HTTP listener on an OS-assigned ephemeral
+# port and use that port in the redirect_uri. The port is unknowable at
+# allowlist-config time, so we match loopback by (scheme, host) and ignore
+# the port. Non-loopback hosts retain strict (scheme, host, port) matching
+# so the localhost.evil.com / 127.0.0.1.evil.com lookalikes the original
+# fix targeted are still rejected.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_redirect_uri_allowed(
+    uri_origin: tuple[str, str, int | None],
+    allowed_origins: set[tuple[str, str, int | None]],
+) -> bool:
+    """Decide whether ``uri_origin`` matches any entry in ``allowed_origins``.
+
+    Loopback hosts (localhost, 127.0.0.1, ::1) match port-agnostically when
+    an allowlist entry exists for the same (scheme, host); all other origins
+    require an exact (scheme, host, port) tuple match.
+    """
+    if uri_origin in allowed_origins:
+        return True
+    scheme, host, _ = uri_origin
+    if host not in LOOPBACK_HOSTS:
+        return False
+    return any(
+        a_scheme == scheme and a_host == host
+        for (a_scheme, a_host, _) in allowed_origins
+    )
 
 ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
 BASE_SCOPES = [SCOPE_READ]
@@ -307,16 +339,25 @@ class SimpleOAuthProvider(OAuthProvider):
             allowed_origins = {redirect_uri_origin(p) for p in allowlist}
             for uri in client_info.redirect_uris:
                 uri_str = str(uri)
-                if redirect_uri_origin(uri_str) not in allowed_origins:
+                if not is_redirect_uri_allowed(
+                    redirect_uri_origin(uri_str), allowed_origins
+                ):
                     logger.warning(
                         "Rejected OAuth client registration: redirect_uri %r "
                         "origin not in allowlist %r",
                         uri_str,
                         allowlist,
                     )
-                    raise ValueError(
-                        f"redirect_uri {uri_str!r} is not permitted. "
-                        "Set OAUTH_REDIRECT_URI_ALLOWLIST to allow additional URIs."
+                    # RFC 7591 §3.2.2: invalid_redirect_uri is a 400 with a
+                    # structured error body. The SDK's register handler
+                    # turns RegistrationError into the right response;
+                    # raising plain ValueError became an unhandled 500.
+                    raise RegistrationError(
+                        error="invalid_redirect_uri",
+                        error_description=(
+                            f"redirect_uri {uri_str!r} is not permitted. "
+                            "Set OAUTH_REDIRECT_URI_ALLOWLIST to allow additional URIs."
+                        ),
                     )
 
         with make_session() as session:
