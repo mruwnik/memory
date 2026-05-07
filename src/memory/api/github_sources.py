@@ -884,7 +884,7 @@ def list_projects(
     return [project_to_response(project) for project in projects]
 
 
-def _get_owned_project(
+def get_owned_project(
     db: Session, project_id: int, user: User
 ) -> GithubProject:
     """Fetch a project, returning 404 if it doesn't belong to ``user``.
@@ -909,7 +909,7 @@ def get_project(
     db: Session = Depends(get_session),
 ) -> GithubProjectResponse:
     """Get a single GitHub project."""
-    project = _get_owned_project(db, project_id, user)
+    project = get_owned_project(db, project_id, user)
     return project_to_response(project)
 
 
@@ -949,7 +949,7 @@ def delete_project(
     db: Session = Depends(get_session),
 ):
     """Delete a synced GitHub project."""
-    project = _get_owned_project(db, project_id, user)
+    project = get_owned_project(db, project_id, user)
 
     db.delete(project)
     db.commit()
