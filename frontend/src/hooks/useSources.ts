@@ -438,15 +438,6 @@ export interface TranscriptAccountUpdate {
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
-// Access control projects (from GitHub milestones)
-export interface Project {
-  id: number
-  title: string
-  description: string | null
-  state: string
-  repo_path: string
-}
-
 // Celery task response (for async jobs)
 export interface CeleryTaskResponse {
   task_id: string
@@ -455,15 +446,6 @@ export interface CeleryTaskResponse {
 
 export const useSources = () => {
   const { apiCall } = useAuth()
-
-  // === Projects (for access control) ===
-
-  const listProjects = useCallback(async (state?: string): Promise<Project[]> => {
-    const params = state ? `?state=${state}` : ''
-    const response = await apiCall(`/projects${params}`)
-    if (!response.ok) throw new Error('Failed to fetch projects')
-    return response.json()
-  }, [apiCall])
 
   // === Email Accounts ===
 
@@ -965,8 +947,6 @@ export const useSources = () => {
   }, [apiCall])
 
   return {
-    // Projects (access control)
-    listProjects,
     // Email
     listEmailAccounts,
     createEmailAccount,

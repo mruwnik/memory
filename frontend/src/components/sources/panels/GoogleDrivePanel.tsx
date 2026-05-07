@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GoogleAccount, GoogleFolder, DriveItem, Project } from '@/hooks/useSources'
+import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import {
   Modal,
   TagsInput,
@@ -16,9 +17,10 @@ import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
   const {
-    listGoogleAccounts, listProjects,
+    listGoogleAccounts,
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
   } = useSources()
+  const { listProjects } = useProjects()
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
