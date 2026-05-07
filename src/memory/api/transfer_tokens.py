@@ -9,6 +9,7 @@ Format:  v1.<base64url(payload_json)>.<base64url(hmac_sha256(payload, secret))>
 """
 
 import base64
+import binascii
 import hmac
 import json
 import time
@@ -24,6 +25,18 @@ DEFAULT_TTL_SECONDS = 60
 
 class TransferTokenError(Exception):
     """Raised when a transfer token is malformed, tampered, or expired."""
+
+
+class TransferTokenExpiredError(TransferTokenError):
+    """Raised specifically when the token's ``exp`` is in the past.
+
+    Callers (notably ``cloud_claude.verify_transfer_token``) used to
+    distinguish the expired branch by string-matching ``"expired"`` in the
+    exception message, which is brittle: any future error message that
+    happens to mention ``expired`` (e.g. for a malformed payload that
+    contains the word) would be misclassified, and the substring sniff
+    leaked the inner reason via the response. Use ``isinstance`` instead.
+    """
 
 
 @dataclass
@@ -86,7 +99,10 @@ def mint_token(
 def verify_token(token: str) -> TransferTokenPayload:
     """Validate a token and return its payload.
 
-    Raises TransferTokenError on any validation failure.
+    Raises ``TransferTokenExpiredError`` if the token's ``exp`` is in the
+    past (callers should distinguish this — it's a normal end-of-life
+    case, not tampering). Raises ``TransferTokenError`` on any other
+    validation failure.
     """
     secret = _require_secret()
 
@@ -98,18 +114,30 @@ def verify_token(token: str) -> TransferTokenPayload:
     if version != VERSION:
         raise TransferTokenError(f"unsupported token version: {version}")
 
-    expected = _sign(payload_segment, secret)
+    # Anything that goes wrong inside `_sign` (e.g. the segment contains
+    # a non-ASCII char that survives a malformed token) should map to a
+    # malformed-token failure, not a 500.
+    try:
+        expected = _sign(payload_segment, secret)
+    except (UnicodeEncodeError, ValueError):
+        raise TransferTokenError("malformed token")
     if not hmac.compare_digest(expected, signature_segment):
         raise TransferTokenError("invalid signature")
 
+    # `_b64u_decode` can raise `binascii.Error` for non-base64 garbage and
+    # `UnicodeDecodeError` if the bytes don't decode as utf-8. The previous
+    # `(ValueError, json.JSONDecodeError)` set caught the binascii case
+    # only because `binascii.Error` happens to be a ValueError subclass on
+    # current CPython — pin the contract explicitly so a future Python
+    # release that re-classifies doesn't surprise us with a 500.
     try:
         data = json.loads(_b64u_decode(payload_segment))
-    except (ValueError, json.JSONDecodeError):
+    except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         raise TransferTokenError("malformed payload")
 
     exp = data.get("exp")
     if not isinstance(exp, int) or exp < int(time.time()):
-        raise TransferTokenError("token expired")
+        raise TransferTokenExpiredError("token expired")
 
     try:
         user_id = int(data["user_id"])

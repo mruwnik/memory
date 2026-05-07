@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.api.auth import get_current_user, get_user_from_token, require_scope
 from memory.api.transfer_tokens import (
     TransferTokenError,
+    TransferTokenExpiredError,
     TransferTokenPayload,
     validate_transfer_path,
     verify_token,
@@ -749,11 +750,14 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
     """
     try:
         payload = verify_token(token)
+    except TransferTokenExpiredError:
+        # Distinct exception type means we can't accidentally classify a
+        # tampered/malformed token as expired (the previous substring sniff
+        # over `str(exc)` was vulnerable to "expired" appearing in unrelated
+        # error text — and it leaked the inner reason via the response).
+        raise HTTPException(status_code=401, detail="Token expired")
     except TransferTokenError as e:
-        msg = str(e)
-        if "expired" in msg:
-            raise HTTPException(status_code=401, detail="Token expired")
-        raise HTTPException(status_code=401, detail=f"Invalid token: {msg}")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
     if payload.action != expected_action:
         raise HTTPException(

@@ -356,3 +356,53 @@ def test_verify_rejects_missing_field():
     })
     with pytest.raises(TransferTokenError, match="malformed payload"):
         verify_token(token)
+
+
+# ----- Brittle exception handling regressions -----
+
+
+from memory.api.transfer_tokens import TransferTokenExpiredError
+
+
+def test_expired_token_raises_typed_subclass():
+    """``cloud_claude.verify_transfer_token`` distinguishes the expired
+    branch via ``isinstance``; the previous "look for the word 'expired'
+    in str(exc)" sniff would misclassify any malformed-token error whose
+    message happens to mention "expired"."""
+    payload = TransferTokenPayload(
+        user_id=42,
+        session_id="u42-e6-cccccccc0000",
+        path="/workspace/x",
+        action="read",
+        exp=int(time.time()) - 1,
+    )
+    token = mint_token(payload)
+    with pytest.raises(TransferTokenExpiredError):
+        verify_token(token)
+
+
+def test_non_base64_payload_segment_returns_malformed_not_500():
+    """``!@#$`` is not base64; the underlying binascii.Error must surface
+    as ``TransferTokenError("malformed payload")``, not propagate as a
+    500-class exception. Pin the contract so a future Python release
+    that re-classifies binascii.Error doesn't surprise us."""
+    secret_bytes = SECRET.encode("utf-8")
+    payload_segment = "!@#$"
+    # Sign the bogus segment with the live secret so we exercise the
+    # base64-decode branch (rather than tripping signature mismatch first).
+    import base64 as _b64, hmac as _hmac, hashlib as _hashlib
+    sig = _hmac.new(secret_bytes, payload_segment.encode("ascii"), _hashlib.sha256).digest()
+    sig_segment = _b64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+    bad = f"v1.{payload_segment}.{sig_segment}"
+
+    with pytest.raises(TransferTokenError, match="malformed payload"):
+        verify_token(bad)
+
+
+def test_non_ascii_payload_segment_returns_malformed_not_500():
+    """Non-ASCII in the payload segment used to surface as
+    UnicodeEncodeError out of `_sign` and 500. It now maps to
+    'malformed token'."""
+    bad = "v1.πayload.signature"  # π in the payload segment
+    with pytest.raises(TransferTokenError, match="malformed"):
+        verify_token(bad)
