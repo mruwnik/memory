@@ -138,6 +138,63 @@ def user_owns_session(user: User, session_id: str) -> bool:
     return owner_id == user.id
 
 
+async def open_orchestrator_uds_request(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str] | None = None,
+    content: bytes | None = None,
+    timeout: float = 600.0,
+    stream: bool = False,
+    cant_reach_detail: str = "Cannot reach orchestrator",
+) -> tuple[httpx.Response, httpx.AsyncClient]:
+    """Open an httpx-over-Unix-socket request to the orchestrator and
+    return the response + client.
+
+    The orchestrator is reachable only via a Unix-domain socket, so
+    every transfer/proxy endpoint had to hand-roll the same
+    transport+client+send+ConnectError→502 boilerplate. The three
+    historical copies (transfer_pull, transfer_push, proxy_differ) had
+    drifted slightly in their aclose() orderings — fertile ground for
+    leaking httpx clients on error.
+
+    Caller MUST close the returned ``client`` (and the ``upstream_resp``
+    if not streaming). The helper handles the connect-error path
+    itself, so on a successful return the caller has both objects to
+    own; on a 502 the helper has already cleaned up.
+
+    Args:
+        method, url, headers, content, timeout: passed through to
+            ``client.build_request``.
+        stream: forwarded to ``client.send`` so streaming endpoints
+            can return without buffering the whole body.
+        cant_reach_detail: HTTP detail to use on ``httpx.ConnectError``.
+            Differs across endpoints (e.g. "Cannot reach differ
+            server" for the differ proxy).
+    """
+    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    client = httpx.AsyncClient(transport=transport, timeout=timeout)
+    try:
+        upstream_resp = await client.send(
+            client.build_request(
+                method=method,
+                url=url,
+                headers=headers,
+                content=content,
+            ),
+            stream=stream,
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=cant_reach_detail)
+    except Exception:
+        # Mirrors the historical behaviour: any failure during send
+        # must not leak the httpx client.
+        await client.aclose()
+        raise
+    return upstream_resp, client
+
+
 @contextlib.asynccontextmanager
 async def map_orchestrator_errors(
     *,
@@ -941,20 +998,11 @@ async def transfer_pull(token: str = Query(...)) -> StreamingResponse:
     payload = verify_transfer_token(token, "read")
 
     upstream_url = container_files_url(payload.session_id, payload.path)
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=600.0)
-
-    try:
-        upstream_resp = await client.send(
-            client.build_request("GET", upstream_url),
-            stream=True,
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
-    except Exception:
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method="GET",
+        url=upstream_url,
+        stream=True,
+    )
 
     if upstream_resp.status_code >= 400:
         body = await upstream_resp.aread()
@@ -1043,31 +1091,18 @@ async def transfer_push(request: Request) -> dict:
     body = b"".join(body_chunks)
 
     upstream_url = container_files_url(payload.session_id, payload.path)
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=600.0)
 
     forward_headers = {
         "content-type": "application/x-tar",
         "content-length": str(len(body)),
     }
 
-    try:
-        upstream_resp = await client.send(
-            client.build_request(
-                "PUT",
-                upstream_url,
-                headers=forward_headers,
-                content=body,
-            ),
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
-    except Exception:
-        # Mirror the pull-side pattern: any failure during send must not leak
-        # the httpx client.
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method="PUT",
+        url=upstream_url,
+        headers=forward_headers,
+        content=body,
+    )
 
     try:
         resp_body = await upstream_resp.aread()
@@ -1226,25 +1261,15 @@ async def proxy_differ(
 
     body = await request.body()
 
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=120.0)
-
-    try:
-        upstream_resp = await client.send(
-            client.build_request(
-                method=request.method,
-                url=upstream_url,
-                headers=headers,
-                content=body if body else None,
-            ),
-            stream=True,
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach differ server")
-    except Exception:
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method=request.method,
+        url=upstream_url,
+        headers=headers,
+        content=body if body else None,
+        timeout=120.0,
+        stream=True,
+        cant_reach_detail="Cannot reach differ server",
+    )
 
     content_type = upstream_resp.headers.get("content-type", "")
     is_streaming = "text/event-stream" in content_type
