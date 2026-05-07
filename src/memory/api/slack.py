@@ -894,9 +894,9 @@ SLACK_EVENT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 SLACK_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60  # 5 min — Slack's documented window
 SLACK_EVENT_REPLAY_TTL_SECONDS = 6 * 60  # 6 min — slightly larger than skew
 
-# Rate limits per slack-changes.md §3.3 step 3-4
-SLACK_EVENT_PER_IP_BURST = 10
-SLACK_EVENT_PER_IP_SUSTAINED = 2  # tokens/sec
+# Per-app rate limit (per slack-changes.md §3.3 step 4). No per-IP bucket
+# because the endpoint is fronted by a reverse proxy that handles IP-level
+# limiting upstream.
 SLACK_EVENT_PER_APP_BURST = 50
 
 UNIFORM_REJECT_BODY = b"invalid request"
@@ -1078,29 +1078,6 @@ def _uniform_401() -> Response:
         status_code=401,
         media_type="application/octet-stream",
     )
-
-
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP for per-IP rate limiting.
-
-    Trusts ``X-Forwarded-For`` only when ``settings.TRUST_PROXY_HEADERS`` is
-    explicitly enabled — spoofing the header is trivial otherwise. Falls back
-    to the direct peer address.
-
-    Note: when ``TRUST_PROXY_HEADERS`` is False (the default) and the service
-    is deployed behind a reverse proxy (cloudflare, nginx, ALB), this function
-    returns the *proxy's* IP — so the per-IP rate limit becomes effectively
-    per-LB-IP, not per-client. Operators behind a trusted proxy should flip
-    the toggle to get per-client granularity.
-    """
-    if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            # Leftmost is the original client per RFC 7239 convention.
-            return forwarded.split(",")[0].strip()
-    if request.client is None:
-        return "unknown"
-    return request.client.host
 
 
 def _check_token_bucket(
@@ -1370,17 +1347,9 @@ async def slack_events(
     if skew > SLACK_EVENT_MAX_TS_SKEW_SECONDS:
         return _uniform_401()
 
-    # 3. Per-IP token bucket.
-    ip_ok = _check_token_bucket(
-        redis_client,
-        f"slack_event_ip_bucket:{_client_ip(request)}",
-        SLACK_EVENT_PER_IP_BURST,
-        SLACK_EVENT_PER_IP_SUSTAINED,
-    )
-    if not ip_ok:
-        return _uniform_401()
-
-    # 4. Per-app token bucket (well above Slack's normal delivery rate).
+    # 3. Per-app token bucket (well above Slack's normal delivery rate).
+    # No per-IP bucket: this endpoint is fronted by a reverse proxy
+    # (nginx/cloudflare) which already does IP-level rate limiting.
     app_ok = _check_token_bucket(
         redis_client,
         f"slack_event_app_bucket:{slack_app_id}",

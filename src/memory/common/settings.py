@@ -262,12 +262,6 @@ API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
 API_RATE_LIMIT_SEARCH = os.getenv("API_RATE_LIMIT_SEARCH", "30/minute")
 # Auth endpoints have stricter limits to prevent brute force
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
-# When True, trust X-Forwarded-For for per-client identification (rate limits,
-# audit logs). Only enable behind a reverse proxy you control (cloudflare,
-# nginx, ALB) — otherwise the header is trivially spoofable. When False,
-# per-client features key off the direct peer address, which behind a proxy
-# is the proxy's IP, not the client's (effective rate limit is per-LB-IP).
-TRUST_PROXY_HEADERS = boolean_env("TRUST_PROXY_HEADERS", False)
 
 # Claude scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
