@@ -27,8 +27,10 @@ TITLE_MATCH_BOOST = 0.01
 # that the user is looking for specific known content
 RECALLED_TITLE_BOOST = 0.05
 
-# Bonus multiplier for popularity (applied as: score * (1 + POPULARITY_BOOST * (popularity - 1)))
-# This gives a small boost to popular items without dominating relevance
+# Additive popularity bonus (applied as: score += POPULARITY_BOOST * (popularity - 1))
+# This gives a small boost to popular items without dominating relevance.
+# Additive (rather than multiplicative) keeps the boost direction correct
+# even for negative scores from e.g. cross-encoder reranker logits.
 POPULARITY_BOOST = 0.02
 
 # Recency boost settings

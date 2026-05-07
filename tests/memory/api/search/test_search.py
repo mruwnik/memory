@@ -313,17 +313,21 @@ def test_apply_source_boosts_none_title(mock_make_session):
 
 
 @pytest.mark.parametrize(
-    "popularity,initial_score,expected_multiplier",
+    "popularity,initial_score,expected_delta",
     [
-        (1.0, 0.5, 1.0),  # Default popularity, no change
-        (2.0, 0.5, 1.0 + POPULARITY_BOOST),  # High popularity
-        (0.5, 0.5, 1.0 - POPULARITY_BOOST * 0.5),  # Low popularity
-        (1.5, 1.0, 1.0 + POPULARITY_BOOST * 0.5),  # Moderate popularity
+        (1.0, 0.5, 0.0),  # Default popularity, no change
+        (2.0, 0.5, POPULARITY_BOOST),  # High popularity, +POPULARITY_BOOST
+        (0.5, 0.5, -POPULARITY_BOOST * 0.5),  # Low popularity, small penalty
+        (1.5, 1.0, POPULARITY_BOOST * 0.5),  # Moderate popularity
+        # Regression for the multiplicative-on-negative-scores bug:
+        # additive boost preserves direction even when the input score
+        # is negative (e.g. cross-encoder reranker logits).
+        (2.0, -0.5, POPULARITY_BOOST),
     ],
 )
 @patch("memory.api.search.search.make_session")
-def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_score, expected_multiplier):
-    """Should boost chunks based on source popularity."""
+def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_score, expected_delta):
+    """Should boost chunks based on source popularity (additive)."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
     mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
@@ -337,7 +341,7 @@ def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_s
     chunks = [_make_boost_chunk(1, initial_score)]
     apply_source_boosts(chunks, set())  # No query terms, just popularity
 
-    expected = initial_score * expected_multiplier
+    expected = initial_score + expected_delta
     assert chunks[0].relevance_score == pytest.approx(expected)
 
 
@@ -366,8 +370,8 @@ def test_apply_source_boosts_multiple_sources(mock_make_session):
     chunks = [_make_boost_chunk(1, 0.5), _make_boost_chunk(2, 0.5)]
     apply_source_boosts(chunks, set())
 
-    # Source 1 should be boosted
-    assert chunks[0].relevance_score == pytest.approx(0.5 * (1.0 + POPULARITY_BOOST))
+    # Source 1 should be boosted (additive)
+    assert chunks[0].relevance_score == pytest.approx(0.5 + POPULARITY_BOOST)
     # Source 2 should be unchanged (popularity = 1.0)
     assert chunks[1].relevance_score == 0.5
 

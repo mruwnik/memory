@@ -155,11 +155,17 @@ def apply_source_boosts(
                     score += RECALLED_TITLE_BOOST
                     break
 
-        # Apply popularity boost
+        # Apply popularity boost (additive, like the other boosts in this
+        # function). The previous implementation was multiplicative
+        # (`score *= (1 + POPULARITY_BOOST * (popularity - 1))`), which
+        # inverted direction for any negative score: cross-encoder
+        # rerankers emit unbounded real-valued logits including negatives,
+        # so popular bad-match items would rank *worse* than equally-bad
+        # unpopular items. Additive avoids that and matches how recency
+        # and title boosts compose.
         popularity = source_data.get("popularity", 1.0)
         if popularity != 1.0:
-            multiplier = 1.0 + POPULARITY_BOOST * (popularity - 1.0)
-            score *= multiplier
+            score += POPULARITY_BOOST * (popularity - 1.0)
 
         # Apply recency boost (exponential decay with half-life)
         inserted_at = source_data.get("inserted_at")
