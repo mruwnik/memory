@@ -9,7 +9,7 @@ ownership filter — secure default. Operators can attribute legacy
 rows to a real user with a manual UPDATE if desired.
 
 Revision ID: 20260507_article_feed_user_id
-Revises: 20260506_transcript_accounts
+Revises: 20260507_snapshot_user_dedup
 Create Date: 2026-05-07
 """
 
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260507_article_feed_user_id"
-down_revision: Union[str, None] = "20260506_transcript_accounts"
+down_revision: Union[str, None] = "20260507_snapshot_user_dedup"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

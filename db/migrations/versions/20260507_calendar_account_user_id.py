@@ -10,8 +10,22 @@ CalDAV accounts pre-dating this migration are left with NULL user_id; they
 become admin-only (via get_user_account) until an admin reassigns them, which
 is the secure default.
 
+OPERATOR-VISIBLE BREAKING CHANGE
+--------------------------------
+Pre-migration, ``get_events_in_range`` returned every CalDAV event to every
+user (the old filter only excluded NULL ``google_account_id``). After this
+migration the filter scopes by ``CalendarAccount.user_id``, and legacy
+CalDAV rows (left at NULL above) are excluded from non-admin views.
+
+Symptom on upgrade: end users with CalDAV-only calendars report "my CalDAV
+events disappeared". Resolution: an admin must reassign each affected row
+via ``PATCH /calendar-accounts/{id}`` (or a manual UPDATE) to set
+``user_id`` to the real owner. This is intentional — the prior behavior was
+a real cross-tenant leak and we prefer secure-default-with-followup over
+silent over-disclosure. Document this in your release notes.
+
 Revision ID: 20260507_calendar_account_user_id
-Revises: 20260506_transcript_accounts
+Revises: 20260507_article_feed_user_id
 Create Date: 2026-05-07
 """
 
@@ -22,7 +36,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260507_calendar_account_user_id"
-down_revision: Union[str, None] = "20260506_transcript_accounts"
+down_revision: Union[str, None] = "20260507_article_feed_user_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
