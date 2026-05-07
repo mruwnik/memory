@@ -58,6 +58,23 @@ async def upsert(
     if not user or user_id is None:
         return {"error": "Authentication required to create reports"}
 
+    # Stored XSS guard: serve_report applies a permissive CSP
+    # ("script-src 'self' 'unsafe-inline'" + sandbox allow-same-origin)
+    # whenever a Report row has allow_scripts=True. That CSP lets uploaded
+    # HTML run inline scripts as the API origin and read JS-readable cookies
+    # like access_token/session_id. Letting any reports:write caller flip the
+    # flag is account takeover via cross-user phishing. The flag is intended
+    # for admin-curated / system-generated reports only — match the REST
+    # /reports/upload endpoint's admin gate. (CWE-79 / OWASP A03:2021.)
+    is_admin = has_admin_scope(user)
+    if allow_scripts and not is_admin:
+        return {"error": "allow_scripts=true requires admin scope"}
+    # Same logic for allowed_connect_urls: it widens connect-src in the
+    # CSP. Ignore the field for non-admins rather than error — keeps the
+    # upsert flow usable, mirroring the REST endpoint's behaviour.
+    if not is_admin:
+        allowed_connect_urls = None
+
     # Validate allowed_connect_urls to prevent CSP directive injection.
     if allowed_connect_urls:
         bad = find_invalid_csp_sources(allowed_connect_urls)
