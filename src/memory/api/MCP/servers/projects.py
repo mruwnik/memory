@@ -26,37 +26,6 @@ from memory.common.access_control import (
     get_user_team_ids,
     has_admin_scope,
 )
-
-
-# Team roles `lead` and `admin` map to project roles `manager` and `admin`
-# respectively (see access_control.role_mapping). These are the two roles
-# considered "authoritative" for administering a project — a `member`
-# (project role `contributor`) can read but cannot delete or wholesale-
-# replace the team list. Centralised here so delete() and update_project()
-# stay in lockstep.
-_PROJECT_ADMIN_ROLES = frozenset({"manager", "admin"})
-
-
-def caller_can_administer_project(session, user, project_id: int) -> bool:
-    """Return True iff ``user`` may delete or wholesale-replace teams on ``project_id``.
-
-    A caller is authoritative for a project if any of the following hold:
-
-    1. They have the global admin scope (``"*"``) — superadmin bypass.
-    2. They hold ``lead`` or ``admin`` role in at least one team currently
-       assigned to the project (i.e. their *project role* is ``manager``
-       or ``admin``).
-
-    A bare ``member`` / ``contributor`` is NOT authoritative; they can read
-    the project (filter_projects_query lets them through) but they cannot
-    administer it. The previous behaviour conflated read access with
-    administer authority, letting a contributor on any one of N assigned
-    teams delete the project or kick the other teams off it.
-    """
-    if has_admin_scope(user):
-        return True
-    project_roles = get_user_project_roles(session, user)
-    return project_roles.get(project_id) in _PROJECT_ADMIN_ROLES
 from memory.common.scopes import SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import Project, Team
@@ -101,6 +70,37 @@ projects_mcp = FastMCP("memory-projects")
 # positive integers, and 0 is unambiguous. The two conventions coexist intentionally;
 # unifying them would add complexity without benefit.
 _UNSET = "__UNSET__"
+
+
+# Team roles `lead` and `admin` map to project roles `manager` and `admin`
+# respectively (see access_control.role_mapping). These are the two roles
+# considered "authoritative" for administering a project — a `member`
+# (project role `contributor`) can read but cannot delete or wholesale-
+# replace the team list. Centralised here so delete() and update_project()
+# stay in lockstep.
+_PROJECT_ADMIN_ROLES = frozenset({"manager", "admin"})
+
+
+def caller_can_administer_project(session, user, project_id: int) -> bool:
+    """Return True iff ``user`` may delete or wholesale-replace teams on ``project_id``.
+
+    A caller is authoritative for a project if any of the following hold:
+
+    1. They have the global admin scope (``"*"``) — superadmin bypass.
+    2. They hold ``lead`` or ``admin`` role in at least one team currently
+       assigned to the project (i.e. their *project role* is ``manager``
+       or ``admin``).
+
+    A bare ``member`` / ``contributor`` is NOT authoritative; they can read
+    the project (filter_projects_query lets them through) but they cannot
+    administer it. The previous behaviour conflated read access with
+    administer authority, letting a contributor on any one of N assigned
+    teams delete the project or kick the other teams off it.
+    """
+    if has_admin_scope(user):
+        return True
+    project_roles = get_user_project_roles(session, user)
+    return project_roles.get(project_id) in _PROJECT_ADMIN_ROLES
 
 
 def _project_error_response(exc: ProjectError) -> dict:
