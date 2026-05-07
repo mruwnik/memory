@@ -19,14 +19,11 @@ from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import TranscriptAccount
-from memory.workers.tasks.transcripts import PROVIDERS
+from memory.common.transcripts import SUPPORTED_PROVIDERS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transcript-accounts", tags=["transcript-accounts"])
-
-
-SUPPORTED_PROVIDERS = sorted(PROVIDERS.keys())
 
 
 class TranscriptAccountCreate(BaseModel):
@@ -114,8 +111,7 @@ def create_account(
 ) -> TranscriptAccountResponse:
     """Create a new transcript account.
 
-    Admins create on their own user_id (no impersonation here); to create
-    an account on behalf of another user, use tools/add_transcript_account.py.
+    Admins create on their own user_id (no impersonation here).
     """
     if data.provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(

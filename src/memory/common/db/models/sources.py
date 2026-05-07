@@ -1269,9 +1269,10 @@ class TranscriptAccount(Base):
     )
 
     # NOTE: provider validation is enforced at sync time via the PROVIDERS
-    # dispatch dict in workers/tasks/transcripts.py rather than a DB-level
-    # CHECK constraint. Adding a new provider then only requires updating
-    # the PROVIDERS dict (and CLI argparse choices), not a schema migration.
+    # dispatch dict in workers/tasks/transcripts.py (asserted to match the
+    # canonical memory.common.transcripts.SUPPORTED_PROVIDERS) rather than
+    # a DB-level CHECK constraint. Adding a new provider only requires
+    # updating those two, not a schema migration.
     __table_args__ = (
         CheckConstraint(
             "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
