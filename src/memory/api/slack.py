@@ -14,12 +14,12 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
-import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
@@ -905,9 +905,164 @@ oracle: header issues, signature failures, replay hits all look the same to
 the caller)."""
 
 
-def _slack_redis() -> redis.Redis:
-    """Use the same redis broker as the celery worker side."""
-    return redis.from_url(settings.REDIS_URL)
+class _InMemorySlackStore:
+    """Process-local TTL key/value store backing the events endpoint and
+    wizard. Mimics the subset of the redis-py API used here so callers stay
+    unchanged.
+
+    Scope: this is a deliberate single-process design. Memory's API container
+    runs a single uvicorn worker (see docker/api/Dockerfile), so the replay
+    cache, token buckets, wizard nonces, and event counters all live inside
+    one process. Multi-worker deployments would lose dedup correctness across
+    workers — call out before adding ``--workers N`` to the API service.
+
+    Implementation notes:
+    - Lazy expiry on access (no background scrubber).
+    - Single ``RLock`` for thread safety; uvicorn's threadpool path can call
+      sync routes from worker threads.
+    - Methods return bytes for ``get`` to match redis-py's behavior (callers
+      already handle the bytes/str ambiguity).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        # value: stored bytes; expires_at: monotonic seconds (or None for no TTL).
+        self._kv: dict[str, tuple[bytes, float | None]] = {}
+        # Hash storage for token-bucket state. Same expiry semantics.
+        self._hashes: dict[str, tuple[dict[str, str], float | None]] = {}
+
+    @staticmethod
+    def _coerce_bytes(value: Any) -> bytes:
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, (int, float)):
+            return str(value).encode()
+        return str(value).encode()
+
+    def _get_unexpired(self, store: dict, key: str, now: float):
+        entry = store.get(key)
+        if entry is None:
+            return None
+        _, expires_at = entry
+        if expires_at is not None and expires_at <= now:
+            store.pop(key, None)
+            return None
+        return entry
+
+    def get(self, key: str):
+        with self._lock:
+            entry = self._get_unexpired(self._kv, key, time.monotonic())
+            return entry[0] if entry is not None else None
+
+    def set(
+        self,
+        key: str,
+        value: Any,
+        ex: int | None = None,
+        nx: bool = False,
+    ):
+        with self._lock:
+            now = time.monotonic()
+            existing = self._get_unexpired(self._kv, key, now)
+            if nx and existing is not None:
+                return None
+            expires_at = now + ex if ex is not None else None
+            self._kv[key] = (self._coerce_bytes(value), expires_at)
+            return True
+
+    def delete(self, key: str) -> int:
+        with self._lock:
+            return 1 if self._kv.pop(key, None) is not None else 0
+
+    def incr(self, key: str) -> int:
+        with self._lock:
+            now = time.monotonic()
+            entry = self._get_unexpired(self._kv, key, now)
+            current = int(entry[0]) if entry is not None else 0
+            new_value = current + 1
+            expires_at = entry[1] if entry is not None else None
+            self._kv[key] = (str(new_value).encode(), expires_at)
+            return new_value
+
+    def expire(self, key: str, seconds: int) -> int:
+        with self._lock:
+            now = time.monotonic()
+            entry = self._get_unexpired(self._kv, key, now)
+            if entry is not None:
+                self._kv[key] = (entry[0], now + seconds)
+                return 1
+            hentry = self._get_unexpired(self._hashes, key, now)
+            if hentry is not None:
+                self._hashes[key] = (hentry[0], now + seconds)
+                return 1
+            return 0
+
+    def hgetall(self, key: str) -> dict[bytes, bytes]:
+        with self._lock:
+            entry = self._get_unexpired(self._hashes, key, time.monotonic())
+            if entry is None:
+                return {}
+            mapping, _ = entry
+            return {k.encode(): v.encode() for k, v in mapping.items()}
+
+    def hset(self, key: str, mapping: dict[str, str]) -> int:
+        with self._lock:
+            now = time.monotonic()
+            entry = self._get_unexpired(self._hashes, key, now)
+            current_mapping = dict(entry[0]) if entry is not None else {}
+            expires_at = entry[1] if entry is not None else None
+            current_mapping.update({k: str(v) for k, v in mapping.items()})
+            self._hashes[key] = (current_mapping, expires_at)
+            return len(mapping)
+
+    def pipeline(self):
+        return _InMemoryPipeline(self)
+
+
+class _InMemoryPipeline:
+    """Tiny shim mimicking redis-py's pipeline API for the only call shape
+    used here: queue ``hgetall`` + ``expire``, then ``execute`` returns the
+    list of results in order."""
+
+    def __init__(self, store: "_InMemorySlackStore") -> None:
+        self._store = store
+        self._ops: list[tuple[str, tuple, dict]] = []
+
+    def hgetall(self, key: str):
+        self._ops.append(("hgetall", (key,), {}))
+        return self
+
+    def expire(self, key: str, seconds: int):
+        self._ops.append(("expire", (key, seconds), {}))
+        return self
+
+    def incr(self, key: str):
+        self._ops.append(("incr", (key,), {}))
+        return self
+
+    def hset(self, key: str, mapping: dict[str, str]):
+        self._ops.append(("hset", (key,), {"mapping": mapping}))
+        return self
+
+    def execute(self) -> list[Any]:
+        results: list[Any] = []
+        for name, args, kwargs in self._ops:
+            method = getattr(self._store, name)
+            results.append(method(*args, **kwargs))
+        self._ops.clear()
+        return results
+
+
+_slack_inmem_store = _InMemorySlackStore()
+
+
+def _slack_redis() -> _InMemorySlackStore:
+    """Process-local in-memory store used for replay cache, token buckets,
+    wizard nonces, and the rolling event counter. Named ``_slack_redis`` for
+    historical reasons — no actual Redis is involved. See
+    ``_InMemorySlackStore`` for the deployment scope this assumes.
+    """
+    return _slack_inmem_store
 
 
 def _events_logger() -> logging.Logger:
@@ -949,7 +1104,7 @@ def _client_ip(request: Request) -> str:
 
 
 def _check_token_bucket(
-    client: redis.Redis, key: str, capacity: int, refill_per_sec: float
+    client: "_InMemorySlackStore", key: str, capacity: int, refill_per_sec: float
 ) -> bool:
     """Atomic-ish token-bucket check via Redis.
 
@@ -999,7 +1154,7 @@ def _verify_slack_signature(
     return hmac.compare_digest(digest, expected_hex)
 
 
-def _bump_event_counter(client: redis.Redis, slack_app_id: int) -> None:
+def _bump_event_counter(client: "_InMemorySlackStore", slack_app_id: int) -> None:
     """Bump the rolling-24h counter the watchdog reads.
 
     Implementation: a single counter with a 24h TTL — refreshed on each
@@ -1149,7 +1304,7 @@ def _dispatch_event_callback(
 
 
 def _check_test_message_token(
-    client: redis.Redis, slack_app_id: int, body: dict
+    client: "_InMemorySlackStore", slack_app_id: int, body: dict
 ) -> None:
     """Wizard step-6 hook: if there's an active test-message token in Redis
     AND a `message` event for this app contains it, advance the SlackApp
