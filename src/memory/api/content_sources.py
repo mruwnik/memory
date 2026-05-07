@@ -314,6 +314,28 @@ async def upload_report(
 
     report_format = "pdf" if ext == ".pdf" else "html"
 
+    # Stored XSS guard: serve_report applies a permissive CSP
+    # ("script-src 'self' 'unsafe-inline'" + sandbox allow-same-origin)
+    # whenever a Report row has allow_scripts=True. That CSP lets uploaded
+    # HTML run inline scripts as the API origin and read JS-readable cookies
+    # like access_token/session_id. Letting any authenticated caller flip
+    # the flag is account takeover via cross-user phishing. The flag is
+    # intended for admin-curated / system-generated reports only — admins
+    # can still set it explicitly here, and background workers bypass this
+    # endpoint entirely. (CWE-79 / OWASP A03:2021.)
+    is_admin = has_admin_scope(user)
+    if allow_scripts and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="allow_scripts=true requires admin scope",
+        )
+    # Same logic for allowed_connect_urls: it widens connect-src in the
+    # CSP only when allow_scripts is also on, but a future serve_report
+    # change could honour it independently. Ignore the field for non-admins
+    # rather than 403 — keeps the upload flow usable.
+    if not is_admin:
+        allowed_connect_urls = ""
+
     settings.REPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     content = await file.read()
