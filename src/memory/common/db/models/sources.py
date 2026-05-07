@@ -1065,6 +1065,13 @@ class CalendarAccount(Base):
     __tablename__ = "calendar_accounts"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Owner. Nullable only because a backfill migration cannot infer the owner
+    # for legacy CalDAV rows (no google_account link). The API always sets this
+    # on creation, and get_user_account(...) gates access to NULL-owner rows
+    # to admins only — keeping the secure default until an admin reassigns.
+    user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
 
     # Calendar type
@@ -1147,6 +1154,9 @@ class CalendarAccount(Base):
     )
 
     # Relationships
+    user: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[user_id], backref="calendar_accounts"
+    )
     google_account: Mapped[GoogleAccount | None] = relationship(
         "GoogleAccount", foreign_keys=[google_account_id]
     )
@@ -1163,6 +1173,7 @@ class CalendarAccount(Base):
         Index("calendar_accounts_active_idx", "active", "last_sync_at"),
         Index("calendar_accounts_type_idx", "calendar_type"),
         Index("calendar_accounts_project_idx", "project_id"),
+        Index("calendar_accounts_user_idx", "user_id"),
     )
 
 

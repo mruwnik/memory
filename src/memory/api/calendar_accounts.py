@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -122,15 +123,8 @@ def list_accounts(
     """List calendar accounts. Admins can view any user's accounts or all accounts."""
     resolved_user_id = resolve_user_filter(user_id, user, db)
     query = db.query(CalendarAccount)
-
     if resolved_user_id is not None:
-        # Filter by user: join through GoogleAccount to get user_id
-        # CalDAV accounts without google_account are excluded when filtering by user
-        query = (
-            query
-            .outerjoin(GoogleAccount, CalendarAccount.google_account_id == GoogleAccount.id)
-            .filter(GoogleAccount.user_id == resolved_user_id)
-        )
+        query = query.filter(CalendarAccount.user_id == resolved_user_id)
 
     accounts = query.all()
     return [account_to_response(account) for account in accounts]
@@ -156,12 +150,13 @@ def create_account(
                 status_code=400,
                 detail="Google Calendar accounts require google_account_id",
             )
-        # Verify the Google account exists
+        # Verify the Google account exists AND belongs to this user
         google_account = db.get(GoogleAccount, data.google_account_id)
-        if not google_account:
+        if not google_account or google_account.user_id != user.id:
             raise HTTPException(status_code=400, detail="Google account not found")
 
     account = CalendarAccount(
+        user_id=user.id,
         name=data.name,
         calendar_type=data.calendar_type,
         caldav_url=data.caldav_url,
@@ -190,9 +185,7 @@ def get_account(
     db: Session = Depends(get_session),
 ) -> CalendarAccountResponse:
     """Get a single calendar account."""
-    account = db.get(CalendarAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, CalendarAccount, account_id, user)
     return account_to_response(account)
 
 
@@ -204,9 +197,7 @@ def update_account(
     db: Session = Depends(get_session),
 ) -> CalendarAccountResponse:
     """Update a calendar account."""
-    account = db.get(CalendarAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, CalendarAccount, account_id, user)
 
     if updates.name is not None:
         account.name = updates.name
@@ -217,9 +208,12 @@ def update_account(
     if updates.caldav_password is not None:
         account.caldav_password = updates.caldav_password
     if updates.google_account_id is not None:
-        # Verify the Google account exists
+        # Verify the Google account exists AND belongs to the caller (or admin)
         google_account = db.get(GoogleAccount, updates.google_account_id)
-        if not google_account:
+        if not google_account or (
+            google_account.user_id != user.id
+            and not has_admin_scope(user)
+        ):
             raise HTTPException(status_code=400, detail="Google account not found")
         account.google_account_id = updates.google_account_id
     if updates.calendar_ids is not None:
@@ -252,9 +246,7 @@ def delete_account(
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
     """Delete a calendar account."""
-    account = db.get(CalendarAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = get_user_account(db, CalendarAccount, account_id, user)
 
     db.delete(account)
     db.commit()
@@ -272,9 +264,7 @@ def trigger_sync(
     """Manually trigger a sync for a calendar account."""
     from memory.common.celery_app import app, SYNC_CALENDAR_ACCOUNT
 
-    account = db.get(CalendarAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    get_user_account(db, CalendarAccount, account_id, user)  # Verify ownership
 
     task = app.send_task(
         SYNC_CALENDAR_ACCOUNT,

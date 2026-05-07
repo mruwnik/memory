@@ -4,6 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
+from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 
 
@@ -22,6 +23,7 @@ def test_list_accounts_returns_all_accounts(client, db_session, user):
     db_session.commit()
 
     account1 = CalendarAccount(
+        user_id=user.id,
         name="Work Calendar",
         calendar_type="caldav",
         caldav_url="https://cal.example.com/dav",
@@ -34,6 +36,7 @@ def test_list_accounts_returns_all_accounts(client, db_session, user):
         sync_future_days=90,
     )
     account2 = CalendarAccount(
+        user_id=user.id,
         name="Personal Calendar",
         calendar_type="google",
         google_account_id=google_account.id,
@@ -601,3 +604,130 @@ def test_account_to_response_google_with_account(db_session, user):
     assert response.google_account_id == google_account.id
     assert response.google_account is not None
     assert response.google_account.email == "test@gmail.com"
+
+
+# ====== IDOR / ownership tests ======
+# Regression tests for the IDOR vulnerability where any authenticated user
+# could read/update/delete/sync any other user's calendar account.
+
+
+def _make_other_user(db_session) -> HumanUser:
+    other = HumanUser(
+        id=999,
+        email="other@example.com",
+        name="Other User",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(other)
+    db_session.flush()
+    return other
+
+
+def _make_account(db_session, owner_id: int, name: str = "Other CalDAV") -> CalendarAccount:
+    account = CalendarAccount(
+        user_id=owner_id,
+        name=name,
+        calendar_type="caldav",
+        caldav_url="https://other.example.com/dav",
+        caldav_username="otheruser",
+        caldav_password="otherpass",
+        check_interval=15,
+        sync_past_days=30,
+        sync_future_days=90,
+    )
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+def test_get_account_not_owned_returns_404_for_non_admin(regular_client, user, db_session):
+    """Non-admin cannot read another user's calendar account (IDOR fix)."""
+    other = _make_other_user(db_session)
+    other_account = _make_account(db_session, other.id)
+
+    response = regular_client.get(f"/calendar-accounts/{other_account.id}")
+
+    assert response.status_code == 404
+
+
+def test_update_account_not_owned_returns_404_for_non_admin(regular_client, user, db_session):
+    """Non-admin cannot mutate another user's calendar account (IDOR fix)."""
+    other = _make_other_user(db_session)
+    other_account = _make_account(db_session, other.id)
+
+    response = regular_client.patch(
+        f"/calendar-accounts/{other_account.id}",
+        json={"caldav_url": "https://attacker.example.com/dav"},
+    )
+
+    assert response.status_code == 404
+    # Confirm DB unchanged
+    db_session.refresh(other_account)
+    assert other_account.caldav_url == "https://other.example.com/dav"
+
+
+def test_delete_account_not_owned_returns_404_for_non_admin(regular_client, user, db_session):
+    """Non-admin cannot delete another user's calendar account (IDOR fix)."""
+    other = _make_other_user(db_session)
+    other_account = _make_account(db_session, other.id)
+
+    response = regular_client.delete(f"/calendar-accounts/{other_account.id}")
+
+    assert response.status_code == 404
+    # Confirm row still present
+    assert db_session.query(CalendarAccount).filter_by(id=other_account.id).first() is not None
+
+
+@patch("memory.common.celery_app.app")
+def test_trigger_sync_not_owned_returns_404_for_non_admin(
+    mock_app, regular_client, user, db_session
+):
+    """Non-admin cannot trigger sync on another user's calendar account (IDOR fix)."""
+    other = _make_other_user(db_session)
+    other_account = _make_account(db_session, other.id)
+
+    response = regular_client.post(f"/calendar-accounts/{other_account.id}/sync")
+
+    assert response.status_code == 404
+    mock_app.send_task.assert_not_called()
+
+
+def test_create_account_sets_user_id_to_caller(client, db_session, user):
+    """New CalDAV account is owned by the authenticated caller."""
+    payload = {
+        "name": "Mine",
+        "calendar_type": "caldav",
+        "caldav_url": "https://cal.example.com",
+        "caldav_username": "u",
+        "caldav_password": "p",
+    }
+
+    response = client.post("/calendar-accounts", json=payload)
+
+    assert response.status_code == 200
+    account = db_session.query(CalendarAccount).filter_by(name="Mine").first()
+    assert account is not None
+    assert account.user_id == user.id
+
+
+def test_create_google_account_rejects_other_users_google_account(client, db_session, user):
+    """Cannot create a Google calendar bound to another user's GoogleAccount."""
+    other = _make_other_user(db_session)
+    other_ga = GoogleAccount(
+        user_id=other.id,
+        name="Other Google",
+        email="victim@gmail.com",
+    )
+    db_session.add(other_ga)
+    db_session.commit()
+
+    payload = {
+        "name": "Stolen",
+        "calendar_type": "google",
+        "google_account_id": other_ga.id,
+    }
+
+    response = client.post("/calendar-accounts", json=payload)
+
+    assert response.status_code == 400
+    assert "not found" in response.json()["detail"]

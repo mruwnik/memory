@@ -9,7 +9,7 @@ from dateutil.rrule import rrulestr
 
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
-from memory.common.db.models.sources import CalendarAccount, GoogleAccount
+from memory.common.db.models.sources import CalendarAccount
 
 
 class EventDict(TypedDict):
@@ -114,16 +114,13 @@ def get_events_in_range(
     def apply_user_filter(query):  # type: ignore[no-untyped-def]
         if user_ids is None:
             return query
-        # Join through CalendarAccount -> GoogleAccount to filter by user_id
-        # CalDAV accounts without google_account are included for all users
+        # Filter by CalendarAccount.user_id (set on creation; backfilled for
+        # legacy Gmail-linked rows). Legacy CalDAV rows with NULL user_id are
+        # excluded — admins can reassign ownership to make them visible.
         return (
             query
-            .outerjoin(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
-            .outerjoin(GoogleAccount, CalendarAccount.google_account_id == GoogleAccount.id)
-            .filter(
-                (GoogleAccount.user_id.in_(user_ids)) |
-                (CalendarAccount.google_account_id.is_(None))  # Include CalDAV accounts
-            )
+            .join(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
+            .filter(CalendarAccount.user_id.in_(user_ids))
         )
 
     # Get non-recurring events in range
