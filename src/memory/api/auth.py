@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import delete
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from memory.common import settings
@@ -201,6 +202,10 @@ def authenticate_by_api_key(
 
     Uses constant-time comparison to prevent timing attacks.
 
+    For one-time keys, consumes the key atomically (DELETE ... RETURNING):
+    if two concurrent requests present the same ot_* token, only one wins.
+    The race-loser gets ``(None, None)`` instead of double-authenticating.
+
     Args:
         api_key: The API key to authenticate.
         db: Database session.
@@ -220,11 +225,13 @@ def authenticate_by_api_key(
     # Eagerly load user before handle_api_key_use, which may delete/commit
     # (for one-time keys). This prevents DetachedInstanceError on lazy load.
     user = matched_key.user
-    handle_api_key_use(matched_key, db)
+    if not handle_api_key_use(matched_key, db):
+        # Concurrent request consumed the one-time key first.
+        return None, None
     return user, matched_key
 
 
-def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
+def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
     """Handle API key usage: update last_used_at and delete one-time keys.
 
     Warning: This function commits the database session. This is intentional
@@ -232,14 +239,29 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
     preventing replay attacks. For regular keys, this updates the last_used_at
     timestamp immediately.
 
-    For one-time keys specifically, the key is deleted and committed before
-    the request completes. If the subsequent request fails, the key is still
-    gone - this is by design for security (single use).
+    For one-time keys: uses an atomic ``DELETE ... WHERE id=:id RETURNING id``
+    so concurrent requests cannot both succeed. Returns False if another
+    request already consumed the key (race-loser); True otherwise.
+
+    For regular keys: updates last_used_at and returns True.
     """
-    key_record.last_used_at = datetime.now(timezone.utc)
     if key_record.is_one_time:
-        db.delete(key_record)
+        # Detach the in-memory row from this session so SQLAlchemy doesn't
+        # also queue an ORM-level delete that would conflict with the
+        # explicit DELETE we issue below.
+        db.expunge(key_record)
+        result = db.execute(
+            delete(APIKey)
+            .where(APIKey.id == key_record.id)
+            .returning(APIKey.id)
+        )
+        won = result.scalar_one_or_none() is not None
+        db.commit()
+        return won
+
+    key_record.last_used_at = datetime.now(timezone.utc)
     db.commit()
+    return True
 
 
 def authenticate_request(
