@@ -652,7 +652,16 @@ async def oauth_callback_discord(request: Request):
         title = "❌ Invalid Request"
         status_code = 400
     else:
-        # Complete the OAuth flow (exchange code for token)
+        # The OAuth flow does two HTTPS round-trips (token exchange and MCP
+        # tools list). Holding a sync DB session across those `await`s pinned
+        # a connection from the pool for the duration of the upstream calls
+        # — under concurrent OAuth callbacks that's a clean route to pool
+        # starvation. Split into short DB scopes around the network I/O.
+
+        # Phase 1: locate the row and detach it from the session so its
+        # column attributes survive past session close. We pass the detached
+        # object to complete_oauth_flow which mutates its in-memory
+        # attributes; we then write those back in a fresh session.
         with make_session() as session:
             mcp_server = (
                 session.query(MCPServer).filter(MCPServer.state == state).first()
@@ -662,18 +671,51 @@ async def oauth_callback_discord(request: Request):
                     content="MCP server not found",
                     status_code=404,
                 )
-
-            status_code, message = await complete_oauth_flow(mcp_server, code, state)
-            session.commit()
-
-            tools = await mcp_tools_list(
-                cast(str, mcp_server.mcp_server_url), cast(str, mcp_server.access_token)
+            server_id = cast(int, mcp_server.id)
+            # Force-load all columns we'll need post-detach. SQLAlchemy
+            # already loaded them via the SELECT above; the explicit access
+            # documents the dependency and fails fast if the schema changes.
+            _ = (
+                mcp_server.mcp_server_url,
+                mcp_server.client_id,
+                mcp_server.code_verifier,
             )
-            mcp_server.available_tools = [
+            session.expunge(mcp_server)
+
+        # Phase 2: network I/O — no DB connection held.
+        status_code, message = await complete_oauth_flow(mcp_server, code, state)
+
+        # Phase 3: persist the mutations complete_oauth_flow wrote onto the
+        # detached object. Re-fetch by primary key so a concurrent admin
+        # update on the same row isn't clobbered (only the OAuth-token
+        # fields and the temporary state/code_verifier are written).
+        with make_session() as session:
+            server = session.get(MCPServer, server_id)
+            if server is not None:
+                server.access_token = mcp_server.access_token  # type: ignore
+                server.refresh_token = mcp_server.refresh_token  # type: ignore
+                server.token_expires_at = mcp_server.token_expires_at  # type: ignore
+                server.state = mcp_server.state  # type: ignore  # cleared on success
+                server.code_verifier = mcp_server.code_verifier  # type: ignore  # cleared on success
+                session.commit()
+
+        # Phase 4: second network I/O — only on success.
+        if 200 <= status_code < 300:
+            tools = await mcp_tools_list(
+                cast(str, mcp_server.mcp_server_url),
+                cast(str, mcp_server.access_token),
+            )
+            available_tools = [
                 name for tool in tools if (name := tool.get("name"))
             ]
-            session.commit()
             logger.info(f"MCP server tools: {tools}")
+
+            # Phase 5: persist the tool list in a fresh short session.
+            with make_session() as session:
+                server = session.get(MCPServer, server_id)
+                if server is not None:
+                    server.available_tools = available_tools  # type: ignore
+                    session.commit()
 
         if 200 <= status_code < 300:
             title = "✅ Authorization Successful!"

@@ -150,28 +150,62 @@ def test_logout_handles_missing_session(_mock_get_user_session):
     db.commit.assert_not_called()
 
 
+def _mock_oauth_make_session():
+    """Build a make_session double that yields a fresh mock session per call.
+
+    The OAuth callback now uses three short DB scopes (locate-and-detach,
+    persist-tokens, persist-tools) rather than one big session held across
+    the awaits. The factory tracks every session it creates so the test
+    can assert per-session commit/expunge behaviour.
+    """
+    sessions: list[MagicMock] = []
+
+    def _make_session_factory(*_a, **_k):
+        sess = MagicMock()
+        sessions.append(sess)
+
+        @contextmanager
+        def _ctx():
+            yield sess
+
+        return _ctx()
+
+    return _make_session_factory, sessions
+
+
 @pytest.mark.asyncio
 @patch("memory.api.auth.mcp_tools_list", new_callable=AsyncMock)
 @patch("memory.api.auth.complete_oauth_flow", new_callable=AsyncMock)
 @patch("memory.api.auth.make_session")
 async def test_oauth_callback_discord_success(mock_make_session, mock_complete, mock_mcp_tools):
-    mock_session = MagicMock()
-
-    @contextmanager
-    def session_cm():
-        yield mock_session
-
-    mock_make_session.return_value = session_cm()
+    factory, sessions = _mock_oauth_make_session()
+    mock_make_session.side_effect = factory
 
     mcp_server = MagicMock()
+    mcp_server.id = 7
     mcp_server.mcp_server_url = "https://example.com"
+    mcp_server.client_id = "cid"
+    mcp_server.code_verifier = "verifier"
     mcp_server.access_token = "token123"
-    mock_session.query.return_value.filter.return_value.first.return_value = mcp_server
 
     mock_complete.return_value = (200, "Authorized")
     mock_mcp_tools.return_value = [{"name": "test_tool"}]
 
     request = make_request("code=abc123&state=state456")
+
+    # First session: SELECT by state returns the row.
+    # Subsequent sessions: get() returns the same row.
+    # We don't know how many sessions will be created up front (depends on
+    # success/failure), so wire each as it's created.
+    def wired_factory(*a, **k):
+        cm = factory(*a, **k)
+        sess = sessions[-1]
+        sess.query.return_value.filter.return_value.first.return_value = mcp_server
+        sess.get.return_value = mcp_server
+        return cm
+
+    mock_make_session.side_effect = wired_factory
+
     response = await auth.oauth_callback_discord(request)
 
     assert response.status_code == 200
@@ -179,7 +213,14 @@ async def test_oauth_callback_discord_success(mock_make_session, mock_complete, 
     assert "Authorization Successful" in body
     assert "Authorized" in body
     mock_complete.assert_awaited_once_with(mcp_server, "abc123", "state456")
-    assert mock_session.commit.call_count == 2  # Once after complete_oauth_flow, once after tools list
+    # Three sessions: locate-and-detach, persist-tokens, persist-tools.
+    assert len(sessions) == 3
+    # The first session expunges, then closes — no commit there.
+    sessions[0].commit.assert_not_called()
+    sessions[0].expunge.assert_called_once_with(mcp_server)
+    # Subsequent sessions commit once each.
+    sessions[1].commit.assert_called_once()
+    sessions[2].commit.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -189,18 +230,23 @@ async def test_oauth_callback_discord_success(mock_make_session, mock_complete, 
 async def test_oauth_callback_discord_handles_failures(
     mock_make_session, mock_complete, mock_mcp_tools
 ):
-    mock_session = MagicMock()
-
-    @contextmanager
-    def session_cm():
-        yield mock_session
-
-    mock_make_session.return_value = session_cm()
+    factory, sessions = _mock_oauth_make_session()
 
     mcp_server = MagicMock()
+    mcp_server.id = 7
     mcp_server.mcp_server_url = "https://example.com"
+    mcp_server.client_id = "cid"
+    mcp_server.code_verifier = "verifier"
     mcp_server.access_token = "token123"
-    mock_session.query.return_value.filter.return_value.first.return_value = mcp_server
+
+    def wired_factory(*a, **k):
+        cm = factory(*a, **k)
+        sess = sessions[-1]
+        sess.query.return_value.filter.return_value.first.return_value = mcp_server
+        sess.get.return_value = mcp_server
+        return cm
+
+    mock_make_session.side_effect = wired_factory
 
     mock_complete.return_value = (500, "Failure")
     mock_mcp_tools.return_value = []
@@ -213,7 +259,15 @@ async def test_oauth_callback_discord_handles_failures(
     assert "Authorization Failed" in body
     assert "Failure" in body
     mock_complete.assert_awaited_once_with(mcp_server, "abc123", "state456")
-    assert mock_session.commit.call_count == 2  # Once after complete_oauth_flow, once after tools list
+    # On failure: only two sessions (locate-and-detach + persist-tokens).
+    # The tools-list phase is skipped because we never reach the success
+    # branch, so the third session is never opened.
+    assert len(sessions) == 2
+    sessions[0].expunge.assert_called_once_with(mcp_server)
+    sessions[1].commit.assert_called_once()
+    # mcp_tools_list must NOT have been called on failure — that's the
+    # whole point of gating phase 4 on the status code.
+    mock_mcp_tools.assert_not_called()
 
 
 @pytest.mark.asyncio
