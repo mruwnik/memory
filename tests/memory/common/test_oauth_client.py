@@ -198,3 +198,49 @@ def test_validate_state_expired(db_session, oauth_user):
     assert validate_and_consume_state(db_session, signed, "slack") is None
     # Expired row was deleted.
     assert db_session.query(OAuthClientState).filter_by(state=state).count() == 0
+
+
+def test_validate_state_consumes_atomically(db_session, oauth_user):
+    """Regression: validate_and_consume_state must reject the second of two
+    concurrent attempts.
+
+    Previous implementation: SELECT-then-DELETE, where the SELECT could
+    succeed on both calls (race window covered signature/expiry checks)
+    so both completions happened. New impl: single ``DELETE ... RETURNING``
+    so only the race-winner gets a row. We can't trivially simulate true
+    concurrency in a single-process test, but a sequential second call
+    with the same signed state gives the same observable outcome — the
+    second call must return None and find no row to delete.
+    """
+    state = generate_state()
+    store_state(db_session, state, "slack", oauth_user.id)
+    signed = sign_state(state, oauth_user.id)
+
+    # First call wins.
+    first = validate_and_consume_state(db_session, signed, "slack")
+    assert first == oauth_user.id
+
+    # Second call (replay) must NOT succeed — the row was atomically
+    # consumed by the first call.
+    second = validate_and_consume_state(db_session, signed, "slack")
+    assert second is None
+    assert db_session.query(OAuthClientState).filter_by(state=state).count() == 0
+
+
+def test_validate_state_with_bad_signature_consumes_row(db_session, oauth_user):
+    """Brute-forcing the signature against a single token must not work:
+    a single attempt consumes the row regardless of whether the signature
+    verifies. This matches the previous behaviour (which also deleted on
+    bad-signature paths) but now happens atomically.
+    """
+    state = generate_state()
+    store_state(db_session, state, "slack", oauth_user.id)
+    # Sign with the wrong user_id.
+    bogus_signed = sign_state(state, oauth_user.id + 9999)
+
+    assert validate_and_consume_state(db_session, bogus_signed, "slack") is None
+    # The legitimate user can no longer use this state — it was consumed
+    # by the brute-force attempt. (This is by design and matches the
+    # pre-fix semantics; the alternative would let an attacker bombard
+    # signatures with no cost.)
+    assert db_session.query(OAuthClientState).filter_by(state=state).count() == 0
