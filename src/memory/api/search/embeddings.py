@@ -245,10 +245,10 @@ def merge_filters(
 
 async def search_chunks(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
     min_score: float = 0.3,
-    filters: SearchFilters = {},
+    filters: SearchFilters | None = None,
     multimodal: bool = False,
 ) -> dict[str, float]:
     """
@@ -265,6 +265,13 @@ async def search_chunks(
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    # ``None`` sentinels: shared mutable defaults would be a cross-request
+    # leak waiting to happen if anyone in this call chain ever mutates
+    # ``filters`` (e.g. ``filters.setdefault('access_filter', X)``).
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
     search_filters: list[dict[str, Any]] = []
     for key, val in filters.items():
         if key in ("access_filter", "person_id"):
@@ -339,9 +346,9 @@ async def search_chunks(
 
 async def search_chunks_embeddings(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
-    filters: SearchFilters = SearchFilters(),
+    filters: SearchFilters | None = None,
     timeout: int = 2,
 ) -> dict[str, float]:
     """
@@ -350,6 +357,10 @@ async def search_chunks_embeddings(
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = SearchFilters()
     # Note: Multimodal embeddings typically produce higher similarity scores,
     # so we use a higher threshold (0.4) to maintain selectivity.
     # Text embeddings produce lower scores, so we use 0.25.

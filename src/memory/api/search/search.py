@@ -42,9 +42,6 @@ from memory.api.search.rerank import rerank_chunks
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
-# Default config for when none is provided
-_DEFAULT_CONFIG = SearchConfig()
-
 logger = logging.getLogger(__name__)
 
 
@@ -565,11 +562,11 @@ async def _apply_reranking(
 
 async def search_chunks(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
-    filters: SearchFilters = {},
+    filters: SearchFilters | None = None,
     timeout: int = 2,
-    config: SearchConfig = _DEFAULT_CONFIG,
+    config: SearchConfig | None = None,
 ) -> list[Chunk]:
     """
     Search chunks using embedding similarity and optionally BM25.
@@ -586,6 +583,17 @@ async def search_chunks(
     - useReranking: Enable cross-encoder reranking
     - useQueryAnalysis: LLM-based query analysis (extracts modalities, cleans query, generates variants)
     """
+    # ``None`` sentinels: any defaults that look like containers must be
+    # constructed per call. A shared mutable default like ``filters={}``
+    # would let a future ``filters.setdefault(...)`` on the hot path
+    # leak across users via the shared dict identity.
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
+    if config is None:
+        config = SearchConfig()
+
     # Resolve enhancement flags: config overrides global settings
     use_bm25 = (
         config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
@@ -687,9 +695,9 @@ async def search_sources(
 
 async def search(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
-    filters: SearchFilters = {},
-    config: SearchConfig = _DEFAULT_CONFIG,
+    modalities: set[str] | None = None,
+    filters: SearchFilters | None = None,
+    config: SearchConfig | None = None,
 ) -> list[SearchResult]:
     """
     Search across knowledge base using text query and optional files.
@@ -703,6 +711,12 @@ async def search(
     Returns:
     - List of search results sorted by score
     """
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
+    if config is None:
+        config = SearchConfig()
     allowed_modalities = modalities & ALL_COLLECTIONS.keys()
     chunks = await search_chunks(
         data,
