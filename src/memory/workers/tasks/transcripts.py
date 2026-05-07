@@ -41,6 +41,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import TranscriptAccount
 from memory.common.db.models.source_items import Meeting
 from memory.common.content_processing import safe_task_execution
+from memory.common.transcripts import SUPPORTED_PROVIDERS
 from memory.parsers.fireflies import (
     DEFAULT_PAGE_LIMIT,
     FirefliesClient,
@@ -202,6 +203,16 @@ def fireflies_walk(
 PROVIDERS: dict[str, Callable[..., int]] = {
     "fireflies": fireflies_walk,
 }
+
+# The api lists supported providers from memory.common.transcripts (it
+# can't import this module without dragging in workers.tasks.* deps like
+# caldav). Assert the two stay in sync — drift would let the api accept a
+# provider name the worker can't dispatch (every sync would then fail
+# with "unsupported provider").
+assert set(PROVIDERS) == set(SUPPORTED_PROVIDERS), (
+    f"PROVIDERS keys {sorted(PROVIDERS)} != "
+    f"common.transcripts.SUPPORTED_PROVIDERS {SUPPORTED_PROVIDERS}"
+)
 
 
 def quick_floor(account: TranscriptAccount, db: DBSession) -> datetime:

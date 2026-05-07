@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
-import { useSources, Project } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
 import {
   Modal,
@@ -33,7 +33,7 @@ export const DiscordPanel = () => {
     removeBotUser,
   } = useDiscord()
   const { listUsers } = useUsers()
-  const { listProjects } = useSources()
+  const { listProjects } = useProjects()
 
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])

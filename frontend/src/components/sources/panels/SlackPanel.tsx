@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
-import { useSources, Project } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import {
   EmptyState,
   LoadingState,
@@ -23,7 +23,7 @@ export const SlackPanel = () => {
     listChannels,
     updateChannel,
   } = useSlack()
-  const { listProjects } = useSources()
+  const { listProjects } = useProjects()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, EmailAccount, GoogleAccount, Project } from '@/hooks/useSources'
+import { useSources, EmailAccount, GoogleAccount } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import {
   SourceCard,
   Modal,
@@ -12,7 +13,8 @@ import { styles } from '../styles'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
-  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts, listProjects } = useSources()
+  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts } = useSources()
+  const { listProjects } = useProjects()
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])

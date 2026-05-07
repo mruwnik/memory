@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, CalendarAccount, GoogleAccount, Project } from '@/hooks/useSources'
+import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import {
   Modal,
@@ -22,8 +23,9 @@ interface GroupedEvents {
 export const CalendarPanel = () => {
   const {
     listCalendarAccounts, createCalendarAccount, updateCalendarAccount,
-    deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts, listProjects
+    deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts
   } = useSources()
+  const { listProjects } = useProjects()
   const { userId } = useSourcesContext()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])

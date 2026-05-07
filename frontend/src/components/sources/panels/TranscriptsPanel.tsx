@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, TranscriptAccount, Project } from '@/hooks/useSources'
+import { useSources, TranscriptAccount } from '@/hooks/useSources'
+import { useProjects, Project } from '@/hooks/useProjects'
 import {
   SourceCard,
   Modal,
@@ -20,8 +21,8 @@ export const TranscriptsPanel = () => {
     syncTranscriptAccount,
     rescanTranscriptAccount,
     listTranscriptProviders,
-    listProjects,
   } = useSources()
+  const { listProjects } = useProjects()
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<TranscriptAccount[]>([])
   const [providers, setProviders] = useState<string[]>([])
