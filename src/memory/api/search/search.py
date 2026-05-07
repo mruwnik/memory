@@ -9,6 +9,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import InvalidRequestError, ProgrammingError
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from memory.common import extract, settings
 from memory.common.db.connection import make_session
@@ -121,8 +123,13 @@ def apply_source_boosts(
         for s in sources:
             try:
                 title = (getattr(s, "title", None) or "").lower()
-            except Exception:
-                # Some subclasses have deferred title columns that may fail to load
+            except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
+                # Polymorphic subclasses may have deferred/missing title columns
+                # (e.g. detached instance, schema drift). Anything broader was
+                # swallowing real DB errors and silently zeroing search quality.
+                logger.warning(
+                    "Could not load title for source %s: %s", s.id, e
+                )
                 title = ""
             source_map[s.id] = {
                 "title": title,
@@ -380,8 +387,13 @@ def _fetch_chunks_by_title(
         for source in sources:
             try:
                 title = getattr(source, "title", None)
-            except Exception:
-                # Polymorphic subclass attributes may fail to load with deferred loading
+            except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
+                # Polymorphic subclasses may have deferred/missing title columns
+                # (e.g. detached instance, schema drift). Anything broader was
+                # swallowing real DB errors.
+                logger.warning(
+                    "Could not load title for source %s: %s", source.id, e
+                )
                 title = None
             if title:
                 title_lower = title.lower()
