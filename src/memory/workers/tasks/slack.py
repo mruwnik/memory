@@ -27,7 +27,6 @@ from memory.common import settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
-    SLACK_TOKEN_HEALTH_CHECK,
     SYNC_ALL_SLACK_WORKSPACES,
     SYNC_SLACK_CHANNEL,
     SYNC_SLACK_WORKSPACE,
@@ -1114,73 +1113,3 @@ def update_slack_channel(
             "status": "created" if created else "updated",
             "channel_id": channel_id,
         }
-
-
-@app.task(name=SLACK_TOKEN_HEALTH_CHECK)
-@tracked_task
-def slack_token_health_check() -> dict[str, Any]:
-    """Hourly watchdog (slack-changes.md §3.8 / B6 fix).
-
-    For each SlackApp with ``setup_state='live'``: if zero events landed in
-    the last 24h AND any of its workspaces have ``collect_messages=True``,
-    probe a credential with ``auth.test``. On ``token_revoked`` /
-    ``invalid_auth``, flip ``setup_state='degraded'`` so the dashboard
-    surfaces the problem. Polling continues to run on degraded apps.
-    """
-    redis_client = get_redis_client()
-    flipped: list[int] = []
-    checked: list[int] = []
-
-    with make_session() as session:
-        live_apps = (
-            session.query(SlackApp)
-            .filter(SlackApp.setup_state == "live", SlackApp.is_active.is_(True))
-            .all()
-        )
-
-        for slack_app in live_apps:
-            checked.append(slack_app.id)
-            counter_key = f"slack_events_count:{slack_app.id}"
-            try:
-                events_24h = int(redis_client.get(counter_key) or 0)
-            except (TypeError, ValueError):
-                events_24h = 0
-            if events_24h > 0:
-                continue
-
-            collecting_workspaces = (
-                session.query(SlackWorkspace)
-                .join(
-                    SlackUserCredentials,
-                    SlackUserCredentials.workspace_id == SlackWorkspace.id,
-                )
-                .filter(
-                    SlackUserCredentials.slack_app_id == slack_app.id,
-                    SlackWorkspace.collect_messages.is_(True),
-                )
-                .first()
-            )
-            if collecting_workspaces is None:
-                continue
-
-            cred = get_workspace_credentials(
-                session, collecting_workspaces.id, slack_app.id
-            )
-            if cred is None or cred.access_token is None:
-                continue
-
-            try:
-                with SlackClient(cred.access_token) as client:
-                    client.call("auth.test")
-            except SlackAPIError as e:
-                if e.error in ("token_revoked", "invalid_auth", "token_expired"):
-                    slack_app.setup_state = "degraded"
-                    flipped.append(slack_app.id)
-                    logger.warning(
-                        f"slack_token_health_check: SlackApp {slack_app.id} "
-                        f"flipped to degraded ({e.error})"
-                    )
-        if flipped:
-            session.commit()
-
-    return {"checked": len(checked), "flipped": flipped}

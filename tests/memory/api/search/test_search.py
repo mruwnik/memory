@@ -4,17 +4,25 @@ title boosting, and source deduplication.
 """
 
 import sys
-
-import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from datetime import datetime, timedelta, timezone
+import pytest
 
+from memory.api.search.constants import (
+    POPULARITY_BOOST,
+    QUERY_TERM_BOOST,
+    RECENCY_BOOST_MAX,
+    RECENCY_HALF_LIFE_DAYS,
+    RRF_K,
+    STOPWORDS,
+    TITLE_MATCH_BOOST,
+)
 from memory.api.search.search import (
-    extract_query_terms,
     apply_query_term_boost,
-    deduplicate_by_source,
     apply_source_boosts,
+    deduplicate_by_source,
+    extract_query_terms,
     fuse_scores_rrf,
 )
 
@@ -34,15 +42,6 @@ def test_optional_search_helpers_imported_unconditionally(name):
     """
     mod = sys.modules["memory.api.search.search"]
     assert callable(getattr(mod, name))
-from memory.api.search.constants import (
-    STOPWORDS,
-    QUERY_TERM_BOOST,
-    TITLE_MATCH_BOOST,
-    POPULARITY_BOOST,
-    RECENCY_BOOST_MAX,
-    RECENCY_HALF_LIFE_DAYS,
-    RRF_K,
-)
 
 
 # ============================================================================

@@ -17,7 +17,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Literal
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -900,172 +900,75 @@ SLACK_EVENT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 SLACK_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60  # 5 min — Slack's documented window
 SLACK_EVENT_REPLAY_TTL_SECONDS = 6 * 60  # 6 min — slightly larger than skew
 
-# Per-app rate limit (per slack-changes.md §3.3 step 4).
-SLACK_EVENT_PER_APP_BURST = 50
-
 UNIFORM_REJECT_BODY = b"invalid request"
 """All security-failure responses use this identical body (security M5 — no
 oracle: header issues, signature failures, replay hits all look the same to
 the caller)."""
 
 
-class _InMemorySlackStore:
-    """Process-local TTL key/value store backing the events endpoint and
-    wizard. Mimics the subset of the redis-py API used here so callers stay
-    unchanged.
+# Process-local TTL state for the slack events endpoint and wizard. Single
+# uvicorn worker (see docker/api/Dockerfile), so plain dicts + a lock are
+# fine; multi-worker deployments would lose this state across workers.
+_slack_state_lock = threading.Lock()
+_event_body_seen: dict[str, float] = {}  # body_sha256 → expiry monotonic seconds
+_wizard_nonces: dict[int, tuple[str, float]] = {}  # app_id → (nonce, expiry)
+_test_message_tokens: dict[int, tuple[str, float]] = {}  # app_id → (token, expiry)
 
-    Scope: this is a deliberate single-process design. Memory's API container
-    runs a single uvicorn worker (see docker/api/Dockerfile), so the replay
-    cache, token buckets, wizard nonces, and event counters all live inside
-    one process. Multi-worker deployments would lose dedup correctness across
-    workers — call out before adding ``--workers N`` to the API service.
 
-    Implementation notes:
-    - Lazy expiry on access (no background scrubber).
-    - Single ``RLock`` for thread safety; uvicorn's threadpool path can call
-      sync routes from worker threads.
-    - Methods return bytes for ``get`` to match redis-py's behavior (callers
-      already handle the bytes/str ambiguity).
-    """
+def _register_event_body_seen(body_sha: str, ttl_seconds: int) -> bool:
+    """Returns True if the body is novel (and records it), False if it's a
+    replay we've seen within ``ttl_seconds``."""
+    now = time.monotonic()
+    with _slack_state_lock:
+        # Drop expired entries lazily.
+        expired = [k for k, exp in _event_body_seen.items() if exp <= now]
+        for k in expired:
+            _event_body_seen.pop(k, None)
+        if body_sha in _event_body_seen:
+            return False
+        _event_body_seen[body_sha] = now + ttl_seconds
+        return True
 
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        # value: stored bytes; expires_at: monotonic seconds (or None for no TTL).
-        self._kv: dict[str, tuple[bytes, float | None]] = {}
-        # Hash storage for token-bucket state. Same expiry semantics.
-        self._hashes: dict[str, tuple[dict[str, str], float | None]] = {}
 
-    @staticmethod
-    def _coerce_bytes(value: Any) -> bytes:
-        if isinstance(value, bytes):
-            return value
-        if isinstance(value, (int, float)):
-            return str(value).encode()
-        return str(value).encode()
+def _set_wizard_nonce(slack_app_id: int, nonce: str, ttl_seconds: int) -> None:
+    with _slack_state_lock:
+        _wizard_nonces[slack_app_id] = (nonce, time.monotonic() + ttl_seconds)
 
-    def _get_unexpired(self, store: dict, key: str, now: float):
-        entry = store.get(key)
+
+def _get_wizard_nonce(slack_app_id: int) -> str | None:
+    now = time.monotonic()
+    with _slack_state_lock:
+        entry = _wizard_nonces.get(slack_app_id)
         if entry is None:
             return None
-        _, expires_at = entry
-        if expires_at is not None and expires_at <= now:
-            store.pop(key, None)
+        nonce, expiry = entry
+        if expiry <= now:
+            _wizard_nonces.pop(slack_app_id, None)
             return None
-        return entry
-
-    def get(self, key: str):
-        with self._lock:
-            entry = self._get_unexpired(self._kv, key, time.monotonic())
-            return entry[0] if entry is not None else None
-
-    def set(
-        self,
-        key: str,
-        value: Any,
-        ex: int | None = None,
-        nx: bool = False,
-    ):
-        with self._lock:
-            now = time.monotonic()
-            existing = self._get_unexpired(self._kv, key, now)
-            if nx and existing is not None:
-                return None
-            expires_at = now + ex if ex is not None else None
-            self._kv[key] = (self._coerce_bytes(value), expires_at)
-            return True
-
-    def delete(self, key: str) -> int:
-        with self._lock:
-            return 1 if self._kv.pop(key, None) is not None else 0
-
-    def incr(self, key: str) -> int:
-        with self._lock:
-            now = time.monotonic()
-            entry = self._get_unexpired(self._kv, key, now)
-            current = int(entry[0]) if entry is not None else 0
-            new_value = current + 1
-            expires_at = entry[1] if entry is not None else None
-            self._kv[key] = (str(new_value).encode(), expires_at)
-            return new_value
-
-    def expire(self, key: str, seconds: int) -> int:
-        with self._lock:
-            now = time.monotonic()
-            entry = self._get_unexpired(self._kv, key, now)
-            if entry is not None:
-                self._kv[key] = (entry[0], now + seconds)
-                return 1
-            hentry = self._get_unexpired(self._hashes, key, now)
-            if hentry is not None:
-                self._hashes[key] = (hentry[0], now + seconds)
-                return 1
-            return 0
-
-    def hgetall(self, key: str) -> dict[bytes, bytes]:
-        with self._lock:
-            entry = self._get_unexpired(self._hashes, key, time.monotonic())
-            if entry is None:
-                return {}
-            mapping, _ = entry
-            return {k.encode(): v.encode() for k, v in mapping.items()}
-
-    def hset(self, key: str, mapping: dict[str, str]) -> int:
-        with self._lock:
-            now = time.monotonic()
-            entry = self._get_unexpired(self._hashes, key, now)
-            current_mapping = dict(entry[0]) if entry is not None else {}
-            expires_at = entry[1] if entry is not None else None
-            current_mapping.update({k: str(v) for k, v in mapping.items()})
-            self._hashes[key] = (current_mapping, expires_at)
-            return len(mapping)
-
-    def pipeline(self):
-        return _InMemoryPipeline(self)
+        return nonce
 
 
-class _InMemoryPipeline:
-    """Tiny shim mimicking redis-py's pipeline API for the only call shape
-    used here: queue ``hgetall`` + ``expire``, then ``execute`` returns the
-    list of results in order."""
-
-    def __init__(self, store: "_InMemorySlackStore") -> None:
-        self._store = store
-        self._ops: list[tuple[str, tuple, dict]] = []
-
-    def hgetall(self, key: str):
-        self._ops.append(("hgetall", (key,), {}))
-        return self
-
-    def expire(self, key: str, seconds: int):
-        self._ops.append(("expire", (key, seconds), {}))
-        return self
-
-    def incr(self, key: str):
-        self._ops.append(("incr", (key,), {}))
-        return self
-
-    def hset(self, key: str, mapping: dict[str, str]):
-        self._ops.append(("hset", (key,), {"mapping": mapping}))
-        return self
-
-    def execute(self) -> list[Any]:
-        results: list[Any] = []
-        for name, args, kwargs in self._ops:
-            method = getattr(self._store, name)
-            results.append(method(*args, **kwargs))
-        self._ops.clear()
-        return results
+def _set_test_message_token(slack_app_id: int, token: str, ttl_seconds: int) -> None:
+    with _slack_state_lock:
+        _test_message_tokens[slack_app_id] = (token, time.monotonic() + ttl_seconds)
 
 
-_slack_inmem_store = _InMemorySlackStore()
+def _get_test_message_token(slack_app_id: int) -> str | None:
+    now = time.monotonic()
+    with _slack_state_lock:
+        entry = _test_message_tokens.get(slack_app_id)
+        if entry is None:
+            return None
+        token, expiry = entry
+        if expiry <= now:
+            _test_message_tokens.pop(slack_app_id, None)
+            return None
+        return token
 
 
-def _slack_store() -> _InMemorySlackStore:
-    """Process-local in-memory store used for replay cache, token buckets,
-    wizard nonces, and the rolling event counter. See ``_InMemorySlackStore``
-    for the deployment scope this assumes.
-    """
-    return _slack_inmem_store
+def _clear_test_message_token(slack_app_id: int) -> None:
+    with _slack_state_lock:
+        _test_message_tokens.pop(slack_app_id, None)
 
 
 def _events_logger() -> logging.Logger:
@@ -1081,36 +984,6 @@ def _uniform_401() -> Response:
         status_code=401,
         media_type="application/octet-stream",
     )
-
-
-def _check_token_bucket(
-    client: "_InMemorySlackStore", key: str, capacity: int, refill_per_sec: float
-) -> bool:
-    """Atomic-ish token-bucket check via Redis.
-
-    Returns True if a token was consumed (request allowed). Uses a
-    millisecond-resolution clock and lazy refill; non-strict (a small
-    burst above ``capacity`` is possible under contention but bounded).
-    Acceptable for DoS mitigation — we don't need exact fairness.
-    """
-    now_ms = int(time.time() * 1000)
-    pipe = client.pipeline()
-    pipe.hgetall(key)
-    pipe.expire(key, 120)
-    raw, _ = pipe.execute()
-    state = {k.decode(): v.decode() for k, v in raw.items()} if raw else {}
-
-    last_ms = int(state.get("ts", now_ms))
-    tokens = float(state.get("tokens", capacity))
-    elapsed = max(now_ms - last_ms, 0) / 1000.0
-    tokens = min(capacity, tokens + elapsed * refill_per_sec)
-
-    if tokens < 1.0:
-        client.hset(key, mapping={"tokens": f"{tokens:.4f}", "ts": str(now_ms)})
-        return False
-    tokens -= 1.0
-    client.hset(key, mapping={"tokens": f"{tokens:.4f}", "ts": str(now_ms)})
-    return True
 
 
 def _verify_slack_signature(
@@ -1132,28 +1005,6 @@ def _verify_slack_signature(
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(digest, expected_hex)
-
-
-def _bump_event_counter(client: "_InMemorySlackStore", slack_app_id: int) -> None:
-    """Bump the rolling-24h counter the watchdog reads.
-
-    Implementation: a single counter with a 24h TTL — refreshed on each
-    write. So a fully idle app's counter expires after 24h, which is the
-    exact signal slack_token_health_check looks for.
-    """
-    key = f"slack_events_count:{slack_app_id}"
-    pipe = client.pipeline()
-    pipe.incr(key)
-    pipe.expire(key, 24 * 3600)
-    pipe.execute()
-
-
-def _wizard_nonce_redis_key(slack_app_id: int) -> str:
-    """Wizard nonce is stored as a hash keyed on slack_app_id, with the
-    initiating user_id as the value. We accept any active nonce for the
-    app — user-binding lives in the OAuth state for /slack/callback,
-    not here."""
-    return f"slack_wizard_nonce:{slack_app_id}"
 
 
 def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
@@ -1283,12 +1134,10 @@ def _dispatch_event_callback(
     return {"dispatch": "ignored"}
 
 
-def _check_test_message_token(
-    client: "_InMemorySlackStore", slack_app_id: int, body: dict
-) -> None:
-    """Wizard step-6 hook: if there's an active test-message token in Redis
-    AND a `message` event for this app contains it, advance the SlackApp
-    state to ``live`` (slack-changes.md §3.4 row 6).
+def _check_test_message_token(slack_app_id: int, body: dict) -> None:
+    """Wizard step-6 hook: if there's an active test-message token AND a
+    `message` event for this app contains it, advance the SlackApp state to
+    ``live`` (slack-changes.md §3.4 row 6).
 
     Idempotent: removes the token on match so duplicate events don't keep
     re-flipping state. No-ops when there's no token waiting.
@@ -1299,16 +1148,10 @@ def _check_test_message_token(
     text = event.get("text") or ""
     if not text:
         return
-    key = f"slack_wizard_test_token:{slack_app_id}"
-    raw = client.get(key)
-    if raw is None:
+    token = _get_test_message_token(slack_app_id)
+    if token is None or token not in text:
         return
-    token = raw.decode() if isinstance(raw, bytes) else str(raw)
-    if token not in text:
-        return
-    # Atomically claim the match so a duplicate event doesn't trigger twice.
-    if client.delete(key) == 0:
-        return
+    _clear_test_message_token(slack_app_id)
     with make_session() as session:
         app = session.get(SlackApp, slack_app_id)
         if app is None:
@@ -1326,14 +1169,14 @@ async def slack_events(
     """Slack push events endpoint (slack-changes.md §3.3).
 
     Layered defense:
-      1. Pre-decrypt cheap rejects — body cap, ts skew, per-IP rate limit,
-         per-app rate limit. None of these touch the SlackApp's signing
-         secret, so the OS scheduler sheds DoS traffic before crypto.
+      1. Pre-decrypt cheap rejects — body cap + ts skew. Neither touches the
+         SlackApp's signing secret, so the OS scheduler sheds malformed
+         traffic before crypto. (IP-level rate limiting is handled by the
+         reverse proxy fronting this endpoint.)
       2. Crypto layer — HMAC verify + replay-cache.
       3. Dispatch — url_verification or event_callback fan-out to celery.
     """
     log = _events_logger()
-    redis_client = _slack_store()
 
     # 1. Body size cap (must read body to count, but we cap the read).
     body = await request.body()
@@ -1350,17 +1193,7 @@ async def slack_events(
     if skew > SLACK_EVENT_MAX_TS_SKEW_SECONDS:
         return _uniform_401()
 
-    # 3. Per-app token bucket (well above Slack's normal delivery rate).
-    app_ok = _check_token_bucket(
-        redis_client,
-        f"slack_event_app_bucket:{slack_app_id}",
-        SLACK_EVENT_PER_APP_BURST,
-        SLACK_EVENT_PER_APP_BURST,
-    )
-    if not app_ok:
-        return _uniform_401()
-
-    # 5. SlackApp lookup + signing-secret decrypt + HMAC verify.
+    # 3. SlackApp lookup + signing-secret decrypt + HMAC verify.
     app = _slack_app_for_event(db, slack_app_id)
     if app is None or not app.is_active:
         return _uniform_401()
@@ -1381,18 +1214,13 @@ async def slack_events(
         )
         return _uniform_401()
 
-    # 6. Replay protection via SETNX on the body hash.
+    # 4. Replay protection: register-if-novel on the body hash.
     body_sha = hashlib.sha256(body).hexdigest()
-    replay_key = f"slack_event_seen:{body_sha}"
-    if not redis_client.set(
-        replay_key, "1", nx=True, ex=SLACK_EVENT_REPLAY_TTL_SECONDS
-    ):
+    if not _register_event_body_seen(body_sha, SLACK_EVENT_REPLAY_TTL_SECONDS):
         # Slack expects 200 on duplicates so its retry loop stops.
         return PlainTextResponse(content="", status_code=200)
 
-    _bump_event_counter(redis_client, slack_app_id)
-
-    # 7. Parse and dispatch.
+    # 5. Parse and dispatch.
     try:
         envelope = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -1405,10 +1233,9 @@ async def slack_events(
         nonce_qs = request.query_params.get("wizard_nonce")
         if not nonce_qs:
             return _uniform_401()
-        stored = redis_client.get(_wizard_nonce_redis_key(slack_app_id))
-        if stored is None:
+        stored_nonce = _get_wizard_nonce(slack_app_id)
+        if stored_nonce is None:
             return _uniform_401()
-        stored_nonce = stored.decode() if isinstance(stored, bytes) else str(stored)
         if not hmac.compare_digest(stored_nonce, nonce_qs):
             return _uniform_401()
 
@@ -1433,7 +1260,7 @@ async def slack_events(
             },
         )
         # Test-message wizard hook (step 6).
-        _check_test_message_token(redis_client, slack_app_id, envelope)
+        _check_test_message_token(slack_app_id, envelope)
         _dispatch_event_callback(envelope, slack_app_id)
         return PlainTextResponse(content="", status_code=200)
 
@@ -1546,12 +1373,7 @@ def issue_wizard_nonce(
     # to ~10⁶ candidates can exhaust SHA-256 in well under a second, defeating
     # the H1 binding between this wizard session and Slack's url_verification ping.
     nonce = secrets.token_hex(16)
-    redis_client = _slack_store()
-    redis_client.set(
-        _wizard_nonce_redis_key(app.id),
-        nonce,
-        ex=WIZARD_NONCE_TTL_SECONDS,
-    )
+    _set_wizard_nonce(app.id, nonce, WIZARD_NONCE_TTL_SECONDS)
     return SlackAppNonceResponse(
         nonce=nonce,
         callback_url=_callback_url_for(app.id),
@@ -1577,7 +1399,7 @@ def wizard_status(
         .first()
         is not None
     )
-    test_pending = _slack_store().get(f"slack_wizard_test_token:{app.id}") is not None
+    test_pending = _get_test_message_token(app.id) is not None
     return SlackWizardStatus(
         setup_state=app.setup_state,
         has_credentials=has_credentials,
@@ -1613,12 +1435,7 @@ def begin_test_message(
         raise HTTPException(
             status_code=400, detail="token must be at least 8 chars"
         )
-    redis_client = _slack_store()
-    redis_client.set(
-        f"slack_wizard_test_token:{app.id}",
-        token,
-        ex=WIZARD_TEST_MESSAGE_TTL_SECONDS,
-    )
+    _set_test_message_token(app.id, token, WIZARD_TEST_MESSAGE_TTL_SECONDS)
     return SlackTestMessageStatus(status="waiting")
 
 
@@ -1636,6 +1453,6 @@ def poll_test_message(
     app = get_slack_app_for_authorized_user(db, app_id, user)
     if app.setup_state == "live":
         return SlackTestMessageStatus(status="matched")
-    if _slack_store().get(f"slack_wizard_test_token:{app.id}") is not None:
+    if _get_test_message_token(app.id) is not None:
         return SlackTestMessageStatus(status="waiting")
     return SlackTestMessageStatus(status="expired")

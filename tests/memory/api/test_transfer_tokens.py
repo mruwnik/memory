@@ -1,5 +1,8 @@
 """Tests for short-lived HMAC tokens used by cloud-claude file transfer URLs."""
 
+import base64
+import hashlib
+import hmac
 import time
 from typing import Any
 from unittest.mock import patch
@@ -8,6 +11,7 @@ import pytest
 
 from memory.api.transfer_tokens import (
     TransferTokenError,
+    TransferTokenExpiredError,
     TransferTokenPayload,
     mint_token,
     mint_transfer_url,
@@ -361,9 +365,6 @@ def test_verify_rejects_missing_field():
 # ----- Brittle exception handling regressions -----
 
 
-from memory.api.transfer_tokens import TransferTokenExpiredError
-
-
 def test_expired_token_raises_typed_subclass():
     """``cloud_claude.verify_transfer_token`` distinguishes the expired
     branch via ``isinstance``; the previous "look for the word 'expired'
@@ -390,9 +391,8 @@ def test_non_base64_payload_segment_returns_malformed_not_500():
     payload_segment = "!@#$"
     # Sign the bogus segment with the live secret so we exercise the
     # base64-decode branch (rather than tripping signature mismatch first).
-    import base64 as _b64, hmac as _hmac, hashlib as _hashlib
-    sig = _hmac.new(secret_bytes, payload_segment.encode("ascii"), _hashlib.sha256).digest()
-    sig_segment = _b64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+    sig = hmac.new(secret_bytes, payload_segment.encode("ascii"), hashlib.sha256).digest()
+    sig_segment = base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
     bad = f"v1.{payload_segment}.{sig_segment}"
 
     with pytest.raises(TransferTokenError, match="malformed payload"):
