@@ -56,7 +56,10 @@ class ClaudeConfigSnapshot(Base):
 
     # Snapshot metadata
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    content_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # NOT globally unique: dedup is per-user to avoid leaking another
+    # user's snapshot metadata on hash collision (see migration
+    # 20260507_snapshot_user_dedup).
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Claude account info (extracted from .credentials.json)
     claude_account_email: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -76,7 +79,9 @@ class ClaudeConfigSnapshot(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("content_hash", name="unique_snapshot_hash"),
+        UniqueConstraint(
+            "user_id", "content_hash", name="unique_snapshot_user_hash"
+        ),
         Index("idx_snapshots_user", "user_id"),
         Index("idx_snapshots_hash", "content_hash"),
     )

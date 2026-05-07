@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TypedDict
 
+from memory.common.dates import parse_iso_datetime
+
 # GitHub REST API base URL
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
@@ -181,11 +183,22 @@ class GithubIssueData(TypedDict):
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:
-    """Parse ISO date string from GitHub API to datetime."""
+    """Parse ISO date string from GitHub API to datetime.
+
+    Falsy input (``None`` or ``""``) passes through as ``None`` — some
+    GitHub fields like ``closedAt`` legitimately come back null/empty.
+    A *non-empty* string that fails to parse raises ``ValueError``:
+    callers in ``common/github/issues.py`` rely on this for fields the
+    schema treats as required (``createdAt``, ``updatedAt``); silently
+    inserting NULL would either crash on a NOT NULL constraint at flush
+    time or poison downstream code that assumes the field is present.
+    """
     if not date_str:
         return None
-    # GitHub uses ISO format with Z suffix
-    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    parsed = parse_iso_datetime(date_str)
+    if parsed is None:
+        raise ValueError(f"Unparseable GitHub date string: {date_str!r}")
+    return parsed
 
 
 def compute_content_hash(body: str, comments: list[GithubComment]) -> str:

@@ -3,7 +3,7 @@ import logging
 import secrets
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
@@ -11,6 +11,17 @@ from memory.common import settings
 from memory.common.db.models import MCPServer
 
 logger = logging.getLogger(__name__)
+
+
+def token_id(token: str) -> str:
+    """Return a short, non-reversible correlation id for a token-like string.
+
+    First 8 chars of SHA-256 — enough to correlate logs across requests
+    but never enough to brute-force the original value or replay it.
+    The auth-code/access-token call sites used to log raw secrets or a
+    20-char prefix; both are too much.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()[:8]
 
 
 @dataclass
@@ -116,7 +127,12 @@ async def register_oauth_client(
         "token_endpoint_auth_method": "none",
     }
 
-    logger.error(f"Registration metadata: {client_metadata}")
+    # Demoted to DEBUG so the routine OAuth flow doesn't log client metadata
+    # at ERROR severity. The metadata itself is operator-public, but pairing
+    # it with the response below (which can include client_secret on a
+    # confidential client) and emitting both at ERROR amounts to "every OAuth
+    # registration loudly logs every detail of the client".
+    logger.debug("Registering OAuth client at %s", endpoints.registration_endpoint)
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -124,10 +140,18 @@ async def register_oauth_client(
                 json=client_metadata,
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
-                logger.error(
-                    f"Registration response: {resp.status} {await resp.text()}"
-                )
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    # Only log the body when something went wrong, and never
+                    # log a successful registration response: a successful
+                    # response can carry `client_secret` for confidential
+                    # clients, which has no business in any log.
+                    body_text = await resp.text()
+                    logger.error(
+                        "OAuth client registration failed: status=%s body=%s",
+                        resp.status,
+                        body_text,
+                    )
+                    resp.raise_for_status()
                 client_info = await resp.json()
     except Exception as exc:
         raise ValueError(
@@ -159,9 +183,15 @@ async def issue_challenge(
     mcp_server.state = state  # type: ignore
     mcp_server.code_verifier = code_verifier  # type: ignore
 
+    # Use SHA-prefix correlation ids — the raw `state` and `verifier`
+    # are bearer-equivalent within the OAuth flow, so the previous
+    # "first 20 chars" log line was already enough to fingerprint
+    # individual flows.
     logger.info(
-        f"Generated OAuth state for MCP server {mcp_server.mcp_server_url}: "
-        f"state={state[:20]}..., verifier={code_verifier[:20]}..."
+        "Generated OAuth state for MCP server %s: state_id=%s, verifier_id=%s",
+        mcp_server.mcp_server_url,
+        token_id(state),
+        token_id(code_verifier),
     )
 
     # Build authorization URL pointing to the target server
@@ -192,7 +222,7 @@ async def complete_oauth_flow(
     """
     try:
         if not mcp_server:
-            logger.error(f"Invalid or expired state: {state[:20]}...")
+            logger.error(f"Invalid or expired state: id={token_id(state)}")
             return 400, "Invalid or expired OAuth state"
 
         logger.info(
@@ -230,17 +260,36 @@ async def complete_oauth_flow(
 
         access_token = tokens.get("access_token")
         refresh_token = tokens.get("refresh_token")
-        expires_in = tokens.get("expires_in", 3600)
+        # Some OAuth providers return expires_in as a JSON string. Coerce to
+        # int defensively so a string slips through without exploding inside
+        # timedelta below; fall back to the 1h default on garbage.
+        try:
+            expires_in = int(tokens.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Upstream returned non-integer expires_in=%r; defaulting to 3600s",
+                tokens.get("expires_in"),
+            )
+            expires_in = 3600
 
         if not access_token:
             return 500, "Token response did not include access_token"
 
-        logger.info(f"Successfully obtained access token: {access_token[:20]}...")
+        # The "first 20 chars" preview that used to be here is enough to
+        # fingerprint individual tokens and noticeably narrows brute force
+        # of the rest. Use a non-reversible correlation id instead.
+        logger.info(f"Obtained access token id={token_id(access_token)}")
 
-        # Store tokens and clear temporary OAuth state
+        # Store tokens and clear temporary OAuth state. Use tz-aware UTC so
+        # the column matches every other token-expiry comparison in the
+        # codebase (those use `datetime.now(timezone.utc)`); a naive
+        # local-time value would either crash on comparison or silently
+        # drift by the host's UTC offset.
         mcp_server.access_token = access_token  # type: ignore
         mcp_server.refresh_token = refresh_token  # type: ignore
-        mcp_server.token_expires_at = datetime.now() + timedelta(seconds=expires_in)  # type: ignore
+        mcp_server.token_expires_at = (  # type: ignore
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        )
 
         # Clear temporary OAuth flow data
         mcp_server.state = None  # type: ignore

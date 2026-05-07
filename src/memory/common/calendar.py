@@ -7,9 +7,10 @@ from typing import TypedDict
 
 from dateutil.rrule import rrulestr
 
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
-from memory.common.db.models.sources import CalendarAccount, GoogleAccount
+from memory.common.db.models.sources import CalendarAccount
 
 
 class EventDict(TypedDict):
@@ -109,21 +110,26 @@ def get_events_in_range(
 
     Returns:
         List of event dictionaries, sorted by start_time
+
+    Note (operator-visible breaking change):
+        Pre-migration ``20260507_calendar_account_user_id``, this filter
+        returned every CalDAV event to every user. The new filter scopes by
+        ``CalendarAccount.user_id``; legacy CalDAV rows with NULL user_id
+        are excluded from non-admin views ("my CalDAV events disappeared"
+        on upgrade). Admins can reassign each row via
+        ``PATCH /calendar-accounts/{id}`` to restore visibility.
     """
     # Build base query with optional user filtering
     def apply_user_filter(query):  # type: ignore[no-untyped-def]
         if user_ids is None:
             return query
-        # Join through CalendarAccount -> GoogleAccount to filter by user_id
-        # CalDAV accounts without google_account are included for all users
+        # Filter by CalendarAccount.user_id (set on creation; backfilled for
+        # legacy Gmail-linked rows). Legacy CalDAV rows with NULL user_id are
+        # excluded — admins can reassign ownership to make them visible.
         return (
             query
-            .outerjoin(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
-            .outerjoin(GoogleAccount, CalendarAccount.google_account_id == GoogleAccount.id)
-            .filter(
-                (GoogleAccount.user_id.in_(user_ids)) |
-                (CalendarAccount.google_account_id.is_(None))  # Include CalDAV accounts
-            )
+            .join(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
+            .filter(CalendarAccount.user_id.in_(user_ids))
         )
 
     # Get non-recurring events in range
@@ -176,17 +182,15 @@ def parse_date_range(
         ValueError: If date format is invalid
     """
     if start_date:
-        try:
-            range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
+        range_start = parse_iso_datetime(start_date)
+        if range_start is None:
             raise ValueError(f"Invalid start_date format: {start_date}")
     else:
         range_start = datetime.now(timezone.utc)
 
     if end_date:
-        try:
-            range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
+        range_end = parse_iso_datetime(end_date)
+        if range_end is None:
             raise ValueError(f"Invalid end_date format: {end_date}")
     else:
         range_end = range_start + timedelta(days=days)

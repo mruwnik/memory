@@ -137,7 +137,14 @@ def fetch_user_by_token(
     user = api_key_record.user
     if user is None:
         return None
-    handle_api_key_use(api_key_record, session)
+    if not handle_api_key_use(api_key_record, session):
+        # Concurrent request consumed the one-time key first. Debug-level
+        # to stay out of normal logs unless operators chase a race.
+        logger.debug(
+            "One-time API key %s consumed by concurrent request; this request loses race",
+            api_key_record.id,
+        )
+        return None
     return user
 
 

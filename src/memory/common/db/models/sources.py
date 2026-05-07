@@ -106,6 +106,14 @@ class ArticleFeed(Base):
     __tablename__ = "article_feeds"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Owner. Nullable for legacy rows that pre-date ownership tracking;
+    # such rows are admin-only via list/get/update/delete (secure default).
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     title: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
@@ -138,6 +146,9 @@ class ArticleFeed(Base):
     project: Mapped["Project | None"] = relationship(
         "Project", foreign_keys=[project_id]
     )
+    user: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[user_id], backref="article_feeds"
+    )
 
     # Add indexes
     __table_args__ = (
@@ -148,6 +159,7 @@ class ArticleFeed(Base):
         Index("article_feeds_active_idx", "active", "last_checked_at"),
         Index("article_feeds_tags_idx", "tags", postgresql_using="gin"),
         Index("article_feeds_project_idx", "project_id"),
+        Index("article_feeds_user_idx", "user_id"),
     )
 
 
@@ -1065,6 +1077,13 @@ class CalendarAccount(Base):
     __tablename__ = "calendar_accounts"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Owner. Nullable only because a backfill migration cannot infer the owner
+    # for legacy CalDAV rows (no google_account link). The API always sets this
+    # on creation, and get_user_account(...) gates access to NULL-owner rows
+    # to admins only — keeping the secure default until an admin reassigns.
+    user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
 
     # Calendar type
@@ -1147,6 +1166,9 @@ class CalendarAccount(Base):
     )
 
     # Relationships
+    user: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[user_id], backref="calendar_accounts"
+    )
     google_account: Mapped[GoogleAccount | None] = relationship(
         "GoogleAccount", foreign_keys=[google_account_id]
     )
@@ -1163,6 +1185,7 @@ class CalendarAccount(Base):
         Index("calendar_accounts_active_idx", "active", "last_sync_at"),
         Index("calendar_accounts_type_idx", "calendar_type"),
         Index("calendar_accounts_project_idx", "project_id"),
+        Index("calendar_accounts_user_idx", "user_id"),
     )
 
 

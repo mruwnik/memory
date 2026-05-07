@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from memory.common import qdrant
+from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
@@ -415,12 +416,11 @@ async def notify_user(
 
         # Parse scheduled time or use now for immediate
         if scheduled_time:
-            try:
-                scheduled_dt = datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
-                if scheduled_dt.tzinfo is not None:
-                    scheduled_dt = scheduled_dt.astimezone(timezone.utc).replace(tzinfo=None)
-            except ValueError:
+            scheduled_dt = parse_iso_datetime(scheduled_time)
+            if scheduled_dt is None:
                 raise ValueError("Invalid datetime format for scheduled_time")
+            if scheduled_dt.tzinfo is not None:
+                scheduled_dt = scheduled_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
             current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
             if scheduled_dt <= current_time_naive:

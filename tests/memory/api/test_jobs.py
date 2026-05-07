@@ -593,3 +593,135 @@ def test_non_admin_cannot_filter_by_user_id(non_admin_client: TestClient, job_fo
     # Should not see other user's job even with user_id filter
     job_ids = [j["id"] for j in data]
     assert job_for_other_user.id not in job_ids
+
+
+# ---------- /jobs/types cross-tenant isolation ----------
+
+
+def test_get_job_types_non_admin_excludes_other_users(
+    non_admin_client: TestClient, db_session, user, other_user
+):
+    """Non-admins should only see job types from their own jobs.
+
+    Without the user_id filter, this endpoint leaked the set of job
+    types active across the whole system, which can reveal which
+    integrations other users have configured (custom job types).
+    """
+    db_session.add_all([
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.REPROCESS.value, params={},
+            status=JobStatus.PENDING.value, user_id=other_user.id,
+        ),
+    ])
+    db_session.commit()
+
+    response = non_admin_client.get("/jobs/types")
+
+    assert response.status_code == 200
+    types = response.json()
+    assert "meeting" in types
+    assert "reprocess" not in types
+
+
+def test_get_job_types_admin_sees_all(
+    admin_client: TestClient, db_session, user, other_user
+):
+    """Admin sees every job type across users."""
+    db_session.add_all([
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.REPROCESS.value, params={},
+            status=JobStatus.PENDING.value, user_id=other_user.id,
+        ),
+    ])
+    db_session.commit()
+
+    response = admin_client.get("/jobs/types")
+
+    assert response.status_code == 200
+    types = response.json()
+    assert {"meeting", "reprocess"} <= set(types)
+
+
+# ---------- /jobs created_after/created_before garbage handling ----------
+
+
+@pytest.mark.parametrize("param", ["created_after", "created_before"])
+def test_list_jobs_garbage_datetime_returns_400(client: TestClient, param):
+    """A non-ISO datetime should be a clean 400, not a 500.
+
+    `datetime.fromisoformat("yesterday")` raises ValueError; before this
+    fix the exception escaped the handler and the request 500'd.
+    """
+    response = client.get(f"/jobs?{param}=not-a-date")
+
+    assert response.status_code == 400
+    assert param in response.json()["detail"]
+
+
+def test_list_jobs_valid_datetime_still_works(client: TestClient, job_for_user):
+    """The happy path with an ISO datetime should still return jobs."""
+    # An obviously-old timestamp so the test job qualifies.
+    response = client.get("/jobs?created_after=2000-01-01T00:00:00Z")
+
+    assert response.status_code == 200
+    ids = {j["id"] for j in response.json()}
+    assert job_for_user.id in ids
+
+
+# ---------- parse_iso_datetime_query unit-level coverage ----------
+#
+# The endpoint-level tests above already pin the API contract (400 on
+# garbage, Z-suffix happy path). These exercise the helper directly so a
+# regression in just the helper (without breaking the endpoint) still
+# trips a test.
+
+from datetime import timezone as _tz
+
+from memory.api.jobs import parse_iso_datetime_query
+
+
+def test_parse_iso_datetime_query_passthrough_none():
+    assert parse_iso_datetime_query("x", None) is None
+
+
+@pytest.mark.parametrize(
+    "raw, expected_offset",
+    [
+        ("2025-01-02T03:04:05Z", _tz.utc),  # Z-suffix
+        ("2025-01-02T03:04:05+00:00", _tz.utc),  # explicit +00:00
+        ("2025-01-02T03:04:05", _tz.utc),  # naive → coerced to UTC
+    ],
+)
+def test_parse_iso_datetime_query_returns_utc_aware(raw, expected_offset):
+    parsed = parse_iso_datetime_query("x", raw)
+    assert parsed is not None
+    assert parsed.utcoffset() == expected_offset.utcoffset(parsed)
+
+
+def test_parse_iso_datetime_query_preserves_explicit_offset():
+    """A non-UTC offset must survive intact — the helper only fills in
+    the tz when the input is naive, never relabels."""
+    parsed = parse_iso_datetime_query("x", "2025-01-02T03:04:05+05:00")
+    assert parsed is not None
+    assert parsed.utcoffset() is not None
+    # +05:00 is 18000s, must NOT be relabeled to UTC.
+    assert parsed.utcoffset().total_seconds() == 5 * 3600
+
+
+def test_parse_iso_datetime_query_garbage_raises_400():
+    """Non-ISO input surfaces as HTTPException(400), with the param name
+    in the detail so the client can identify which arg was bad."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        parse_iso_datetime_query("created_after", "yesterday")
+    assert exc.value.status_code == 400
+    assert "created_after" in exc.value.detail

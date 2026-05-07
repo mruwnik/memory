@@ -3,6 +3,8 @@ Tests for search module functions including RRF fusion, query term boosting,
 title boosting, and source deduplication.
 """
 
+import sys
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,23 @@ from memory.api.search.search import (
     apply_source_boosts,
     fuse_scores_rrf,
 )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["search_bm25_chunks", "expand_query_hyde", "rerank_chunks"],
+)
+def test_optional_search_helpers_imported_unconditionally(name):
+    """Optional search helpers must be importable regardless of the
+    ENABLE_BM25_SEARCH / ENABLE_HYDE_EXPANSION / ENABLE_RERANKING flags.
+
+    Settings flags are *defaults* for SearchConfig.useX, not gates on
+    module load. If imports were conditional, a per-request override
+    such as SearchConfig(useBm25=True) while ENABLE_BM25_SEARCH=False
+    would NameError at call time and silently dishonor the override.
+    """
+    mod = sys.modules["memory.api.search.search"]
+    assert callable(getattr(mod, name))
 from memory.api.search.constants import (
     STOPWORDS,
     QUERY_TERM_BOOST,

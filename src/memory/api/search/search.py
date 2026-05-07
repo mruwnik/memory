@@ -27,17 +27,13 @@ from memory.api.search.constants import (
     STOPWORDS,
 )
 
-# Conditional imports based on settings
-# pyright: reportUnboundVariable=false
-if settings.ENABLE_BM25_SEARCH:
-    from memory.api.search.bm25 import search_bm25_chunks
-
-if settings.ENABLE_HYDE_EXPANSION:
-    from memory.api.search.hyde import expand_query_hyde
-
-if settings.ENABLE_RERANKING:
-    from memory.api.search.rerank import rerank_chunks
-
+# Always import optionals; settings flags are *defaults* for SearchConfig,
+# not gates on module load. Conditionally importing means a per-request
+# override (SearchConfig.useBm25=True while ENABLE_BM25_SEARCH=False)
+# would NameError at call time and silently dishonor the override.
+from memory.api.search.bm25 import search_bm25_chunks
+from memory.api.search.hyde import expand_query_hyde
+from memory.api.search.rerank import rerank_chunks
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 

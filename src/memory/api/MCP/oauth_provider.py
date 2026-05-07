@@ -17,6 +17,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from memory.common import settings
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
@@ -30,7 +31,7 @@ from memory.common.db.models.users import (
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
 )
-from memory.api.auth import lookup_api_key, handle_api_key_use
+from memory.api.auth import lookup_api_key, handle_api_key_use, is_expired
 from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)
@@ -140,12 +141,13 @@ def create_refresh_token_record(
 
 
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
-    """Validate a refresh token, raising ValueError if invalid."""
-    now = datetime.now(timezone.utc)
-    expires_at = db_refresh_token.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < now:
+    """Validate a refresh token, raising ValueError if invalid.
+
+    Reuses memory.api.auth.is_expired so a tz-aware non-UTC expires_at
+    (which can happen with some Postgres drivers / pool configs) is
+    properly converted instead of silently relabeled.
+    """
+    if is_expired(db_refresh_token.expires_at):
         logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
         db_refresh_token.revoked = True  # type: ignore
         raise ValueError("Refresh token expired")
@@ -243,8 +245,11 @@ class SimpleOAuthProvider(OAuthProvider):
                 # Always include SCOPE_READ/SCOPE_WRITE for FastMCP endpoint auth
                 scopes: list[str] = sorted(set(base_scopes) | {SCOPE_READ, SCOPE_WRITE})
 
+                # Tokens themselves stay out of the log; correlate via the
+                # SHA-prefix id so a leaked log can't be replayed.
                 logger.info(
-                    f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}"
+                    f"verify_token: token_id={token_id(token)}, "
+                    f"user={user_session.user_id}, scopes={scopes}, client={client_id}"
                 )
                 return FastMCPAccessToken(
                     token=token,
@@ -315,10 +320,25 @@ class SimpleOAuthProvider(OAuthProvider):
                     )
 
         with make_session() as session:
-            client = session.get(OAuthClientInformation, client_info.client_id)
-            if not client:
-                client = OAuthClientInformation(client_id=client_info.client_id)
+            existing = session.get(OAuthClientInformation, client_info.client_id)
+            if existing is not None:
+                # Squatting protection (RFC 7591 §3 / RFC 7592):
+                # dynamic registration is for *creating* clients. Updates
+                # require a registration access token (which we don't issue
+                # here). Without auth on the update path, anyone who can
+                # guess a client_id (e.g. a publicly-known name like
+                # "cursor-mcp" or "claude-desktop") could overwrite the
+                # legitimate client's secret/scope/redirect_uris and either
+                # DoS the real client or impersonate it.
+                logger.warning(
+                    "Rejected duplicate OAuth client registration for client_id=%r",
+                    client_info.client_id,
+                )
+                raise ValueError(
+                    f"client_id {client_info.client_id!r} is already registered"
+                )
 
+            client = OAuthClientInformation(client_id=client_info.client_id)
             for key, value in client_info.model_dump().items():
                 if key == "redirect_uris":
                     value = [str(uri) for uri in value]
@@ -448,7 +468,10 @@ class SimpleOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> Optional[AuthorizationCode]:
         """Load an authorization code."""
-        logger.info(f"Loading authorization code: {authorization_code}")
+        # Log a SHA-prefix correlation id, never the raw code. Auth codes
+        # are short-lived single-use credentials; whoever can grep the logs
+        # can replay them otherwise.
+        logger.info(f"Loading authorization code: id={token_id(authorization_code)}")
         with make_session() as session:
             auth_code = (
                 session.query(OAuthState)
@@ -456,18 +479,31 @@ class SimpleOAuthProvider(OAuthProvider):
                 .first()
             )
             if not auth_code:
-                logger.error(f"Invalid authorization code: {authorization_code}")
+                logger.error(
+                    f"Invalid authorization code: id={token_id(authorization_code)}"
+                )
                 raise ValueError("Invalid authorization code")
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
                 logger.warning(
-                    "Authorization code %s requested by client %r but issued to %r",
-                    authorization_code,
+                    "Authorization code id=%s requested by client %r but issued to %r",
+                    token_id(authorization_code),
                     client.client_id,
                     auth_code.client_id,
                 )
                 raise ValueError("Authorization code not issued to this client")
+
+            # RFC 6749 §4.1.2: auth codes MUST be short-lived ("a maximum
+            # authorization code lifetime of 10 minutes is RECOMMENDED").
+            # We pin to the same expires_at the row was issued with so a code
+            # someone scraped from referer/logs/etc. can't outlive the login
+            # window indefinitely.
+            if auth_code.expires_at < now_naive_utc():
+                logger.warning(
+                    "Authorization code id=%s expired", token_id(authorization_code)
+                )
+                raise ValueError("Authorization code expired")
 
             return AuthorizationCode(**auth_code.serialize(code=True))
 
@@ -475,7 +511,10 @@ class SimpleOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         """Exchange authorization code for tokens."""
-        logger.info(f"Exchanging authorization code: {authorization_code}")
+        # Same redaction as load_authorization_code — never log the raw code.
+        logger.info(
+            f"Exchanging authorization code: id={token_id(authorization_code.code)}"
+        )
         with make_session() as session:
             auth_code = (
                 session.query(OAuthState)
@@ -484,22 +523,36 @@ class SimpleOAuthProvider(OAuthProvider):
             )
 
             if not auth_code:
-                logger.error(f"Invalid authorization code: {authorization_code.code}")
+                logger.error(
+                    f"Invalid authorization code: id={token_id(authorization_code.code)}"
+                )
                 raise ValueError("Invalid authorization code")
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
                 logger.warning(
-                    "Authorization code %s exchange attempted by client %r but issued to %r",
-                    authorization_code.code,
+                    "Authorization code id=%s exchange attempted by client %r but issued to %r",
+                    token_id(authorization_code.code),
                     client.client_id,
                     auth_code.client_id,
                 )
                 raise ValueError("Authorization code not issued to this client")
 
             if not auth_code.user:
-                logger.error(f"No user found for auth code: {authorization_code.code}")
+                logger.error(
+                    f"No user found for auth code: id={token_id(authorization_code.code)}"
+                )
                 raise ValueError("Invalid authorization code")
+
+            # RFC 6749 §4.1.2: enforce short lifetime on the exchange path
+            # too — load_authorization_code already checks, but we re-check
+            # here so callers that skip the load step still get the guarantee.
+            if auth_code.expires_at < now_naive_utc():
+                logger.warning(
+                    "Authorization code id=%s expired",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError("Authorization code expired")
 
             # Extract data needed for token creation
             auth_code_id = auth_code.id
@@ -507,11 +560,27 @@ class SimpleOAuthProvider(OAuthProvider):
             client_id = auth_code.client_id
             scopes = authorization_code.scopes
 
-            # Invalidate the auth code by clearing the code field.
-            # We keep the OAuthState record because UserSession references it
-            # for client_id and scopes lookup in load_access_token().
-            # This prevents replay attacks while preserving needed state.
-            auth_code.code = None
+            # Atomically invalidate: UPDATE … WHERE code=:code RETURNING id.
+            # If two requests race, only one's WHERE clause matches (the other
+            # already saw NULL). We keep the OAuthState row because
+            # UserSession references it for client_id/scopes lookup in
+            # load_access_token() — clearing the code is enough to prevent
+            # replay. (CWE-367 single-use enforcement.)
+            consumed = session.execute(
+                update(OAuthState)
+                .where(
+                    OAuthState.id == auth_code_id,
+                    OAuthState.code == authorization_code.code,
+                )
+                .values(code=None)
+                .returning(OAuthState.id)
+            ).scalar_one_or_none()
+            if consumed is None:
+                logger.warning(
+                    "Authorization code id=%s already consumed (race)",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError("Authorization code already used")
             session.commit()
 
             # Create token linked to the (now code-less) OAuthState

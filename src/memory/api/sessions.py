@@ -10,6 +10,7 @@ Provides endpoints for:
 import fcntl
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common import settings
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
 
@@ -175,6 +177,7 @@ class SessionListResponse(BaseModel):
 
 def safe_loads(file: Path, start=0, end=None):
     items = []
+    bad_lines = 0
     for i, line in enumerate(file.read_text().splitlines()):
         if i < start or not line.strip():
             continue
@@ -184,8 +187,95 @@ def safe_loads(file: Path, start=0, end=None):
         try:
             items.append(json.loads(line))
         except json.JSONDecodeError:
-            pass
+            bad_lines += 1
+    if bad_lines:
+        # Surface corruption rather than silently returning a short list — a
+        # transcript with N malformed JSONL lines used to drop those rows
+        # without any indication, hiding ingest bugs.
+        logger.warning(
+            "transcript %s: %d unparseable JSON line(s) skipped",
+            file,
+            bad_lines,
+        )
     return items
+
+
+@dataclass
+class ToolCall:
+    """Single tool invocation with token attribution.
+
+    When an assistant message invokes N tools, the API-reported usage
+    counts are not broken down per tool — we attribute them by even
+    division with remainder going to the first tools (deterministic and
+    keeps the sum exact).
+    """
+
+    tool_name: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_creation_tokens
+        )
+
+
+def extract_tool_calls_from_message(message: dict[str, Any]) -> list[ToolCall]:
+    """Extract one ``ToolCall`` per ``tool_use`` block in an assistant message.
+
+    Token totals reported by the API for the whole assistant turn are
+    split evenly across the tools; the divmod remainder is distributed
+    to the first tools so the per-call sum equals the API total exactly
+    (no silent rounding loss).
+
+    NOTE: When a single assistant message invokes multiple tools, the
+    API does not tell us which tool consumed which tokens. Per-tool
+    numbers are therefore an approximation — fine for aggregate metrics,
+    but individual costs should be treated as estimates when N > 1.
+    """
+    content = message.get("content") or []
+    usage = message.get("usage") or {}
+    if not content or not usage:
+        return []
+
+    tool_names = [
+        block.get("name", "unknown")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    if not tool_names:
+        return []
+
+    n = len(tool_names)
+    in_b, in_r = divmod(usage.get("input_tokens", 0), n)
+    out_b, out_r = divmod(usage.get("output_tokens", 0), n)
+    cr_b, cr_r = divmod(usage.get("cache_read_input_tokens", 0), n)
+    cc_b, cc_r = divmod(usage.get("cache_creation_input_tokens", 0), n)
+
+    return [
+        ToolCall(
+            tool_name=name,
+            input_tokens=in_b + (1 if i < in_r else 0),
+            output_tokens=out_b + (1 if i < out_r else 0),
+            cache_read_tokens=cr_b + (1 if i < cr_r else 0),
+            cache_creation_tokens=cc_b + (1 if i < cc_r else 0),
+        )
+        for i, name in enumerate(tool_names)
+    ]
+
+
+def parse_event_timestamp(timestamp_str: str | None) -> datetime | None:
+    """Thin wrapper around :func:`memory.common.dates.parse_iso_datetime`
+    kept for callers that imported the local name. Returns None on
+    missing/invalid input.
+    """
+    return parse_iso_datetime(timestamp_str)
 
 
 def count_transcript_events(transcript_path: str) -> int:
@@ -363,81 +453,30 @@ def extract_tool_usage_telemetry(
     if event.type != "assistant":
         return []
 
-    message = event.message or {}
-    content = message.get("content", [])
-    usage = message.get("usage", {})
-
-    if not content or not usage:
+    tool_calls = extract_tool_calls_from_message(event.message or {})
+    if not tool_calls:
         return []
 
-    # Find tool_use blocks in content
-    tools_in_message = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_use":
-            tool_name = block.get("name", "unknown")
-            tools_in_message.append(tool_name)
+    event_timestamp = parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
 
-    if not tools_in_message:
-        return []
-
-    # Get token counts from usage
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
-
-    # Parse event timestamp
-    event_timestamp = datetime.now(timezone.utc)
-    if event.timestamp:
-        try:
-            event_timestamp = datetime.fromisoformat(
-                event.timestamp.replace("Z", "+00:00")
-            )
-        except (ValueError, TypeError):
-            pass
-
-    # Split tokens evenly if multiple tools in one message, distributing remainder.
-    # NOTE: This is an approximation. When multiple tools are called in one assistant
-    # message, we cannot determine which tool consumed which tokens. Dividing evenly
-    # may misattribute costs (e.g., a cheap Read + expensive WebSearch would each get
-    # half the tokens). This is acceptable for aggregate metrics but individual tool
-    # costs should be treated as estimates when num_tools > 1.
-    num_tools = len(tools_in_message)
-    telemetry_events = []
-
-    # Calculate base values and remainders for accurate distribution
-    input_base, input_remainder = divmod(input_tokens, num_tools)
-    output_base, output_remainder = divmod(output_tokens, num_tools)
-    cache_read_base, cache_read_remainder = divmod(cache_read, num_tools)
-    cache_creation_base, cache_creation_remainder = divmod(cache_creation, num_tools)
-
-    for i, tool_name in enumerate(tools_in_message):
-        # Distribute remainder tokens to first tools (one extra token each until exhausted)
-        tool_input = input_base + (1 if i < input_remainder else 0)
-        tool_output = output_base + (1 if i < output_remainder else 0)
-        tool_cache_read = cache_read_base + (1 if i < cache_read_remainder else 0)
-        tool_cache_creation = cache_creation_base + (1 if i < cache_creation_remainder else 0)
-        total = tool_input + tool_output + tool_cache_read + tool_cache_creation
-
-        telemetry_events.append(
-            TelemetryEvent(
-                timestamp=event_timestamp,
-                user_id=user_id,
-                event_type="metric",
-                name="tool.token.usage",
-                value=float(total),
-                session_id=session_id,
-                tool_name=tool_name,
-                attributes={
-                    "input_tokens": tool_input,
-                    "output_tokens": tool_output,
-                    "cache_read_input_tokens": tool_cache_read,
-                    "cache_creation_input_tokens": tool_cache_creation,
-                },
-            )
+    return [
+        TelemetryEvent(
+            timestamp=event_timestamp,
+            user_id=user_id,
+            event_type="metric",
+            name="tool.token.usage",
+            value=float(call.total_tokens),
+            session_id=session_id,
+            tool_name=call.tool_name,
+            attributes={
+                "input_tokens": call.input_tokens,
+                "output_tokens": call.output_tokens,
+                "cache_read_input_tokens": call.cache_read_tokens,
+                "cache_creation_input_tokens": call.cache_creation_tokens,
+            },
         )
-
-    return telemetry_events
+        for call in tool_calls
+    ]
 
 
 def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
@@ -677,6 +716,12 @@ def extract_tool_usage_from_transcript(
         call_count, input_tokens, output_tokens, ...,
         per_call_totals: list[int]  # total tokens per individual call
     }
+
+    Token attribution is the same as ``extract_tool_usage_telemetry``
+    (divmod with remainder distribution). Previously this path used
+    plain integer division so per-tool totals silently rounded down,
+    producing different numbers than the telemetry path for the same
+    underlying message.
     """
     transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
     if not transcript_file.exists():
@@ -689,66 +734,35 @@ def extract_tool_usage_from_transcript(
         if event.get("type") != "assistant":
             continue
 
-        # Filter by timestamp if provided
-        timestamp_str = event.get("timestamp")
-        if timestamp_str and (from_time or to_time):
-            try:
-                event_time = datetime.fromisoformat(
-                    timestamp_str.replace("Z", "+00:00")
-                )
+        # Filter by timestamp if provided. Unparseable timestamps fall
+        # through to inclusion (matches prior behaviour: don't drop
+        # events because of a flaky clock).
+        if from_time or to_time:
+            event_time = parse_event_timestamp(event.get("timestamp"))
+            if event_time is not None:
                 if from_time and event_time < from_time:
                     continue
                 if to_time and event_time > to_time:
                     continue
-            except (ValueError, TypeError):
-                pass  # If we can't parse timestamp, include the event
 
-        message = event.get("message", {})
-        content = message.get("content", [])
-        usage = message.get("usage", {})
-
-        if not content or not usage:
-            continue
-
-        # Find tool_use blocks in content
-        tools_in_message = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                tool_name = block.get("name", "unknown")
-                tools_in_message.append(tool_name)
-
-        if not tools_in_message:
-            continue
-
-        # Get token counts from usage
-        input_tokens = usage.get("input_tokens", 0)
-        output_tokens = usage.get("output_tokens", 0)
-        cache_read = usage.get("cache_read_input_tokens", 0)
-        cache_creation = usage.get("cache_creation_input_tokens", 0)
-
-        # Attribute tokens to tools (split evenly if multiple tools in one message)
-        num_tools = len(tools_in_message)
-        per_tool_total = (input_tokens + output_tokens + cache_read + cache_creation) // num_tools
-
-        for tool_name in tools_in_message:
-            if tool_name not in tool_stats:
-                tool_stats[tool_name] = {
+        for call in extract_tool_calls_from_message(event.get("message") or {}):
+            stats = tool_stats.setdefault(
+                call.tool_name,
+                {
                     "call_count": 0,
                     "input_tokens": 0,
                     "output_tokens": 0,
                     "cache_read_tokens": 0,
                     "cache_creation_tokens": 0,
                     "per_call_totals": [],
-                }
-
-            tool_stats[tool_name]["call_count"] += 1
-            tool_stats[tool_name]["input_tokens"] += input_tokens // num_tools
-            tool_stats[tool_name]["output_tokens"] += output_tokens // num_tools
-            tool_stats[tool_name]["cache_read_tokens"] += cache_read // num_tools
-            tool_stats[tool_name]["cache_creation_tokens"] += (
-                cache_creation // num_tools
+                },
             )
-            tool_stats[tool_name]["per_call_totals"].append(per_tool_total)
+            stats["call_count"] += 1
+            stats["input_tokens"] += call.input_tokens
+            stats["output_tokens"] += call.output_tokens
+            stats["cache_read_tokens"] += call.cache_read_tokens
+            stats["cache_creation_tokens"] += call.cache_creation_tokens
+            stats["per_call_totals"].append(call.total_tokens)
 
     return tool_stats
 

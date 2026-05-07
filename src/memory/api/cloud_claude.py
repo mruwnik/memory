@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.api.auth import get_current_user, get_user_from_token, require_scope
 from memory.api.transfer_tokens import (
     TransferTokenError,
+    TransferTokenExpiredError,
     TransferTokenPayload,
     validate_transfer_path,
     verify_token,
@@ -133,6 +134,26 @@ def user_owns_session(user: User, session_id: str) -> bool:
     """Check if a session belongs to a user."""
     owner_id = get_user_id_from_session(session_id)
     return owner_id == user.id
+
+
+# Strict session-id regex matching ``is_valid_session_id`` below; duplicated
+# at the top of the file so ``require_session_access`` can validate before
+# ``is_valid_session_id`` is defined further down.
+_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
+
+
+def require_session_access(user: User, session_id: str) -> None:
+    """Raise 404 unless ``session_id`` is well-formed AND owned by ``user``.
+
+    Combines format validation (defense-in-depth against path traversal
+    when the id flows into orchestrator URL paths or host filesystem
+    operations like ``OrchestratorClient.get_logs``) with ownership.
+    Both failures map to 404 so we don't leak which sessions exist.
+    """
+    if not _SESSION_ID_RE.match(session_id) or not user_owns_session(
+        user, session_id
+    ):
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 class SpawnRequest(BaseModel):
@@ -266,8 +287,14 @@ async def session_stats_history(
             status_code=400,
             detail="session_id required for non-admin callers",
         )
-    if session_id and not is_admin and not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    if session_id:
+        if is_admin:
+            # Admin: any well-formed id is permitted; format check still
+            # required because session_id is forwarded into orchestrator URLs.
+            if not _SESSION_ID_RE.match(session_id):
+                raise HTTPException(status_code=404, detail="Session not found")
+        else:
+            require_session_access(user, session_id)
 
     client = get_orchestrator_client()
     try:
@@ -291,8 +318,13 @@ async def container_stats(
     Returns 404 both for unknown sessions and for sessions the caller
     doesn't own — same shape as kill_session and friends.
     """
-    if not has_admin_scope(user) and not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    if has_admin_scope(user):
+        # Admins can fetch any session's stats, but the id still has to
+        # parse — orchestrator URL paths are derived from it.
+        if not _SESSION_ID_RE.match(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+    else:
+        require_session_access(user, session_id)
 
     client = get_orchestrator_client()
     try:
@@ -397,8 +429,17 @@ async def spawn_session(
     if request.enable_playwright:
         env["ENABLE_PLAYWRIGHT"] = "1"
 
-    # Set run ID for branch naming (used by entrypoint to create claude/<run_id> branch)
-    env["CLAUDE_RUN_ID"] = request.run_id or session_id
+    # Set run ID for branch naming (used by entrypoint to create
+    # claude/<run_id> branch). Sanitise the user-supplied value so a
+    # caller can't smuggle shell metacharacters or a leading hyphen
+    # past the entrypoint's `git checkout -b`. Falls back to session_id
+    # (already format-validated upstream) if the slug strips to empty.
+    if request.run_id:
+        slug = re.sub(r"[^a-z0-9-]", "-", request.run_id.lower())
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")[:50]
+        env["CLAUDE_RUN_ID"] = slug or session_id
+    else:
+        env["CLAUDE_RUN_ID"] = session_id
 
     # Add custom environment variables (with validation)
     if request.custom_env:
@@ -597,8 +638,7 @@ async def get_session_info(
     user: User = Depends(get_current_user),
 ) -> SessionInfo:
     """Get details of a specific Claude session owned by the current user."""
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    require_session_access(user, session_id)
 
     client = get_orchestrator_client()
 
@@ -626,8 +666,7 @@ async def kill_session(
     user: User = Depends(get_current_user),
 ) -> dict:
     """Kill a Claude session owned by the current user."""
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    require_session_access(user, session_id)
 
     client = get_orchestrator_client()
 
@@ -653,8 +692,7 @@ async def list_panes(
     Returns `{panes: [...], stats: {memory, cpu} | None}`. The pane list is
     used by the frontend to populate a pane switcher when multiple panes exist.
     """
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    require_session_access(user, session_id)
 
     client = get_orchestrator_client()
     try:
@@ -675,8 +713,7 @@ async def get_attach_commands(
     - attach_cmd: docker attach (connects to main process)
     - exec_cmd: docker exec -it bash (new shell in container)
     """
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    require_session_access(user, session_id)
 
     # Verify the container exists
     client = get_orchestrator_client()
@@ -722,11 +759,14 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
     """
     try:
         payload = verify_token(token)
+    except TransferTokenExpiredError:
+        # Distinct exception type means we can't accidentally classify a
+        # tampered/malformed token as expired (the previous substring sniff
+        # over `str(exc)` was vulnerable to "expired" appearing in unrelated
+        # error text — and it leaked the inner reason via the response).
+        raise HTTPException(status_code=401, detail="Token expired")
     except TransferTokenError as e:
-        msg = str(e)
-        if "expired" in msg:
-            raise HTTPException(status_code=401, detail="Token expired")
-        raise HTTPException(status_code=401, detail=f"Invalid token: {msg}")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
     if payload.action != expected_action:
         raise HTTPException(
@@ -841,6 +881,16 @@ async def transfer_push(request: Request) -> dict:
     token = parts[1].strip()
     payload = verify_transfer_token(token, "write")
 
+    # Cheap pre-check: if the client honestly declared a body larger than
+    # the cap, refuse before reading anything.
+    cap = settings.MAX_TRANSFER_PUSH_BYTES
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > cap:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload too large. Maximum size is {cap // (1024 * 1024)} MB",
+        )
+
     # Buffer the request body at the API layer rather than streaming it to the
     # orchestrator. Two reasons:
     #   1. The orchestrator's Unix-socket HTTP parser reads `Content-Length`
@@ -853,7 +903,20 @@ async def transfer_push(request: Request) -> dict:
     # this endpoint is for skill-bundled tar uploads of small artifacts
     # (markdown reports, specs, configs). If anyone hits a buffer cap, we
     # extend the orchestrator HTTP parser to handle chunked encoding.
-    body = await request.body()
+    #
+    # Streamed read with running cap so a chunked upload (no Content-Length)
+    # or a Content-Length-lying client can't drive an unbounded allocation.
+    body_chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload too large. Maximum size is {cap // (1024 * 1024)} MB",
+            )
+        body_chunks.append(chunk)
+    body = b"".join(body_chunks)
 
     upstream_url = container_files_url(payload.session_id, payload.path)
     transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
@@ -921,8 +984,9 @@ async def get_session_logs(
         - source: "file"
         - logs: The log content
     """
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # Format check is critical here: get_logs constructs LOG_DIR/{session_id}.log
+    # on the host, so an unvalidated session_id is a path-traversal sink.
+    require_session_access(user, session_id)
 
     client = get_orchestrator_client()
     result = await client.get_logs(session_id, tail=tail)
@@ -1272,7 +1336,7 @@ def is_valid_session_id(session_id: str) -> bool:
       - ``s{snap_id}`` for snapshot-based sessions      (e.g. u123-s789-abc123)
       - ``x``          for sessions without snapshot/environment (e.g. u123-x-abc123)
     """
-    return bool(re.match(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$", session_id))
+    return bool(_SESSION_ID_RE.match(session_id))
 
 
 @router.websocket("/{session_id}/logs/stream")

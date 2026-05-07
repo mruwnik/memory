@@ -105,3 +105,109 @@ def test_upload_photo_invalid_extension(client: TestClient, user):
     assert "Invalid file type" in response.json()["detail"]
 
 
+# ====== Reports upload — XSS/allow_scripts gating ======
+
+
+def test_upload_report_admin_can_set_allow_scripts(
+    client: TestClient, mock_dispatch_job, user, tmp_path
+):
+    """Admin (default test client has scopes=['*']) may upload with allow_scripts=true."""
+    html = b"<html><body><script>console.log(1)</script></body></html>"
+
+    with patch("memory.api.content_sources.settings") as mock_settings:
+        mock_settings.REPORT_STORAGE_DIR = tmp_path
+
+        response = client.post(
+            "/content-sources/reports/upload",
+            files={"file": ("evil.html", BytesIO(html), "text/html")},
+            data={"allow_scripts": "true"},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_dispatch_job.call_args.kwargs
+    assert call_kwargs["task_kwargs"]["allow_scripts"] is True
+
+
+def test_upload_report_non_admin_rejected_with_allow_scripts(
+    regular_client: TestClient, mock_dispatch_job, user, tmp_path
+):
+    """Non-admin uploading allow_scripts=true must get 403, not silent acceptance."""
+    html = b"<html><body><script>fetch('/users/me/api-keys')</script></body></html>"
+
+    with patch("memory.api.content_sources.settings") as mock_settings:
+        mock_settings.REPORT_STORAGE_DIR = tmp_path
+
+        response = regular_client.post(
+            "/content-sources/reports/upload",
+            files={"file": ("evil.html", BytesIO(html), "text/html")},
+            data={"allow_scripts": "true"},
+        )
+
+    assert response.status_code == 403
+    assert "admin" in response.json()["detail"].lower()
+    # Critical: dispatch_job must NOT have been called with allow_scripts=True
+    mock_dispatch_job.assert_not_called()
+
+
+def test_upload_report_non_admin_default_allow_scripts_false(
+    regular_client: TestClient, mock_dispatch_job, user, tmp_path
+):
+    """Non-admin upload without allow_scripts works and persists allow_scripts=False."""
+    html = b"<html><body><h1>plain</h1></body></html>"
+
+    with patch("memory.api.content_sources.settings") as mock_settings:
+        mock_settings.REPORT_STORAGE_DIR = tmp_path
+
+        response = regular_client.post(
+            "/content-sources/reports/upload",
+            files={"file": ("plain.html", BytesIO(html), "text/html")},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_dispatch_job.call_args.kwargs
+    assert call_kwargs["task_kwargs"]["allow_scripts"] is False
+
+
+def test_upload_report_non_admin_allowed_connect_urls_dropped(
+    regular_client: TestClient, mock_dispatch_job, user, tmp_path
+):
+    """Non-admin's allowed_connect_urls is dropped (defense in depth)."""
+    html = b"<html><body>x</body></html>"
+
+    with patch("memory.api.content_sources.settings") as mock_settings:
+        mock_settings.REPORT_STORAGE_DIR = tmp_path
+
+        response = regular_client.post(
+            "/content-sources/reports/upload",
+            files={"file": ("plain.html", BytesIO(html), "text/html")},
+            data={"allowed_connect_urls": "https://attacker.example.com,https://evil.test"},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_dispatch_job.call_args.kwargs
+    # allowed_connect_urls becomes None (empty list parses to None in upload_report)
+    assert call_kwargs["task_kwargs"]["allowed_connect_urls"] is None
+
+
+def test_upload_report_admin_can_set_allowed_connect_urls(
+    client: TestClient, mock_dispatch_job, user, tmp_path
+):
+    """Admin may pass allowed_connect_urls — needed for legitimate interactive reports."""
+    html = b"<html><body>x</body></html>"
+
+    with patch("memory.api.content_sources.settings") as mock_settings:
+        mock_settings.REPORT_STORAGE_DIR = tmp_path
+
+        response = client.post(
+            "/content-sources/reports/upload",
+            files={"file": ("plain.html", BytesIO(html), "text/html")},
+            data={
+                "allow_scripts": "true",
+                "allowed_connect_urls": "https://api.example.com",
+            },
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_dispatch_job.call_args.kwargs
+    assert call_kwargs["task_kwargs"]["allow_scripts"] is True
+    assert call_kwargs["task_kwargs"]["allowed_connect_urls"] == ["https://api.example.com"]

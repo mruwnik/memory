@@ -10,8 +10,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session as DBSession
 
 from memory.common.db.connection import get_session
@@ -26,8 +27,37 @@ from memory.common.db.models import (
     AvailabilityLevel,
     SlotAggregation,
 )
+from memory.common.rate_limit import check_rate_limit_spec
 
 router = APIRouter(prefix="/polls", tags=["polls"])
+
+# Public poll endpoints (no auth) need DoS guards. The slug isn't a secret —
+# it's typically shared via Slack/Discord/email — so anyone can spam responses
+# unless we cap them. Per-request availability count is bounded so a single
+# call can't insert thousands of rows; per-IP rate-limit bounds total writes.
+MAX_POLL_AVAILABILITIES_PER_REQUEST = 200
+POLL_RESPONSE_RATE_LIMIT = "10/minute"
+
+
+def enforce_poll_response_rate_limit(request: Request, slug: str) -> None:
+    """Per-(IP, slug) rate limit on public poll-response writes."""
+    ip = get_remote_address(request)
+    if not check_rate_limit_spec(f"poll_resp:{ip}:{slug}", POLL_RESPONSE_RATE_LIMIT):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many poll responses. Please wait a minute and try again.",
+        )
+
+
+def reject_oversized_poll_request(data: "PollResponseRequest") -> None:
+    if len(data.availabilities) > MAX_POLL_AVAILABILITIES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Too many availability slots: {len(data.availabilities)} "
+                f"(max {MAX_POLL_AVAILABILITIES_PER_REQUEST})"
+            ),
+        )
 
 
 # Request schemas
@@ -275,9 +305,13 @@ def get_poll_for_response(
 def submit_response(
     slug: str,
     data: PollResponseRequest,
+    request: Request,
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Submit availability for a poll (public, no auth)."""
+    enforce_poll_response_rate_limit(request, slug)
+    reject_oversized_poll_request(data)
+
     poll = get_poll_by_slug_or_404(slug, db)
 
     if not poll.is_open:
@@ -349,10 +383,14 @@ def update_response(
     slug: str,
     response_id: int,
     data: PollResponseRequest,
+    request: Request,
     x_edit_token: str = Header(..., alias="X-Edit-Token"),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Update an existing response (requires X-Edit-Token header)."""
+    enforce_poll_response_rate_limit(request, slug)
+    reject_oversized_poll_request(data)
+
     poll = get_poll_by_slug_or_404(slug, db)
 
     response = db.get(PollResponse, response_id)
@@ -360,7 +398,12 @@ def update_response(
     if not response or response.poll_id != poll.id:
         raise HTTPException(status_code=404, detail="Response not found")
 
-    if not secrets.compare_digest(response.edit_token, x_edit_token):
+    # Defensive: secrets.compare_digest raises TypeError on None inputs.
+    # response.edit_token shouldn't be None (set on creation) but guarding
+    # avoids a 500 if a row was created by a code path that skipped it.
+    if response.edit_token is None or not secrets.compare_digest(
+        response.edit_token, x_edit_token
+    ):
         raise HTTPException(status_code=403, detail="Invalid edit token")
 
     if not poll.is_open:

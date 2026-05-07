@@ -7,7 +7,9 @@ from fastapi import HTTPException
 
 from memory.api.cloud_claude import (
     get_user_id_from_session,
+    is_valid_session_id,
     make_session_id,
+    require_session_access,
     user_owns_session,
     validate_differ_subpath,
 )
@@ -68,6 +70,91 @@ def test_user_owns_session():
     assert user_owns_session(user, "u42-xyz789") is True
     assert user_owns_session(user, "u1-abc123") is False
     assert user_owns_session(user, "invalid") is False
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        # Path-traversal attempts smuggled into the trailing hex segment
+        # (or via extra hyphens) — these all start with the caller's "u42"
+        # so the cheap user_owns_session check would pass them.
+        "u42-x-../../../etc/hosts",
+        "u42-x-..%2F..%2Fetc%2Fhosts",
+        "u42-x-abc/../../passwd",
+        "u42-x-abc.log",
+        "u42-x-",
+        "u42-abc123",  # missing source segment — pre-existing acceptance by user_owns_session
+        "u42-x-abc def",
+        "u42-x-abc\x00def",
+        "",
+    ],
+)
+def test_require_session_access_rejects_malformed(session_id):
+    """Format check refuses anything that doesn't match the strict
+    ``u{id}-(e\\d+|s\\d+|x)-{hex}`` shape, even if the user "owns" it."""
+    user = MagicMock()
+    user.id = 42
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_session_access(user, session_id)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        "u42-x-abc123",
+        "u42-e1-deadbeef",
+        "u42-s99-CAFE0123",
+    ],
+)
+def test_require_session_access_allows_owned_well_formed(session_id):
+    user = MagicMock()
+    user.id = 42
+    require_session_access(user, session_id)  # should not raise
+
+
+def test_require_session_access_rejects_other_users_session():
+    """Well-formed session id owned by a different user must 404."""
+    user = MagicMock()
+    user.id = 42
+    with pytest.raises(HTTPException) as exc_info:
+        require_session_access(user, "u9999-x-abc123")
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "session_id,expected",
+    [
+        ("u1-x-abc", True),
+        ("u123-e456-deadbeef", True),
+        ("u123-s456-DEADBEEF", True),
+        ("u123-abc", False),  # missing source
+        ("u123-y-abc", False),  # invalid source
+        ("u-x-abc", False),  # missing user id
+        ("u123-x-../etc/hosts", False),
+        ("u123-x-abc.log", False),
+        ("", False),
+    ],
+)
+def test_is_valid_session_id(session_id, expected):
+    assert is_valid_session_id(session_id) is expected
+
+
+def test_orchestrator_get_logs_rejects_path_traversal():
+    """Belt-and-braces: even if a caller bypasses the route validation,
+    OrchestratorClient.get_logs must refuse a malformed id rather than
+    constructing ``LOG_DIR / {malformed}.log`` on the host filesystem."""
+    import asyncio
+
+    from memory.api.orchestrator_client import OrchestratorClient
+
+    client = OrchestratorClient()
+
+    async def run():
+        return await client.get_logs("u1-x-../../../etc/hosts", tail=10)
+
+    assert asyncio.run(run()) is None
 
 
 # Tests for differ proxy path traversal validation

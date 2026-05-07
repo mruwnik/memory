@@ -9,11 +9,15 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import (
+    assert_project_membership,
+    get_current_user,
+    resolve_user_filter,
+)
 from memory.common import discord as discord_client
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
-from memory.common.db.models import Person, User
+from memory.common.db.models import DiscordMessage, Person, User, discord_bot_users
 from memory.common.db.models.discord import (
     DiscordBot,
     DiscordChannel,
@@ -487,6 +491,7 @@ def update_server(
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         server.project_id = updates.project_id
     if updates.sensitivity is not None:
         server.sensitivity = updates.sensitivity
@@ -524,6 +529,7 @@ def update_channel(
     # Allow setting to None (inherit) - check if key is present, not if value is None
     channel.collect_messages = updates.collect_messages
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         channel.project_id = updates.project_id
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity
@@ -549,6 +555,33 @@ def discord_user_to_response(user: DiscordUser) -> DiscordUserResponse:
     )
 
 
+def caller_can_see_discord_user(
+    db: Session, caller: User, discord_user_id: int
+) -> bool:
+    """Return True if ``caller`` is allowed to read a particular DiscordUser row.
+
+    A non-admin caller can only see Discord users they actually have a
+    plausible reason to know about — i.e. one of their authorized bots
+    has stored a message authored by that Discord user. Without this gate,
+    any bot owner could enumerate every DiscordUser row in the system
+    (including admin Discord IDs) and target them with the link endpoint.
+    """
+    if has_admin_scope(caller):
+        return True
+
+    seen = (
+        db.query(DiscordMessage.id)
+        .join(DiscordBot, DiscordMessage.bot_id == DiscordBot.id)
+        .join(discord_bot_users, discord_bot_users.c.bot_id == DiscordBot.id)
+        .filter(
+            DiscordMessage.author_id == discord_user_id,
+            discord_bot_users.c.user_id == caller.id,
+        )
+        .first()
+    )
+    return seen is not None
+
+
 @router.get("/users")
 def list_discord_users(
     search: str | None = None,
@@ -557,12 +590,29 @@ def list_discord_users(
 ) -> list[DiscordUserResponse]:
     """List Discord users known to the system.
 
+    Non-admin callers only see Discord users that one of their
+    authorized bots has actually stored a message from. Admins see
+    every DiscordUser in the table.
+
     Args:
         search: Optional search term (matches username or display_name)
         linked_only: If True, only return users linked to a system user or person
     """
-    _, db = auth
+    caller, db = auth
     query = db.query(DiscordUser)
+
+    if not has_admin_scope(caller):
+        # Restrict to DiscordUsers that have authored a message stored by
+        # one of the caller's authorized bots. EXISTS keeps the
+        # filter cheap regardless of total message volume.
+        seen_subq = (
+            db.query(DiscordMessage.author_id)
+            .join(DiscordBot, DiscordMessage.bot_id == DiscordBot.id)
+            .join(discord_bot_users, discord_bot_users.c.bot_id == DiscordBot.id)
+            .filter(discord_bot_users.c.user_id == caller.id)
+            .subquery()
+        )
+        query = query.filter(DiscordUser.id.in_(seen_subq.select()))
 
     if search:
         search_term = f"%{search.lower()}%"
@@ -590,10 +640,14 @@ def get_discord_user(
     discord_user_id: int,
     auth: tuple[User, Session] = Depends(require_discord_access),
 ) -> DiscordUserResponse:
-    """Get a specific Discord user by ID."""
-    _, db = auth
+    """Get a specific Discord user by ID.
+
+    404s for both "not found" and "exists but you can't see it" so we
+    don't leak DiscordUser existence to callers who happen to own a bot.
+    """
+    caller, db = auth
     user = db.get(DiscordUser, discord_user_id)
-    if not user:
+    if not user or not caller_can_see_discord_user(db, caller, discord_user_id):
         raise HTTPException(status_code=404, detail="Discord user not found")
     return discord_user_to_response(user)
 
@@ -607,14 +661,35 @@ def link_discord_user(
     """Link a Discord user to a system user and/or person.
 
     Set system_user_id or person_id to link, or set to null to unlink.
+
+    Authorization (non-admin):
+    - The caller must already be able to see the target DiscordUser via
+      one of their authorized bots (else 404).
+    - ``system_user_id`` may only be set to the caller's own user id (or
+      to ``null`` to unlink). Setting it to another user's id would let
+      a bot owner re-attribute their Discord activity to the admin's
+      identity.
+    - ``person_id`` may only be set to a Person that is either unlinked
+      (``person.user_id is None``) or already owned by the caller. This
+      blocks identity-hijack attacks that move an admin's Person record
+      under a Discord ID controlled by the attacker.
+
+    Admins bypass these checks.
     """
-    _, db = auth
+    caller, db = auth
     discord_user = db.get(DiscordUser, discord_user_id)
-    if not discord_user:
+    if not discord_user or not caller_can_see_discord_user(db, caller, discord_user_id):
         raise HTTPException(status_code=404, detail="Discord user not found")
+
+    is_admin = has_admin_scope(caller)
 
     # Validate and link system user
     if data.system_user_id is not None:
+        if not is_admin and data.system_user_id != caller.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot link Discord user to another system user",
+            )
         system_user = db.get(User, data.system_user_id)
         if not system_user:
             raise HTTPException(status_code=404, detail="System user not found")
@@ -628,6 +703,15 @@ def link_discord_user(
         person = db.get(Person, data.person_id)
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
+        if (
+            not is_admin
+            and person.user_id is not None
+            and person.user_id != caller.id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot link Discord user to another user's Person",
+            )
         discord_user.person_id = data.person_id
     elif data.person_id is None and "person_id" in (data.model_fields_set or set()):
         # Explicitly set to None = unlink

@@ -12,7 +12,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from memory.common import extract, paths, settings
@@ -58,9 +57,41 @@ from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
 
+
+def _trusted_proxies() -> set[str]:
+    """Parse RATE_LIMIT_TRUSTED_PROXIES at call time so tests can patch it."""
+    raw = settings.RATE_LIMIT_TRUSTED_PROXIES or ""
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def rate_limit_key(request: Request) -> str:
+    """Bucket key for SlowAPI.
+
+    SlowAPI's bundled ``get_remote_address`` honors ``X-Forwarded-For``
+    whenever Uvicorn was started with ``--proxy-headers``, which means a
+    remote attacker can rotate ``X-Forwarded-For`` to mint a fresh
+    bucket per request and defeat every rate limit.
+
+    Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
+    configured trusted proxy (see ``RATE_LIMIT_TRUSTED_PROXIES``). The
+    ``"*"`` wildcard exists for parity with the existing
+    ``--forwarded-allow-ips=*`` Uvicorn default but explicitly opts out
+    of the spoofing protection — operators behind a real proxy should
+    list its IP instead.
+    """
+    immediate = request.client.host if request.client else "unknown"
+    trusted = _trusted_proxies()
+    if "*" in trusted or immediate in trusted:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            # Left-most entry is the original client per RFC 7239 §5.2.
+            return xff.split(",")[0].strip() or immediate
+    return immediate
+
+
 # Rate limiter setup
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=rate_limit_key,
     default_limits=[settings.API_RATE_LIMIT_DEFAULT]
     if settings.API_RATE_LIMIT_ENABLED
     else [],
@@ -143,40 +174,100 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
-# Validation error handler with detailed logging
+# Field names whose values must never be logged or echoed in 422 responses.
+# Validation errors fire on auth, password change, secrets, API key creation,
+# and account-credential endpoints — the offending value is exactly the secret
+# the user just typed, so Pydantic's default `input` echo is a credential leak.
+SENSITIVE_VALIDATION_FIELDS = frozenset({
+    "password",
+    "current_password",
+    "new_password",
+    "old_password",
+    "confirm_password",
+    "token",
+    "refresh_token",
+    "access_token",
+    "api_key",
+    "client_secret",
+    "secret",
+    "value",  # /secrets endpoint
+    "caldav_password",
+    "webhook_secret",
+})
+
+# Query-param names whose values must be redacted before logging. Tokens
+# typically arrive as cookies/headers, but legacy callers sometimes pass them
+# in the URL (e.g. one-time keys in Discord redirect flows).
+SENSITIVE_QUERY_PARAMS = frozenset({
+    "token",
+    "api_key",
+    "key",
+    "access_token",
+    "refresh_token",
+    "code",  # OAuth authorization codes
+    "state",  # may carry signed session state
+    "password",
+})
+
+
+def redact_validation_errors(errors: list[dict]) -> list[dict]:
+    """Return validation errors with sensitive `input`/`ctx` values stripped.
+
+    Pydantic includes the raw offending value under each error's `input` key
+    (and sometimes inside `ctx`). For auth/secret endpoints that's the user's
+    plaintext credential. Drop those fields whenever the error's `loc` path
+    mentions a known sensitive field, and always drop `input` for body-level
+    errors (we can't always know the schema).
+    """
+    redacted: list[dict] = []
+    for err in errors:
+        loc = err.get("loc") or ()
+        loc_names = {str(part).lower() for part in loc}
+        clean = {k: v for k, v in err.items() if k not in {"input", "ctx"}}
+        # Keep ctx only when it doesn't reference the sensitive value
+        if "ctx" in err and not (loc_names & SENSITIVE_VALIDATION_FIELDS):
+            ctx = err["ctx"]
+            if isinstance(ctx, dict):
+                clean["ctx"] = {
+                    k: v for k, v in ctx.items() if k.lower() not in SENSITIVE_VALIDATION_FIELDS
+                }
+        redacted.append(clean)
+    return redacted
+
+
+def redact_query_params(params: dict) -> dict:
+    """Return query params with sensitive values masked."""
+    return {
+        k: ("***" if k.lower() in SENSITIVE_QUERY_PARAMS else v)
+        for k, v in params.items()
+    }
+
+
+# Validation error handler.
+#
+# Security: we deliberately do NOT log the raw request body and we do NOT
+# echo `exc.body` back to the caller. Validation failures on auth / password
+# / secret / API-key endpoints would otherwise drop the user's plaintext
+# credential into log files (CWE-532) and into the 422 response body. The
+# structured `loc`/`msg`/`type` from `errors()` is enough to debug client
+# bugs without exposing the value the validator rejected.
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    # Log detailed validation error info
+    safe_errors = redact_validation_errors(list(exc.errors()))
+
     logger.warning(
         "Validation error on %s %s: %s",
         request.method,
         request.url.path,
-        exc.errors(),
+        safe_errors,
     )
 
-    # Log query parameters if present
     if request.query_params:
-        logger.warning("Query params: %s", dict(request.query_params))
+        logger.warning("Query params: %s", redact_query_params(dict(request.query_params)))
 
-    # Try to log the request body for debugging (may fail for large bodies)
-    try:
-        body = await request.body()
-        if body:
-            # Truncate large bodies
-            body_preview = body[:2000].decode("utf-8", errors="replace")
-            if len(body) > 2000:
-                body_preview += f"... ({len(body)} bytes total)"
-            logger.warning("Request body: %s", body_preview)
-    except Exception as e:
-        logger.warning("Could not read request body: %s", e)
-
-    # Return detailed error response
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": exc.errors(),
-            "body": exc.body if hasattr(exc, "body") else None,
-        },
+        content={"detail": safe_errors},
     )
 
 
@@ -185,12 +276,24 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.
+#
+# `http://localhost:5173` is the Vite dev server. It used to be hard-coded
+# into the production allow-list, which lets any locally-running attacker
+# JS (a different `npm run dev`, a malicious VS Code preview, a DNS-rebound
+# site) make credentialed cross-origin requests against prod and read
+# the response body. Gate it on `ALLOW_LOCALHOST_CORS=true` so dev
+# workflows still work but production environments default closed.
+_cors_origins: list[str] = [settings.SERVER_URL]
+if settings.ALLOW_LOCALHOST_CORS:
+    _cors_origins.extend(settings.LOCALHOST_CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.SERVER_URL, "http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Tightened from "*" — only methods we actually use, only headers we
+    # actually accept. Reduces the audit surface.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Edit-Token"],
 )
 
 

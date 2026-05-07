@@ -6,12 +6,46 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import ArticleFeed
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/article-feeds", tags=["article-feeds"])
+
+
+def get_owned_feed(db: Session, user: User, feed_id: int) -> ArticleFeed:
+    """Fetch ``feed_id``, 404ing for non-owners.
+
+    Admins can see any feed. Legacy rows with ``user_id IS NULL`` are
+    admin-only by default — operators reattribute via SQL if needed.
+    """
+    feed = db.get(ArticleFeed, feed_id)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    if has_admin_scope(user):
+        return feed
+    if feed.user_id is None or feed.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    return feed
+
+
+def reject_unsafe_url(url: str) -> None:
+    """Map ``UnsafeURLError`` to HTTP 400 for the public API.
+
+    Centralised so the message stays consistent across endpoints —
+    creating, syncing, and discovery all share the same SSRF gate.
+    """
+    try:
+        validate_public_url(url)
+    except UnsafeURLError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"URL is not allowed: {exc}",
+        ) from exc
 
 
 class ArticleFeedCreate(BaseModel):
@@ -73,8 +107,11 @@ def list_feeds(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ArticleFeedResponse]:
-    """List all article feeds."""
-    feeds = db.query(ArticleFeed).all()
+    """List article feeds — admin sees all, regular users see their own."""
+    query = db.query(ArticleFeed)
+    if not has_admin_scope(user):
+        query = query.filter(ArticleFeed.user_id == user.id)
+    feeds = query.all()
     return [feed_to_response(feed) for feed in feeds]
 
 
@@ -84,15 +121,18 @@ def create_feed(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ArticleFeedResponse:
-    """Create a new article feed."""
+    """Create a new article feed owned by the calling user."""
     url_str = str(data.url)
+    reject_unsafe_url(url_str)
 
-    # Check for duplicate URL
+    # Check for duplicate URL — feeds are globally URL-unique today, so two
+    # users can't both own the same feed. (Future: per-user uniqueness.)
     existing = db.query(ArticleFeed).filter(ArticleFeed.url == url_str).first()
     if existing:
         raise HTTPException(status_code=400, detail="Feed with this URL already exists")
 
     feed = ArticleFeed(
+        user_id=user.id,
         url=url_str,
         title=data.title or url_str,
         description=data.description,
@@ -113,10 +153,8 @@ def get_feed(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ArticleFeedResponse:
-    """Get a single article feed."""
-    feed = db.get(ArticleFeed, feed_id)
-    if not feed:
-        raise HTTPException(status_code=404, detail="Feed not found")
+    """Get a single article feed (owner or admin only)."""
+    feed = get_owned_feed(db, user, feed_id)
     return feed_to_response(feed)
 
 
@@ -127,10 +165,8 @@ def update_feed(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ArticleFeedResponse:
-    """Update an article feed."""
-    feed = db.get(ArticleFeed, feed_id)
-    if not feed:
-        raise HTTPException(status_code=404, detail="Feed not found")
+    """Update an article feed (owner or admin only)."""
+    feed = get_owned_feed(db, user, feed_id)
 
     if updates.title is not None:
         feed.title = updates.title
@@ -155,10 +191,8 @@ def delete_feed(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Delete an article feed."""
-    feed = db.get(ArticleFeed, feed_id)
-    if not feed:
-        raise HTTPException(status_code=404, detail="Feed not found")
+    """Delete an article feed (owner or admin only)."""
+    feed = get_owned_feed(db, user, feed_id)
 
     db.delete(feed)
     db.commit()
@@ -172,12 +206,15 @@ def trigger_sync(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Manually trigger a sync for an article feed."""
+    """Manually trigger a sync for an article feed (owner or admin only)."""
     from memory.common.celery_app import app, SYNC_ARTICLE_FEED
 
-    feed = db.get(ArticleFeed, feed_id)
-    if not feed:
-        raise HTTPException(status_code=404, detail="Feed not found")
+    feed = get_owned_feed(db, user, feed_id)
+
+    # Re-validate at sync time too: a feed URL stored before this gate
+    # existed, or one whose hostname has since been rebound to a private
+    # range, must not be fetched from the worker network position.
+    reject_unsafe_url(cast(str, feed.url))
 
     task = app.send_task(
         SYNC_ARTICLE_FEED,
@@ -196,6 +233,7 @@ def discover_feed(
     from memory.parsers.feeds import get_feed_parser
 
     url_str = str(url)
+    reject_unsafe_url(url_str)
     parser = get_feed_parser(url_str)
 
     if not parser:

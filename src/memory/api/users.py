@@ -5,19 +5,30 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal, TYPE_CHECKING, cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
+from memory.common import settings
 from memory.common.db.connection import get_session
-from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
+from memory.common.db.models import (
+    APIKey,
+    APIKeyType,
+    BotUser,
+    HumanUser,
+    OAuthRefreshToken,
+    User,
+    UserSession,
+)
 from memory.common.db.models.users import hash_password, verify_password
+from memory.common.rate_limit import check_rate_limit_spec
 from memory.common.scopes import (
     SCOPE_ADMIN,
     VALID_SCOPES,
     validate_scopes,
 )
-from memory.api.auth import get_current_user, require_scope
+from memory.api.auth import get_current_user, get_token, require_scope
 from memory.common.people import find_or_create_person
 
 if TYPE_CHECKING:
@@ -189,7 +200,17 @@ def create_user(
         new_user.scopes = data.scopes
 
     db.add(new_user)
-    db.commit()
+    # Catch the TOCTOU race: two concurrent admin POSTs with the same
+    # email both pass the existence check above, then one commit() lands
+    # and the other raises IntegrityError. Convert to a clean 400 so the
+    # second admin sees the same UX as the early-existence path.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="User with this email already exists"
+        )
     db.refresh(new_user)
 
     # Auto-link to Person record if one exists with matching email
@@ -317,15 +338,62 @@ def delete_user(
     return {"status": "deleted"}
 
 
+def revoke_user_credentials(
+    db: Session, user_id: int, keep_session_id: str | None = None
+) -> tuple[int, int]:
+    """Invalidate a user's other sessions and OAuth refresh tokens.
+
+    Called after a password change or admin reset so a stolen
+    cookie/refresh token can't outlive the rotation. ``keep_session_id``
+    optionally preserves a single session row (used by the self-change
+    flow so the user isn't logged out of the tab they're using to change
+    their password).
+
+    Returns ``(deleted_sessions, revoked_refresh_tokens)``.
+
+    NOTE: API keys are deliberately *not* revoked here. They tend to be
+    long-lived integration credentials with their own rotation cadence;
+    a password rotation shouldn't silently break Discord/Slack/MCP
+    integrations. Operators who want to revoke keys after a password
+    reset should use the API-key endpoints explicitly.
+    """
+    session_query = db.query(UserSession).filter(UserSession.user_id == user_id)
+    if keep_session_id is not None:
+        session_query = session_query.filter(UserSession.id != keep_session_id)
+    sessions_deleted = session_query.delete(synchronize_session=False)
+
+    refresh_revoked = (
+        db.query(OAuthRefreshToken)
+        .filter(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.revoked.is_(False),
+        )
+        .update({"revoked": True}, synchronize_session=False)
+    )
+    return sessions_deleted, refresh_revoked
+
+
 @router.post("/me/change-password")
 def change_password(
     data: PasswordChange,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
     """Change current user's password. Requires current password verification."""
     if user.user_type != "human":
         raise HTTPException(status_code=400, detail="Only human users can change passwords")
+
+    # Per-user rate limit on the current_password check itself.
+    # Prevents an attacker who has stolen a session/token from brute-forcing
+    # the user's current password to escalate to a full password rotation.
+    if not check_rate_limit_spec(
+        f"change_password:user:{user.id}", settings.API_RATE_LIMIT_AUTH
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many password-change attempts. Please wait and try again.",
+        )
 
     human_user = db.get(HumanUser, user.id)
     if not human_user:
@@ -338,6 +406,12 @@ def change_password(
     # Validate and update password
     validate_password_strength(data.new_password)
     human_user.password_hash = hash_password(data.new_password)
+
+    # Revoke other credentials so a stolen session/refresh-token doesn't
+    # survive the rotation. Keep the *current* session (the tab the user is
+    # actively using to change their password); they'll keep working.
+    current_session_token = get_token(request)
+    revoke_user_credentials(db, cast(int, user.id), keep_session_id=current_session_token)
     db.commit()
 
     return {"status": "password_changed"}
@@ -358,6 +432,11 @@ def reset_password(
 
     validate_password_strength(data.new_password)
     human_user.password_hash = hash_password(data.new_password)
+
+    # Admin reset is the "lock the account" path — revoke EVERY session and
+    # refresh token (no keep_session_id). The target user will need to log
+    # back in everywhere with the new password.
+    revoke_user_credentials(db, user_id)
     db.commit()
 
     return {"status": "password_reset"}

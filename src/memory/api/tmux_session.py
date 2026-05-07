@@ -34,6 +34,27 @@ SCROLL_LINES = 3  # Lines per scroll wheel event
 PANE_POLL_INTERVAL = 5.0  # Poll orchestrator for pane list every 5s
 
 
+def coerce_int(value: object, default: int) -> int:
+    """Best-effort int coercion for client-supplied JSON values.
+
+    The terminal WebSocket message handlers used to feed
+    ``message.get("lines", default)`` straight into ``min/max``. A client
+    that sent ``{"lines": null}`` or ``{"lines": "5"}`` would crash the
+    handler coroutine with TypeError, which silently dropped the
+    long-lived terminal session. Coerce defensively: ``int("5")`` is
+    fine, anything that doesn't convert (None, dict, list, NaN string)
+    falls back to ``default``.
+    """
+    if isinstance(value, bool):
+        # bool is a subclass of int; treat as default to avoid the
+        # surprising "True == 1" path.
+        return default
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 async def send_live_screen(
     websocket: WebSocket,
     relay: RelayClient,
@@ -305,103 +326,144 @@ async def input_handler_loop(
             )
             break
 
-        msg_type = message.get("type")
-        if msg_type == "input":
-            keys = message.get("keys", "")
-            literal = message.get("literal", True)
-            if keys:
-                # Jump back to live view on any input
-                activity_state["scroll_offset"] = 0
-                # Record activity and wake up capture loop immediately
+        try:
+            await _dispatch_input_message(
+                websocket, session_id, relay, activity_state, client, message
+            )
+        except Exception:
+            # Belt-and-braces: even with the per-message coercion above, a
+            # malformed frame must not tear down the long-lived terminal
+            # session. Log and surface a single "error" event instead of
+            # returning the coroutine and dropping the connection.
+            logger.exception(
+                "Unhandled error processing input message for %s", session_id
+            )
+            try:
+                await send_ws_json(websocket, "error", "internal error")
+            except Exception:
+                # If we can't even send the error frame, the socket is
+                # already gone — the next receive_json will drop us out.
+                pass
+
+
+async def _dispatch_input_message(
+    websocket: WebSocket,
+    session_id: str,
+    relay: RelayClient,
+    activity_state: dict,
+    client: "OrchestratorClient | None",
+    message: dict,
+) -> None:
+    """Dispatch a single input-WebSocket message body.
+
+    Extracted from ``input_handler_loop`` so the outer loop can guard
+    every per-message dispatch with one try/except. Without that guard a
+    malformed frame (e.g. ``{"type":"scroll","lines":null}``) used to
+    crash the loop coroutine and silently disconnect the terminal.
+    """
+    msg_type = message.get("type")
+    if msg_type == "input":
+        keys = message.get("keys", "")
+        literal = message.get("literal", True)
+        if keys:
+            # Jump back to live view on any input
+            activity_state["scroll_offset"] = 0
+            # Record activity and wake up capture loop immediately
+            activity_state["last_input_time"] = asyncio.get_running_loop().time()
+            input_event = activity_state.get("input_event")
+            if input_event:
+                input_event.set()
+            try:
+                result = await relay.send_keys(keys, literal=literal)
+                if result["status"] != "ok":
+                    await send_ws_json(
+                        websocket,
+                        "error",
+                        result.get("error", "Failed to send input"),
+                    )
+            except RelayError as e:
+                await send_ws_json(websocket, "error", str(e))
+    elif msg_type == "scroll":
+        direction = message.get("direction", "down")
+        lines = max(
+            1,
+            min(coerce_int(message.get("lines", SCROLL_LINES), SCROLL_LINES), 200),
+        )
+        offset = activity_state.get("scroll_offset", 0)
+        max_history = activity_state.get("history_size") or 1000
+
+        if direction == "up":
+            offset = min(offset + lines, max_history)
+        else:
+            offset = max(0, offset - lines)
+
+        activity_state["scroll_offset"] = offset
+
+        if offset > 0:
+            rows = activity_state.get("terminal_rows", 24)
+            start = -offset
+            # end can go negative when offset >= rows, putting the entire
+            # window in scrollback.  When offset < rows the window straddles
+            # scrollback and the visible area (showing the lines the user
+            # would see if they scrolled up by `offset` lines in a real terminal).
+            # e.g. rows=24, offset=30 -> start=-30, end=-7 (pure scrollback)
+            #      rows=24, offset=3  -> start=-3,  end=20  (3 scrollback + 21 visible)
+            end = rows - 1 - offset
+            try:
+                result = await relay.capture_range(start, end)
+                if result["status"] == "ok":
+                    await send_ws_json(
+                        websocket, "screen", result["content"],
+                        scrolled=offset,
+                    )
+            except RelayError as e:
+                await send_ws_json(websocket, "error", str(e))
+        else:
+            # Back to live view - send current screen immediately
+            try:
+                await send_live_screen(websocket, relay, activity_state)
+            except RelayError as e:
+                logger.debug("RelayError on scroll-to-live: %s", e)
+    elif msg_type == "scroll_to_bottom":
+        try:
+            await send_live_screen(websocket, relay, activity_state)
+        except RelayError as e:
+            logger.debug("RelayError on scroll-to-bottom: %s", e)
+    elif msg_type == "select_pane":
+        pane = message.get("pane", "")
+        if pane and client:
+            try:
+                # Pass dimensions atomically with the pane switch
+                cols = activity_state.get("terminal_cols", 80)
+                rows = activity_state.get("terminal_rows", 24)
+                await client.relay_select_pane(session_id, pane, cols=cols, rows=rows)
+                # Signal pane poll to refresh immediately (IDs shift after swap)
+                pane_event = activity_state.get("pane_event")
+                if pane_event:
+                    pane_event.set()
+                # Wake up capture loop to show new pane immediately
                 activity_state["last_input_time"] = asyncio.get_running_loop().time()
                 input_event = activity_state.get("input_event")
                 if input_event:
                     input_event.set()
-                try:
-                    result = await relay.send_keys(keys, literal=literal)
-                    if result["status"] != "ok":
-                        await send_ws_json(
-                            websocket,
-                            "error",
-                            result.get("error", "Failed to send input"),
-                        )
-                except RelayError as e:
-                    await send_ws_json(websocket, "error", str(e))
-        elif msg_type == "scroll":
-            direction = message.get("direction", "down")
-            lines = max(1, min(message.get("lines", SCROLL_LINES), 200))
-            offset = activity_state.get("scroll_offset", 0)
-            max_history = activity_state.get("history_size") or 1000
-
-            if direction == "up":
-                offset = min(offset + lines, max_history)
+            except OrchestratorError as e:
+                await send_ws_json(websocket, "error", f"Failed to select pane: {e}")
+    elif msg_type == "resize":
+        # 1..1000 covers every realistic terminal geometry; reject
+        # anything wilder than that so a hostile client can't trick
+        # the relay into allocating arbitrary buffer dimensions.
+        cols = max(1, min(coerce_int(message.get("cols", 80), 80), 1000))
+        rows = max(1, min(coerce_int(message.get("rows", 24), 24), 1000))
+        # Always store latest resize so it can be applied when relay becomes ready
+        activity_state["pending_resize"] = (cols, rows)
+        try:
+            result = await relay.resize(cols, rows)
+            if result["status"] == "ok":
+                activity_state.pop("pending_resize", None)
             else:
-                offset = max(0, offset - lines)
-
-            activity_state["scroll_offset"] = offset
-
-            if offset > 0:
-                rows = activity_state.get("terminal_rows", 24)
-                start = -offset
-                # end can go negative when offset >= rows, putting the entire
-                # window in scrollback.  When offset < rows the window straddles
-                # scrollback and the visible area (showing the lines the user
-                # would see if they scrolled up by `offset` lines in a real terminal).
-                # e.g. rows=24, offset=30 -> start=-30, end=-7 (pure scrollback)
-                #      rows=24, offset=3  -> start=-3,  end=20  (3 scrollback + 21 visible)
-                end = rows - 1 - offset
-                try:
-                    result = await relay.capture_range(start, end)
-                    if result["status"] == "ok":
-                        await send_ws_json(
-                            websocket, "screen", result["content"],
-                            scrolled=offset,
-                        )
-                except RelayError as e:
-                    await send_ws_json(websocket, "error", str(e))
-            else:
-                # Back to live view - send current screen immediately
-                try:
-                    await send_live_screen(websocket, relay, activity_state)
-                except RelayError as e:
-                    logger.debug("RelayError on scroll-to-live: %s", e)
-        elif msg_type == "scroll_to_bottom":
-            try:
-                await send_live_screen(websocket, relay, activity_state)
-            except RelayError as e:
-                logger.debug("RelayError on scroll-to-bottom: %s", e)
-        elif msg_type == "select_pane":
-            pane = message.get("pane", "")
-            if pane and client:
-                try:
-                    # Pass dimensions atomically with the pane switch
-                    cols = activity_state.get("terminal_cols", 80)
-                    rows = activity_state.get("terminal_rows", 24)
-                    await client.relay_select_pane(session_id, pane, cols=cols, rows=rows)
-                    # Signal pane poll to refresh immediately (IDs shift after swap)
-                    pane_event = activity_state.get("pane_event")
-                    if pane_event:
-                        pane_event.set()
-                    # Wake up capture loop to show new pane immediately
-                    activity_state["last_input_time"] = asyncio.get_running_loop().time()
-                    input_event = activity_state.get("input_event")
-                    if input_event:
-                        input_event.set()
-                except OrchestratorError as e:
-                    await send_ws_json(websocket, "error", f"Failed to select pane: {e}")
-        elif msg_type == "resize":
-            cols = message.get("cols", 80)
-            rows = message.get("rows", 24)
-            # Always store latest resize so it can be applied when relay becomes ready
-            activity_state["pending_resize"] = (cols, rows)
-            try:
-                result = await relay.resize(cols, rows)
-                if result["status"] == "ok":
-                    activity_state.pop("pending_resize", None)
-                else:
-                    logger.debug(f"resize failed: {result.get('error')}")
-            except RelayError as e:
-                logger.debug(f"resize error (will retry when relay ready): {e}")
+                logger.debug(f"resize failed: {result.get('error')}")
+        except RelayError as e:
+            logger.debug(f"resize error (will retry when relay ready): {e}")
 
 
 async def pane_poll_loop(

@@ -9,13 +9,14 @@ Provides endpoints for:
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import exists, func
 
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, resolve_user_filter
+from memory.common import settings
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import TelemetryEvent, User
@@ -25,6 +26,13 @@ from memory.common.telemetry import (
 )
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
+
+# Maximum events extracted from a single OTLP payload. Even within the
+# byte cap an OTLP "metrics" payload can fan out to thousands of
+# datapoints; bound the in-memory list before it's handed off to a
+# background task so a burst of valid-but-fat payloads can't pile up
+# write_events_to_db invocations on the asyncio loop.
+_MAX_TELEMETRY_EVENTS_PER_REQUEST = 10000
 
 
 class IngestResponse(BaseModel):
@@ -54,8 +62,49 @@ async def ingest_telemetry(
     ```
 
     Authentication: Requires Bearer token (same auth as other endpoints).
+
+    Bounded by ``settings.MAX_TELEMETRY_PAYLOAD_BYTES`` (default 5 MiB)
+    so a misbehaving collector — or an authenticated attacker — can't
+    POST gigabytes of OTLP and OOM the API process while the body is
+    buffered and parsed before any rate limit fires.
     """
-    body = await request.body()
+    max_bytes = settings.MAX_TELEMETRY_PAYLOAD_BYTES
+    # Trust the declared Content-Length when present; bail before reading.
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_int = int(declared)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length")
+        if declared_int > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Telemetry payload exceeds {max_bytes} bytes; "
+                    "split into smaller batches or raise MAX_TELEMETRY_PAYLOAD_BYTES."
+                ),
+            )
+
+    # Even with a small/missing Content-Length, defend against chunked or
+    # lying clients by reading in chunks and bailing if the cumulative
+    # size crosses the cap.
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        received += len(chunk)
+        if received > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Telemetry payload exceeds {max_bytes} bytes; "
+                    "split into smaller batches or raise MAX_TELEMETRY_PAYLOAD_BYTES."
+                ),
+            )
+        chunks.append(chunk)
+    body = b"".join(chunks)
+
     if not body:
         return IngestResponse(status="accepted", events_received=0, events_stored=0)
 
@@ -64,6 +113,12 @@ async def ingest_telemetry(
 
     if not events:
         return IngestResponse(status="accepted", events_received=0, events_stored=0)
+
+    # Cap event count per request — a small payload of nested OTLP can
+    # still expand to a large datapoint list. Truncate rather than fail
+    # so a chatty collector doesn't lose the whole batch.
+    if len(events) > _MAX_TELEMETRY_EVENTS_PER_REQUEST:
+        events = events[:_MAX_TELEMETRY_EVENTS_PER_REQUEST]
 
     # Process in background to avoid blocking the response
     background_tasks.add_task(write_events_to_db, events, user.id)

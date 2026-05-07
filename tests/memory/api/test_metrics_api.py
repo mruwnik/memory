@@ -12,11 +12,25 @@ from memory.common.db.models import MetricEvent
 
 @pytest.fixture
 def client():
-    """Create a test client for the metrics router."""
+    """Create a test client for the metrics router.
+
+    The metrics endpoints require admin scope; this fixture overrides
+    `get_current_user` so the existing data-shape tests don't have to
+    juggle auth tokens. See `test_metrics_admin_only` for the actual
+    access-control assertions.
+    """
     from fastapi import FastAPI
+    from unittest.mock import MagicMock
+
+    from memory.api.auth import get_current_user
 
     app = FastAPI()
     app.include_router(router)
+
+    admin = MagicMock()
+    admin.id = 1
+    admin.scopes = ["*"]
+    app.dependency_overrides[get_current_user] = lambda: admin
     return TestClient(app)
 
 
@@ -393,3 +407,62 @@ def test_hours_validation(client, db_session):
         # Too high
         response = client.get("/api/metrics/summary?hours=1000")
         assert response.status_code == 422
+
+
+# ============== Admin-only access ==============
+
+
+@pytest.fixture
+def regular_user_client():
+    """Variant of `client` that authenticates as a non-admin user."""
+    from fastapi import FastAPI
+    from unittest.mock import MagicMock
+
+    from memory.api.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(router)
+
+    regular = MagicMock()
+    regular.id = 42
+    regular.scopes = ["read", "write"]  # no SCOPE_ADMIN
+    app.dependency_overrides[get_current_user] = lambda: regular
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/metrics/summary",
+        "/api/metrics/tasks",
+        "/api/metrics/mcp",
+        "/api/metrics/system",
+        "/api/metrics/raw",
+    ],
+)
+def test_metrics_endpoints_forbidden_for_non_admin(regular_user_client, path):
+    """All metrics endpoints must 403 for non-admin callers.
+
+    Event labels include user_id and tool/task names — shipping that to
+    every authenticated user is a cross-tenant activity-disclosure
+    surface (see audit-ged task 302a92c5).
+    """
+    response = regular_user_client.get(path)
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/metrics/summary",
+        "/api/metrics/tasks",
+        "/api/metrics/mcp",
+        "/api/metrics/system",
+        "/api/metrics/raw",
+    ],
+)
+def test_metrics_endpoints_allowed_for_admin(client, db_session, path):
+    """Admin (default test client) clears the gate on every metrics route."""
+    with patch("memory.api.metrics.make_session", return_value=db_session):
+        response = client.get(path)
+    assert response.status_code == 200

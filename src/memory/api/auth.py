@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from memory.common import settings
@@ -16,7 +18,7 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import get_user_project_roles, has_admin_scope
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
@@ -32,10 +34,12 @@ _auth_disabled_warning_logged = False
 # Create router
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Endpoints that don't require authentication (prefix matching)
+# Endpoints that don't require authentication (prefix matching).
+# Note: `/register` previously sat here even though no endpoint registers
+# that path. A future, well-meaning addition of a `/register` route
+# would have inherited the auth bypass — removed.
 WHITELIST = {
     "/health",
-    "/register",
     "/authorize",
     "/token",
     "/mcp",
@@ -50,6 +54,28 @@ WHITELIST = {
     # themselves — must bypass OAuth or curl can't reach them.
     "/claude/transfer/",
 }
+
+
+def is_whitelisted_path(path: str) -> bool:
+    """Decide whether ``path`` should bypass the AuthenticationMiddleware.
+
+    Trailing-slash whitelist entries (``/oauth/``, ``/.well-known/``)
+    match anything below them. Bare entries (``/health``, ``/mcp``,
+    ``/ui``, …) match the exact path or a child segment delimited by
+    ``/`` — they deliberately do NOT match ``/healthcheck`` or
+    ``/mcphidden``. The previous ``str.startswith`` everywhere version
+    was a latent auth-bypass any time someone added a sibling route
+    sharing a prefix with one of the bare entries.
+    """
+    if path == "/":
+        return True
+    for entry in WHITELIST:
+        if entry.endswith("/"):
+            if path.startswith(entry):
+                return True
+        elif path == entry or path.startswith(entry + "/"):
+            return True
+    return False
 
 # Claude WebSocket session path pattern - more specific than prefix matching
 # Session IDs have format: u{user_id}-{source}-{hex} where source is:
@@ -108,6 +134,29 @@ def create_user_session(
     return str(session.id)
 
 
+def is_expired(expires_at: datetime | None) -> bool:
+    """Return True if ``expires_at`` is in the past (UTC-correct).
+
+    PostgreSQL stores session expiry as naive UTC; some drivers / pool
+    configs return tz-aware datetimes. ``.replace(tzinfo=UTC)`` only
+    works for the naive case — for an already-aware datetime in a
+    non-UTC zone it relabels rather than converting and silently shifts
+    the wall clock. This helper handles both:
+
+    - naive → assume UTC (matches how the column is written)
+    - aware → astimezone(UTC) so the comparison is wall-clock-correct
+
+    A NULL expires_at is treated as expired (fail-closed).
+    """
+    if expires_at is None:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
 def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     """Get session ID from request"""
     session_id = get_token(request)
@@ -119,17 +168,7 @@ def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     if not session:
         return None
 
-    now = datetime.now(timezone.utc)
-    # Normalize expires_at to UTC for comparison
-    expires_at = session.expires_at
-    if expires_at.tzinfo is None:
-        # Assume naive datetimes are UTC (PostgreSQL stores as UTC)
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    else:
-        # Convert to UTC if it has a different timezone
-        expires_at = expires_at.astimezone(timezone.utc)
-
-    if expires_at < now:
+    if is_expired(session.expires_at):
         return None
     return session
 
@@ -179,6 +218,10 @@ def authenticate_by_api_key(
 
     Uses constant-time comparison to prevent timing attacks.
 
+    For one-time keys, consumes the key atomically (DELETE ... RETURNING):
+    if two concurrent requests present the same ot_* token, only one wins.
+    The race-loser gets ``(None, None)`` instead of double-authenticating.
+
     Args:
         api_key: The API key to authenticate.
         db: Database session.
@@ -198,11 +241,19 @@ def authenticate_by_api_key(
     # Eagerly load user before handle_api_key_use, which may delete/commit
     # (for one-time keys). This prevents DetachedInstanceError on lazy load.
     user = matched_key.user
-    handle_api_key_use(matched_key, db)
+    if not handle_api_key_use(matched_key, db):
+        # Concurrent request consumed the one-time key first. Debug-level
+        # so it stays out of normal production logs unless an operator is
+        # chasing a "401 from a fresh key" report and bumps verbosity.
+        logger.debug(
+            "One-time API key %s consumed by concurrent request; this request loses race",
+            matched_key.id,
+        )
+        return None, None
     return user, matched_key
 
 
-def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
+def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
     """Handle API key usage: update last_used_at and delete one-time keys.
 
     Warning: This function commits the database session. This is intentional
@@ -210,14 +261,29 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
     preventing replay attacks. For regular keys, this updates the last_used_at
     timestamp immediately.
 
-    For one-time keys specifically, the key is deleted and committed before
-    the request completes. If the subsequent request fails, the key is still
-    gone - this is by design for security (single use).
+    For one-time keys: uses an atomic ``DELETE ... WHERE id=:id RETURNING id``
+    so concurrent requests cannot both succeed. Returns False if another
+    request already consumed the key (race-loser); True otherwise.
+
+    For regular keys: updates last_used_at and returns True.
     """
-    key_record.last_used_at = datetime.now(timezone.utc)
     if key_record.is_one_time:
-        db.delete(key_record)
+        # Detach the in-memory row from this session so SQLAlchemy doesn't
+        # also queue an ORM-level delete that would conflict with the
+        # explicit DELETE we issue below.
+        db.expunge(key_record)
+        result = db.execute(
+            delete(APIKey)
+            .where(APIKey.id == key_record.id)
+            .returning(APIKey.id)
+        )
+        won = result.scalar_one_or_none() is not None
+        db.commit()
+        return won
+
+    key_record.last_used_at = datetime.now(timezone.utc)
     db.commit()
+    return True
 
 
 def authenticate_request(
@@ -316,8 +382,7 @@ def get_user_from_token(
     if not session:
         return None
 
-    now = datetime.now(timezone.utc)
-    if session.expires_at.replace(tzinfo=timezone.utc) < now:
+    if is_expired(session.expires_at):
         return None
     return session.user
 
@@ -415,6 +480,29 @@ def get_user_account(db: DBSession, model: type[T], account_id: int, user: User)
     return account
 
 
+def assert_project_membership(
+    db: DBSession, user: User, project_id: int | None
+) -> None:
+    """Raise 403 unless `user` is admin or a member of `project_id`.
+
+    Mirrors the membership check PR #74 added to tidbit_add/tidbit_update.
+    Non-members assigning content to a project violates the access invariant
+    in both directions: (a) attacker plants content into a confidential
+    project, (b) the access-filter pipeline then surfaces it to legitimate
+    members. ``project_id=None`` is a no-op (NULL → admin-only by convention,
+    handled at read time).
+    """
+    if project_id is None:
+        return
+    if has_admin_scope(user):
+        return
+    roles = get_user_project_roles(db, user)
+    if project_id not in roles:
+        raise HTTPException(
+            status_code=403, detail="Not a member of target project"
+        )
+
+
 def resolve_user_filter(
     user_id: int | None, current_user: User, db: DBSession
 ) -> int | None:
@@ -453,15 +541,31 @@ def resolve_user_filter(
 
 
 def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
-    """Create a new human user"""
-    # Check if user already exists
+    """Create a new human user.
+
+    The select-then-insert is a TOCTOU race: two concurrent registrations
+    with the same email both pass the existence check, then one
+    db.commit() lands and the other raises IntegrityError. Catching
+    IntegrityError on commit converts that into a clean 400 instead of a
+    500, matching the UX of the early-existence path. The unique
+    constraint on users.email is the actual safety net.
+    """
+    # Best-effort early check so the common "duplicate email" path
+    # returns a friendly 400 without churning a transaction. Real
+    # serialization happens on commit.
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
     user = HumanUser.create_with_password(email, name, password)
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="User with this email already exists"
+        )
     db.refresh(user)
 
     return user
@@ -588,12 +692,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
 
-        # Skip authentication for whitelisted endpoints
-        if (
-            any(path.startswith(whitelist_path) for whitelist_path in WHITELIST)
-            or path == "/"
-            or _CLAUDE_SESSION_PATTERN.match(path)  # Claude WebSocket sessions
-        ):
+        # Skip authentication for whitelisted endpoints. Use the explicit
+        # exact-or-child-segment matcher rather than a raw `startswith` so
+        # adding a future route like `/mcphost` doesn't accidentally
+        # whitelist itself.
+        if is_whitelisted_path(path) or _CLAUDE_SESSION_PATTERN.match(path):
             return await call_next(request)
 
         # Check for session ID in header or cookie

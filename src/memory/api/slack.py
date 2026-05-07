@@ -20,7 +20,11 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import (
+    assert_project_membership,
+    get_current_user,
+    resolve_user_filter,
+)
 from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_SLACK_WORKSPACE
 from memory.common.db.connection import get_session
@@ -459,6 +463,7 @@ def update_workspace(
     if updates.sync_interval_seconds is not None:
         workspace.sync_interval_seconds = updates.sync_interval_seconds
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         workspace.project_id = updates.project_id
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
@@ -570,6 +575,7 @@ def update_channel(
 
     channel.collect_messages = updates.collect_messages
     if updates.project_id is not None:
+        assert_project_membership(db, user, updates.project_id)
         channel.project_id = updates.project_id
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity
