@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, TYPE_CHECKING, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -199,7 +200,17 @@ def create_user(
         new_user.scopes = data.scopes
 
     db.add(new_user)
-    db.commit()
+    # Catch the TOCTOU race: two concurrent admin POSTs with the same
+    # email both pass the existence check above, then one commit() lands
+    # and the other raises IntegrityError. Convert to a clean 400 so the
+    # second admin sees the same UX as the early-existence path.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="User with this email already exists"
+        )
     db.refresh(new_user)
 
     # Auto-link to Person record if one exists with matching email

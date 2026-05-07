@@ -724,3 +724,52 @@ def test_get_user_from_token_returns_user_when_session_fresh():
 
     result = auth.get_user_from_token("session-uuid", db)
     assert result is user
+
+
+# ====== create_user TOCTOU on duplicate email ======
+
+
+from fastapi import HTTPException as _HTTPException  # noqa: E402
+from sqlalchemy.exc import IntegrityError as _IntegrityError  # noqa: E402
+
+
+def test_create_user_early_check_returns_400_when_user_exists():
+    """Existing user → 400 without ever calling commit()."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = MagicMock()  # existing
+
+    with pytest.raises(_HTTPException) as exc:
+        auth.create_user("a@b", "pw", "Name", db)
+
+    assert exc.value.status_code == 400
+    db.commit.assert_not_called()
+
+
+def test_create_user_commit_integrityerror_returns_400():
+    """Race: existence check passes, but a parallel commit landed first
+    and the unique index rejects ours. Must not surface as 500."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None  # no existing
+    db.commit.side_effect = _IntegrityError("INSERT", {}, None)
+
+    with patch.object(auth.HumanUser, "create_with_password", return_value=MagicMock()):
+        with pytest.raises(_HTTPException) as exc:
+            auth.create_user("a@b", "pw", "Name", db)
+
+    assert exc.value.status_code == 400
+    db.rollback.assert_called_once()
+
+
+def test_create_user_happy_path_commits_and_refreshes():
+    """No race, no existing user → user is added, committed, and refreshed."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    fake_user = MagicMock()
+    with patch.object(auth.HumanUser, "create_with_password", return_value=fake_user):
+        result = auth.create_user("a@b", "pw", "Name", db)
+
+    assert result is fake_user
+    db.add.assert_called_once_with(fake_user)
+    db.commit.assert_called_once()
+    db.refresh.assert_called_once_with(fake_user)
+    db.rollback.assert_not_called()

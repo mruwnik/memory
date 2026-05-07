@@ -5,6 +5,7 @@ from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from memory.common import settings
@@ -534,15 +535,31 @@ def resolve_user_filter(
 
 
 def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
-    """Create a new human user"""
-    # Check if user already exists
+    """Create a new human user.
+
+    The select-then-insert is a TOCTOU race: two concurrent registrations
+    with the same email both pass the existence check, then one
+    db.commit() lands and the other raises IntegrityError. Catching
+    IntegrityError on commit converts that into a clean 400 instead of a
+    500, matching the UX of the early-existence path. The unique
+    constraint on users.email is the actual safety net.
+    """
+    # Best-effort early check so the common "duplicate email" path
+    # returns a friendly 400 without churning a transaction. Real
+    # serialization happens on commit.
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
     user = HumanUser.create_with_password(email, name, password)
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="User with this email already exists"
+        )
     db.refresh(user)
 
     return user
