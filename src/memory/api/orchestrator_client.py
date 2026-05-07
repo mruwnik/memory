@@ -52,11 +52,15 @@ def tail_log_text(log_file: Path, tail: int) -> str:
     Reads the file backwards in :data:`_TAIL_READ_CHUNK`-sized chunks
     until ``tail+1`` newlines have been seen (the +1 lets us drop the
     leading partial line — otherwise we'd return at most ``tail-1``
-    full lines plus a partial). Falls back to reading the entire file
-    when ``tail <= 0`` or when the file is small enough that seeking is
-    pointless. The final payload is also truncated to
-    :data:`LOG_TAIL_MAX_BYTES` so an attacker requesting ``tail=10_000_000``
-    can't blow up the API process.
+    full lines plus a partial). For ``tail <= 0`` the function reads
+    the file when small, OR returns just the last
+    :data:`LOG_TAIL_MAX_BYTES` worth of bytes (with the leading partial
+    line dropped) when the file is larger — i.e. ``tail=0`` no longer
+    means "return the entire file" the way it used to; the response is
+    capped so a single request can't exhaust the API container even
+    against a multi-GB log. The final payload is always bounded by
+    :data:`LOG_TAIL_MAX_BYTES`, regardless of ``tail`` value, for the
+    same reason.
     """
     file_size = log_file.stat().st_size
     if tail <= 0:

@@ -4,7 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
@@ -19,7 +19,7 @@ from memory.common.celery_app import app as celery_app
 from memory.common.jobs import dispatch_job
 from memory.common.content_processing import clear_item_chunks
 from memory.common.db.models.source_items import Report
-from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
+from memory.common.rate_limit import check_rate_limit_spec
 
 logger = logging.getLogger(__name__)
 
@@ -434,7 +434,6 @@ class ForumSyncResponse(BaseModel):
 @router.post("/forums/sync")
 def trigger_forum_sync(
     request: ForumSyncRequest,
-    http_request: Request,
     user: User = Depends(get_current_user),
 ) -> ForumSyncResponse:
     """Trigger a LessWrong forum sync with the given parameters.
@@ -450,9 +449,14 @@ def trigger_forum_sync(
             detail="Forum sync is restricted to admin users.",
         )
 
-    # Per-user rate limit: 1/minute. Keyed on user id rather than IP so a
-    # single admin can't rotate IPs to bypass.
-    bucket_key = f"forum_sync:user:{user.id}:{rate_limit_key(http_request)}"
+    # Per-user rate limit: 1/minute. Keyed on user id alone — IP rotation
+    # would otherwise let a single admin mint a fresh bucket per request
+    # against an XFF-trusted proxy. (Earlier version of this concatenated
+    # ``rate_limit_key(http_request)`` to the user id; that compound key
+    # let a single user bypass the cap by rotating IPs/XFF, which is the
+    # opposite of what a per-user limit should do — Parvati flagged in
+    # PR #77.)
+    bucket_key = f"forum_sync:user:{user.id}"
     if not check_rate_limit_spec(bucket_key, FORUM_SYNC_RATE_LIMIT):
         raise HTTPException(
             status_code=429,
