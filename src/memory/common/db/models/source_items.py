@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from memory.common import settings
+from memory.common import paths, settings
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
@@ -1242,7 +1242,15 @@ class Note(SourceItem):
     def save_to_file(self) -> None:
         if not self.filename:
             self.filename = f"{self.subject}.md"
-        path = settings.NOTES_STORAGE_DIR / self.filename
+        # Defense in depth: validate the resolved path stays inside the
+        # configured notes directory. Without this a Note row whose
+        # `filename` was set by an upstream caller that skipped
+        # validation (for example a misconfigured worker, a future
+        # caller, or a celery-broker injection) would let
+        # `path.write_text` clobber arbitrary files on the worker host.
+        path = paths.validate_path_within_directory(
+            settings.NOTES_STORAGE_DIR, str(self.filename)
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.content or "")
 
