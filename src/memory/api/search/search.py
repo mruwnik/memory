@@ -662,7 +662,21 @@ async def search_sources(
     would silently exfiltrate the parent SourceItem rows. The chunk-level
     access filter is reused here verbatim so the three layers stay in
     lock-step.
+
+    Fail-closed on missing filters: ``filters`` MUST contain an
+    ``access_filter`` key. A caller that doesn't thread filters through
+    is treated as a programming error and raises ``ValueError`` —
+    defense-in-depth that's only effective when callers remember to opt
+    in is a hint, not a defense (Parvati flagged in PR #77).
     """
+    if filters is None or "access_filter" not in filters:
+        raise ValueError(
+            "search_sources requires `filters` with an `access_filter` key. "
+            "The final-merge access check is mandatory — a None/missing "
+            "filter would silently bypass the third layer of the documented "
+            "three-layer access control invariant."
+        )
+
     by_source = defaultdict(list)
     for chunk in chunks:
         by_source[chunk.source_id].append(chunk)
@@ -672,18 +686,7 @@ async def search_sources(
 
     with make_session() as db:
         query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
-        # Defense-in-depth: re-apply the access filter at the final merge.
-        # ``filters`` may be None (legacy callers) — treat that as
-        # "trust the upstream" for backwards compat, but log so misuse
-        # surfaces during code review. The MCP search wrapper now passes
-        # filters through.
-        if filters is not None and "access_filter" in filters:
-            query = apply_access_filter_to_query(query, filters["access_filter"])
-        else:
-            logger.debug(
-                "search_sources called without filters — relying on upstream "
-                "access control (defense-in-depth invariant skipped)"
-            )
+        query = apply_access_filter_to_query(query, filters["access_filter"])
 
         sources = query.all()
         return [

@@ -680,62 +680,63 @@ def test_search_sources_applies_final_access_filter_when_filters_provided():
     assert fake_filter_arg_seen == [sentinel_access_filter]
 
 
-def test_search_sources_no_filter_skips_final_layer_with_log():
-    """Legacy callers that don't pass ``filters`` skip the final-merge
-    filter (backwards-compatible) but log a debug warning so misuse
-    surfaces during code review.
+def test_search_sources_fails_closed_when_filters_missing():
+    """Regression for Parvati's IMPORTANT comment on PR #77: the previous
+    "DEBUG-log-and-trust-upstream" fallback let a caller that forgot to
+    thread filters silently bypass the final-merge access check —
+    defense-in-depth that's only effective when callers remember it
+    isn't defense-in-depth, it's a hint.
+
+    Now ``search_sources`` raises ValueError when ``filters`` is None or
+    has no ``access_filter`` key. Callers that legitimately want admin
+    access pass ``filters={'access_filter': None}`` explicitly.
     """
     import asyncio
     import sys
 
-    # Sidestep the package-shadowing trap: the package's __init__ does
-    # ``from .search import search``, which rebinds ``memory.api.search.search``
-    # to the function. The submodule is still importable as a string key.
     search_module = sys.modules["memory.api.search.search"]
 
     chunk = MagicMock()
     chunk.source_id = 42
 
-    fake_query = MagicMock()
-    fake_query.filter.return_value = fake_query
-    fake_query.all.return_value = []
+    # filters=None: must raise.
+    try:
+        asyncio.run(search_module.search_sources(chunks=[chunk], previews=False))
+    except ValueError as e:
+        assert "access_filter" in str(e)
+    else:
+        raise AssertionError("search_sources(filters=None) should have raised")
 
-    fake_db = MagicMock()
-    fake_db.__enter__ = lambda self: fake_db
-    fake_db.__exit__ = lambda *args: False
-    fake_db.query.return_value = fake_query
-
-    with (
-        patch(
-            "memory.api.search.search.make_session",
-            return_value=fake_db,
-        ),
-        patch(
-            "memory.api.search.search.apply_access_filter_to_query",
-        ) as mock_apply,
-    ):
-        result = asyncio.run(
-            search_module.search_sources(chunks=[chunk], previews=False)
+    # filters={}: also missing access_filter key — must raise.
+    try:
+        asyncio.run(
+            search_module.search_sources(
+                chunks=[chunk], previews=False, filters={}
+            )
         )
-
-    assert result == []
-    # No filter passed → no apply call.
-    mock_apply.assert_not_called()
+    except ValueError as e:
+        assert "access_filter" in str(e)
+    else:
+        raise AssertionError("search_sources(filters={}) should have raised")
 
 
 def test_search_sources_empty_chunks_returns_empty():
-    """Empty input must short-circuit before hitting the DB."""
+    """Empty input must short-circuit before hitting the DB. The
+    fail-closed filter check still happens (so callers must pass filters
+    even with empty chunks) but the empty-list short-circuit fires
+    immediately after, so we never query."""
     import asyncio
     import sys
 
-    # Sidestep the package-shadowing trap: the package's __init__ does
-    # ``from .search import search``, which rebinds ``memory.api.search.search``
-    # to the function. The submodule is still importable as a string key.
     search_module = sys.modules["memory.api.search.search"]
 
     with patch("memory.api.search.search.make_session") as mock_session:
         result = asyncio.run(
-            search_module.search_sources(chunks=[], previews=False)
+            search_module.search_sources(
+                chunks=[],
+                previews=False,
+                filters={"access_filter": None},
+            )
         )
 
     assert result == []
