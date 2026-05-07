@@ -167,6 +167,10 @@ def create_account(
     except IntegrityError:
         # Lost a race against the pre-check or another concurrent create.
         db.rollback()
+        logger.info(
+            "TranscriptAccount create race for user_id=%s provider=%s name=%s",
+            user.id, data.provider, data.name,
+        )
         raise HTTPException(
             status_code=400,
             detail="A transcript account with this name and provider already exists",
