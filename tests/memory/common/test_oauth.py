@@ -610,3 +610,134 @@ async def test_complete_oauth_flow_invalid_state_does_not_log_raw_state(caplog):
     assert state[:20] not in log_text
     # But a correlation id must still be present so logs are useful.
     assert token_id(state) in log_text
+
+
+# ----- token_expires_at: tz-aware UTC -----
+
+
+@pytest.mark.parametrize("expires_in", [3600, "3600", 7200, "7200"])
+@pytest.mark.asyncio
+async def test_complete_oauth_flow_token_expires_at_is_tz_aware_utc(
+    monkeypatch, expires_in
+):
+    """token_expires_at must be tz-aware UTC, regardless of expires_in's type.
+
+    The fix: switch from the naive `datetime.now()` (which uses local time)
+    to `datetime.now(timezone.utc)`, and coerce expires_in to int so a
+    string-typed value from a quirky upstream provider doesn't blow up
+    inside `timedelta`. Without this, the column either compares-incorrectly
+    against tz-aware comparisons elsewhere or raises TypeError.
+    """
+    from datetime import timezone as tz
+
+    # Stand-in for the MCPServer ORM object — only the attributes the
+    # success path mutates need to exist.
+    class FakeMcp:
+        id = 1
+        mcp_server_url = "https://example.com"
+        client_id = "client-xyz"
+        code_verifier = "verifier"
+        state = "state"
+        access_token = None
+        refresh_token = None
+        token_expires_at = None
+
+    mcp_server = FakeMcp()
+
+    metadata = {
+        "authorization_endpoint": "https://example.com/auth",
+        "registration_endpoint": "https://example.com/register",
+        "token_endpoint": "https://example.com/token",
+    }
+    token_response = {
+        "access_token": "access-tok",
+        "refresh_token": "refresh-tok",
+        "expires_in": expires_in,
+    }
+    mock_token_response = Mock()
+    mock_token_response.status = 200
+    mock_token_response.json = AsyncMock(return_value=token_response)
+
+    mock_post = AsyncMock()
+    mock_post.__aenter__.return_value = mock_token_response
+    mock_post.__aexit__.return_value = None
+
+    mock_session = Mock()
+    mock_session.post = Mock(return_value=mock_post)
+
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__.return_value = mock_session
+    mock_session_ctx.__aexit__.return_value = None
+
+    with (
+        patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+        patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+    ):
+        status, _ = await complete_oauth_flow(
+            cast(Any, mcp_server), "auth-code-xyz", "state"
+        )
+
+    assert status == 200
+    assert mcp_server.token_expires_at is not None
+    # The big invariant the original task is about: tz-aware UTC.
+    assert mcp_server.token_expires_at.tzinfo is not None
+    assert mcp_server.token_expires_at.utcoffset() == tz.utc.utcoffset(None)
+
+
+@pytest.mark.asyncio
+async def test_complete_oauth_flow_garbage_expires_in_falls_back_to_default(caplog):
+    """A non-integer expires_in must default to 3600 with a warning, not crash."""
+    from datetime import timezone as tz
+
+    class FakeMcp:
+        id = 1
+        mcp_server_url = "https://example.com"
+        client_id = "client-xyz"
+        code_verifier = "verifier"
+        state = "state"
+        access_token = None
+        refresh_token = None
+        token_expires_at = None
+
+    mcp_server = FakeMcp()
+
+    metadata = {
+        "authorization_endpoint": "https://example.com/auth",
+        "registration_endpoint": "https://example.com/register",
+        "token_endpoint": "https://example.com/token",
+    }
+    token_response = {
+        "access_token": "access-tok",
+        "refresh_token": "refresh-tok",
+        "expires_in": "not-a-number",
+    }
+    mock_token_response = Mock()
+    mock_token_response.status = 200
+    mock_token_response.json = AsyncMock(return_value=token_response)
+
+    mock_post = AsyncMock()
+    mock_post.__aenter__.return_value = mock_token_response
+    mock_post.__aexit__.return_value = None
+
+    mock_session = Mock()
+    mock_session.post = Mock(return_value=mock_post)
+
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__.return_value = mock_session
+    mock_session_ctx.__aexit__.return_value = None
+
+    with (
+        patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+        patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        caplog.at_level(logging.WARNING, logger="memory.common.oauth"),
+    ):
+        status, _ = await complete_oauth_flow(
+            cast(Any, mcp_server), "auth-code-xyz", "state"
+        )
+
+    assert status == 200
+    assert mcp_server.token_expires_at is not None
+    assert mcp_server.token_expires_at.tzinfo is not None
+    # The warning should mention the bad value so operators can find the offender.
+    log_text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "not-a-number" in log_text

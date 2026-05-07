@@ -3,7 +3,7 @@ import logging
 import secrets
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
@@ -260,7 +260,17 @@ async def complete_oauth_flow(
 
         access_token = tokens.get("access_token")
         refresh_token = tokens.get("refresh_token")
-        expires_in = tokens.get("expires_in", 3600)
+        # Some OAuth providers return expires_in as a JSON string. Coerce to
+        # int defensively so a string slips through without exploding inside
+        # timedelta below; fall back to the 1h default on garbage.
+        try:
+            expires_in = int(tokens.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Upstream returned non-integer expires_in=%r; defaulting to 3600s",
+                tokens.get("expires_in"),
+            )
+            expires_in = 3600
 
         if not access_token:
             return 500, "Token response did not include access_token"
@@ -270,10 +280,16 @@ async def complete_oauth_flow(
         # of the rest. Use a non-reversible correlation id instead.
         logger.info(f"Obtained access token id={token_id(access_token)}")
 
-        # Store tokens and clear temporary OAuth state
+        # Store tokens and clear temporary OAuth state. Use tz-aware UTC so
+        # the column matches every other token-expiry comparison in the
+        # codebase (those use `datetime.now(timezone.utc)`); a naive
+        # local-time value would either crash on comparison or silently
+        # drift by the host's UTC offset.
         mcp_server.access_token = access_token  # type: ignore
         mcp_server.refresh_token = refresh_token  # type: ignore
-        mcp_server.token_expires_at = datetime.now() + timedelta(seconds=expires_in)  # type: ignore
+        mcp_server.token_expires_at = (  # type: ignore
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        )
 
         # Clear temporary OAuth flow data
         mcp_server.state = None  # type: ignore
