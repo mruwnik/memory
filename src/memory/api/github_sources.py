@@ -615,26 +615,15 @@ def update_repo(
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
 
-    if updates.track_issues is not None:
-        repo.track_issues = updates.track_issues
-    if updates.track_prs is not None:
-        repo.track_prs = updates.track_prs
-    if updates.track_comments is not None:
-        repo.track_comments = updates.track_comments
-    if updates.track_project_fields is not None:
-        repo.track_project_fields = updates.track_project_fields
-    if updates.labels_filter is not None:
-        repo.labels_filter = updates.labels_filter
-    if updates.state_filter is not None:
-        repo.state_filter = updates.state_filter
-    if updates.tags is not None:
-        repo.tags = updates.tags
-    if updates.check_interval is not None:
-        repo.check_interval = updates.check_interval
-    if updates.full_sync_interval is not None:
-        repo.full_sync_interval = updates.full_sync_interval
-    if updates.active is not None:
-        repo.active = updates.active
+    # Apply only the fields the client actually set. ``exclude_unset``
+    # distinguishes "field omitted" (skip) from "field present and
+    # explicitly None" (set to None) — which the previous wall of
+    # ``is not None`` checks could not. All ten GithubRepoUpdate fields
+    # are direct passthroughs to GithubRepo columns, so a generic
+    # setattr loop is safe; if any field gains bespoke validation in
+    # the future, pull it back out as an explicit branch.
+    for field, value in updates.model_dump(exclude_unset=True).items():
+        setattr(repo, field, value)
 
     db.commit()
     db.refresh(repo)
