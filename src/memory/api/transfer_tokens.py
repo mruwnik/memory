@@ -135,8 +135,15 @@ def verify_token(token: str) -> TransferTokenPayload:
     except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         raise TransferTokenError("malformed payload")
 
+    # Distinguish "no/garbage exp claim" (malformed payload, possibly
+    # tampering) from "exp is an int in the past" (genuinely expired).
+    # Conflating them defeats the purpose of having a dedicated
+    # TransferTokenExpiredError and gives an attacker probing token
+    # shape the same response as a benign expiry.
     exp = data.get("exp")
-    if not isinstance(exp, int) or exp < int(time.time()):
+    if not isinstance(exp, int):
+        raise TransferTokenError("malformed payload")
+    if exp < int(time.time()):
         raise TransferTokenExpiredError("token expired")
 
     try:

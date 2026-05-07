@@ -406,3 +406,42 @@ def test_non_ascii_payload_segment_returns_malformed_not_500():
     bad = "v1.πayload.signature"  # π in the payload segment
     with pytest.raises(TransferTokenError, match="malformed"):
         verify_token(bad)
+
+
+@pytest.mark.parametrize(
+    "exp_value",
+    [None, "not-an-int", 1.5, [1234567890]],
+    ids=["none", "string", "float", "list"],
+)
+def test_verify_rejects_non_int_exp_as_malformed_not_expired(exp_value):
+    """Garbage in the ``exp`` claim is malformed-payload territory, not
+    end-of-life. Conflating the two reintroduces the very confusion the
+    typed exception was added to eliminate (an attacker probing token
+    shape would otherwise get the same 401 as a benign expiry)."""
+    token = _mint_with_raw_payload({
+        "user_id": 1,
+        "session_id": "u1-e6-aaaa",
+        "path": "/workspace/x",
+        "action": "read",
+        "exp": exp_value,
+    })
+    with pytest.raises(TransferTokenError, match="malformed payload") as exc_info:
+        verify_token(token)
+    # Crucially: it is NOT the typed-expired subclass.
+    assert not isinstance(exc_info.value, TransferTokenExpiredError)
+
+
+def test_verify_rejects_missing_exp_as_malformed():
+    """``exp`` omitted entirely must surface as malformed-payload, not
+    expired — the dict.get(\"exp\") returns None and the old code path
+    misclassified that as an expired token."""
+    token = _mint_with_raw_payload({
+        "user_id": 1,
+        "session_id": "u1-e6-aaaa",
+        "path": "/workspace/x",
+        "action": "read",
+        # no exp key at all
+    })
+    with pytest.raises(TransferTokenError, match="malformed payload") as exc_info:
+        verify_token(token)
+    assert not isinstance(exc_info.value, TransferTokenExpiredError)
