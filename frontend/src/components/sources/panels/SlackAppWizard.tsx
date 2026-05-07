@@ -167,12 +167,35 @@ export const SlackAppWizard = ({
   const handleOpenOAuth = useCallback(() => {
     // Opens the OAuth flow in a popup. Listener above advances state when the
     // BroadcastChannel message arrives.
-    if (!app) return
-    // Backend expects the same /slack/authorize entry point (it'll bind state
-    // to current session) — but routes to the per-app callback via the URL.
-    // We rely on the OAuth callback's BroadcastChannel for completion.
-    window.open(`/slack/authorize?slack_app_id=${app.id}`, '_blank', 'width=600,height=700')
-  }, [app])
+    //
+    // Per-app multi-tenant flow: build Slack's authorize URL using THIS app's
+    // client_id and route Slack's redirect to /slack/callback/{slack_app_id}.
+    // No env-var single-app `/slack/authorize` endpoint exists anymore.
+    if (!app || !callbackUrl) return
+    const scopes = [
+      'channels:history',
+      'groups:history',
+      'im:history',
+      'mpim:history',
+      'channels:read',
+      'groups:read',
+      'im:read',
+      'mpim:read',
+      'users:read',
+      'users:read.email',
+      'team:read',
+      'reactions:read',
+      'files:read',
+    ].join(' ')
+    const params = new URLSearchParams({
+      client_id: app.client_id,
+      scope: scopes,
+      user_scope: scopes,
+      redirect_uri: callbackUrl,
+    })
+    const authUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`
+    window.open(authUrl, '_blank', 'width=600,height=700')
+  }, [app, callbackUrl])
 
   const handleSigningSecret = useCallback(async () => {
     if (!app) return

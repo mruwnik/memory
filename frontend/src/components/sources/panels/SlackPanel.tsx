@@ -11,11 +11,11 @@ import {
 } from '../shared'
 import { styles, cx } from '../styles'
 import { useSourcesContext } from '../Sources'
+import { SlackAppWizard } from './SlackAppWizard'
 
 export const SlackPanel = () => {
   const { userId } = useSourcesContext()
   const {
-    getAuthorizeUrl,
     listWorkspaces,
     updateWorkspace,
     deleteWorkspace,
@@ -32,6 +32,7 @@ export const SlackPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [disconnecting, setDisconnecting] = useState<SlackWorkspace | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -54,16 +55,19 @@ export const SlackPanel = () => {
     loadData()
   }, [loadData])
 
-  // Listen for OAuth completion via BroadcastChannel
+  // Listen for OAuth completion via BroadcastChannel.
+  // The events endpoint scopes the channel name to slack-oauth-{user_id}
+  // (§4 S12) so the oauth-complete event doesn't leak across tenants.
   useEffect(() => {
-    const channel = new BroadcastChannel('slack-oauth')
+    if (userId === null || userId === undefined) return
+    const channel = new BroadcastChannel(`slack-oauth-${userId}`)
     channel.onmessage = (event) => {
       if (event.data?.type === 'oauth-complete') {
         loadData()
       }
     }
     return () => channel.close()
-  }, [loadData])
+  }, [loadData, userId])
 
   const loadChannels = async (workspaceId: string) => {
     if (channelsByWorkspace[workspaceId]) return
@@ -76,22 +80,15 @@ export const SlackPanel = () => {
     }
   }
 
-  const handleConnect = async () => {
-    try {
-      const { authorization_url } = await getAuthorizeUrl()
-      // Open OAuth flow in a popup
-      const popup = window.open(authorization_url, '_blank', 'width=600,height=700')
+  const handleConnect = () => {
+    // Per-app wizard flow: register a SlackApp first, then OAuth into it.
+    // No env-var single-app `/slack/authorize` endpoint anymore.
+    setWizardOpen(true)
+  }
 
-      // Check if popup was blocked
-      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-        // Popup was blocked - show error with link
-        setError(
-          `Popup was blocked. Please allow popups for this site, or open the authorization link directly: ${authorization_url}`
-        )
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start OAuth flow')
-    }
+  const handleWizardComplete = () => {
+    setWizardOpen(false)
+    loadData()
   }
 
   const handleDisconnect = async (workspace: SlackWorkspace) => {
@@ -154,6 +151,13 @@ export const SlackPanel = () => {
           Connect Workspace
         </button>
       </div>
+
+      {wizardOpen && (
+        <SlackAppWizard
+          onComplete={handleWizardComplete}
+          onCancel={() => setWizardOpen(false)}
+        />
+      )}
 
       {workspaces.length === 0 ? (
         <EmptyState

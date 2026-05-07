@@ -308,9 +308,6 @@ DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.
 DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
 
 # Slack integration settings
-SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "")
-SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "")
-SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", f"{SERVER_URL}/slack/callback")
 # Polling interval is the safety net behind the push events endpoint
 # (slack-changes.md §3.5). Slack's webhook retry window is ~3h and we want
 # ≤1h staleness on partial outages, so 1h is the smallest interval that
