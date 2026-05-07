@@ -29,6 +29,7 @@ from memory.common.scopes import (
     validate_scopes,
 )
 from memory.api.auth import get_current_user, get_token, require_scope
+from memory.common.access_control import has_admin_scope
 from memory.common.people import find_or_create_person
 
 if TYPE_CHECKING:
@@ -99,12 +100,6 @@ def user_to_response(user: User) -> UserResponse:
         scopes=list(user.scopes or []),
         api_key_count=key_count,
     )
-
-
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope."""
-    user_scopes = user.scopes or []
-    return SCOPE_ADMIN in user_scopes
 
 
 def link_person_to_user(db: Session, user: User) -> Person | None:
