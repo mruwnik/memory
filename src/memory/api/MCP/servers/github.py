@@ -207,31 +207,36 @@ async def fetch(
 
     number_int = int(number) if number is not None else None
 
+    # Authenticated caller — threaded into fetch_* so they apply the same
+    # access filters as their list_* siblings (closes IDOR across tenants).
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        raise ValueError("Not authenticated")
+
     if type == "issue":
         if not repo:
             raise ValueError("repo is required for fetching issues")
         if number_int is None:
             raise ValueError("number is required for fetching issues")
-        return fetch_issue(repo, number_int)
+        return fetch_issue(repo, number_int, user=user)
     elif type == "milestone":
         if not repo:
             raise ValueError("repo is required for fetching milestones")
         if number_int is None:
             raise ValueError("number is required for fetching milestones")
-        return fetch_milestone(repo, number_int)
+        return fetch_milestone(repo, number_int, user=user)
     elif type == "project":
         if not owner:
             raise ValueError("owner is required for fetching projects")
         if number_int is None:
             raise ValueError("number is required for fetching projects")
-        return fetch_project(owner, number_int)
+        return fetch_project(owner, number_int, user=user)
     elif type == "team":
         if not owner:
             raise ValueError("owner (org) is required for fetching teams")
         if not slug:
             raise ValueError("slug is required for fetching teams")
-        user_id = _get_current_user_id()
-        return fetch_team(owner, slug, user_id=user_id)
+        return fetch_team(owner, slug, user_id=user.id)
     else:
         raise ValueError(f"Unknown type: {type}")
 

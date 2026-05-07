@@ -923,9 +923,95 @@ async def test_list_entities_accepts_limit_as_string():
 
 @pytest.mark.asyncio
 async def test_fetch_accepts_number_as_string():
-    """fetch should coerce string number to int."""
-    with patch("memory.api.MCP.servers.github.fetch_issue") as mock_fetch:
+    """fetch should coerce string number to int and pass the caller through."""
+    fake_user = type("U", (), {"id": 1, "scopes": ["github"]})()
+    with (
+        patch(
+            "memory.api.MCP.servers.github.get_mcp_current_user",
+            return_value=fake_user,
+        ),
+        patch("memory.api.MCP.servers.github.fetch_issue") as mock_fetch,
+    ):
         mock_fetch.return_value = {}
         await fetch.fn(type="issue", repo="o/r", number="46")  # type: ignore[arg-type]
 
-    mock_fetch.assert_called_once_with("o/r", 46)
+    # Caller is threaded through so fetch_issue can apply the access filter.
+    mock_fetch.assert_called_once_with("o/r", 46, user=fake_user)
+
+
+# =============================================================================
+# Cross-tenant IDOR blocking on fetch_* (the audit task)
+# =============================================================================
+
+
+def test_fetch_issue_blocks_user_without_project_access(db_session, sample_issues):
+    """A non-admin without project access must not fetch an issue tied to that project.
+
+    Pre-fix, fetch_issue was scoped by (repo_path, number) only, so any
+    SCOPE_GITHUB caller could read any issue body / PR diff in any repo
+    by enumerating numbers.
+    """
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    # Pin sample issue to a project the caller has no role in, with a
+    # different creator so creator-bypass doesn't fire.
+    issue = sample_issues[0]
+    issue.project_id = 12345
+    issue.creator_id = 1
+    issue.sensitivity = "confidential"
+    db_session.commit()
+
+    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        with patch(
+            "memory.api.MCP.servers.github_helpers.get_user_project_roles",
+            return_value={},
+        ):
+            with pytest.raises(ValueError, match="not found"):
+                fetch_issue(repo="owner/repo1", number=1, user=non_admin)
+
+
+def test_fetch_issue_allows_creator_without_project_access(db_session, sample_issues):
+    """Creator-override still works even without explicit project membership."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    issue = sample_issues[0]
+    issue.project_id = None
+    issue.creator_id = 999  # caller IS the creator
+    db_session.commit()
+
+    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        with patch(
+            "memory.api.MCP.servers.github_helpers.get_user_project_roles",
+            return_value={},
+        ):
+            result = fetch_issue(repo="owner/repo1", number=1, user=non_admin)
+
+    assert result["number"] == 1
+
+
+def test_fetch_issue_admin_bypasses_filter(db_session, sample_issues):
+    """Admin scope sees the issue regardless of project."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    issue = sample_issues[0]
+    issue.project_id = 12345
+    issue.creator_id = 1
+    issue.sensitivity = "confidential"
+    db_session.commit()
+
+    admin = type("U", (), {"id": 999, "scopes": ["*"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin)
+
+    assert result["number"] == 1
