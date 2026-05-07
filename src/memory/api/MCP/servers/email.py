@@ -73,54 +73,52 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
     Takes ``user_id`` rather than a User ORM instance so we don't rely on a
     caller's session lifetime — lazy-loaded relationships on a detached user
     would raise ``DetachedInstanceError``.
+
+    Returns ``None`` for the small, expected set of "skip this attachment"
+    failures (path-traversal, file missing, no matching SourceItem, no
+    access). Anything else — programmer errors, encoding bugs, DB
+    connection failures — propagates instead of being silently swallowed
+    by a blanket ``except Exception``.
     """
-    try:
-        file_path = Path(settings.FILE_STORAGE_DIR) / path
-        # Security: ensure path is within storage dir
-        file_path = file_path.resolve()
-        storage_dir = Path(settings.FILE_STORAGE_DIR).resolve()
-
-        try:
-            relative = file_path.relative_to(storage_dir).as_posix()
-        except ValueError:
-            logger.warning(f"Attempted path traversal: {path}")
-            return None
-
-        if not file_path.exists():
-            logger.warning(f"Attachment not found: {path}")
-            return None
-
-        if user_id is None:
-            logger.warning(f"Unauthenticated attachment request for: {path}")
-            return None
-
-        with make_session() as session:
-            user = session.query(User).filter(User.id == user_id).one_or_none()
-            if user is None:
-                logger.warning(f"User {user_id} not found for attachment: {path}")
-                return None
-            try:
-                get_accessible_source_item_by_filename(session, user, relative)
-            except FileNotFoundError:
-                logger.warning(f"No SourceItem found for attachment: {relative}")
-                return None
-            except PermissionError:
-                logger.warning(f"Access denied to attachment {relative} for user {user_id}")
-                return None
-
-        content = file_path.read_bytes()
-
-        # Guess content type from extension
-        content_type, _ = mimetypes.guess_type(str(file_path))
-
-        return EmailAttachmentData(
-            filename=file_path.name,
-            content=content,
-            content_type=content_type,
-        )
-    except Exception as e:
-        logger.error(f"Failed to load attachment {path}: {e}")
+    if user_id is None:
+        logger.warning("Unauthenticated attachment request for: %s", path)
         return None
+
+    file_path = (Path(settings.FILE_STORAGE_DIR) / path).resolve()
+    storage_dir = Path(settings.FILE_STORAGE_DIR).resolve()
+
+    try:
+        relative = file_path.relative_to(storage_dir).as_posix()
+    except ValueError:
+        logger.warning("Attempted path traversal: %s", path)
+        return None
+
+    if not file_path.exists():
+        logger.warning("Attachment not found: %s", path)
+        return None
+
+    with make_session() as session:
+        user = session.query(User).filter(User.id == user_id).one_or_none()
+        if user is None:
+            logger.warning("User %s not found for attachment: %s", user_id, path)
+            return None
+        try:
+            get_accessible_source_item_by_filename(session, user, relative)
+        except FileNotFoundError:
+            logger.warning("No SourceItem found for attachment: %s", relative)
+            return None
+        except PermissionError:
+            logger.warning(
+                "Access denied to attachment %s for user %s", relative, user_id
+            )
+            return None
+
+    content_type, _ = mimetypes.guess_type(str(file_path))
+    return EmailAttachmentData(
+        filename=file_path.name,
+        content=file_path.read_bytes(),
+        content_type=content_type,
+    )
 
 
 @email_mcp.tool()
