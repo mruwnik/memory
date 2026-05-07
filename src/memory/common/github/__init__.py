@@ -22,7 +22,7 @@ Example:
 
 from .core import GithubClientCore
 from .issues import IssuesMixin
-from .projects import ProjectsMixin
+from .projects import ProjectsMixin, extract_status_priority
 from .teams import TeamsMixin
 from .types import (
     GITHUB_API_URL,
@@ -78,6 +78,7 @@ __all__ = [
     "parse_github_date",
     "compute_content_hash",
     "serialize_issue_data",
+    "extract_status_priority",
     # Constants
     "GITHUB_API_URL",
     "GITHUB_GRAPHQL_URL",

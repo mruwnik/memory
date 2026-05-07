@@ -374,26 +374,10 @@ def list_teams(
         return teams
 
 
-def extract_status_priority(
-    project_fields: dict[str, Any],
-) -> tuple[str | None, str | None]:
-    """Extract status and priority from project fields dict.
-
-    Returns (status, priority) tuple. Values are None if not found.
-    Only extracts string/numeric values, ignoring None and complex types.
-    """
-    status: str | None = None
-    priority: str | None = None
-    for key, value in project_fields.items():
-        # Skip None and complex types
-        if value is None or not isinstance(value, (str, int, float)):
-            continue
-        key_lower = key.lower()
-        if "status" in key_lower and status is None:
-            status = str(value)
-        elif "priority" in key_lower and priority is None:
-            priority = str(value)
-    return status, priority
+# extract_status_priority lives in memory.common.github.projects so the
+# worker ingest path can share the implementation. Re-exported here so
+# existing callers within this module keep working.
+from memory.common.github import extract_status_priority  # noqa: E402, F401
 
 
 def fetch_issue(repo: str, number: int, user: Any = None) -> dict[str, Any]:

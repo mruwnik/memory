@@ -22,6 +22,7 @@ from memory.common.github import (
     GithubMilestoneData,
     GithubProjectData,
     GithubPRDataDict,
+    extract_status_priority,
     serialize_issue_data,
 )
 from memory.common.content_processing import (
@@ -166,16 +167,13 @@ def _create_github_item(
     """Create a GithubItem from parsed issue/PR data."""
     content = _build_content(issue_data)
 
-    # Extract project status/priority if available
+    # Extract project status/priority if available. Use the shared
+    # helper so the worker path matches the MCP fetch path's
+    # behaviour — in particular, both must skip non-scalar values
+    # (some Projects v2 field types ship structured payloads, and
+    # str()-ing those leaves dict/list reprs in the DB column).
     project_fields = issue_data.get("project_fields") or {}
-    project_status = None
-    project_priority = None
-    for key, value in project_fields.items():
-        key_lower = key.lower()
-        if "status" in key_lower and project_status is None:
-            project_status = str(value)
-        elif "priority" in key_lower and project_priority is None:
-            project_priority = str(value)
+    project_status, project_priority = extract_status_priority(project_fields)
 
     repo_tags = cast(list[str], repo.tags) or []
 
