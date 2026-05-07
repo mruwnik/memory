@@ -196,6 +196,7 @@ def test_check_batch_empty(db_session, qdrant):
     assert check_batch([]) == {}
 
 
+@pytest.mark.transactional_db
 def test_check_batch(db_session, qdrant):
     modalities = ["text", "photo", "mail"]
     chunks = [
@@ -315,6 +316,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
 
 
 @pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+@pytest.mark.transactional_db
 def test_reingest_item_success(db_session, qdrant, item_type):
     """Test successful reingestion of an item with existing chunks."""
     if item_type == "MailMessage":

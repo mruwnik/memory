@@ -122,7 +122,10 @@ def test_prepare_meeting_for_reingest_clears_chunks_and_detaches_tasks(
     for task in remaining_tasks:
         assert task.source_item_id is None  # But detached from meeting
 
-    # Verify chunk was deleted
+    # Verify chunk was deleted. The relationship is cached on the in-memory
+    # `meeting` object — refresh it so we observe the post-flush state rather
+    # than the stale collection.
+    db_session.refresh(meeting)
     assert len(meeting.chunks) == 0
 
 
@@ -244,11 +247,16 @@ def test_reextract_meeting_success(db_session, meeting_with_tasks):
     assert result["notes_length"] > 0
     assert result["tasks_created"] == 2
 
-    # Check meeting was updated
+    # reextract_meeting() updates attributes on the session but doesn't commit
+    # ("caller controls the transaction"). Commit so the changes are visible
+    # to subsequent reads.
+    db_session.commit()
     db_session.refresh(meeting)
     assert meeting.summary == "New extracted summary"
     assert meeting.notes == "New extracted notes"
-    assert meeting.extraction_status == "complete"
+    # extraction_status is set to "extracted" by reextract; it advances to
+    # "complete" only at the end of execute_meeting_processing.
+    assert meeting.extraction_status == "extracted"
 
     # Check original tasks were detached (still exist but not linked)
     remaining_tasks = (
@@ -277,6 +285,8 @@ def test_reextract_meeting_llm_failure(db_session, meeting):
     assert result["status"] == "error"
     assert "LLM API error" in result["error"]
 
-    # Check meeting status was updated
+    # reextract_meeting() doesn't commit on the failure path; commit so the
+    # status update is visible after refresh.
+    db_session.commit()
     db_session.refresh(meeting)
     assert meeting.extraction_status == "failed"

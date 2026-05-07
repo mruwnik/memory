@@ -120,11 +120,11 @@ class EmailAccountResponse(BaseModel):
 
 
 def account_to_response(
-    account: EmailAccount, db: Session | None = None
+    account: EmailAccount, db: Session
 ) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
     google_account_info = None
-    if account.google_account_id and db:
+    if account.google_account_id:
         ga = db.get(GoogleAccount, account.google_account_id)
         if ga:
             google_account_info = GoogleAccountInfo(

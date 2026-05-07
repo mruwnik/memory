@@ -602,7 +602,7 @@ def find_category_in_guild(
     for category in categories_result.get("categories", []):
         if category.get("name", "").lower() == category_name.lower():
             return {
-                "id": int(category["id"]),
+                "id": category["id"],  # bot API returns string; preserve precision
                 "name": category["name"],
                 "position": category.get("position"),
             }

@@ -1039,6 +1039,7 @@ async def test_exchange_authorization_code_atomic_single_use(db_session):
         await provider.exchange_authorization_code(client, auth_code)
 
 
+@pytest.mark.transactional_db
 def test_attribute_read_after_commit_does_not_autobegin(db_session):
     """Reading an attribute after commit() must not auto-begin a transaction.
 

@@ -178,8 +178,8 @@ def team_to_dict(
         "owner_id": team.owner_id,
         "owner": person_summary(team.owner) if team.owner else None,
         "tags": list(team.tags or []),
-        "discord_role_id": team.discord_role_id,
-        "discord_guild_id": team.discord_guild_id,
+        "discord_role_id": str(team.discord_role_id) if team.discord_role_id else None,
+        "discord_guild_id": str(team.discord_guild_id) if team.discord_guild_id else None,
         "auto_sync_discord": team.auto_sync_discord,
         "github_team_id": team.github_team_id,
         "github_team_slug": team.github_team_slug,
@@ -286,8 +286,8 @@ def upsert_team_record(
 async def ensure_discord_role(
     session: Session | scoped_session[Session],
     team_id: int,
-    guild: int | str | None,
-    discord_role: int | str | None,
+    guild: str | None,
+    discord_role: str | None,
     auto_sync_discord: bool,
 ) -> tuple[dict[str, Any], list[str]]:
     """Ensure Discord role exists and membership matches internal team.
@@ -560,8 +560,8 @@ async def upsert(
     # Ownership
     owner: str | int | None = _UNSET,
     # Discord integration
-    guild: int | str | None = None,
-    discord_role: int | str | None = None,
+    guild: str | None = None,
+    discord_role: str | None = None,
     auto_sync_discord: bool = True,
     # GitHub integration
     github_org: str | None = None,

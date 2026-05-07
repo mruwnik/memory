@@ -77,7 +77,7 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
-def resolve_bot_id(bot_id: int | None, session: DBSession | None = None) -> int:
+def resolve_bot_id(bot_id: str | None, session: DBSession | None = None) -> int:
     """Resolve and authorise bot_id, using the caller's default bot if None.
 
     Always verifies that the authenticated user owns (or has access to) the
@@ -85,7 +85,9 @@ def resolve_bot_id(bot_id: int | None, session: DBSession | None = None) -> int:
     cannot be bypassed by passing an explicit ID.
 
     Args:
-        bot_id: Explicit bot ID, or None to use default bot
+        bot_id: Explicit bot snowflake (as string), or None to use default bot.
+                Snowflakes must cross MCP boundaries as strings to avoid JS
+                Number precision loss.
         session: Optional session to use. If not provided, creates a new session.
                  Pass an existing session to avoid nested make_session() calls
                  which can cause DetachedInstanceError.
@@ -116,7 +118,7 @@ def _to_snowflake(value: int | str) -> int:
 
 def resolve_guild_id(
     session: DBSession,
-    guild: int | str | None,
+    guild: str | None,
 ) -> int:
     """
     Resolve a guild ID from either numeric ID or server name.
@@ -140,10 +142,11 @@ def resolve_guild_id(
     return resolved
 
 
-def resolve_bot(session: DBSession, bot_id: int | None) -> int:
-    """Resolve and authorize a bot ID."""
+def resolve_bot(session: DBSession, bot_id: str | None) -> int:
+    """Resolve and authorize a bot snowflake (string at the boundary)."""
     if bot_id is not None:
-        bot = session.get(DiscordBot, bot_id)
+        bot_pk = _to_snowflake(bot_id)
+        bot = session.get(DiscordBot, bot_pk)
         if not bot:
             raise ValueError(f"Bot {bot_id} not found")
         _, user_bots = _get_user_and_bots(session)
@@ -158,7 +161,7 @@ async def send_to_channel(
     session: DBSession,
     bot_id: int,
     message: str,
-    channel_id: int | str | None,
+    channel_id: str | None,
     channel_name: str | None,
 ) -> dict[str, Any]:
     """Resolve channel and send message."""
@@ -172,7 +175,7 @@ async def send_to_channel(
         )
         if not channel:
             raise ValueError(f"Channel '{channel_name}' not found")
-        target = channel.id
+        target = str(channel.id)
 
     success = await asyncio.to_thread(
         discord_client.send_to_channel, bot_id, target, message
@@ -185,7 +188,7 @@ async def send_dm(
     session: DBSession,
     bot_id: int,
     message: str,
-    user_id: int | str | None,
+    user_id: str | None,
     username: str | None,
 ) -> dict[str, Any]:
     """Resolve user and send DM, with Person fallback on failure.
@@ -209,7 +212,7 @@ async def send_dm(
 
 def resolve_discord_user(
     session: DBSession,
-    user_id: int | str | None,
+    user_id: str | None,
     username: str | None,
 ) -> str | None:
     """Resolve a Discord user ID from explicit ID or username. Returns None if not found."""
@@ -260,11 +263,11 @@ def suggest_people(session: DBSession, query: str) -> list[dict[str, str]]:
 @visible_when(require_scopes(SCOPE_DISCORD_WRITE), has_discord_bots)
 async def send_message(
     message: str,
-    channel_id: int | str | None = None,
+    channel_id: str | None = None,
     channel_name: str | None = None,
-    user_id: int | str | None = None,
+    user_id: str | None = None,
     username: str | None = None,
-    bot_id: int | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Send a Discord message to a channel or user via DM.
@@ -307,7 +310,7 @@ async def send_message(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def channel_history(
-    channel_id: int | str | None = None,
+    channel_id: str | None = None,
     channel_name: str | None = None,
     limit: int = 50,
     before: str | None = None,
@@ -357,7 +360,7 @@ async def channel_history(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_channels(
-    server: int | str | None = None,
+    server: str | None = None,
     include_dms: bool = False,
 ) -> dict[str, Any]:
     """
@@ -377,8 +380,8 @@ async def list_channels(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_roles(
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     List all roles in a Discord server.
@@ -406,9 +409,9 @@ async def list_roles(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def list_role_members(
-    role: int | str,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    role: str,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     List all members who have a specific role.
@@ -440,8 +443,8 @@ async def list_role_members(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def list_categories(
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     List all categories in a Discord server.
@@ -472,14 +475,14 @@ async def list_categories(
 
 
 def resolve_role(
-    role: int | str,
+    role: str,
     guild_id: int,
     bot_id: int,
 ) -> int:
     """Resolve a role from either numeric ID or role name.
 
     Args:
-        role: Role ID (snowflake as int or str) or role name
+        role: Role ID (snowflake as numeric string) or role name
         guild_id: Discord guild ID
         bot_id: Discord bot ID
 
@@ -511,13 +514,13 @@ def resolve_role(
 
 def resolve_user(
     session: DBSession,
-    user: int | str,
+    user: str,
 ) -> int:
     """Resolve a user ID from either numeric ID or username.
 
     Args:
         session: Database session
-        user: User ID (snowflake as int or str) or username
+        user: User ID (snowflake as numeric string) or username
 
     Returns:
         The resolved user ID as int
@@ -552,10 +555,10 @@ def resolve_user(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def role_add_user(
-    role: int | str,
-    user: int | str,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    role: str,
+    user: str,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Add a user to a Discord role.
@@ -589,10 +592,10 @@ async def role_add_user(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def role_remove_user(
-    role: int | str,
-    user: int | str,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    role: str,
+    user: str,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Remove a user from a Discord role.
@@ -627,11 +630,11 @@ async def role_remove_user(
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def create_role(
     name: str,
-    guild: int | str | None = None,
+    guild: str | None = None,
     color: int | None = None,
     mentionable: bool = False,
     hoist: bool = False,
-    bot_id: int | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Create a new Discord role in a server.
@@ -671,9 +674,43 @@ async def create_role(
 # =============================================================================
 
 
+def ensure_channel_record(
+    session: DBSession,
+    channel_id: int,
+    name: str,
+    server_id: int | None,
+    category_id: int | None,
+    channel_type: str = "text",
+) -> DiscordChannel:
+    """Insert-or-update a DiscordChannel row from MCP-driven channel mutations.
+
+    The bot collector populates discord_channels lazily (on_message,
+    sync_all). MCP tools that create/move channels need the row to exist
+    immediately so subsequent name-based lookups in the same session resolve.
+    """
+    record = session.get(DiscordChannel, channel_id)
+    if record is None:
+        record = DiscordChannel(
+            id=channel_id,
+            server_id=server_id,
+            category_id=category_id,
+            name=name,
+            channel_type=channel_type,
+        )
+        session.add(record)
+        session.flush()
+        return record
+
+    if record.name != name:
+        record.name = name
+    if category_id is not None and record.category_id != category_id:
+        record.category_id = category_id
+    return record
+
+
 def resolve_channel_id(
     session: DBSession,
-    channel_id: int | str | None,
+    channel_id: str | None,
     channel_name: str | None,
 ) -> int:
     """
@@ -681,7 +718,8 @@ def resolve_channel_id(
 
     Args:
         session: Database session
-        channel_id: Discord channel ID (snowflake) as int or string
+        channel_id: Discord channel snowflake as a numeric string. If the value
+            isn't numeric it's treated as a channel name lookup.
         channel_name: Discord channel name to look up
 
     Returns:
@@ -691,16 +729,10 @@ def resolve_channel_id(
         ValueError: If neither is provided or channel_name not found
     """
     if channel_id is not None:
-        # If it's a string that's not numeric, treat it as a channel name
-        if isinstance(channel_id, str):
-            try:
-                return int(channel_id)
-            except ValueError:
-                channel_name = channel_id
-                channel_id = None
-
-        if channel_id is not None:
-            return _to_snowflake(channel_id)
+        try:
+            return int(channel_id)
+        except ValueError:
+            channel_name = channel_id
 
     if channel_name is None:
         raise ValueError("Must specify either channel_id or channel_name")
@@ -718,9 +750,9 @@ def resolve_channel_id(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN), has_discord_bots)
 async def perms(
-    channel_id: int | str | None = None,
+    channel_id: str | None = None,
     channel_name: str | None = None,
-    bot_id: int | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Get permission overwrites for a Discord channel.
@@ -728,7 +760,7 @@ async def perms(
     Shows which roles and users have special permissions on the channel.
 
     Args:
-        channel_id: Discord channel ID (snowflake, can be string or int)
+        channel_id: Discord channel ID (snowflake as a numeric string)
         channel_name: Discord channel name (alternative to channel_id)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
 
@@ -751,13 +783,13 @@ async def perms(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def set_perms(
-    channel: int | str | None = None,
-    role: int | str | None = None,
-    user: int | str | None = None,
+    channel: str | None = None,
+    role: str | None = None,
+    user: str | None = None,
     allow: list[str] | None = None,
     deny: list[str] | None = None,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Set permission overwrite for a role or user on a channel.
@@ -816,11 +848,11 @@ async def set_perms(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def del_perms(
-    channel: int | str,
-    role: int | str | None = None,
-    user: int | str | None = None,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    channel: str,
+    role: str | None = None,
+    user: str | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Remove permission overwrite for a role or user from a channel.
@@ -925,7 +957,7 @@ def ensure_team_has_discord_role(
 
 def resolve_team_or_role(
     session: DBSession,
-    identifier: int | str,
+    identifier: str,
     guild_id: int,
     bot_id: int,
 ) -> tuple[Team | None, int, bool, bool]:
@@ -1025,7 +1057,7 @@ def resolve_team_or_role(
 async def attach_teams_to_channel(
     session: DBSession,
     channel_id: int,
-    teams: list[int | str],
+    teams: list[str],
     guild_id: int,
     bot_id: int,
 ) -> dict[str, Any]:
@@ -1100,13 +1132,13 @@ async def attach_teams_to_channel(
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def upsert_channel(
     name: str,
-    guild: int | str | None = None,
-    category: int | str | None = None,
+    guild: str | None = None,
+    category: str | None = None,
     topic: str | None = None,
-    teams: list[int | str] | None = None,
+    teams: list[str] | None = None,
     project_id: int | None = None,
     sensitivity: str | None = None,
-    bot_id: int | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Create or update a Discord text channel.
@@ -1193,7 +1225,26 @@ async def upsert_channel(
 
         result["channel"] = channel_result.get("channel")
         result["action"] = channel_result.get("action")
-        channel_id = int(channel_result["channel"]["id"])
+        channel_info = channel_result["channel"]
+        channel_id = int(channel_info["id"])
+        # Use Discord's canonical name (lowercased / hyphenated) — it's what
+        # users see in the UI and pass to subsequent MCP tools. Storing the
+        # raw user-supplied `name` would defeat name-based lookups against
+        # the canonical form.
+        canonical_name = channel_info.get("name") or name
+
+        # Persist the DiscordChannel row eagerly. The collector's
+        # on_guild_channel_create listener will fire too, but it races with
+        # the rest of this MCP request — without this eager insert, callers
+        # chaining set_perms(channel="<canonical-name>") would hit a
+        # "channel not found" gap until the gateway event arrives.
+        channel_record = ensure_channel_record(
+            session,
+            channel_id=channel_id,
+            name=canonical_name,
+            server_id=resolved_guild_id,
+            category_id=resolved_category_id,
+        )
 
         # Handle teams/permissions
         if teams is not None:
@@ -1205,16 +1256,12 @@ async def upsert_channel(
             result["roles_created"] = teams_result["roles_created"]
             result["warnings"] = teams_result["warnings"]
 
-        # Set project_id/sensitivity after Discord API creates/updates the channel
-        if project_id is not None or sensitivity is not None:
-            channel_record = session.get(DiscordChannel, channel_id)
-            if channel_record:
-                if project_id is not None:
-                    channel_record.project_id = project_id
-                    result["project_id"] = project_id
-                if sensitivity is not None:
-                    channel_record.sensitivity = sensitivity
-                    result["sensitivity"] = sensitivity
+        if project_id is not None:
+            channel_record.project_id = project_id
+            result["project_id"] = project_id
+        if sensitivity is not None:
+            channel_record.sensitivity = sensitivity
+            result["sensitivity"] = sensitivity
 
         session.commit()
         result["success"] = True
@@ -1226,9 +1273,9 @@ async def upsert_channel(
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def upsert_category(
     name: str,
-    guild: int | str | None = None,
-    teams: list[int | str] | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    teams: list[str] | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Create or find a Discord category.
@@ -1299,16 +1346,16 @@ async def upsert_category(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def delete_channel(
-    channel_id: int | str | None = None,
+    channel_id: str | None = None,
     channel_name: str | None = None,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Delete a Discord channel or category.
 
     Args:
-        channel_id: Discord channel/category ID (snowflake, can be string or int)
+        channel_id: Discord channel/category ID (snowflake as a numeric string)
         channel_name: Discord channel/category name (alternative to channel_id)
         guild: Discord server - can be numeric ID or server name (required when using channel_name)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)
@@ -1345,16 +1392,16 @@ async def delete_channel(
 @discord_mcp.tool()
 @visible_when(require_scopes(SCOPE_DISCORD_ADMIN_WRITE), has_discord_bots)
 async def delete_category(
-    category_id: int | str | None = None,
+    category_id: str | None = None,
     category_name: str | None = None,
-    guild: int | str | None = None,
-    bot_id: int | None = None,
+    guild: str | None = None,
+    bot_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Delete a Discord category.
 
     Args:
-        category_id: Discord category ID (snowflake, can be string or int)
+        category_id: Discord category ID (snowflake as a numeric string)
         category_name: Discord category name (alternative to category_id)
         guild: Discord server - can be numeric ID or server name (required when using category_name)
         bot_id: Optional specific bot ID to use (defaults to user's first bot)

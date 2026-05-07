@@ -726,7 +726,7 @@ async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
         )
 
     assert result["success"] is True
-    assert result["team"]["discord_guild_id"] == 123456789
+    assert result["team"]["discord_guild_id"] == "123456789"
     assert result["team"]["auto_sync_discord"] is True
 
 
@@ -759,7 +759,7 @@ async def test_upsert_with_discord_role_creates_role(db_session, admin_session, 
 
     assert result["success"] is True
     assert result["discord_sync"].get("role_created") is True
-    assert result["team"]["discord_role_id"] == 999888777
+    assert result["team"]["discord_role_id"] == "999888777"
 
     # Verify the value is actually persisted in the database
     db_session.expire_all()  # Force reload from DB
@@ -791,7 +791,7 @@ async def test_upsert_with_existing_discord_role(db_session, admin_session, disc
 
     assert result["success"] is True
     assert result["discord_sync"].get("role_created") is not True
-    assert result["team"]["discord_role_id"] == 555666777
+    assert result["team"]["discord_role_id"] == "555666777"
 
 
 @pytest.mark.asyncio
@@ -1421,7 +1421,7 @@ async def test_ensure_discord_role_syncs_members(db_session, admin_session, disc
         patch("memory.common.discord.add_role_member", return_value={"success": True}),
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert sync_info.get("members_added", 0) >= 1
@@ -1442,7 +1442,7 @@ async def test_ensure_discord_role_handles_failure(db_session, admin_session, di
         patch("memory.common.discord.list_role_members", side_effect=Exception("API Error")),
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert any("Discord membership sync failed" in w for w in warnings)
@@ -1462,7 +1462,7 @@ async def test_ensure_discord_role_no_sync_when_disabled(db_session, admin_sessi
         patch("memory.common.discord.list_role_members") as mock_list,
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=False
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=False
         )
 
     # Should not call list_role_members since sync is disabled
@@ -2120,7 +2120,7 @@ async def test_ensure_discord_role_requeries_team_after_await(db_session, admin_
     ):
         # Should not raise DetachedInstanceError - uses team_id to re-query
         sync_info, warnings = await ensure_discord_role(
-            db_session, team_id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team_id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert not any("not found" in w for w in warnings)

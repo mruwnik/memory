@@ -39,6 +39,13 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow")
     config.addinivalue_line("markers", "integration: marks integration tests")
     config.addinivalue_line("markers", "db: marks tests that require database")
+    config.addinivalue_line(
+        "markers",
+        "transactional_db: opt out of the SAVEPOINT-based db_session pattern. "
+        "Each test gets a real session that commits to the DB; teardown "
+        "TRUNCATEs all tables. ~2 s slower per test but works with code "
+        "paths that conflict with the shared-connection SAVEPOINT trick.",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -357,15 +364,25 @@ def db_engine(test_db):
 
 
 @pytest.fixture
-def db_session(db_engine):
-    """Create a session for a test, with isolation via transaction rollback.
+def db_session(request, db_engine):
+    """Create a session for a test.
 
-    Wraps the test in an outer transaction; test code's session.commit() lands
-    on a SAVEPOINT (begin_nested) so commits don't escape. The connection
-    module's session factory is redirected to the same connection so that code
-    paths using make_session() share the test transaction. Teardown is
-    effectively free, vs ~2s for TRUNCATE-all-60-tables.
+    Default: SAVEPOINT-on-shared-connection pattern (15× faster teardown than
+    TRUNCATE). The connection module's session factory is redirected so that
+    production code's ``make_session()`` shares the test connection — letting
+    the test see production-side writes and vice versa without committing to
+    the real DB.
+
+    Mark a test with ``@pytest.mark.transactional_db`` to opt into a
+    real-commit, TRUNCATE-cleanup variant. Use that for tests where
+    production code's session lifecycle conflicts with the SAVEPOINT pattern
+    (typical symptom: ``IllegalStateChangeError`` during commit, or a test
+    asserting on ``session.in_transaction()``).
     """
+    if request.node.get_closest_marker("transactional_db") is not None:
+        yield from _transactional_db_session(db_engine)
+        return
+
     from memory.common.db import connection as db_connection
 
     connection = db_engine.connect()
@@ -413,10 +430,37 @@ def db_session(db_engine):
             if transaction.is_active:
                 transaction.rollback()
         except Exception:
-            # Connection may already be in an unrecoverable state if a savepoint
-            # was deassociated; closing still releases it.
             pass
         connection.close()
+
+
+def _transactional_db_session(db_engine):
+    """Generator backing the @pytest.mark.transactional_db opt-out path."""
+    SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+        with db_engine.connect() as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname='public' AND tablename != 'alembic_version'"
+                    )
+                )
+            ]
+            if tables:
+                conn.execute(text("SET session_replication_role = 'replica'"))
+                table_list = ", ".join(f'"{t}"' for t in tables)
+                conn.execute(
+                    text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE")
+                )
+                conn.execute(text("SET session_replication_role = 'origin'"))
+                conn.commit()
 
 
 # =============================================================================

@@ -349,6 +349,7 @@ def test_sync_comic_string_published_date(
     assert saved_comic.published.year == expected_year
 
 
+@pytest.mark.transactional_db
 @patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_empty_string_published_date(
     mock_get, mock_image_response, db_session, qdrant
@@ -401,6 +402,7 @@ def test_sync_comic_special_characters_in_title(
     "memory.common.embedding.embed_source_item",
     side_effect=Exception("Embedding failed"),
 )
+@pytest.mark.transactional_db
 def test_sync_comic_embedding_failure(
     mock_embed_source_item, mock_image_response, db_session, qdrant
 ):

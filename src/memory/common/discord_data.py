@@ -42,7 +42,7 @@ def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot 
 
 def fetch_channel_history(
     session: DBSession,
-    channel_id: int | str | None,
+    channel_id: str | None,
     channel_name: str | None,
     before_dt: datetime | None,
     after_dt: datetime | None,
@@ -64,10 +64,10 @@ def fetch_channel_history(
     """
     # Resolve channel
     if channel_id is not None:
-        resolved_channel_id = int(channel_id) if isinstance(channel_id, str) else channel_id
+        resolved_channel_id = int(channel_id)
         channel = session.get(DiscordChannel, resolved_channel_id)
         channel_info = {
-            "id": resolved_channel_id,
+            "id": str(resolved_channel_id),
             "name": channel.name if channel else "unknown",
         }
     else:
@@ -79,7 +79,7 @@ def fetch_channel_history(
         if not channel:
             raise ValueError(f"Channel '{channel_name}' not found")
         resolved_channel_id = channel.id
-        channel_info = {"id": channel.id, "name": channel.name}
+        channel_info = {"id": str(channel.id), "name": channel.name}
 
     # Build query
     query = session.query(DiscordMessage).filter(
@@ -111,15 +111,15 @@ def fetch_channel_history(
         author_name = author.name if author else f"user_{msg.author_id}"
 
         formatted.append({
-            "id": msg.message_id,
+            "id": str(msg.message_id),
             "author": author_name,
-            "author_id": msg.author_id,
+            "author_id": str(msg.author_id),
             "content": msg.content,
             "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
             "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
             "is_pinned": msg.is_pinned,
             "reactions": msg.reactions,
-            "reply_to": msg.reply_to_message_id,
+            "reply_to": str(msg.reply_to_message_id) if msg.reply_to_message_id else None,
         })
 
     # Reverse to get chronological order
@@ -135,7 +135,7 @@ def fetch_channel_history(
 
 def fetch_channels(
     session: DBSession,
-    server: int | str | None,
+    server: str | None,
     include_dms: bool,
 ) -> dict[str, Any]:
     """
