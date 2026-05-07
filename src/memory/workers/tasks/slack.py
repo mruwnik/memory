@@ -192,30 +192,22 @@ def download_slack_file(
 
 
 def get_workspace_credentials(
-    session, workspace_id: str, slack_app_id: int | None = None
+    session, workspace_id: str, slack_app_id: int
 ) -> SlackUserCredentials | None:
-    """Get valid credentials for a workspace, scoped to a Slack app.
+    """Get a valid credential for a (SlackApp, workspace) pair.
 
     Returns the first non-expired credential, or None if none available.
-    Collection is user-agnostic — any valid token for the (app, workspace)
-    pair will do.
-
-    When ``slack_app_id`` is given, only credentials issued under that
-    SlackApp are considered (multi-tenant correctness — two SlackApps can
-    legally share a workspace per §3 decision 5). When ``None``, returns
-    any valid credential for the workspace (legacy single-app callers).
-    New code should always pass ``slack_app_id``.
+    Collection is user-agnostic — any valid token for the pair will do,
+    but the SlackApp scope is required so two SlackApps that legitimately
+    share a workspace (design doc §7 decision 5) don't cross-contaminate.
     """
     query = session.query(SlackUserCredentials).filter(
-        SlackUserCredentials.workspace_id == workspace_id
+        SlackUserCredentials.workspace_id == workspace_id,
+        SlackUserCredentials.slack_app_id == slack_app_id,
     )
-    if slack_app_id is not None:
-        query = query.filter(SlackUserCredentials.slack_app_id == slack_app_id)
-
     for cred in query.all():
         if not cred.is_token_expired() and cred.access_token:
             return cred
-
     return None
 
 
@@ -288,19 +280,20 @@ def sync_all_slack_workspaces() -> dict[str, Any]:
 @app.task(name=SYNC_SLACK_WORKSPACE)
 @tracked_task
 def sync_slack_workspace(
-    workspace_id: str, slack_app_id: int | None = None
+    workspace_id: str, slack_app_id: int
 ) -> dict[str, Any]:
     """
-    Sync a single Slack workspace.
+    Sync a single Slack workspace under a specific SlackApp.
 
-    - Get valid credentials (any user's token will work for reading)
+    - Get valid credentials for (slack_app_id, workspace_id)
     - Sync channels list
     - Build user cache for mention resolution
     - Trigger channel syncs for channels with collection enabled
 
     ``slack_app_id`` scopes the credential lookup and propagates to all
-    enqueued downstream tasks. ``None`` falls back to legacy single-app
-    behavior — the periodic dispatcher always passes a value.
+    enqueued downstream tasks. Two SlackApps can legitimately share a
+    workspace (design doc §7 decision 5), so the pair is the unit of
+    sync work.
     """
     logger.info(f"Syncing Slack workspace {workspace_id}")
 
@@ -482,16 +475,16 @@ def build_user_cache(client: SlackClient) -> dict[str, str]:
 @app.task(name=SYNC_SLACK_CHANNEL)
 @tracked_task
 def sync_slack_channel(
-    channel_id: str, slack_app_id: int | None = None
+    channel_id: str, slack_app_id: int
 ) -> dict[str, Any]:
     """
-    Sync messages from a Slack channel.
+    Sync messages from a Slack channel under a specific SlackApp.
 
     Uses incremental sync based on last_message_ts cursor.
     Uses Redis lock to prevent concurrent syncs of the same channel.
 
-    ``slack_app_id`` scopes credential lookup; propagated to all
-    enqueued downstream tasks. ``None`` falls back to legacy any-app.
+    ``slack_app_id`` scopes credential lookup and propagates to all
+    enqueued downstream tasks.
     """
     # Try to acquire lock - skip if another sync is already running
     if not acquire_channel_sync_lock(channel_id):
@@ -507,7 +500,7 @@ def sync_slack_channel(
 
 
 def _sync_slack_channel_impl(
-    channel_id: str, slack_app_id: int | None = None
+    channel_id: str, slack_app_id: int
 ) -> dict[str, Any]:
     """Implementation of channel sync (called with lock held)."""
     with make_session() as session:
@@ -833,10 +826,9 @@ def _insert_new_slack_message(session, msg_kwargs: dict) -> dict[str, Any]:
     message_ts = msg_kwargs["message_ts"]
     content = msg_kwargs["content"]
     author_id = msg_kwargs["author_id"]
+    slack_app_id = msg_kwargs["slack_app_id"]
 
-    credentials = get_workspace_credentials(
-        session, workspace_id, msg_kwargs.get("slack_app_id")
-    )
+    credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
     access_token = credentials.access_token if credentials else None
 
     users_by_id: dict[str, str] = {}
@@ -906,13 +898,13 @@ def add_slack_message(
     message_ts: str,
     author_id: str | None,
     content: str,
+    slack_app_id: int,
     thread_ts: str | None = None,
     reply_count: int | None = None,
     subtype: str | None = None,
     edited_ts: str | None = None,
     reactions: list[dict] | None = None,
     files: list[dict] | None = None,
-    slack_app_id: int | None = None,
 ) -> dict[str, Any]:
     """Add or merge a Slack message in the database.
 
@@ -922,8 +914,7 @@ def add_slack_message(
     embedding is regenerated when content changes.
 
     ``slack_app_id`` scopes credential lookup so the right Slack token is
-    used to resolve mentions and download files. ``None`` falls back to
-    legacy any-app behavior.
+    used to resolve mentions and download files.
     """
     logger.info(f"Adding Slack message {message_ts} from channel {channel_id}")
 

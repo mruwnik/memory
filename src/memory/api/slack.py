@@ -51,7 +51,10 @@ from memory.common.db.models.slack import (
 )
 from memory.common.db.models.source_items import SlackMessage
 from memory.common.oauth_client import (
+    generate_state,
     log_corr_id,
+    sign_state,
+    store_state,
     validate_and_consume_state,
 )
 
@@ -207,39 +210,61 @@ class SlackAppResponse(BaseModel):
 # --- Helper Functions ---
 
 
-def get_user_credentials(
+def get_user_credentials_for_app(
     db: Session,
     workspace_id: str,
     user: User,
-    slack_app_id: int | None = None,
+    slack_app_id: int,
 ) -> SlackUserCredentials | None:
-    """Get the current user's credentials for a workspace.
+    """Get the current user's credentials for a (SlackApp, workspace) pair.
 
-    When ``slack_app_id`` is given, scopes to that SlackApp (multi-tenant
-    correctness — two SlackApps can legitimately share a workspace per
-    design doc §7 decision 5). When ``None``, returns any credential the
-    user has for the workspace (legacy single-app caller).
+    Strict per-tenant lookup — two SlackApps can legitimately share a
+    workspace (design doc §7 decision 5), so callers MUST identify the
+    app. For "does this user have ANY credential for this workspace?"
+    membership checks (e.g. workspace-level access gating), use
+    :func:`user_has_workspace_membership` instead.
     """
-    query = db.query(SlackUserCredentials).filter(
-        SlackUserCredentials.workspace_id == workspace_id,
-        SlackUserCredentials.user_id == user.id,
+    return (
+        db.query(SlackUserCredentials)
+        .filter(
+            SlackUserCredentials.workspace_id == workspace_id,
+            SlackUserCredentials.user_id == user.id,
+            SlackUserCredentials.slack_app_id == slack_app_id,
+        )
+        .first()
     )
-    if slack_app_id is not None:
-        query = query.filter(SlackUserCredentials.slack_app_id == slack_app_id)
-    return query.first()
+
+
+def user_has_workspace_membership(
+    db: Session, workspace_id: str, user: User
+) -> bool:
+    """Cheap any-app membership probe used to gate workspace-level views.
+
+    Returns True if the user has at least one credential for this
+    workspace through any SlackApp they're authorized on. Does NOT
+    return the credential itself — for that, use
+    :func:`get_user_credentials_for_app`.
+    """
+    return (
+        db.query(SlackUserCredentials.id)
+        .filter(
+            SlackUserCredentials.workspace_id == workspace_id,
+            SlackUserCredentials.user_id == user.id,
+        )
+        .first()
+        is not None
+    )
 
 
 def get_workspace_with_access(
     db: Session, workspace_id: str, user: User
 ) -> SlackWorkspace:
-    """Get a workspace, ensuring the user has credentials for it."""
+    """Get a workspace, ensuring the user has at least one credential for it."""
     workspace = db.get(SlackWorkspace, workspace_id)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    # User must have credentials to access workspace
-    credentials = get_user_credentials(db, workspace_id, user)
-    if not credentials:
+    if not user_has_workspace_membership(db, workspace_id, user):
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     return workspace
@@ -540,16 +565,24 @@ def disconnect_workspace(
 ):
     """Disconnect user's credentials from a Slack workspace.
 
-    This removes the user's OAuth credentials. The workspace and its messages
-    are preserved if there are ingested messages (to avoid data loss) or if
-    other users are still connected.
+    This removes ALL of the user's credentials for this workspace
+    (across every SlackApp they connected through). The workspace and
+    its messages are preserved if there are ingested messages (to
+    avoid data loss) or if other users are still connected.
     """
-    # Get user's credentials
-    credentials = get_user_credentials(db, workspace_id, user)
-    if not credentials:
+    user_creds = (
+        db.query(SlackUserCredentials)
+        .filter(
+            SlackUserCredentials.workspace_id == workspace_id,
+            SlackUserCredentials.user_id == user.id,
+        )
+        .all()
+    )
+    if not user_creds:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    db.delete(credentials)
+    for cred in user_creds:
+        db.delete(cred)
     db.commit()
 
     # Check remaining users and messages
@@ -584,13 +617,37 @@ def trigger_sync(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Trigger a manual sync for a workspace."""
-    # Verify user has access
+    """Trigger a manual sync for a workspace.
+
+    A workspace can legitimately be served by multiple SlackApps (design
+    doc §7 decision 5), so we fan out one ``sync_slack_workspace`` task
+    per (slack_app_id, workspace_id) pair the user has credentials for.
+    """
     get_workspace_with_access(db, workspace_id, user)
 
-    celery_app.send_task(SYNC_SLACK_WORKSPACE, args=[workspace_id])
+    app_ids = [
+        row[0]
+        for row in (
+            db.query(SlackUserCredentials.slack_app_id)
+            .filter(
+                SlackUserCredentials.workspace_id == workspace_id,
+                SlackUserCredentials.user_id == user.id,
+            )
+            .distinct()
+            .all()
+        )
+    ]
+    for slack_app_id in app_ids:
+        celery_app.send_task(
+            SYNC_SLACK_WORKSPACE,
+            kwargs={"workspace_id": workspace_id, "slack_app_id": slack_app_id},
+        )
 
-    return {"status": "sync_triggered", "workspace_id": workspace_id}
+    return {
+        "status": "sync_triggered",
+        "workspace_id": workspace_id,
+        "apps_dispatched": len(app_ids),
+    }
 
 
 # --- Channel Endpoints ---
@@ -1294,6 +1351,18 @@ class SlackAppNonceResponse(BaseModel):
     events_url: str
 
 
+class SlackOAuthStateResponse(BaseModel):
+    """Signed OAuth state issued for the wizard's "Open Slack OAuth" step.
+
+    The frontend includes ``state`` in the Slack authorize URL; Slack
+    echoes it back to ``/slack/callback/{slack_app_id}`` where
+    ``validate_and_consume_state`` checks the signature and one-time
+    use, and the authenticated user must match the state's ``user_id``.
+    """
+
+    state: str
+
+
 class SlackWizardStatus(BaseModel):
     setup_state: str
     has_credentials: bool
@@ -1383,6 +1452,31 @@ def issue_wizard_nonce(
         callback_url=_callback_url_for(app.id),
         events_url=_events_url_for(app.id, nonce),
     )
+
+
+@router.post(
+    "/apps/{app_id}/oauth-state", response_model=SlackOAuthStateResponse
+)
+def issue_oauth_state(
+    app_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> SlackOAuthStateResponse:
+    """Mint a fresh OAuth state for the wizard's "Open Slack OAuth" step.
+
+    The frontend includes the returned ``state`` as the ``state=`` query
+    parameter on the Slack authorize URL. Slack echoes it back to
+    ``/slack/callback/{slack_app_id}`` where it's validated against the
+    stored row, signed-state HMAC, and the authenticated user.
+
+    Owner-only. The state is bound to ``user.id`` so the callback's
+    session-vs-state user check (CSRF binding) succeeds.
+    """
+    # Side effect: 404 if missing/inactive, 403 if not owner.
+    get_slack_app_for_owner(db, app_id, user)
+    raw_state = generate_state()
+    store_state(db, raw_state, "slack", user.id)
+    return SlackOAuthStateResponse(state=sign_state(raw_state, user.id))
 
 
 @router.get("/apps/{app_id}/wizard-status", response_model=SlackWizardStatus)

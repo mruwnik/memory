@@ -6,6 +6,7 @@
 // app to 'live'. Polls /slack/apps/{id}/wizard-status for async
 // transitions (url_verification, test-message match).
 import {useCallback, useEffect, useMemo, useState} from 'react'
+import {useAuth} from '../../../hooks/useAuth'
 import {
   type SlackAppNonceResponse,
   type SlackAppResponse,
@@ -53,6 +54,7 @@ export const SlackAppWizard = ({
   onCancel,
 }: SlackAppWizardProps) => {
   const wizard = useSlackWizard()
+  const {user: authUser} = useAuth()
   const [app, setApp] = useState<SlackAppResponse | null>(initialApp)
   const [step, setStep] = useState<Step>(() => {
     if (!initialApp) return 'register'
@@ -114,11 +116,14 @@ export const SlackAppWizard = ({
   }, [app, step, wizard, onComplete])
 
   // === Listen for OAuth completion via per-user BroadcastChannel ===
+  // The backend's callback HTML posts to slack-oauth-{user.id}; we listen on
+  // the same channel name. Source `user.id` from useAuth() — the previous
+  // approach (regex over document.cookie) silently fell back to "0" when the
+  // session cookie was HttpOnly or named differently, leaving the wizard
+  // stuck waiting on an event that never arrived.
   useEffect(() => {
-    if (!app || step !== 'oauth') return
-    const userIdMatch = document.cookie.match(/user_id=(\d+)/)
-    const userId = userIdMatch?.[1] ?? '0'
-    const channel = new BroadcastChannel(`slack-oauth-${userId}`)
+    if (!app || step !== 'oauth' || !authUser) return
+    const channel = new BroadcastChannel(`slack-oauth-${authUser.id}`)
     channel.addEventListener('message', async (evt: MessageEvent) => {
       if (evt.data?.type === 'oauth-complete' && app) {
         const fresh = await wizard.getApp(app.id)
@@ -127,7 +132,7 @@ export const SlackAppWizard = ({
       }
     })
     return () => channel.close()
-  }, [app, step, wizard])
+  }, [app, step, wizard, authUser])
 
   const handleError = (e: unknown) => setError((e as Error).message)
   const clearError = () => setError(null)
@@ -172,38 +177,49 @@ export const SlackAppWizard = ({
     }
   }, [app, clientSecret, wizard])
 
-  const handleOpenOAuth = useCallback(() => {
-    // Opens the OAuth flow in a popup. Listener above advances state when the
-    // BroadcastChannel message arrives.
-    //
+  const handleOpenOAuth = useCallback(async () => {
     // Per-app multi-tenant flow: build Slack's authorize URL using THIS app's
     // client_id and route Slack's redirect to /slack/callback/{slack_app_id}.
-    // No env-var single-app `/slack/authorize` endpoint exists anymore.
+    //
+    // Mint a fresh signed OAuth state via /slack/apps/{id}/oauth-state and
+    // pass it as `&state=...` — the callback validates the signature, the
+    // OAuthClientState row, and the bound user.id (CSRF binding fix
+    // a5c9746d).
     if (!app || !callbackUrl) return
-    const scopes = [
-      'channels:history',
-      'groups:history',
-      'im:history',
-      'mpim:history',
-      'channels:read',
-      'groups:read',
-      'im:read',
-      'mpim:read',
-      'users:read',
-      'users:read.email',
-      'team:read',
-      'reactions:read',
-      'files:read',
-    ].join(' ')
-    const params = new URLSearchParams({
-      client_id: app.client_id,
-      scope: scopes,
-      user_scope: scopes,
-      redirect_uri: callbackUrl,
-    })
-    const authUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`
-    window.open(authUrl, '_blank', 'width=600,height=700')
-  }, [app, callbackUrl])
+    clearError()
+    setBusy(true)
+    try {
+      const state = await wizard.issueOAuthState(app.id)
+      const scopes = [
+        'channels:history',
+        'groups:history',
+        'im:history',
+        'mpim:history',
+        'channels:read',
+        'groups:read',
+        'im:read',
+        'mpim:read',
+        'users:read',
+        'users:read.email',
+        'team:read',
+        'reactions:read',
+        'files:read',
+      ].join(' ')
+      const params = new URLSearchParams({
+        client_id: app.client_id,
+        scope: scopes,
+        user_scope: scopes,
+        redirect_uri: callbackUrl,
+        state,
+      })
+      const authUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`
+      window.open(authUrl, '_blank', 'width=600,height=700')
+    } catch (e) {
+      handleError(e)
+    } finally {
+      setBusy(false)
+    }
+  }, [app, callbackUrl, wizard])
 
   const handleSigningSecret = useCallback(async () => {
     if (!app) return

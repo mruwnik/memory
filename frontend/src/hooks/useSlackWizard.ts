@@ -148,6 +148,17 @@ export const useSlackWizard = () => {
     [apiCall],
   )
 
+  const issueOAuthState = useCallback(
+    async (appId: number): Promise<string> => {
+      const r = await apiCall(`/slack/apps/${appId}/oauth-state`, {
+        method: 'POST',
+      })
+      const body = await apiOk(r, 'Failed to issue OAuth state')
+      return body.state
+    },
+    [apiCall],
+  )
+
   const getWizardStatus = useCallback(
     async (appId: number): Promise<SlackWizardStatus> => {
       const r = await apiCall(`/slack/apps/${appId}/wizard-status`)
@@ -186,6 +197,7 @@ export const useSlackWizard = () => {
     setClientSecret,
     setSigningSecret,
     issueWizardNonce,
+    issueOAuthState,
     getWizardStatus,
     beginTestMessage,
     pollTestMessage,

@@ -87,7 +87,7 @@ def slack_channel(db_session, slack_workspace):
 
 
 @pytest.fixture
-def sample_message_data(slack_workspace, slack_channel):
+def sample_message_data(slack_workspace, slack_channel, slack_app):
     """Sample message data for testing."""
     return {
         "workspace_id": slack_workspace.id,
@@ -95,6 +95,7 @@ def sample_message_data(slack_workspace, slack_channel):
         "message_ts": "1704067200.000100",
         "author_id": "U12345678",  # Just a Slack user ID
         "content": "This is a test Slack message with enough content to be processed properly.",
+        "slack_app_id": slack_app.id,
         "thread_ts": None,
         "reply_count": None,
         "subtype": None,
@@ -352,17 +353,17 @@ def test_resolve_mentions_url():
     assert "<https://example.com|Example Site>" not in resolved
 
 
-def test_sync_slack_workspace_no_credentials(db_session, slack_workspace):
+def test_sync_slack_workspace_no_credentials(db_session, slack_workspace, slack_app):
     """Test syncing workspace without credentials returns error."""
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "error"
     assert "No valid credentials" in result["error"]
 
 
-def test_sync_slack_workspace_not_found(db_session):
+def test_sync_slack_workspace_not_found(db_session, slack_app):
     """Test syncing non-existent workspace returns error."""
-    result = slack.sync_slack_workspace("T_NONEXISTENT")
+    result = slack.sync_slack_workspace("T_NONEXISTENT", slack_app.id)
 
     assert result["status"] == "error"
     assert "Workspace not found" in result["error"]
@@ -376,6 +377,7 @@ def test_sync_slack_workspace_success(
     db_session,
     slack_workspace,
     slack_credentials,
+    slack_app,
 ):
     """Test successful workspace sync."""
     mock_client = MagicMock()
@@ -384,7 +386,7 @@ def test_sync_slack_workspace_success(
     mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
     mock_sync_channels.return_value = 3
 
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "completed"
     assert result["channels_synced"] == 3
@@ -392,7 +394,7 @@ def test_sync_slack_workspace_success(
 
 @patch("memory.workers.tasks.slack.SlackClient")
 def test_sync_slack_workspace_token_expired(
-    mock_client_class, db_session, slack_workspace, slack_credentials
+    mock_client_class, db_session, slack_workspace, slack_credentials, slack_app
 ):
     """Test workspace sync with expired token."""
     mock_client = MagicMock()
@@ -400,7 +402,7 @@ def test_sync_slack_workspace_token_expired(
     mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "error"
     assert "token_expired" in result["error"]
@@ -412,7 +414,7 @@ def test_sync_slack_workspace_token_expired(
 
 @patch("memory.workers.tasks.slack.SlackClient")
 def test_sync_slack_workspace_unexpected_error(
-    mock_client_class, db_session, slack_workspace, slack_credentials
+    mock_client_class, db_session, slack_workspace, slack_credentials, slack_app
 ):
     """Test workspace sync with unexpected error doesn't re-raise."""
     mock_client = MagicMock()
@@ -420,7 +422,7 @@ def test_sync_slack_workspace_unexpected_error(
     mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     # Should return error status, not re-raise
     assert result["status"] == "error"
@@ -585,18 +587,18 @@ def test_ensure_slack_channel_idempotent(db_session, slack_workspace, slack_chan
     assert count == 1
 
 
-def test_get_workspace_credentials_returns_valid(db_session, slack_workspace, slack_credentials):
+def test_get_workspace_credentials_returns_valid(db_session, slack_workspace, slack_credentials, slack_app):
     """Test that get_workspace_credentials returns valid credentials."""
-    result = slack.get_workspace_credentials(db_session, slack_workspace.id)
+    result = slack.get_workspace_credentials(db_session, slack_workspace.id, slack_app.id)
 
     assert result is not None
     assert result.workspace_id == slack_workspace.id
     assert result.access_token == "xoxp-test-token"
 
 
-def test_get_workspace_credentials_returns_none_when_no_creds(db_session, slack_workspace):
+def test_get_workspace_credentials_returns_none_when_no_creds(db_session, slack_workspace, slack_app):
     """Test that get_workspace_credentials returns None when no credentials."""
-    result = slack.get_workspace_credentials(db_session, slack_workspace.id)
+    result = slack.get_workspace_credentials(db_session, slack_workspace.id, slack_app.id)
 
     assert result is None
 
@@ -777,13 +779,13 @@ def test_is_channel_sync_locked_returns_false_when_not_locked():
     assert slack.is_channel_sync_locked(channel_id) is False
 
 
-def test_sync_slack_channel_skips_when_locked(db_session, slack_channel):
+def test_sync_slack_channel_skips_when_locked(db_session, slack_channel, slack_app):
     """Test that sync_slack_channel skips if channel is already locked."""
     # Pre-acquire the lock
     slack.acquire_channel_sync_lock(slack_channel.id)
 
     # Try to sync - should skip
-    result = slack.sync_slack_channel(slack_channel.id)
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
     assert result["status"] == "skipped"
     assert result["reason"] == "sync_in_progress"
@@ -793,7 +795,7 @@ def test_sync_slack_channel_skips_when_locked(db_session, slack_channel):
 @patch("memory.workers.tasks.slack.iter_messages")
 def test_sync_slack_channel_releases_lock_on_success(
     mock_iter_messages, mock_client_class,
-    db_session, slack_channel, slack_credentials
+    db_session, slack_channel, slack_credentials, slack_app
 ):
     """Test that sync_slack_channel releases lock after successful sync."""
     mock_client = MagicMock()
@@ -804,7 +806,7 @@ def test_sync_slack_channel_releases_lock_on_success(
     # Verify lock is not held before
     assert slack.is_channel_sync_locked(slack_channel.id) is False
 
-    result = slack.sync_slack_channel(slack_channel.id)
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
     assert result["status"] == "completed"
     # Lock should be released after
@@ -815,7 +817,7 @@ def test_sync_slack_channel_releases_lock_on_success(
 @patch("memory.workers.tasks.slack.iter_messages")
 def test_sync_slack_channel_releases_lock_on_error(
     mock_iter_messages, mock_client_class,
-    db_session, slack_channel, slack_credentials
+    db_session, slack_channel, slack_credentials, slack_app
 ):
     """Test that sync_slack_channel releases lock even on error."""
     mock_client = MagicMock()
@@ -823,7 +825,7 @@ def test_sync_slack_channel_releases_lock_on_error(
     mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
     mock_iter_messages.side_effect = slack.SlackAPIError("rate_limited")
 
-    result = slack.sync_slack_channel(slack_channel.id)
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
     assert result["status"] == "error"
     # Lock should still be released
@@ -835,7 +837,7 @@ def test_sync_slack_channel_releases_lock_on_error(
 @patch("memory.workers.tasks.slack.app")
 def test_sync_slack_workspace_skips_locked_channels(
     mock_app, mock_sync_channels, mock_client_class,
-    db_session, slack_workspace, slack_channel, slack_credentials
+    db_session, slack_workspace, slack_channel, slack_credentials, slack_app
 ):
     """Test that sync_slack_workspace skips channels that are already locked."""
     mock_client = MagicMock()
@@ -847,7 +849,7 @@ def test_sync_slack_workspace_skips_locked_channels(
     # Pre-lock the channel
     slack.acquire_channel_sync_lock(slack_channel.id)
 
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "completed"
     # Channel sync task should NOT have been sent (channel was locked)
@@ -859,7 +861,7 @@ def test_sync_slack_workspace_skips_locked_channels(
 @patch("memory.workers.tasks.slack.app")
 def test_sync_slack_workspace_triggers_unlocked_channels(
     mock_app, mock_sync_channels, mock_client_class,
-    db_session, slack_workspace, slack_channel, slack_credentials
+    db_session, slack_workspace, slack_channel, slack_credentials, slack_app
 ):
     """Test that sync_slack_workspace triggers sync for unlocked channels."""
     mock_client = MagicMock()
@@ -870,7 +872,7 @@ def test_sync_slack_workspace_triggers_unlocked_channels(
 
     # Channel is NOT locked
 
-    result = slack.sync_slack_workspace(slack_workspace.id)
+    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "completed"
     assert result["channels_triggered"] == 1
