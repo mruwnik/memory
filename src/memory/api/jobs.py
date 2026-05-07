@@ -32,13 +32,44 @@ def can_access_job(job, current_user: User) -> bool:
     return job.user_id is None or job.user_id == current_user.id
 
 
+def parse_iso_datetime_query(name: str, value: str | None) -> datetime | None:
+    """Parse an ISO-8601 datetime query parameter, returning a 400 on garbage.
+
+    Datetimes without an explicit timezone are interpreted as UTC so that
+    downstream comparisons against tz-aware ``PendingJob.created_at`` are
+    consistent. ``datetime.fromisoformat("yesterday")`` would otherwise
+    raise ``ValueError`` and surface as a 500 to the caller.
+    """
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ISO-8601 datetime for '{name}': {e}",
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 @router.get("/types")
 def get_job_types(
     user: User = Depends(get_current_user),
     db: DBSession = Depends(get_session),
 ) -> list[str]:
-    """Get distinct job types that exist in the database."""
-    rows = db.query(distinct(PendingJob.job_type)).order_by(PendingJob.job_type).all()
+    """Get distinct job types that exist in the database.
+
+    Non-admins only see job types they themselves have run; admins
+    see every type across the table. Without this filter the endpoint
+    leaks "what custom integrations does <other user> have configured"
+    to anyone with a session.
+    """
+    query = db.query(distinct(PendingJob.job_type))
+    if not has_admin_scope(user):
+        query = query.filter(PendingJob.user_id == user.id)
+    rows = query.order_by(PendingJob.job_type).all()
     return [r[0] for r in rows]
 
 
@@ -115,16 +146,8 @@ def list_jobs(
     """
     resolved_user_id = resolve_user_filter(user_id, user, db)
 
-    parsed_after = None
-    parsed_before = None
-    if created_after:
-        parsed_after = datetime.fromisoformat(created_after)
-        if parsed_after.tzinfo is None:
-            parsed_after = parsed_after.replace(tzinfo=timezone.utc)
-    if created_before:
-        parsed_before = datetime.fromisoformat(created_before)
-        if parsed_before.tzinfo is None:
-            parsed_before = parsed_before.replace(tzinfo=timezone.utc)
+    parsed_after = parse_iso_datetime_query("created_after", created_after)
+    parsed_before = parse_iso_datetime_query("created_before", created_before)
 
     jobs = job_utils.list_jobs(
         db,

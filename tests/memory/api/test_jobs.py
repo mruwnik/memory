@@ -593,3 +593,84 @@ def test_non_admin_cannot_filter_by_user_id(non_admin_client: TestClient, job_fo
     # Should not see other user's job even with user_id filter
     job_ids = [j["id"] for j in data]
     assert job_for_other_user.id not in job_ids
+
+
+# ---------- /jobs/types cross-tenant isolation ----------
+
+
+def test_get_job_types_non_admin_excludes_other_users(
+    non_admin_client: TestClient, db_session, user, other_user
+):
+    """Non-admins should only see job types from their own jobs.
+
+    Without the user_id filter, this endpoint leaked the set of job
+    types active across the whole system, which can reveal which
+    integrations other users have configured (custom job types).
+    """
+    db_session.add_all([
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.REPROCESS.value, params={},
+            status=JobStatus.PENDING.value, user_id=other_user.id,
+        ),
+    ])
+    db_session.commit()
+
+    response = non_admin_client.get("/jobs/types")
+
+    assert response.status_code == 200
+    types = response.json()
+    assert "meeting" in types
+    assert "reprocess" not in types
+
+
+def test_get_job_types_admin_sees_all(
+    admin_client: TestClient, db_session, user, other_user
+):
+    """Admin sees every job type across users."""
+    db_session.add_all([
+        PendingJob(
+            job_type=JobType.MEETING.value, params={},
+            status=JobStatus.PENDING.value, user_id=user.id,
+        ),
+        PendingJob(
+            job_type=JobType.REPROCESS.value, params={},
+            status=JobStatus.PENDING.value, user_id=other_user.id,
+        ),
+    ])
+    db_session.commit()
+
+    response = admin_client.get("/jobs/types")
+
+    assert response.status_code == 200
+    types = response.json()
+    assert {"meeting", "reprocess"} <= set(types)
+
+
+# ---------- /jobs created_after/created_before garbage handling ----------
+
+
+@pytest.mark.parametrize("param", ["created_after", "created_before"])
+def test_list_jobs_garbage_datetime_returns_400(client: TestClient, param):
+    """A non-ISO datetime should be a clean 400, not a 500.
+
+    `datetime.fromisoformat("yesterday")` raises ValueError; before this
+    fix the exception escaped the handler and the request 500'd.
+    """
+    response = client.get(f"/jobs?{param}=not-a-date")
+
+    assert response.status_code == 400
+    assert param in response.json()["detail"]
+
+
+def test_list_jobs_valid_datetime_still_works(client: TestClient, job_for_user):
+    """The happy path with an ISO datetime should still return jobs."""
+    # An obviously-old timestamp so the test job qualifies.
+    response = client.get("/jobs?created_after=2000-01-01T00:00:00Z")
+
+    assert response.status_code == 200
+    ids = {j["id"] for j in response.json()}
+    assert job_for_user.id in ids
