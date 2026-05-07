@@ -7,7 +7,6 @@ from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 from bs4 import BeautifulSoup, Tag
 from PIL import Image as PILImage
 
