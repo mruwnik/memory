@@ -616,13 +616,17 @@ def update_repo(
         raise HTTPException(status_code=404, detail="Repo not found")
 
     # Apply only the fields the client actually set. ``exclude_unset``
-    # distinguishes "field omitted" (skip) from "field present and
-    # explicitly None" (set to None) — which the previous wall of
-    # ``is not None`` checks could not. All ten GithubRepoUpdate fields
-    # are direct passthroughs to GithubRepo columns, so a generic
-    # setattr loop is safe; if any field gains bespoke validation in
-    # the future, pull it back out as an explicit branch.
-    for field, value in updates.model_dump(exclude_unset=True).items():
+    # filters out request-omitted fields; ``exclude_none`` additionally
+    # filters out request-explicit-None — preserving the old "explicit
+    # null means skip" semantics from the wall of ``is not None`` checks
+    # this loop replaced. Without ``exclude_none`` a client posting
+    # ``{"tags": null}`` would attempt to write ``NULL`` to a
+    # ``NOT NULL`` column (``tags`` is ``list[str]`` with ``default=[]``)
+    # and surface as an IntegrityError 500 instead of the previous silent
+    # skip — Parvati flagged in PR #77.
+    for field, value in updates.model_dump(
+        exclude_unset=True, exclude_none=True
+    ).items():
         setattr(repo, field, value)
 
     db.commit()
