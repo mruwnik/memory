@@ -9,9 +9,17 @@ from typing import Literal
 
 from fastmcp import FastMCP
 
-from memory.api.MCP.access import get_mcp_current_user
+from memory.api.MCP.access import (
+    get_mcp_current_user,
+    get_project_roles_by_user_id,
+)
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import (
+    build_access_filter,
+    has_admin_scope,
+    user_can_access,
+    user_can_edit,
+)
 from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import SCOPE_ORGANIZER, SCOPE_ORGANIZER_WRITE
 from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
@@ -91,7 +99,21 @@ async def list_tasks(
     limit = min(max(limit, 1), 200)
     offset = min(max(offset, 0), 10000)
 
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        return []
+
     with make_session() as session:
+        # Build the standard access filter — admins see everything (None),
+        # everyone else gets project + creator + person-override + public
+        # bypass conditions threaded through. This is the same filter the
+        # search pipeline uses, so list_tasks stays consistent with what
+        # the user could already discover via search.
+        access_filter = None
+        if not has_admin_scope(user):
+            project_roles = get_project_roles_by_user_id(user.id, session)
+            access_filter = build_access_filter(user, project_roles)
+
         return get_tasks(
             session,
             status=status,
@@ -99,6 +121,7 @@ async def list_tasks(
             include_completed=include_completed,
             limit=limit,
             offset=offset,
+            access_filter=access_filter,
         )
 
 
@@ -117,15 +140,29 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
         Dict with task details (id, task_title, due_date, priority, status,
         recurrence, completed_at, tags), or error dict if not found.
     """
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        return {"error": "Authentication required"}
+
     with make_session() as session:
         task = session.get(Task, task_id)
         if not task:
             return {"error": f"Task {task_id} not found"}
 
+        # Enforce per-task access control — tasks inherit the standard
+        # SourceItem access model (project_id / sensitivity / creator_id /
+        # person override). Without this any user with SCOPE_ORGANIZER
+        # could read any task by ID enumeration.
+        if not has_admin_scope(user):
+            project_roles = get_project_roles_by_user_id(user.id, session)
+            if not user_can_access(user, task, project_roles):
+                # Same error string as "not found" so we don't leak the
+                # existence of the row to a user who can't read it.
+                return {"error": f"Task {task_id} not found"}
+
         result: TaskDict | dict = {"success": True, "task": task_to_dict(task)}
 
         if include_journal:
-            user = get_mcp_current_user()
             user_id = getattr(user, "id", None) if user else None
             # Note: 'task' is not currently a valid target_type in the journal system.
             # This query will return empty until 'task' support is added.
@@ -172,13 +209,28 @@ async def create_task(
     if due_date and parsed_due_date is None:
         raise ValueError(f"Invalid due_date format: {due_date}")
 
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        raise ValueError("Authentication required")
+
     # Hash based on title - same title means same task
     task_sha256 = hashlib.sha256(f"task:{title}".encode()).digest()
 
     with make_session() as session:
-        # Check if task with this title already exists
+        # Check if task with this title already exists. Note: we return the
+        # existing task to the caller regardless of who created it, but ONLY
+        # if the caller can access it — otherwise we re-raise as a sha256
+        # collision is a side channel for task-title enumeration.
         existing = session.query(Task).filter(Task.sha256 == task_sha256).first()
         if existing:
+            if not has_admin_scope(user):
+                project_roles = get_project_roles_by_user_id(user.id, session)
+                if not user_can_access(user, existing, project_roles):
+                    # Don't leak that a colliding title exists in someone
+                    # else's project; behave as if creation failed.
+                    raise ValueError(
+                        "Task with this title already exists or cannot be created"
+                    )
             return task_to_dict(existing)
 
         task = Task(
@@ -189,6 +241,7 @@ async def create_task(
             recurrence=recurrence,
             tags=tags or [],
             sha256=task_sha256,
+            creator_id=user.id,
         )
         session.add(task)
         session.commit()
@@ -220,10 +273,30 @@ async def update_task(
 
     Returns: The updated task, or error if not found.
     """
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        raise ValueError("Authentication required")
+
     with make_session() as session:
         task = session.get(Task, task_id)
         if not task:
             raise ValueError(f"Task {task_id} not found")
+
+        # First gate: can the caller even SEE this task? If not, behave as
+        # if it doesn't exist so we don't leak the row's presence.
+        project_roles: dict[int, str] | None = None
+        if not has_admin_scope(user):
+            project_roles = get_project_roles_by_user_id(user.id, session)
+            if not user_can_access(user, task, project_roles):
+                raise ValueError(f"Task {task_id} not found")
+
+        # Second gate: edit perm = creator or admin (per user_can_edit).
+        # A user who can read the task but didn't create it gets a clear
+        # permission error rather than a misleading "not found".
+        if not user_can_edit(user, task):
+            raise PermissionError(
+                "You can only update tasks you created"
+            )
 
         if title is not None:
             task.task_title = title
