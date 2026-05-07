@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
-from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
+from memory.common.scopes import SCOPE_READ
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -49,11 +49,39 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
     """Create a one-time API key for the user.
 
     Returns the key string (only available at creation time).
-    The key includes OAuth scopes (read, write) plus the user's MCP tool scopes.
+
+    The minted key is bound to the **intersection** of the user's underlying
+    scopes and the scopes the current access token already carries. This
+    preserves the OAuth consent boundary: if Alice authorizes a third-party
+    MCP client only for ``{read, write, claudeai}``, the one-time key cannot
+    be used to act with her admin privileges even though her account holds
+    ``"*"``. The previous implementation unioned the user's full scopes with
+    ``{read, write}`` and so silently escalated past the OAuth grant.
     """
-    # Combine OAuth scopes with user's MCP tool scopes
-    user_scopes = list(user_session.user.scopes or [])
-    scopes = list(set(user_scopes) | {SCOPE_READ, SCOPE_WRITE})
+    user_scopes = set(user_session.user.scopes or [])
+
+    # Cap the issued key by the access token's own grant. Direct API-key
+    # callers see their full key scopes here, so this is a no-op for those;
+    # OAuth callers see only the consented subset.
+    access_token = get_access_token()
+    granted_scopes = set(access_token.scopes or []) if access_token else set()
+
+    if "*" in granted_scopes:
+        # Token carries admin authority (e.g. direct admin API-key call,
+        # not an OAuth flow). Issue the user's literal scope set; no
+        # escalation needed, no de-escalation either.
+        effective = user_scopes
+    elif "*" in user_scopes:
+        # User is admin but the access token isn't (typical OAuth case).
+        # Cap the issued key strictly by the OAuth grant — admin authority
+        # MUST NOT slip past the consent boundary.
+        effective = granted_scopes
+    else:
+        # Neither side is admin: the key can carry only scopes the user
+        # actually holds AND that were granted by the access token.
+        effective = user_scopes & granted_scopes
+
+    scopes = sorted(effective | {SCOPE_READ})
 
     one_time_key = APIKey.create(
         user_id=user_session.user.id,
