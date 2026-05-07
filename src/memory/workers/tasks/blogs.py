@@ -88,6 +88,8 @@ def sync_article_feed(feed_id: int) -> dict:
     Returns:
         dict: Summary of sync operation including stats
     """
+    from memory.common.ssrf import UnsafeURLError, validate_public_url
+
     with make_session() as session:
         feed = session.query(ArticleFeed).filter(ArticleFeed.id == feed_id).first()
         if not feed or not cast(bool, feed.active):
@@ -100,6 +102,16 @@ def sync_article_feed(feed_id: int) -> dict:
         ):
             logger.info(f"Feed {feed_id} checked too recently, skipping")
             return {"status": "skipped_recent_check", "feed_id": feed_id}
+
+        # Defense in depth: re-validate at fetch time. Even if the URL
+        # passed the gate at create_feed/sync time, DNS could have been
+        # rebound to a private range, or a row could have been written
+        # before the gate existed.
+        try:
+            validate_public_url(cast(str, feed.url))
+        except UnsafeURLError as exc:
+            logger.warning(f"Feed {feed_id} URL rejected by SSRF gate: {exc}")
+            return {"status": "error", "error": f"URL not allowed: {exc}"}
 
         logger.info(f"Syncing feed: {feed.title} ({feed.url})")
 

@@ -9,9 +9,25 @@ from sqlalchemy.orm import Session
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import ArticleFeed
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/article-feeds", tags=["article-feeds"])
+
+
+def reject_unsafe_url(url: str) -> None:
+    """Map ``UnsafeURLError`` to HTTP 400 for the public API.
+
+    Centralised so the message stays consistent across endpoints —
+    creating, syncing, and discovery all share the same SSRF gate.
+    """
+    try:
+        validate_public_url(url)
+    except UnsafeURLError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"URL is not allowed: {exc}",
+        ) from exc
 
 
 class ArticleFeedCreate(BaseModel):
@@ -86,6 +102,7 @@ def create_feed(
 ) -> ArticleFeedResponse:
     """Create a new article feed."""
     url_str = str(data.url)
+    reject_unsafe_url(url_str)
 
     # Check for duplicate URL
     existing = db.query(ArticleFeed).filter(ArticleFeed.url == url_str).first()
@@ -179,6 +196,11 @@ def trigger_sync(
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
+    # Re-validate at sync time too: a feed URL stored before this gate
+    # existed, or one whose hostname has since been rebound to a private
+    # range, must not be fetched from the worker network position.
+    reject_unsafe_url(cast(str, feed.url))
+
     task = app.send_task(
         SYNC_ARTICLE_FEED,
         args=[feed_id],
@@ -196,6 +218,7 @@ def discover_feed(
     from memory.parsers.feeds import get_feed_parser
 
     url_str = str(url)
+    reject_unsafe_url(url_str)
     parser = get_feed_parser(url_str)
 
     if not parser:

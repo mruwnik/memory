@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 from memory.common.db.models.sources import ArticleFeed
+from memory.common.ssrf import UnsafeURLError
 
 
 # ====== GET /article-feeds tests ======
@@ -441,3 +442,64 @@ def test_feed_to_response_with_minimal_fields(db_session):
     assert response.description is None
     assert response.tags == []
     assert response.last_checked_at is None
+
+
+# ====== SSRF gate tests ======
+
+
+@patch("memory.api.article_feeds.validate_public_url")
+def test_create_feed_rejects_ssrf_url(mock_validate, client, db_session, user):
+    """create_feed must call the SSRF gate; URLs targeting private IPs
+    are 400, not 200."""
+    mock_validate.side_effect = UnsafeURLError("targets non-public IP")
+
+    response = client.post(
+        "/article-feeds",
+        json={"url": "http://169.254.169.254/latest/meta-data/"},
+    )
+
+    assert response.status_code == 400
+    assert "not allowed" in response.json()["detail"].lower()
+    # Row must NOT have been written.
+    assert db_session.query(ArticleFeed).count() == 0
+
+
+@patch("memory.parsers.feeds.get_feed_parser")
+@patch("memory.api.article_feeds.validate_public_url")
+def test_discover_feed_rejects_ssrf_url(
+    mock_validate, mock_get_parser, client, db_session, user
+):
+    """discover_feed must call the SSRF gate before fetching."""
+    mock_validate.side_effect = UnsafeURLError("targets non-public IP")
+
+    response = client.post(
+        "/article-feeds/discover",
+        json="http://10.0.0.5/admin",
+    )
+
+    assert response.status_code == 400
+    # Parser must NOT have been called — the SSRF gate fired first.
+    mock_get_parser.assert_not_called()
+
+
+@patch("memory.common.celery_app.app")
+@patch("memory.api.article_feeds.validate_public_url")
+def test_trigger_sync_rejects_ssrf_url(
+    mock_validate, mock_app, client, db_session, user
+):
+    """trigger_sync re-validates the persisted URL — defends against
+    a row whose hostname has been DNS-rebound to a private range."""
+    feed = ArticleFeed(
+        url="http://internal.example.com/feed.xml",
+        title="Compromised feed",
+    )
+    db_session.add(feed)
+    db_session.commit()
+
+    mock_validate.side_effect = UnsafeURLError("hostname resolves to private IP")
+
+    response = client.post(f"/article-feeds/{feed.id}/sync")
+
+    assert response.status_code == 400
+    # Celery task must NOT have been dispatched.
+    mock_app.send_task.assert_not_called()
