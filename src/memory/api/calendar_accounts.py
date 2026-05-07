@@ -6,6 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from memory.api.access_control_propagation import (
+    access_fields_changed,
+    bump_and_enqueue_propagation,
+)
 from memory.api.auth import (
     assert_project_membership,
     get_current_user,
@@ -13,6 +17,7 @@ from memory.api.auth import (
     resolve_user_filter,
 )
 from memory.common.access_control import has_admin_scope
+from memory.common.celery_app import SYNC_CALENDAR_ACCOUNT, app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -236,13 +241,19 @@ def update_account(
         account.sync_future_days = updates.sync_future_days
     if updates.active is not None:
         account.active = updates.active
+    needs_propagation = access_fields_changed(
+        account, updates.project_id, updates.sensitivity
+    )
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
 
-    db.commit()
+    if needs_propagation:
+        bump_and_enqueue_propagation(db, account, "calendar_account")
+    else:
+        db.commit()
     db.refresh(account)
 
     return account_to_response(account)
@@ -271,11 +282,9 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a calendar account."""
-    from memory.common.celery_app import app, SYNC_CALENDAR_ACCOUNT
-
     get_user_account(db, CalendarAccount, account_id, user)  # Verify ownership
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_CALENDAR_ACCOUNT,
         args=[account_id],
         kwargs={"force_full": force_full},

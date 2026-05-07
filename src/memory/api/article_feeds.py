@@ -7,10 +7,12 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
 from memory.common.access_control import has_admin_scope
+from memory.common.celery_app import SYNC_ARTICLE_FEED, app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import ArticleFeed
 from memory.common.ssrf import UnsafeURLError, validate_public_url
+from memory.parsers.feeds import get_feed_parser
 from memory.api.auth import get_current_user
 
 router = APIRouter(prefix="/article-feeds", tags=["article-feeds"])
@@ -207,8 +209,6 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an article feed (owner or admin only)."""
-    from memory.common.celery_app import app, SYNC_ARTICLE_FEED
-
     feed = get_owned_feed(db, user, feed_id)
 
     # Re-validate at sync time too: a feed URL stored before this gate
@@ -216,7 +216,7 @@ def trigger_sync(
     # range, must not be fetched from the worker network position.
     reject_unsafe_url(cast(str, feed.url))
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_ARTICLE_FEED,
         args=[feed_id],
     )
@@ -230,8 +230,6 @@ def discover_feed(
     user: User = Depends(get_current_user),
 ) -> FeedDiscoveryResponse:
     """Auto-discover feed metadata from a URL."""
-    from memory.parsers.feeds import get_feed_parser
-
     url_str = str(url)
     reject_unsafe_url(url_str)
     parser = get_feed_parser(url_str)

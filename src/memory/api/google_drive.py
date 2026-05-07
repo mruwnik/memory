@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from memory.common import settings
+from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import (
@@ -21,6 +22,10 @@ from memory.common.db.models.sources import (
     GoogleOAuthConfig,
 )
 from memory.common.scopes import SCOPE_ADMIN
+from memory.api.access_control_propagation import (
+    access_fields_changed,
+    bump_and_enqueue_propagation,
+)
 from memory.api.auth import (
     assert_project_membership,
     get_current_user,
@@ -722,13 +727,20 @@ def update_folder(
         folder.active = updates.active
     if updates.exclude_folder_ids is not None:
         folder.exclude_folder_ids = updates.exclude_folder_ids
+
+    needs_propagation = access_fields_changed(
+        folder, updates.project_id, updates.sensitivity
+    )
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
         folder.project_id = updates.project_id
     if updates.sensitivity is not None:
         folder.sensitivity = updates.sensitivity
 
-    db.commit()
+    if needs_propagation:
+        bump_and_enqueue_propagation(db, folder, "google_folder")
+    else:
+        db.commit()
     db.refresh(folder)
 
     return FolderResponse(
@@ -784,8 +796,6 @@ def trigger_sync(
     db: DBSession = Depends(get_session),
 ):
     """Manually trigger a sync for a folder."""
-    from memory.common.celery_app import app, SYNC_GOOGLE_FOLDER
-
     get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
     folder = (
         db.query(GoogleFolder)
@@ -799,7 +809,7 @@ def trigger_sync(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_GOOGLE_FOLDER,
         args=[folder.id],
         kwargs={"force_full": force_full},
