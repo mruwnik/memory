@@ -141,12 +141,15 @@ def create_refresh_token_record(
 
 
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
-    """Validate a refresh token, raising ValueError if invalid."""
-    now = datetime.now(timezone.utc)
-    expires_at = db_refresh_token.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < now:
+    """Validate a refresh token, raising ValueError if invalid.
+
+    Reuses memory.api.auth.is_expired so a tz-aware non-UTC expires_at
+    (which can happen with some Postgres drivers / pool configs) is
+    properly converted instead of silently relabeled.
+    """
+    from memory.api.auth import is_expired
+
+    if is_expired(db_refresh_token.expires_at):
         logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
         db_refresh_token.revoked = True  # type: ignore
         raise ValueError("Refresh token expired")

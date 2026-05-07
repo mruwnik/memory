@@ -131,6 +131,29 @@ def create_user_session(
     return str(session.id)
 
 
+def is_expired(expires_at: datetime | None) -> bool:
+    """Return True if ``expires_at`` is in the past (UTC-correct).
+
+    PostgreSQL stores session expiry as naive UTC; some drivers / pool
+    configs return tz-aware datetimes. ``.replace(tzinfo=UTC)`` only
+    works for the naive case — for an already-aware datetime in a
+    non-UTC zone it relabels rather than converting and silently shifts
+    the wall clock. This helper handles both:
+
+    - naive → assume UTC (matches how the column is written)
+    - aware → astimezone(UTC) so the comparison is wall-clock-correct
+
+    A NULL expires_at is treated as expired (fail-closed).
+    """
+    if expires_at is None:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
 def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     """Get session ID from request"""
     session_id = get_token(request)
@@ -142,17 +165,7 @@ def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     if not session:
         return None
 
-    now = datetime.now(timezone.utc)
-    # Normalize expires_at to UTC for comparison
-    expires_at = session.expires_at
-    if expires_at.tzinfo is None:
-        # Assume naive datetimes are UTC (PostgreSQL stores as UTC)
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    else:
-        # Convert to UTC if it has a different timezone
-        expires_at = expires_at.astimezone(timezone.utc)
-
-    if expires_at < now:
+    if is_expired(session.expires_at):
         return None
     return session
 
@@ -360,8 +373,7 @@ def get_user_from_token(
     if not session:
         return None
 
-    now = datetime.now(timezone.utc)
-    if session.expires_at.replace(tzinfo=timezone.utc) < now:
+    if is_expired(session.expires_at):
         return None
     return session.user
 

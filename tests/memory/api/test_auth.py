@@ -643,3 +643,84 @@ def test_handle_api_key_use_one_time_loser_returns_false():
     won = auth.handle_api_key_use(record, db)
 
     assert won is False
+
+
+# ====== is_expired (tz-aware UTC handling) ======
+
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def test_is_expired_naive_assumed_utc_in_past():
+    # Strip tzinfo to mimic how Postgres returns naive UTC datetimes.
+    past_naive = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    assert auth.is_expired(past_naive) is True
+
+
+def test_is_expired_naive_assumed_utc_in_future():
+    future_naive = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None)
+    assert auth.is_expired(future_naive) is False
+
+
+def test_is_expired_aware_utc_in_past():
+    past_utc = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert auth.is_expired(past_utc) is True
+
+
+def test_is_expired_aware_utc_in_future():
+    future_utc = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert auth.is_expired(future_utc) is False
+
+
+def test_is_expired_aware_non_utc_converts_correctly():
+    """A datetime tagged with a non-UTC zone must be converted, not relabeled.
+
+    Repro for the get_user_from_token bug: a token expiring at
+    2025-01-01T01:00:00+02:00 represents 2024-12-31T23:00:00 UTC. The old
+    `.replace(tzinfo=UTC)` form would treat it as 2025-01-01T01:00:00 UTC,
+    granting two extra hours of validity.
+    """
+    plus_two = timezone(timedelta(hours=2))
+    # 1 hour from "now" UTC, expressed in +02:00. astimezone-correct path
+    # treats this as ~1h in the future; relabel-incorrect path would treat
+    # it as ~3h in the future (still future) — we use a tighter check.
+    far_future_in_plus2 = (datetime.now(timezone.utc) + timedelta(hours=1)).astimezone(plus_two)
+    assert auth.is_expired(far_future_in_plus2) is False
+
+    # Now a value that's in the past in UTC but would *look* future if you
+    # only relabeled. 1 hour ago UTC, expressed in -05:00:
+    minus_five = timezone(timedelta(hours=-5))
+    one_hour_ago_in_minus5 = (datetime.now(timezone.utc) - timedelta(hours=1)).astimezone(minus_five)
+    # If we only relabeled the tzinfo (the bug), we'd take the wall-clock
+    # time of the -05:00 representation and compare it to UTC `now` — that
+    # comparison is wrong. The fixed code converts and gets True (expired).
+    assert auth.is_expired(one_hour_ago_in_minus5) is True
+
+
+def test_is_expired_none_treated_as_expired():
+    """Defense-in-depth: a NULL expires_at is expired (fail-closed)."""
+    assert auth.is_expired(None) is True
+
+
+def test_get_user_from_token_uses_is_expired():
+    """Smoke test: get_user_from_token reads session.user only when fresh."""
+    db = MagicMock()
+    session = MagicMock()
+    session.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    session.user = MagicMock()
+    db.get.return_value = session
+
+    result = auth.get_user_from_token("session-uuid", db)
+    assert result is None  # Expired → no user
+
+
+def test_get_user_from_token_returns_user_when_session_fresh():
+    db = MagicMock()
+    session = MagicMock()
+    session.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    user = MagicMock()
+    session.user = user
+    db.get.return_value = session
+
+    result = auth.get_user_from_token("session-uuid", db)
+    assert result is user
