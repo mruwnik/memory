@@ -424,7 +424,6 @@ def _fetch_chunks_by_title(
 
 async def _run_searches(
     search_data: list[extract.DataChunk],
-    data: list[extract.DataChunk],
     modalities: set[str],
     internal_limit: int,
     filters: SearchFilters,
@@ -632,7 +631,7 @@ async def search_chunks(
 
     # Run searches and fuse scores
     fused_scores = await _run_searches(
-        search_data, data, modalities, internal_limit, filters, timeout, use_bm25,
+        search_data, modalities, internal_limit, filters, timeout, use_bm25,
         recalled_titles=recalled_content,
     )
 
