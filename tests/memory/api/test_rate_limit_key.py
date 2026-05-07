@@ -125,6 +125,24 @@ def test_rate_limit_key_handles_missing_client(make_request):
     assert key == "unknown"
 
 
+def test_dockerfile_forwarded_allow_ips_default_is_loopback():
+    """Pin the Dockerfile default. The rate-limit tests above bypass
+    Uvicorn entirely (constructing Request objects directly), so they
+    cannot detect a regression where the Dockerfile flips back to ``*``
+    and Uvicorn rewrites ``scope["client"]`` from XFF before
+    ``rate_limit_key`` ever runs. This test catches that flip.
+    """
+    from pathlib import Path
+
+    dockerfile = Path(__file__).resolve().parents[3] / "docker/api/Dockerfile"
+    text = dockerfile.read_text()
+    assert 'ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1"' in text, (
+        "Dockerfile default for FORWARDED_ALLOW_IPS must stay restricted "
+        "to loopback so Uvicorn does not rewrite scope[client] from XFF "
+        "for arbitrary peers — that rewrite happens before rate_limit_key."
+    )
+
+
 def test_rate_limit_key_attacker_xff_rotation_is_no_op(make_request):
     """Concrete regression: an attacker rotating ``X-Forwarded-For`` per
     request cannot mint fresh buckets unless they're connecting from a
