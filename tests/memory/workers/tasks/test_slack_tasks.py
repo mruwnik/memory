@@ -729,47 +729,75 @@ def test_merge_slack_message_state_preserves_files_when_incoming_none():
 # =============================================================================
 
 
-def test_acquire_channel_sync_lock_success():
-    """Test acquiring a lock when none exists."""
+def test_channel_sync_lock_acquires_when_unheld():
+    """Acquiring a lock when none exists yields a Lock instance."""
     channel_id = "C_TEST_LOCK_1"
 
-    result = slack.acquire_channel_sync_lock(channel_id)
+    with slack.channel_sync_lock(channel_id) as lock:
+        assert lock is not None
+        assert slack.is_channel_sync_locked(channel_id) is True
 
-    assert result is True
-    assert slack.is_channel_sync_locked(channel_id) is True
 
-
-def test_acquire_channel_sync_lock_already_locked():
-    """Test acquiring a lock when one already exists."""
+def test_channel_sync_lock_returns_none_when_already_held():
+    """Acquiring a lock when one already exists yields None."""
     channel_id = "C_TEST_LOCK_2"
 
-    # First acquire should succeed
-    assert slack.acquire_channel_sync_lock(channel_id) is True
+    with slack.channel_sync_lock(channel_id) as outer:
+        assert outer is not None
+        with slack.channel_sync_lock(channel_id) as inner:
+            assert inner is None
 
-    # Second acquire should fail
-    assert slack.acquire_channel_sync_lock(channel_id) is False
 
-
-def test_release_channel_sync_lock():
-    """Test releasing a lock."""
+def test_channel_sync_lock_releases_on_exit():
+    """Lock is released on context-manager exit."""
     channel_id = "C_TEST_LOCK_3"
 
-    # Acquire then release
-    slack.acquire_channel_sync_lock(channel_id)
-    assert slack.is_channel_sync_locked(channel_id) is True
+    with slack.channel_sync_lock(channel_id) as lock:
+        assert lock is not None
+        assert slack.is_channel_sync_locked(channel_id) is True
 
-    slack.release_channel_sync_lock(channel_id)
     assert slack.is_channel_sync_locked(channel_id) is False
 
 
-def test_release_channel_sync_lock_allows_reacquire():
-    """Test that releasing a lock allows re-acquisition."""
+def test_channel_sync_lock_allows_reacquire_after_release():
+    """Reacquisition works after a clean release."""
     channel_id = "C_TEST_LOCK_4"
 
-    # Acquire, release, acquire again
-    assert slack.acquire_channel_sync_lock(channel_id) is True
-    slack.release_channel_sync_lock(channel_id)
-    assert slack.acquire_channel_sync_lock(channel_id) is True
+    with slack.channel_sync_lock(channel_id) as lock:
+        assert lock is not None
+    with slack.channel_sync_lock(channel_id) as lock:
+        assert lock is not None
+
+
+def test_channel_sync_lock_release_is_ownership_checked():
+    """Regression: the previous slack lock release used plain
+    ``client.delete()`` with no token check. A slow worker whose lock
+    had already expired and been reacquired by another worker would
+    clobber the new owner. The shared distributed_lock helper uses an
+    atomic Lua script to delete only when the value still equals our
+    token. We simulate the reacquisition by stuffing a foreign token
+    into the lock key while the outer context is still 'held' from
+    Python's perspective."""
+    import redis as redis_module
+    from memory.common import settings
+
+    channel_id = "C_TEST_LOCK_OWNERSHIP"
+    client = redis_module.from_url(settings.REDIS_URL)
+    key = slack.channel_sync_lock_key(channel_id)
+
+    with slack.channel_sync_lock(channel_id) as lock:
+        assert lock is not None
+        # Simulate a different worker reacquiring after our TTL expired.
+        client.set(key, "different-worker-token")
+
+    # Foreign token must still be in place — our context-exit must not
+    # have deleted it. (Real Redis returns bytes; the test fixture's
+    # MockRedis returns str.)
+    actual = client.get(key)
+    if isinstance(actual, bytes):
+        actual = actual.decode()
+    assert actual == "different-worker-token"
+    client.delete(key)  # cleanup
 
 
 def test_is_channel_sync_locked_returns_false_when_not_locked():
@@ -781,11 +809,11 @@ def test_is_channel_sync_locked_returns_false_when_not_locked():
 
 def test_sync_slack_channel_skips_when_locked(db_session, slack_channel, slack_app):
     """Test that sync_slack_channel skips if channel is already locked."""
-    # Pre-acquire the lock
-    slack.acquire_channel_sync_lock(slack_channel.id)
-
-    # Try to sync - should skip
-    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+    # Pre-acquire the lock via the new context manager. Holding it for
+    # the duration of the sync_slack_channel call simulates another
+    # worker being mid-sync.
+    with slack.channel_sync_lock(slack_channel.id):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
     assert result["status"] == "skipped"
     assert result["reason"] == "sync_in_progress"
@@ -846,10 +874,10 @@ def test_sync_slack_workspace_skips_locked_channels(
     mock_client_class.return_value.__exit__ = MagicMock(return_value=False)
     mock_sync_channels.return_value = 1
 
-    # Pre-lock the channel
-    slack.acquire_channel_sync_lock(slack_channel.id)
-
-    result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
+    # Pre-lock the channel by entering the context manager and holding
+    # it for the duration of sync_slack_workspace's iteration.
+    with slack.channel_sync_lock(slack_channel.id):
+        result = slack.sync_slack_workspace(slack_workspace.id, slack_app.id)
 
     assert result["status"] == "completed"
     # Channel sync task should NOT have been sent (channel was locked)

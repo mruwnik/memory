@@ -11,6 +11,7 @@ Note: User data is not stored in a separate SlackUser table. Instead:
 - For linking users to People, store Slack IDs in Person.contact_info["slack"]
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -24,6 +25,7 @@ import redis
 from sqlalchemy.exc import IntegrityError
 
 from memory.common import settings
+from memory.common.redis_lock import distributed_lock
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
@@ -76,33 +78,38 @@ SLACK_FILE_MAX_BYTES = int(os.getenv("SLACK_FILE_MAX_BYTES", 100 * 1024 * 1024))
 
 
 def get_redis_client() -> redis.Redis:
-    """Get Redis client for locking."""
+    """Get Redis client for locking and short-lived caches in this module."""
     return redis.from_url(settings.REDIS_URL)
 
 
-def acquire_channel_sync_lock(channel_id: str) -> bool:
-    """Try to acquire a lock for syncing a channel.
+def channel_sync_lock_key(channel_id: str) -> str:
+    return f"slack_channel_sync:{channel_id}"
 
-    Returns True if lock acquired, False if another sync is in progress.
+
+@contextlib.contextmanager
+def channel_sync_lock(channel_id: str):
+    """Distributed lock for syncing a single Slack channel.
+
+    Yields a Lock if acquired, or None if another sync is in progress.
+    Atomic ownership-checked release is handled by the underlying
+    ``distributed_lock`` helper — the previous bespoke
+    ``release_channel_sync_lock`` deleted the key without checking
+    the owner token, so a slow worker whose lock had already
+    expired could clobber another worker's freshly-acquired lock.
     """
-    client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    # SET NX (only if not exists) with TTL
-    return bool(client.set(lock_key, "1", nx=True, ex=CHANNEL_SYNC_LOCK_TTL_SECONDS))
-
-
-def release_channel_sync_lock(channel_id: str) -> None:
-    """Release the channel sync lock."""
-    client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    client.delete(lock_key)
+    with distributed_lock(
+        channel_sync_lock_key(channel_id), CHANNEL_SYNC_LOCK_TTL_SECONDS
+    ) as lock:
+        yield lock
 
 
 def is_channel_sync_locked(channel_id: str) -> bool:
-    """Check if a channel sync is already in progress."""
+    """Check if a channel sync is already in progress (probe only).
+
+    Used to skip enqueueing redundant work; does NOT claim ownership.
+    """
     client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    return client.exists(lock_key) > 0  # type: ignore[operator]
+    return client.exists(channel_sync_lock_key(channel_id)) > 0  # type: ignore[operator]
 
 
 def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
@@ -489,17 +496,18 @@ def sync_slack_channel(
     ``slack_app_id`` scopes credential lookup and propagates to all
     enqueued downstream tasks.
     """
-    # Try to acquire lock - skip if another sync is already running
-    if not acquire_channel_sync_lock(channel_id):
-        logger.info(f"Skipping channel {channel_id} - sync already in progress")
-        return {"status": "skipped", "reason": "sync_in_progress"}
+    # Try to acquire lock - skip if another sync is already running.
+    # Release happens automatically on context-manager exit, with an
+    # ownership-checked Lua script (no plain `client.delete()` race).
+    with channel_sync_lock(channel_id) as lock:
+        if lock is None:
+            logger.info(
+                f"Skipping channel {channel_id} - sync already in progress"
+            )
+            return {"status": "skipped", "reason": "sync_in_progress"}
 
-    logger.info(f"Syncing Slack channel {channel_id}")
-
-    try:
+        logger.info(f"Syncing Slack channel {channel_id}")
         return _sync_slack_channel_impl(channel_id, slack_app_id)
-    finally:
-        release_channel_sync_lock(channel_id)
 
 
 def _sync_slack_channel_impl(

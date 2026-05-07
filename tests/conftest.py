@@ -97,6 +97,35 @@ class MockRedis:
         """Return count of keys that exist."""
         return sum(1 for key in keys if key in self._data)
 
+    def eval(self, script: str, numkeys: int, *args):
+        """Mock implementation of EVAL for the two Lua scripts used by
+        memory.common.redis_lock: an ownership-checked DEL and an
+        ownership-checked EXPIRE. Recognises the scripts by their
+        ``redis.call("del", ...)`` vs ``redis.call("expire", ...)``
+        signature so tests don't have to care about exact whitespace.
+
+        Returns 1 on success, 0 if the ownership check fails — matching
+        the real redis-py contract.
+        """
+        keys = list(args[:numkeys])
+        argv = list(args[numkeys:])
+        if not keys:
+            return 0
+        key = keys[0]
+        token = argv[0] if argv else None
+        existing = self._data.get(key)
+        if isinstance(existing, bytes) and isinstance(token, str):
+            existing = existing.decode()
+        if existing != token:
+            return 0
+        if 'redis.call("del"' in script or "redis.call('del'" in script:
+            del self._data[key]
+            return 1
+        if 'redis.call("expire"' in script or "redis.call('expire'" in script:
+            # TTL is ignored by this mock; just confirm we still own it.
+            return 1
+        return 0
+
     def scan_iter(self, match: str):
         import fnmatch
 

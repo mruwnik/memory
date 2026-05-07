@@ -41,6 +41,34 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE_SIZE = 50 * 1024 * 1024
 
 
+def safe_process_discord_message(
+    message: DiscordMessage,
+    session,
+    *,
+    message_id: int,
+    operation: str,
+) -> dict[str, Any]:
+    """Wrap ``process_content_item`` so callers don't repeat the IntegrityError path.
+
+    ``add_discord_message`` and ``edit_discord_message`` had three near-
+    identical try/except blocks that all logged + returned the same
+    error dict. Centralising it here keeps the error wording in lock-
+    step and makes it easy to add common-shape recovery (e.g. retry
+    with a backoff) in one place.
+    """
+    try:
+        return process_content_item(message, session)
+    except sqlalchemy_exc.IntegrityError as e:
+        logger.error(
+            "Integrity error %s Discord message %s: %s", operation, message_id, e
+        )
+        return {
+            "status": "error",
+            "error": "Integrity error",
+            "message_id": message_id,
+        }
+
+
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
     """Download images from URLs and save to disk. Returns relative file paths.
 
@@ -136,16 +164,12 @@ def add_discord_message(
             if reactions is not None:
                 existing_msg.reactions = reactions  # type: ignore
 
-            try:
-                result = process_content_item(existing_msg, session)
-            except sqlalchemy_exc.IntegrityError as e:
-                logger.error(f"Integrity error editing Discord message {message_id}: {e}")
-                return {
-                    "status": "error",
-                    "error": "Integrity error",
-                    "message_id": message_id,
-                }
-            return result
+            return safe_process_discord_message(
+                existing_msg,
+                session,
+                message_id=message_id,
+                operation="editing",
+            )
 
         # Create new message
         discord_message = DiscordMessage(
@@ -184,17 +208,12 @@ def add_discord_message(
             if discord_user.person not in discord_message.people:
                 discord_message.people.append(discord_user.person)
 
-        try:
-            result = process_content_item(discord_message, session)
-        except sqlalchemy_exc.IntegrityError as e:
-            logger.error(f"Integrity error adding Discord message {message_id}: {e}")
-            return {
-                "status": "error",
-                "error": "Integrity error",
-                "message_id": message_id,
-            }
-
-        return result
+        return safe_process_discord_message(
+            discord_message,
+            session,
+            message_id=message_id,
+            operation="adding",
+        )
 
 
 @app.task(name=EDIT_DISCORD_MESSAGE)
@@ -228,17 +247,12 @@ def edit_discord_message(
             edited_at.replace("Z", "+00:00")
         )
 
-        try:
-            result = process_content_item(existing_msg, session)
-        except sqlalchemy_exc.IntegrityError as e:
-            logger.error(f"Integrity error editing Discord message {message_id}: {e}")
-            return {
-                "status": "error",
-                "error": "Integrity error",
-                "message_id": message_id,
-            }
-
-        return result
+        return safe_process_discord_message(
+            existing_msg,
+            session,
+            message_id=message_id,
+            operation="editing",
+        )
 
 
 @app.task(name=UPDATE_REACTIONS)
