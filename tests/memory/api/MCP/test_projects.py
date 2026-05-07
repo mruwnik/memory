@@ -543,6 +543,103 @@ async def test_project_update_prevents_circular_parent(db_session, user_session,
     assert "circular" in result["error"].lower()
 
 
+def test_circular_parent_walk_terminates_on_orphan_cycle():
+    """Pure-unit regression: simulate an existing A→B→C→A cycle (none of
+    which is the project being updated) and verify the walk inside
+    update_project terminates with an error instead of looping.
+
+    We bypass the surrounding upsert by constructing the smallest fake
+    state the loop reads: a chain of objects with `.parent_id`, and a
+    `session.get(Project, id)` that returns them.
+    """
+    from unittest.mock import MagicMock
+
+    # Build the cycle: A(id=-50, parent=-52), B(id=-51, parent=-50), C(id=-52, parent=-51)
+    a = MagicMock(id=-50, parent_id=-52)
+    b = MagicMock(id=-51, parent_id=-50)
+    c = MagicMock(id=-52, parent_id=-51)
+    by_id = {-50: a, -51: b, -52: c}
+
+    fake_session = MagicMock()
+    fake_session.get.side_effect = lambda model, pk: by_id.get(pk)
+
+    # Simulate the loop logic from update_project. project_id is the row
+    # being updated (-1, NOT in the cycle). parent is c (which is in the
+    # cycle). The pre-fix loop would walk c→b→a→c→b→... forever; the
+    # post-fix loop terminates on the visited-set hit.
+    project_id = -1
+    parent = c
+
+    # Inline copy of the new logic (kept tiny so the test pins the
+    # algorithm independently of any source-tree changes).
+    MAX_PARENT_DEPTH = 100
+    visited: set[int] = {project_id}
+    current = parent
+    depth = 0
+    error = None
+    while current.parent_id is not None:
+        if current.parent_id in visited:
+            error = "Circular parent reference detected"
+            break
+        visited.add(current.parent_id)
+        depth += 1
+        if depth >= MAX_PARENT_DEPTH:
+            error = "too deep"
+            break
+        current = fake_session.get("Project", current.parent_id)
+        if not current:
+            break
+
+    assert error == "Circular parent reference detected"
+    # And it terminated within the cycle length (3 hops), nowhere near
+    # MAX_PARENT_DEPTH.
+    assert depth < 5
+
+
+@pytest.mark.asyncio
+async def test_project_update_detects_orphan_cycle_in_existing_data(
+    db_session, admin_session, teams_and_projects
+):
+    """Regression: a cycle in the parent chain that doesn't include the
+    project being updated must be detected, not infinite-looped.
+
+    Pre-fix: the walk only exited when the chain hit `project_id` or the
+    root. A cycle A→B→C→A in the existing data would loop forever for
+    *any* upsert pointing into it. Now we track every ancestor visited
+    and bail on a repeat.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+    from memory.common.db.models import Project
+
+    # Create a cycle in raw rows: A→B→C→A (none of these is project -1).
+    project_a = Project(id=-50, title="Cycle A", state="open")
+    project_b = Project(id=-51, title="Cycle B", state="open", parent_id=-50)
+    project_c = Project(id=-52, title="Cycle C", state="open", parent_id=-51)
+    db_session.add_all([project_a, project_b, project_c])
+    db_session.flush()
+    # Close the cycle by pointing A at C.
+    project_a.parent_id = -52
+    db_session.commit()
+
+    # Project -1 has no parent yet. Try to attach it to C (which is in the
+    # cycle). Pre-fix this hung forever; now it must surface a clean error.
+    mock_token = make_mock_access_token(admin_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            title="Project One", project_id=-1, parent_id=-52
+        )
+
+    assert "error" in result
+    err = result["error"].lower()
+    # Either the cycle-detection or depth-cap message is acceptable; both
+    # are non-hang outcomes which is the regression we care about.
+    assert "circular" in err or "too deep" in err
+
+
 # =============================================================================
 # project_delete tests
 # =============================================================================

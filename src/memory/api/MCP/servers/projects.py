@@ -953,11 +953,37 @@ async def update_project(
         if not parent:
             return {"error": f"Parent project not found: {parent_id}", "project": None}
 
-        # Check for circular reference
+        # Check for circular reference. The previous loop only exited when
+        # the parent chain hit ``project_id`` (the would-be cycle through
+        # the row being updated) or reached the root. If the existing data
+        # already contained a cycle not involving ``project_id`` (e.g.
+        # A→B→C→A introduced by raw SQL, a buggy migration, or a race
+        # between two concurrent upserts), the walk would loop forever and
+        # hang an event-loop slot — repeatable into an API DoS.
+        #
+        # Track every ancestor we've seen and bail on either a repeat or a
+        # depth cap. MAX_PARENT_DEPTH is generous: real hierarchies in this
+        # app are <10 deep.
+        MAX_PARENT_DEPTH = 100
+        visited: set[int] = {project_id}
         current = parent
+        depth = 0
         while current.parent_id is not None:
-            if current.parent_id == project_id:
-                return {"error": "Circular parent reference detected", "project": None}
+            if current.parent_id in visited:
+                return {
+                    "error": "Circular parent reference detected",
+                    "project": None,
+                }
+            visited.add(cast(int, current.parent_id))
+            depth += 1
+            if depth >= MAX_PARENT_DEPTH:
+                return {
+                    "error": (
+                        f"Project hierarchy too deep (>{MAX_PARENT_DEPTH}); "
+                        "the parent chain may be corrupted."
+                    ),
+                    "project": None,
+                }
             current = session.get(Project, current.parent_id)
             if not current:
                 break
