@@ -39,6 +39,14 @@ from memory.common import settings
         "/polls/respond/abc-123",
         "/claude/transfer/pull",
         "/claude/transfer/push",
+        # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
+        # at root by the MCP SDK. DCR clients have no credentials at
+        # registration time by definition, so the middleware bypass is
+        # mandatory. Re-added by master commit bd7d388 ("make sure mcp
+        # can register").
+        "/register",
+        "/register/finish",
+        "/revoke",
     ],
 )
 def test_is_whitelisted_path_lets_real_routes_through(path):
@@ -53,8 +61,6 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/healthcheck",
         "/health-secret",
         "/healthxxx",
-        "/register",  # /register entry was removed — must require auth now
-        "/register/finish",
         "/registerme",
         "/registers",
         "/authorize-anything",
