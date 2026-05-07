@@ -249,6 +249,22 @@ INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
+# CORS allow-list for development hosts. The Vite dev server lives on
+# http://localhost:5173 by default; trusting it from production lets
+# any locally-running attacker JS (other npm projects, malicious VS Code
+# previews, DNS-rebound sites) make credentialed cross-origin requests
+# and read the response. Gate dev origins on this flag so production
+# defaults closed; set ALLOW_LOCALHOST_CORS=true in dev .env files.
+ALLOW_LOCALHOST_CORS = boolean_env("ALLOW_LOCALHOST_CORS", False)
+LOCALHOST_CORS_ORIGINS = [
+    p.strip()
+    for p in os.getenv(
+        "LOCALHOST_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if p.strip()
+]
+
 # API Rate limiting settings
 API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
 # Default rate limit: 100 requests per minute

@@ -276,12 +276,24 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.
+#
+# `http://localhost:5173` is the Vite dev server. It used to be hard-coded
+# into the production allow-list, which lets any locally-running attacker
+# JS (a different `npm run dev`, a malicious VS Code preview, a DNS-rebound
+# site) make credentialed cross-origin requests against prod and read
+# the response body. Gate it on `ALLOW_LOCALHOST_CORS=true` so dev
+# workflows still work but production environments default closed.
+_cors_origins: list[str] = [settings.SERVER_URL]
+if settings.ALLOW_LOCALHOST_CORS:
+    _cors_origins.extend(settings.LOCALHOST_CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.SERVER_URL, "http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Tightened from "*" — only methods we actually use, only headers we
+    # actually accept. Reduces the audit surface.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Edit-Token"],
 )
 
 
