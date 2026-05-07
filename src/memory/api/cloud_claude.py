@@ -474,11 +474,17 @@ async def spawn_session(
     # Determine Docker network for communication with Memory API
     networks = [f"memory-api-{settings.MEMORY_STACK}"]
 
+    # Track a freshly-created snapshot volume so we can roll back if container
+    # creation fails. Only the snapshot path is owned by this call; the
+    # environment-mode volume_name points at the user's persistent volume and
+    # MUST NOT be deleted on failure.
+    created_snapshot_volume: str | None = None
     try:
         # For snapshot-based sessions, create a temporary volume and init from snapshot
         if host_snapshot_path:
             volume_name = f"claude-snap-{session_id}"
             await client.create_initialized_volume(volume_name, host_snapshot_path)
+            created_snapshot_volume = volume_name
 
         result = await client.create_container(
             session_id,
@@ -489,6 +495,19 @@ async def spawn_session(
         )
     except OrchestratorError as e:
         logger.error(f"Failed to create session: {e}")
+        if created_snapshot_volume is not None:
+            # Best-effort cleanup of the orphan snapshot volume. The volume
+            # was created exclusively for the container we just failed to
+            # spawn — leaving it behind accumulates `claude-snap-*` volumes
+            # on the host with no way to attribute them later.
+            try:
+                await client.delete_volume(created_snapshot_volume)
+            except Exception:
+                logger.exception(
+                    "Failed to clean up orphan snapshot volume %s after "
+                    "create_container failure",
+                    created_snapshot_volume,
+                )
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     # Update environment usage stats if using an environment

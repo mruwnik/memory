@@ -1,18 +1,23 @@
 """Tests for Cloud Claude Code session management API."""
 
+import asyncio
+import pathlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from memory.api.cloud_claude import (
+    SpawnRequest,
     get_user_id_from_session,
     is_valid_session_id,
     make_session_id,
     require_session_access,
+    spawn_session,
     user_owns_session,
     validate_differ_subpath,
 )
+from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
 from memory.common.db.models import ScheduledTask
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
@@ -676,3 +681,129 @@ def test_stats_history_orchestrator_400_propagates(client, user):
         response = client.get("/claude/stats/history?since=not-a-date")
     assert response.status_code == 400
     assert "bad since" in response.json()["detail"]
+
+
+# --- spawn_session: snapshot volume rollback on container failure ----------
+
+
+def _make_spawn_session_test_doubles(snapshot_filename: str = "snap.tar.gz"):
+    """Build the bag of mocks required to drive spawn_session in isolation.
+
+    spawn_session is an async FastAPI route with several real-DB lookups before
+    reaching the volume-creation block we care about. These doubles short-circuit
+    the snapshot-row lookup and the on-disk existence check, leaving the
+    orchestrator-client interactions as the only behaviour under test.
+    """
+    fake_user = MagicMock()
+    fake_user.id = 7
+    fake_user.ssh_private_key = None  # avoid env injection branches
+
+    # snapshot row returned by the DB query chain
+    snapshot_row = MagicMock()
+    snapshot_row.filename = snapshot_filename
+
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = snapshot_row
+
+    request = SpawnRequest(snapshot_id=99)
+
+    return fake_user, db, request
+
+
+def test_spawn_session_cleans_up_snapshot_volume_on_container_failure(tmp_path):
+    """Regression: when create_container raises after a snapshot volume was
+    initialized, spawn_session must delete the orphan volume before re-raising
+    as 503. Otherwise `claude-snap-*` volumes leak silently on the host.
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    client = MagicMock()
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(
+        side_effect=OrchestratorError("container limit reached", status_code=503)
+    )
+    client.delete_volume = AsyncMock(return_value=True)
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(spawn_session(request, fake_user, db))
+
+    assert exc_info.value.status_code == 503
+    # The orphan volume must have been targeted for deletion exactly once,
+    # and the name must match the convention spawn_session uses.
+    assert client.delete_volume.await_count == 1
+    (deleted_name,) = client.delete_volume.await_args.args
+    assert deleted_name.startswith("claude-snap-u7-s99-")
+
+
+def test_spawn_session_does_not_delete_volume_when_volume_creation_fails(tmp_path):
+    """If create_initialized_volume itself raises, no volume exists — so
+    delete_volume must NOT be called. (Otherwise we'd issue a spurious DELETE
+    on a name the orchestrator never minted.)
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    client = MagicMock()
+    client.create_initialized_volume = AsyncMock(
+        side_effect=OrchestratorError("disk full", status_code=507)
+    )
+    client.create_container = AsyncMock()  # should never be called
+    client.delete_volume = AsyncMock()
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        with pytest.raises(HTTPException):
+            asyncio.run(spawn_session(request, fake_user, db))
+
+    client.create_container.assert_not_awaited()
+    client.delete_volume.assert_not_awaited()
+
+
+def test_spawn_session_swallows_cleanup_failure(tmp_path):
+    """Cleanup is best-effort: if delete_volume itself raises, the original
+    503 must still surface (we don't want to mask the spawn failure with a
+    secondary cleanup error).
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    client = MagicMock()
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(
+        side_effect=OrchestratorError("primary failure", status_code=503)
+    )
+    client.delete_volume = AsyncMock(
+        side_effect=OrchestratorError("cleanup failure", status_code=500)
+    )
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(spawn_session(request, fake_user, db))
+
+    # The user-facing error must reflect the primary spawn failure, not the
+    # secondary cleanup error.
+    assert exc_info.value.status_code == 503
+    assert "primary failure" in exc_info.value.detail
+    assert client.delete_volume.await_count == 1
