@@ -136,10 +136,66 @@ def user_owns_session(user: User, session_id: str) -> bool:
     return owner_id == user.id
 
 
-# Strict session-id regex matching ``is_valid_session_id`` below; duplicated
-# at the top of the file so ``require_session_access`` can validate before
-# ``is_valid_session_id`` is defined further down.
+# Strict session-id regex used by both is_valid_session_id and the
+# require_session_access defense-in-depth check below.
 _SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
+
+
+def is_valid_session_id(session_id: str) -> bool:
+    """Validate session_id format (defense in depth).
+
+    Format: ``u{user_id}-{source}-{hex}`` where source is one of:
+      - ``e{env_id}``  for environment-based sessions   (e.g. u123-e456-abc123)
+      - ``s{snap_id}`` for snapshot-based sessions      (e.g. u123-s789-abc123)
+      - ``x``          for sessions without snapshot/environment (e.g. u123-x-abc123)
+    """
+    return bool(_SESSION_ID_RE.match(session_id))
+
+
+class UnsafeSubpathError(Exception):
+    """Internal sentinel: differ subpath contains a traversal or empty segment."""
+
+
+def check_no_traversal(differ_path: str) -> None:
+    """Raise ``UnsafeSubpathError`` if ``differ_path`` is unsafe to forward.
+
+    The subpath comes from the raw request bytes and may still contain
+    percent-encoded characters.  An attacker can smuggle traversal sequences
+    as ``%2e%2e``, ``..`` plain, or doubly-encoded as ``%252e%252e``.  Decode
+    in a fixed-point loop so all forms are caught: each iteration unwraps
+    one layer of percent-encoding, and we stop once the string stops
+    changing (which is the only safe way to know there's no more decoding
+    a downstream proxy could apply).
+
+    Empty segments (``a//b``) are also rejected because httpx (or a
+    downstream proxy) may normalise them into a different orchestrator
+    endpoint than what the user typed.
+
+    Shared between the HTTP and WebSocket differ proxies so both surfaces
+    stay in lock-step on what counts as "safe to forward".
+    """
+    prev = differ_path
+    while True:
+        decoded = unquote(prev)
+        if decoded == prev:
+            break
+        prev = decoded
+    for segment in decoded.split("/"):
+        if segment in ("", ".", ".."):
+            raise UnsafeSubpathError(segment)
+
+
+def validate_differ_subpath(differ_path: str) -> None:
+    """HTTP-shaped wrapper around :func:`check_no_traversal`.
+
+    Raises HTTPException 400 if the path contains traversal or empty segments.
+    """
+    try:
+        check_no_traversal(differ_path)
+    except UnsafeSubpathError as exc:
+        raise HTTPException(
+            status_code=400, detail="Path traversal not allowed"
+        ) from exc
 
 
 def require_session_access(user: User, session_id: str) -> None:
@@ -1303,66 +1359,6 @@ async def proxy_differ_ws(
             await websocket.close()
         except Exception:
             pass
-
-
-# --- WebSocket log streaming helpers ---
-
-
-class UnsafeSubpathError(Exception):
-    """Internal sentinel: differ subpath contains a traversal or empty segment."""
-
-
-def check_no_traversal(differ_path: str) -> None:
-    """Raise ``UnsafeSubpathError`` if ``differ_path`` is unsafe to forward.
-
-    The subpath comes from the raw request bytes and may still contain
-    percent-encoded characters.  An attacker can smuggle traversal sequences
-    as ``%2e%2e``, ``..`` plain, or doubly-encoded as ``%252e%252e``.  Decode
-    in a fixed-point loop so all forms are caught: each iteration unwraps
-    one layer of percent-encoding, and we stop once the string stops
-    changing (which is the only safe way to know there's no more decoding
-    a downstream proxy could apply).
-
-    Empty segments (``a//b``) are also rejected because httpx (or a
-    downstream proxy) may normalise them into a different orchestrator
-    endpoint than what the user typed.
-
-    Shared between the HTTP and WebSocket differ proxies so both surfaces
-    stay in lock-step on what counts as "safe to forward".
-    """
-    prev = differ_path
-    while True:
-        decoded = unquote(prev)
-        if decoded == prev:
-            break
-        prev = decoded
-    for segment in decoded.split("/"):
-        if segment in ("", ".", ".."):
-            raise UnsafeSubpathError(segment)
-
-
-def validate_differ_subpath(differ_path: str) -> None:
-    """HTTP-shaped wrapper around :func:`check_no_traversal`.
-
-    Raises HTTPException 400 if the path contains traversal or empty segments.
-    """
-    try:
-        check_no_traversal(differ_path)
-    except UnsafeSubpathError as exc:
-        raise HTTPException(
-            status_code=400, detail="Path traversal not allowed"
-        ) from exc
-
-
-def is_valid_session_id(session_id: str) -> bool:
-    """Validate session_id format (defense in depth).
-
-    Format: ``u{user_id}-{source}-{hex}`` where source is one of:
-      - ``e{env_id}``  for environment-based sessions   (e.g. u123-e456-abc123)
-      - ``s{snap_id}`` for snapshot-based sessions      (e.g. u123-s789-abc123)
-      - ``x``          for sessions without snapshot/environment (e.g. u123-x-abc123)
-    """
-    return bool(_SESSION_ID_RE.match(session_id))
 
 
 @router.websocket("/{session_id}/logs/stream")
