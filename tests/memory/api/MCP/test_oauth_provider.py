@@ -3,6 +3,7 @@
 import pytest
 from datetime import datetime, timedelta
 from typing import cast
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy.pool import QueuePool
 
@@ -527,6 +528,268 @@ def test_session_factory_uses_expire_on_commit_false():
     factory = get_session_factory()
     # sessionmaker stashes constructor kwargs on .kw
     assert factory.kw.get("expire_on_commit") is False
+
+
+# ====== Authorization-code expiry — hermetic (no DB) ======
+
+
+@pytest.mark.asyncio
+async def test_load_authorization_code_rejects_expired_hermetic():
+    """Expiry-on-load enforcement, exercised without a real Postgres."""
+    from memory.api.MCP.oauth_provider import (
+        SimpleOAuthProvider,
+        now_naive_utc,
+    )
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="c",
+        client_secret="s",
+        redirect_uris=cast(list, ["http://localhost/cb"]),
+    )
+
+    expired_row = MagicMock()
+    expired_row.client_id = "c"
+    expired_row.expires_at = now_naive_utc() - timedelta(minutes=5)
+    expired_row.serialize.return_value = {}
+
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.query.return_value.filter.return_value.first.return_value = expired_row
+
+    with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
+        with pytest.raises(ValueError, match="expired"):
+            await provider.load_authorization_code(client, "code_xyz")
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_rejects_expired_hermetic():
+    """Expiry-on-exchange enforcement, exercised without a real Postgres."""
+    from memory.api.MCP.oauth_provider import (
+        SimpleOAuthProvider,
+        now_naive_utc,
+    )
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+    from pydantic import AnyUrl
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="c",
+        client_secret="s",
+        redirect_uris=cast(list, ["http://localhost/cb"]),
+    )
+    expired_code = AuthorizationCode(
+        code="code_xyz",
+        client_id="c",
+        redirect_uri=AnyUrl("http://localhost/cb"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="",
+        expires_at=(now_naive_utc() - timedelta(minutes=5)).timestamp(),
+    )
+
+    expired_row = MagicMock()
+    expired_row.id = 1
+    expired_row.client_id = "c"
+    expired_row.user_id = 42
+    expired_row.user = MagicMock()
+    expired_row.expires_at = now_naive_utc() - timedelta(minutes=5)
+
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.query.return_value.filter.return_value.first.return_value = expired_row
+
+    with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
+        with pytest.raises(ValueError, match="expired"):
+            await provider.exchange_authorization_code(client, expired_code)
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_race_loser_rejected_hermetic():
+    """Atomic UPDATE … RETURNING — race-loser sees no row and is rejected."""
+    from memory.api.MCP.oauth_provider import (
+        SimpleOAuthProvider,
+        now_naive_utc,
+    )
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+    from pydantic import AnyUrl
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="c",
+        client_secret="s",
+        redirect_uris=cast(list, ["http://localhost/cb"]),
+    )
+    valid_code = AuthorizationCode(
+        code="code_race",
+        client_id="c",
+        redirect_uri=AnyUrl("http://localhost/cb"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="",
+        expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
+    )
+
+    valid_row = MagicMock()
+    valid_row.id = 1
+    valid_row.client_id = "c"
+    valid_row.user_id = 42
+    valid_row.user = MagicMock()
+    valid_row.expires_at = now_naive_utc() + timedelta(minutes=5)
+
+    fake_session = MagicMock()
+    fake_session.__enter__.return_value = fake_session
+    fake_session.__exit__.return_value = False
+    fake_session.query.return_value.filter.return_value.first.return_value = valid_row
+
+    # The atomic UPDATE … RETURNING returns no rows because another
+    # concurrent exchange already cleared the code.
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = None
+    fake_session.execute.return_value = update_result
+
+    with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
+        with pytest.raises(ValueError, match="already used"):
+            await provider.exchange_authorization_code(client, valid_code)
+
+
+# ====== Authorization-code expiry + single-use enforcement ======
+
+
+@pytest.mark.asyncio
+async def test_load_authorization_code_rejects_expired_code(db_session):
+    """RFC 6749 §4.1.2: auth codes must not outlive their expires_at."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    # Insert an OAuthState whose code is set but the row is already past expiry
+    expired = OAuthState(
+        state="expired-state",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="",
+        scopes=["read"],
+        expires_at=now_naive_utc() - timedelta(minutes=5),
+        code="code_expired_xyz",
+        user_id=user.id,
+    )
+    db_session.add(expired)
+    db_session.commit()
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+
+    with pytest.raises(ValueError, match="expired"):
+        await provider.load_authorization_code(client, "code_expired_xyz")
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_rejects_expired_code(db_session):
+    """Exchange path also enforces RFC 6749 §4.1.2."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    expired = OAuthState(
+        state="expired-state-2",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="",
+        scopes=["read"],
+        expires_at=now_naive_utc() - timedelta(minutes=5),
+        code="code_expired_abc",
+        user_id=user.id,
+    )
+    db_session.add(expired)
+    db_session.commit()
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    from pydantic import AnyUrl
+    auth_code = AuthorizationCode(
+        code="code_expired_abc",
+        client_id="test-client",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="",
+        expires_at=(now_naive_utc() - timedelta(minutes=5)).timestamp(),
+    )
+
+    with pytest.raises(ValueError, match="expired"):
+        await provider.exchange_authorization_code(client, auth_code)
+
+
+@pytest.mark.asyncio
+async def test_exchange_authorization_code_atomic_single_use(db_session):
+    """Two concurrent exchanges of the same code: only one wins (CWE-367)."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import AuthorizationCode
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    state = OAuthState(
+        state="single-use",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="",
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(minutes=5),
+        code="code_single_use_42",
+        user_id=user.id,
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    from pydantic import AnyUrl
+    auth_code = AuthorizationCode(
+        code="code_single_use_42",
+        client_id="test-client",
+        redirect_uri=AnyUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["read"],
+        code_challenge="",
+        expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
+    )
+
+    # First exchange wins
+    await provider.exchange_authorization_code(client, auth_code)
+
+    # Second exchange (same code) must now fail — either as already-used
+    # (atomic UPDATE saw NULL) or as invalid (the code field was cleared by
+    # the first exchange). Either way: not a successful token.
+    with pytest.raises(ValueError):
+        await provider.exchange_authorization_code(client, auth_code)
 
 
 def test_attribute_read_after_commit_does_not_autobegin(db_session):

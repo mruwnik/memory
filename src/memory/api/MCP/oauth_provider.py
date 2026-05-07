@@ -17,6 +17,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from memory.common import settings
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
@@ -477,6 +478,17 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 raise ValueError("Authorization code not issued to this client")
 
+            # RFC 6749 §4.1.2: auth codes MUST be short-lived ("a maximum
+            # authorization code lifetime of 10 minutes is RECOMMENDED").
+            # We pin to the same expires_at the row was issued with so a code
+            # someone scraped from referer/logs/etc. can't outlive the login
+            # window indefinitely.
+            if auth_code.expires_at < now_naive_utc():
+                logger.warning(
+                    "Authorization code id=%s expired", token_id(authorization_code)
+                )
+                raise ValueError("Authorization code expired")
+
             return AuthorizationCode(**auth_code.serialize(code=True))
 
     async def exchange_authorization_code(
@@ -516,17 +528,43 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 raise ValueError("Invalid authorization code")
 
+            # RFC 6749 §4.1.2: enforce short lifetime on the exchange path
+            # too — load_authorization_code already checks, but we re-check
+            # here so callers that skip the load step still get the guarantee.
+            if auth_code.expires_at < now_naive_utc():
+                logger.warning(
+                    "Authorization code id=%s expired",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError("Authorization code expired")
+
             # Extract data needed for token creation
             auth_code_id = auth_code.id
             user_id = auth_code.user_id
             client_id = auth_code.client_id
             scopes = authorization_code.scopes
 
-            # Invalidate the auth code by clearing the code field.
-            # We keep the OAuthState record because UserSession references it
-            # for client_id and scopes lookup in load_access_token().
-            # This prevents replay attacks while preserving needed state.
-            auth_code.code = None
+            # Atomically invalidate: UPDATE … WHERE code=:code RETURNING id.
+            # If two requests race, only one's WHERE clause matches (the other
+            # already saw NULL). We keep the OAuthState row because
+            # UserSession references it for client_id/scopes lookup in
+            # load_access_token() — clearing the code is enough to prevent
+            # replay. (CWE-367 single-use enforcement.)
+            consumed = session.execute(
+                update(OAuthState)
+                .where(
+                    OAuthState.id == auth_code_id,
+                    OAuthState.code == authorization_code.code,
+                )
+                .values(code=None)
+                .returning(OAuthState.id)
+            ).scalar_one_or_none()
+            if consumed is None:
+                logger.warning(
+                    "Authorization code id=%s already consumed (race)",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError("Authorization code already used")
             session.commit()
 
             # Create token linked to the (now code-less) OAuthState
