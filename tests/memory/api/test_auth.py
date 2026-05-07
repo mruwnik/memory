@@ -773,3 +773,41 @@ def test_create_user_happy_path_commits_and_refreshes():
     db.commit.assert_called_once()
     db.refresh.assert_called_once_with(fake_user)
     db.rollback.assert_not_called()
+
+
+# --- dummy_password_hash (timing-attack mitigation) -------------------------
+
+
+def test_dummy_password_hash_is_valid_bcrypt_format():
+    """The dummy hash must be a real, well-formed bcrypt hash.
+
+    The previous implementation used a 46-char hard-coded string that bcrypt
+    rejected as malformed, returning False in microseconds and defeating the
+    whole purpose of the dummy check (timing-based user enumeration).
+    A valid bcrypt hash is exactly 60 chars: ``$2b$<rounds>$<22-char salt><31-char hash>``.
+    """
+    import bcrypt
+
+    digest = auth.dummy_password_hash()
+
+    assert len(digest) == 60
+    assert digest.startswith("$2b$12$")
+    # bcrypt.checkpw must NOT raise on this hash — that's the whole point.
+    # And the hash should not match an arbitrary password (no fluke truthy return).
+    assert bcrypt.checkpw(b"a-password-that-isnt-the-original", digest.encode()) is False
+
+
+def test_dummy_password_hash_is_cached():
+    """Subsequent calls return the same value (avoids re-paying ~250ms bcrypt cost)."""
+    assert auth.dummy_password_hash() is auth.dummy_password_hash()
+
+
+def test_dummy_password_hash_actually_verifies():
+    """verify_password against the dummy must run a full bcrypt check (returns False, no exception)."""
+    from memory.common.db.models.users import verify_password
+
+    # Any password, any number of times — must consistently return False
+    # without raising. If the underlying hash were malformed, verify_password
+    # would still return False but via a fast exception path.
+    assert verify_password("any-password", auth.dummy_password_hash()) is False
+    assert verify_password("", auth.dummy_password_hash()) is False

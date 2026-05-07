@@ -1,8 +1,10 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from functools import cache
 from typing import TypeVar, cast
 
+import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
@@ -571,6 +573,24 @@ def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUse
     return user
 
 
+@cache
+def dummy_password_hash() -> str:
+    """Return a real bcrypt hash used as a constant-time dummy.
+
+    The cached value is generated on first call (paying the ~250ms bcrypt cost
+    once per process) and reused thereafter. We deliberately use the same cost
+    factor (12) as :func:`hash_password` so that ``verify_password`` against
+    this hash performs the *same amount of work* as a real-user check —
+    that's the whole point of the dummy in :func:`authenticate_user`.
+
+    The previous implementation used a hard-coded 46-character string that was
+    not a valid bcrypt hash. ``bcrypt.checkpw`` raised ``ValueError("Invalid
+    salt")`` almost immediately, defeating the timing-attack mitigation and
+    letting attackers enumerate accounts by response latency.
+    """
+    return bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
 def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | None:
     """Authenticate a human user by email and password.
 
@@ -584,11 +604,13 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
         if user.is_valid_password(password):
             return user
     else:
-        # Dummy password check to prevent timing-based user enumeration
-        # This ensures the function takes similar time whether user exists or not
+        # Dummy password check to prevent timing-based user enumeration.
+        # This ensures the function takes similar time whether user exists or
+        # not. The dummy hash is a real bcrypt hash so checkpw runs the full
+        # 12-round computation rather than failing fast on a malformed string.
         from memory.common.db.models.users import verify_password
 
-        verify_password(password, "$2b$12$dummy.hash.for.timing.attack.prevention")
+        verify_password(password, dummy_password_hash())
 
     return None
 
