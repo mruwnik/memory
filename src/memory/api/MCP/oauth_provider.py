@@ -169,6 +169,58 @@ def create_refresh_token_record(
     )
 
 
+def revoke_refresh_token_family(
+    db: Session, *, user_id: int, client_id: str
+) -> int:
+    """Revoke every active refresh token + paired access-token session for a (user, client) pair.
+
+    Used when a replay is detected (a revoked refresh token is re-presented,
+    or two concurrent exchanges race) — RFC 6819 §5.2.2.3 recommends treating
+    the whole family as compromised.
+
+    Returns the number of refresh tokens revoked. The caller is responsible
+    for committing the session.
+    """
+    # Find all currently-live refresh tokens for this (user, client) pair.
+    family = (
+        db.query(OAuthRefreshToken)
+        .filter(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.client_id == client_id,
+            OAuthRefreshToken.revoked == False,  # noqa: E712
+        )
+        .all()
+    )
+    if not family:
+        return 0
+
+    paired_session_ids = [
+        cast(str, t.access_token_session_id)
+        for t in family
+        if t.access_token_session_id is not None
+    ]
+
+    # Mark them all revoked in one UPDATE.
+    db.execute(
+        update(OAuthRefreshToken)
+        .where(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.client_id == client_id,
+            OAuthRefreshToken.revoked == False,  # noqa: E712
+        )
+        .values(revoked=True)
+    )
+
+    # Delete every paired access-token UserSession so the access tokens
+    # they minted die immediately too.
+    for sid in paired_session_ids:
+        sess = db.get(UserSession, sid)
+        if sess is not None:
+            db.delete(sess)
+
+    return len(family)
+
+
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     """Validate a refresh token, raising ValueError if invalid.
 
@@ -736,15 +788,35 @@ class SimpleOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        """Exchange refresh token for new access token."""
+        """Exchange refresh token for new access token (single-use rotation).
+
+        OAuth 2.1 / RFC 6819 §5.2.2.3 mandates single-use refresh tokens with
+        replay detection: a refresh token presented after it's already been
+        used is assumed compromised, so we revoke the *entire token family*
+        for that (user, client) pair.
+
+        Steps:
+          1. Look up the token without filtering on ``revoked`` so we can
+             distinguish "never existed" from "already used".
+          2. If the row is already revoked → replay attack assumed; revoke
+             every other refresh token for the same user+client and delete
+             their paired UserSessions, then refuse the exchange.
+          3. Atomically flip ``revoked`` from False to True
+             (``UPDATE ... WHERE revoked=False RETURNING id``). Race-losers
+             see no row and are treated as replays too.
+          4. Delete the paired access-token UserSession so the old access
+             token is dead.
+          5. Issue the replacement pair via ``make_token``.
+        """
         with make_session() as session:
-            # Load the refresh token from database
+            # Load WITHOUT the revoked filter — we need to tell apart
+            # "token never existed" (genuine bad token) from "token was
+            # already used" (potential replay).
             db_refresh_token = (
                 session.query(OAuthRefreshToken)
                 .filter(
                     OAuthRefreshToken.token == refresh_token.token,
                     OAuthRefreshToken.client_id == client.client_id,
-                    OAuthRefreshToken.revoked == False,  # noqa: E712
                 )
                 .first()
             )
@@ -753,7 +825,27 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"Refresh token not found: {token_id(refresh_token.token)}")
                 raise ValueError("Invalid refresh token")
 
-            # Validate refresh token
+            # Replay detection (RFC 6819 §5.2.2.3): a revoked refresh token
+            # presented again is treated as compromise — revoke the whole
+            # family so any in-flight attacker copy is dead too.
+            if cast(bool, db_refresh_token.revoked):
+                logger.warning(
+                    "Refresh token replay detected: id=%s user=%s client=%s — revoking family",
+                    token_id(refresh_token.token),
+                    db_refresh_token.user_id,
+                    client.client_id,
+                )
+                revoke_refresh_token_family(
+                    session,
+                    user_id=cast(int, db_refresh_token.user_id),
+                    client_id=cast(str, db_refresh_token.client_id),
+                )
+                session.commit()
+                raise ValueError(
+                    "Refresh token already used — token family revoked"
+                )
+
+            # Validate refresh token (expiry; also flips revoked=True if expired)
             validate_refresh_token(db_refresh_token)
 
             # Validate requested scopes are subset of original scopes
@@ -765,6 +857,45 @@ class SimpleOAuthProvider(OAuthProvider):
                     f"Requested scopes {requested_scopes} exceed original scopes {original_scopes}"
                 )
                 raise ValueError("Requested scopes exceed original authorization")
+
+            # Atomic single-use rotation. ``UPDATE … WHERE revoked=False
+            # RETURNING id`` lets only one of N concurrent exchanges win.
+            # The race-loser sees no row and is treated as a replay (per
+            # RFC 6819 — be conservative when in doubt).
+            consumed = session.execute(
+                update(OAuthRefreshToken)
+                .where(
+                    OAuthRefreshToken.id == db_refresh_token.id,
+                    OAuthRefreshToken.revoked == False,  # noqa: E712
+                )
+                .values(revoked=True)
+                .returning(OAuthRefreshToken.id)
+            ).scalar_one_or_none()
+            if consumed is None:
+                logger.warning(
+                    "Refresh token race-lost: id=%s — revoking family as suspected replay",
+                    token_id(refresh_token.token),
+                )
+                revoke_refresh_token_family(
+                    session,
+                    user_id=cast(int, db_refresh_token.user_id),
+                    client_id=cast(str, db_refresh_token.client_id),
+                )
+                session.commit()
+                raise ValueError(
+                    "Refresh token already used — token family revoked"
+                )
+
+            # Kill the paired access-token session so the old access token
+            # is dead the moment its refresh token is rotated. Without this,
+            # an attacker who already has a copy of the access token can
+            # keep using it for up to ACCESS_TOKEN_LIFETIME after the user
+            # legitimately rotates.
+            paired_session_id = db_refresh_token.access_token_session_id
+            if paired_session_id is not None:
+                old_session = session.get(UserSession, paired_session_id)
+                if old_session is not None:
+                    session.delete(old_session)
 
             return make_token(session, db_refresh_token, scopes)
 

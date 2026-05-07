@@ -1037,6 +1037,253 @@ async def test_exchange_authorization_code_clears_code_challenge_on_consume(db_s
     )
 
 
+# ====== Refresh-token rotation (RFC 6819 §5.2.2.3) ======
+
+
+@pytest.mark.asyncio
+async def test_exchange_refresh_token_rotates_and_revokes_old(db_session):
+    """Successful rotation: old refresh token + paired session die, new pair issued."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import RefreshToken
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    # The "old" access-token session that's paired with the refresh token —
+    # rotation must delete it.
+    old_session = UserSession(
+        user_id=user.id,
+        oauth_state_id=None,
+        expires_at=now_naive_utc() + timedelta(hours=1),
+    )
+    db_session.add(old_session)
+    db_session.commit()
+    old_session_id = str(old_session.id)
+
+    rt = OAuthRefreshToken(
+        token="rt_old_token_42",
+        client_id="test-client",
+        user_id=user.id,
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(days=30),
+        access_token_session_id=old_session_id,
+    )
+    db_session.add(rt)
+    db_session.commit()
+    rt_id = rt.id
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    refresh_token = RefreshToken(
+        token="rt_old_token_42",
+        client_id="test-client",
+        scopes=["read"],
+        expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
+    )
+
+    new_token = await provider.exchange_refresh_token(client, refresh_token, ["read"])
+
+    # New access + refresh tokens are issued
+    assert new_token.access_token != old_session_id
+    assert new_token.refresh_token is not None
+    assert new_token.refresh_token != "rt_old_token_42"
+
+    # Old refresh token is revoked
+    db_session.expire_all()
+    old_rt = db_session.get(OAuthRefreshToken, rt_id)
+    assert old_rt is not None
+    assert old_rt.revoked is True
+
+    # Old paired session is deleted
+    assert db_session.get(UserSession, old_session_id) is None
+
+    # New session exists
+    new_session = db_session.query(UserSession).filter(
+        UserSession.id == new_token.access_token
+    ).first()
+    assert new_session is not None
+    assert new_session.user_id == user.id
+
+
+@pytest.mark.asyncio
+async def test_exchange_refresh_token_replay_revokes_family(db_session):
+    """Re-using a revoked refresh token revokes ALL refresh tokens for that (user, client)."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import RefreshToken
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    # Two sibling refresh tokens for the same user+client. One is already
+    # revoked (from a prior legitimate rotation), the other still live.
+    # If the attacker presents the revoked one, the live sibling must be
+    # revoked too — RFC 6819 family revocation.
+    paired_session_revoked = UserSession(
+        user_id=user.id,
+        oauth_state_id=None,
+        expires_at=now_naive_utc() + timedelta(hours=1),
+    )
+    paired_session_live = UserSession(
+        user_id=user.id,
+        oauth_state_id=None,
+        expires_at=now_naive_utc() + timedelta(hours=1),
+    )
+    db_session.add(paired_session_revoked)
+    db_session.add(paired_session_live)
+    db_session.commit()
+    revoked_sid = str(paired_session_revoked.id)
+    live_sid = str(paired_session_live.id)
+
+    revoked_rt = OAuthRefreshToken(
+        token="rt_replay_revoked",
+        client_id="test-client",
+        user_id=user.id,
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(days=30),
+        revoked=True,
+        access_token_session_id=revoked_sid,
+    )
+    live_rt = OAuthRefreshToken(
+        token="rt_replay_live_sibling",
+        client_id="test-client",
+        user_id=user.id,
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(days=30),
+        revoked=False,
+        access_token_session_id=live_sid,
+    )
+    db_session.add(revoked_rt)
+    db_session.add(live_rt)
+    db_session.commit()
+    live_rt_id = live_rt.id
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    refresh_token = RefreshToken(
+        token="rt_replay_revoked",
+        client_id="test-client",
+        scopes=["read"],
+        expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
+    )
+
+    with pytest.raises(ValueError, match="family revoked"):
+        await provider.exchange_refresh_token(client, refresh_token, ["read"])
+
+    # Live sibling is now revoked too
+    db_session.expire_all()
+    live_rt_after = db_session.get(OAuthRefreshToken, live_rt_id)
+    assert live_rt_after is not None
+    assert live_rt_after.revoked is True, (
+        "Sibling refresh token must be revoked on replay (RFC 6819 family revocation)"
+    )
+
+    # Live sibling's paired session is also deleted
+    assert db_session.get(UserSession, live_sid) is None
+
+
+@pytest.mark.asyncio
+async def test_exchange_refresh_token_rejects_unknown_token(db_session):
+    """A genuinely-bad token still returns "Invalid refresh token" without family revocation."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import RefreshToken
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    # An unrelated live refresh token that must NOT get caught up in any
+    # family revocation when an unknown token is presented.
+    bystander = OAuthRefreshToken(
+        token="rt_bystander",
+        client_id="test-client",
+        user_id=user.id,
+        scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(days=30),
+    )
+    db_session.add(bystander)
+    db_session.commit()
+    bystander_id = bystander.id
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    refresh_token = RefreshToken(
+        token="rt_definitely_not_in_db",
+        client_id="test-client",
+        scopes=["read"],
+        expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
+    )
+
+    with pytest.raises(ValueError, match="Invalid refresh token"):
+        await provider.exchange_refresh_token(client, refresh_token, ["read"])
+
+    # Bystander is unaffected — we only revoke families on actual replays.
+    db_session.expire_all()
+    bystander_after = db_session.get(OAuthRefreshToken, bystander_id)
+    assert bystander_after is not None
+    assert bystander_after.revoked is False
+
+
+@pytest.mark.asyncio
+async def test_exchange_refresh_token_rejects_scope_escalation(db_session):
+    """Requesting scopes that exceed the original grant must fail."""
+    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
+    from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.server.auth.provider import RefreshToken
+
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+
+    rt = OAuthRefreshToken(
+        token="rt_scoped_read_only",
+        client_id="test-client",
+        user_id=user.id,
+        scopes=["read"],  # original grant
+        expires_at=now_naive_utc() + timedelta(days=30),
+    )
+    db_session.add(rt)
+    db_session.commit()
+    rt_id = rt.id
+
+    provider = SimpleOAuthProvider()
+    client = OAuthClientInformationFull(
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+    refresh_token = RefreshToken(
+        token="rt_scoped_read_only",
+        client_id="test-client",
+        scopes=["read"],
+        expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
+    )
+
+    # Asking for write when only read was granted must fail and NOT
+    # revoke the token (this is a misbehaving client, not a replay).
+    with pytest.raises(ValueError, match="exceed original"):
+        await provider.exchange_refresh_token(client, refresh_token, ["read", "write"])
+
+    db_session.expire_all()
+    rt_after = db_session.get(OAuthRefreshToken, rt_id)
+    assert rt_after is not None
+    assert rt_after.revoked is False, (
+        "Scope-escalation attempt must NOT revoke the token — leave it alone"
+    )
+
+
 def test_attribute_read_after_commit_does_not_autobegin(db_session):
     """Reading an attribute after commit() must not auto-begin a transaction.
 
