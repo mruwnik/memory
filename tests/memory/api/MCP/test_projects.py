@@ -584,6 +584,158 @@ async def test_project_delete_success(db_session, user_session, teams_and_projec
     assert result["deleted_id"] == -2
 
 
+@pytest.mark.asyncio
+async def test_project_delete_rejects_bare_member(
+    db_session, user_session, teams_and_projects
+):
+    """Regression: a contributor (team `member`) on one of the project's teams
+    must NOT be able to delete the project. Previously delete only checked
+    that filter_projects_query found the row — i.e. that the caller had
+    read access — which let any contributor on any assigned team destroy
+    the project. The new authority check requires lead/admin on a current
+    team (or global admin scope).
+    """
+    from memory.api.MCP.servers.projects import delete
+
+    # regular_user is a `member` on team_alpha which owns project_one (-1).
+    # That gives read access but not authority to delete.
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(delete)(-1)
+
+    assert "error" in result
+    assert "Forbidden" in result["error"] or "lead or admin" in result["error"]
+    # The project must NOT have been deleted.
+    db_session.expire_all()
+    assert (
+        db_session.query(Project).filter(Project.id == -1).first() is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_delete_allowed_for_admin_scope(
+    db_session, admin_session, teams_and_projects
+):
+    """Global admin scope must keep the bypass — admins can delete any project."""
+    from memory.api.MCP.servers.projects import delete
+
+    mock_token = make_mock_access_token(admin_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        # project_one — admin has no team membership but global scope wins.
+        result = await get_fn(delete)(-1)
+
+    assert result.get("success") is True
+    assert result["deleted_id"] == -1
+
+
+@pytest.mark.asyncio
+async def test_project_upsert_rejects_team_replacement_by_bare_member(
+    db_session, user_session, teams_and_projects
+):
+    """Regression: a contributor on team_alpha must not be able to call
+    upsert(team_ids=[only_their_team]) on a project where they only have
+    `member`/`contributor` role. Wholesale-replacing the team list is the
+    hijack vector — kicks every other team off the project.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+
+    # project_one (-1) has team_alpha. regular_user is `member` on team_alpha
+    # — read access yes, administer authority no.
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            project_id=-1, team_ids=[team_alpha_id]
+        )
+
+    assert "error" in result
+    err = result["error"].lower()
+    assert "forbidden" in err or "lead or admin" in err
+
+    # Team list must be unchanged.
+    db_session.expire_all()
+    project_one = db_session.query(Project).filter(Project.id == -1).first()
+    assert project_one is not None
+    current_team_ids = {t.id for t in project_one.teams}
+    assert team_alpha_id in current_team_ids
+
+
+@pytest.mark.asyncio
+async def test_project_upsert_team_replacement_allowed_for_lead(
+    db_session, user_session, teams_and_projects
+):
+    """A user with lead/manager role on a current team can replace the team
+    list. regular_user is `lead` on team_beta (project_two), so they can
+    administer project_two.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+
+    team_beta_id = teams_and_projects["team_beta"].id
+
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            project_id=-2, team_ids=[team_beta_id]
+        )
+
+    # Should not be the new "Forbidden" error — the lead is authorised.
+    if "error" in result:
+        assert "Forbidden" not in result["error"]
+        assert "lead or admin" not in result["error"]
+
+
+@pytest.mark.parametrize(
+    "scopes,project_role,expected",
+    [
+        # Global admin scope wins regardless of project role
+        (["*"], None, True),
+        (["*"], "contributor", True),
+        # No admin scope: only manager/admin grant authority
+        ([], "contributor", False),
+        ([], "manager", True),
+        ([], "admin", True),
+        # No project membership at all → no authority
+        ([], None, False),
+        # Other scopes don't grant project authority either
+        (["projects:write"], "contributor", False),
+        (["projects:write"], "manager", True),
+    ],
+)
+def test_caller_can_administer_project_unit(scopes, project_role, expected):
+    """Pure-unit test of the role gate: admin scope OR manager/admin project role."""
+    from unittest.mock import patch
+
+    from memory.api.MCP.servers.projects import caller_can_administer_project
+
+    user = MagicMock()
+    user.scopes = scopes
+
+    project_roles = {} if project_role is None else {42: project_role}
+    fake_session = MagicMock()
+    with patch(
+        "memory.api.MCP.servers.projects.get_user_project_roles",
+        return_value=project_roles,
+    ):
+        assert caller_can_administer_project(fake_session, user, 42) is expected
+
+
 # =============================================================================
 # project_tree tests
 # =============================================================================
