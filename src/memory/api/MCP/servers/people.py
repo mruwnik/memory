@@ -25,13 +25,6 @@ from memory.common.access_control import (
     user_can_create_in_project,
     user_can_edit,
 )
-
-
-# The full set of sensitivity strings the access-control matrix understands.
-# Anything outside this set must be rejected at the write boundary —
-# previously a typo or attacker-supplied string was stored verbatim,
-# producing an "invisible" tidbit that no read-side filter matched.
-ALLOWED_SENSITIVITIES = frozenset({"public", "basic", "internal", "confidential"})
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -51,6 +44,13 @@ from memory.common.db.models.sources import GithubUser
 logger = logging.getLogger(__name__)
 
 people_mcp = FastMCP("memory-people")
+
+
+# The full set of sensitivity strings the access-control matrix understands.
+# Anything outside this set must be rejected at the write boundary —
+# previously a typo or attacker-supplied string was stored verbatim,
+# producing an "invisible" tidbit that no read-side filter matched.
+ALLOWED_SENSITIVITIES = frozenset({"public", "basic", "internal", "confidential"})
 
 
 def _person_to_dict(person: Person) -> dict[str, Any]:
