@@ -378,21 +378,27 @@ from contextlib import contextmanager  # noqa: E402
 @pytest.mark.parametrize(
     "user_scopes,granted_scopes,expected",
     [
-        # Admin-on-token: don't restrict (e.g., direct admin API key call)
-        (["*"], ["*"], {"*", "read"}),
-        # OAuth caps admin user down to consented set
+        # Admin-on-token: don't restrict (e.g., direct admin API key call).
+        # NB: no SCOPE_READ floor anymore — see _create_one_time_key for why.
+        (["*"], ["*"], {"*"}),
+        # OAuth caps admin user down to consented set.
         (["*"], ["read", "write", "claudeai"], {"read", "write", "claudeai"}),
-        # OAuth read-only → key is read-only even if user is admin
+        # OAuth read-only → key is read-only even if user is admin.
         (["*"], ["read"], {"read"}),
-        # Intersection: user has {teams}, grant has {read,write,teams,claudeai}
-        # → {teams, read} (read floor always added)
-        (["teams"], ["read", "write", "teams", "claudeai"], {"teams", "read"}),
-        # User without "claudeai" doesn't get it, even if grant includes it
+        # Intersection only: user has {teams}, grant has rich scope set
+        # → {teams}. No SCOPE_READ floor — user didn't consent to read at
+        # this minting site, so we don't widen.
+        (["teams"], ["read", "write", "teams", "claudeai"], {"teams"}),
+        # User without "claudeai" doesn't get it, even if grant includes it.
         (["read"], ["read", "write", "claudeai"], {"read"}),
-        # Empty intersection → still gets read floor
-        (["teams"], ["claudeai"], {"read"}),
-        # Empty user scopes → just read
-        ([], ["read", "write"], {"read"}),
+        # Empty intersection: user has {teams}, grant has {claudeai}, neither
+        # has read. Resulting key has no scopes — useless, but honest. The
+        # alternative (silently widen with read) violates the OAuth grant.
+        (["teams"], ["claudeai"], set()),
+        # Empty user scopes: same — empty key is the honest signal that the
+        # user has nothing to grant. The previous "always add read" was the
+        # exact bug Parvati flagged.
+        ([], ["read", "write"], set()),
     ],
 )
 def test_create_one_time_key_scope_capping(user_scopes, granted_scopes, expected):

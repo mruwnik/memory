@@ -9,7 +9,6 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
-from memory.common.scopes import SCOPE_READ
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -81,7 +80,15 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
         # actually holds AND that were granted by the access token.
         effective = user_scopes & granted_scopes
 
-    scopes = sorted(effective | {SCOPE_READ})
+    # NO SCOPE_READ floor: adding it unconditionally would silently widen
+    # against narrow grants. E.g. a ``{claudeai}``-only OAuth client would
+    # get a key carrying ``{claudeai, read}`` even though the user never
+    # consented to read at this point in the flow. If the grant doesn't
+    # carry read AND user×grant intersection is empty, the resulting
+    # empty-scope key is harmless — every ``has_scope`` check still
+    # rejects it. Honest "your grant doesn't permit this" beats silent
+    # widening.
+    scopes = sorted(effective)
 
     one_time_key = APIKey.create(
         user_id=user_session.user.id,
