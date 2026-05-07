@@ -91,10 +91,9 @@ def check_git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
         raise RuntimeError(f"`{' '.join(args)}` failed")
 
     if res.returncode != 0:
-        logger.error(f"Git command failed: {res.returncode}")
-        logger.error(f"stderr: {res.stderr}")
-        if res.stdout:
-            logger.error(f"stdout: {res.stdout}")
+        # git_command already logged stderr/stdout/returncode above; just
+        # raise with enough context for the caller. Duplicating the
+        # log block here was producing two copies of every git failure.
         raise RuntimeError(
             f"`{' '.join(args)}` failed with return code {res.returncode}"
         )
