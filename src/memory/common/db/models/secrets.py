@@ -172,7 +172,13 @@ def extract(session: Session, user_id: int, name: str) -> str:
     """
     secret = find_secret(session, user_id, name)
     if secret is None:
-        logger.debug(f"No secret found for '{name}', using as literal value")
+        # Do NOT interpolate `name` into the log message: per this
+        # function's contract, `name` may be a literal secret value
+        # (e.g. a GitHub PAT passed directly through cloud_claude's
+        # GITHUB_TOKEN / GITHUB_TOKEN_WRITE plumbing). Logging it at any
+        # level risks leaking plaintext credentials to log aggregation
+        # or error trackers if DEBUG is ever enabled.
+        logger.debug("No secret found for given name, using as literal value")
         return name
     return secret.value
 
