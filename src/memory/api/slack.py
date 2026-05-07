@@ -194,12 +194,14 @@ class SlackAppResponse(BaseModel):
     setup_state: str
     is_active: bool
     is_owner: bool
+    is_authorized: bool
     created_by_user_id: int | None
     created_at: str | None
     updated_at: str | None
     client_secret_configured: bool
     signing_secret_configured: bool
     authorized_users: list[SlackAppAuthorizedUser]
+    authorized_user_ids: list[int]
 
 
 # --- Helper Functions ---
@@ -677,6 +679,7 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
         setup_state=app.setup_state,
         is_active=app.is_active,
         is_owner=app.is_owner(current_user),
+        is_authorized=app.is_authorized(current_user),
         created_by_user_id=app.created_by_user_id,
         created_at=app.created_at.isoformat() if app.created_at else None,
         updated_at=app.updated_at.isoformat() if app.updated_at else None,
@@ -686,6 +689,7 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
             SlackAppAuthorizedUser(id=u.id, email=u.email, name=u.name)
             for u in app.authorized_users
         ],
+        authorized_user_ids=[u.id for u in app.authorized_users],
     )
 
 

@@ -79,10 +79,14 @@ export const SlackAppWizard = ({
     if (!app) return
     if (step !== 'events-url' && step !== 'test-message') return
     let cancelled = false
+    let consecutiveFailures = 0
+    const FAILURE_THRESHOLD = 3
     const tick = async () => {
       try {
         const status = await wizard.getWizardStatus(app.id)
         if (cancelled) return
+        consecutiveFailures = 0
+        clearError()
         if (step === 'events-url' && status.setup_state === 'signing_verified') {
           setStep('test-message')
         }
@@ -94,8 +98,12 @@ export const SlackAppWizard = ({
           onComplete?.(fresh)
         }
       } catch (e) {
-        // Transient errors during polling are non-fatal — keep retrying.
-        if (!cancelled) setError((e as Error).message)
+        consecutiveFailures += 1
+        console.warn('Wizard polling tick failed:', e)
+        // Surface only persistent failures, not single network blips.
+        if (!cancelled && consecutiveFailures >= FAILURE_THRESHOLD) {
+          setError((e as Error).message)
+        }
       }
     }
     const id = window.setInterval(tick, POLL_INTERVAL_MS)

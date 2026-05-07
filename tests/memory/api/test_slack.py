@@ -418,6 +418,270 @@ def test_oauth_state_expiration(db_session, user):
     assert valid_state.expires_at > datetime.now(timezone.utc)
 
 
+# ====== /slack/callback/{slack_app_id} tests (multi-tenant) ======
+
+
+@pytest.fixture
+def authorized_slack_app(db_session, user):
+    """SlackApp owned by `user` with client_id + client_secret set, ready for
+    callback tests. ``user`` is implicitly authorized as the owner."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Test Slack App",
+        setup_state="live",
+        created_by_user_id=user.id,
+    )
+    app.client_secret = "test-client-secret"
+    db_session.add(app)
+    db_session.commit()
+    return app
+
+
+def _seed_state_for_user(db_session, user_id: int) -> str:
+    """Mint a real OAuthClientState row + signed_state for ``user_id``.
+    Returns the signed_state suitable for the /callback query parameter."""
+    from memory.common.oauth_client import generate_state, sign_state
+
+    raw_state = generate_state()
+    db_session.add(
+        OAuthClientState(
+            state=raw_state,
+            provider="slack",
+            user_id=user_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        )
+    )
+    db_session.commit()
+    return sign_state(raw_state, user_id)
+
+
+def test_callback_unknown_slack_app_id_returns_404(client, db_session, user):
+    """Hitting /slack/callback/{id} for a non-existent app id returns 404
+    (uniformly, so existence isn't probable from outside)."""
+    signed_state = _seed_state_for_user(db_session, user.id)
+    response = client.get(
+        "/slack/callback/9999999",
+        params={"code": "fake_code", "state": signed_state},
+    )
+    assert response.status_code == 404
+
+
+def test_callback_inactive_slack_app_returns_404(client, db_session, user):
+    """An app with is_active=False is invisible to the callback for the same
+    reason a non-existent one is."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Inactive App",
+        setup_state="live",
+        is_active=False,
+        created_by_user_id=user.id,
+    )
+    app.client_secret = "secret"
+    db_session.add(app)
+    db_session.commit()
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+    response = client.get(
+        f"/slack/callback/{app.id}",
+        params={"code": "fake_code", "state": signed_state},
+    )
+    assert response.status_code == 404
+
+
+def test_callback_unauthorized_user_returns_403(
+    client, db_session, user, other_user
+):
+    """A user who is neither the owner nor in authorized_users gets 403 —
+    they must not be able to OAuth into another tenant's SlackApp."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Other-tenant App",
+        setup_state="live",
+        created_by_user_id=other_user.id,
+    )
+    app.client_secret = "secret"
+    db_session.add(app)
+    db_session.commit()
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+    response = client.get(
+        f"/slack/callback/{app.id}",
+        params={"code": "fake_code", "state": signed_state},
+    )
+    assert response.status_code == 403
+
+
+def test_callback_state_for_different_user_returns_403(
+    client, db_session, user, other_user, authorized_slack_app
+):
+    """CSRF binding regression: an attacker who minted a state for their own
+    session must NOT be able to phish a victim into hitting the callback
+    with that state. The authenticated user (`user`) must match the state's
+    user_id (`other_user.id`); mismatch → 403."""
+    signed_state = _seed_state_for_user(db_session, other_user.id)
+    response = client.get(
+        f"/slack/callback/{authorized_slack_app.id}",
+        params={"code": "fake_victim_code", "state": signed_state},
+    )
+    assert response.status_code == 403
+
+
+def test_callback_missing_client_secret_returns_503(client, db_session, user):
+    """An app whose client_secret hasn't been set yet (wizard incomplete) must
+    fail-closed at the callback rather than attempt a token exchange with
+    None."""
+    app = SlackApp(
+        client_id="test.client.id",
+        name="Half-configured App",
+        setup_state="draft",
+        created_by_user_id=user.id,
+    )
+    db_session.add(app)
+    db_session.commit()
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+    response = client.get(
+        f"/slack/callback/{app.id}",
+        params={"code": "fake_code", "state": signed_state},
+    )
+    assert response.status_code == 503
+
+
+def test_callback_malformed_team_id_returns_400(
+    client, db_session, user, authorized_slack_app
+):
+    """Defense-in-depth: even if Slack (or an MITM) returns a team_id that
+    doesn't match `_SLACK_TEAM_ID_PATTERN`, we 400 before letting the value
+    reach the DB or the HTML template. Catches XSS via team_id if the
+    regex is ever loosened."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "ok": True,
+            "authed_user": {"access_token": "xoxp-fake", "scope": "channels:history"},
+            "team": {"id": "<script>alert(1)</script>", "name": "Test"},
+        }
+    )
+    async_client_ctx = AsyncMock()
+    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+    async_client_ctx.post = AsyncMock(return_value=mock_response)
+
+    with patch("memory.api.slack.httpx.AsyncClient") as mock_httpx:
+        mock_httpx.return_value = async_client_ctx
+        response = client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+    assert response.status_code == 400
+    assert "team id" in response.json()["detail"].lower()
+
+
+def test_callback_happy_path_creates_credentials_with_slack_app_id(
+    client, db_session, user, authorized_slack_app
+):
+    """Full successful flow: callback exchanges code, persists a
+    `SlackUserCredentials` row scoped to (slack_app_id, workspace_id,
+    user_id), and returns the BroadcastChannel HTML."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "ok": True,
+            "authed_user": {
+                "access_token": "xoxp-test-access",
+                "refresh_token": "xoxr-test-refresh",
+                "scope": "channels:history,chat:write",
+                "id": "U_TESTUSER",
+                "expires_in": 3600,
+            },
+            "team": {"id": "T0123ABCDE", "name": "Test Workspace"},
+        }
+    )
+    async_client_ctx = AsyncMock()
+    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+    async_client_ctx.post = AsyncMock(return_value=mock_response)
+
+    with (
+        patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
+        patch("memory.api.slack.celery_app.send_task"),
+    ):
+        mock_httpx.return_value = async_client_ctx
+        response = client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    assert response.status_code == 200, response.text
+    creds = (
+        db_session.query(SlackUserCredentials)
+        .filter(
+            SlackUserCredentials.slack_app_id == authorized_slack_app.id,
+            SlackUserCredentials.workspace_id == "T0123ABCDE",
+            SlackUserCredentials.user_id == user.id,
+        )
+        .one_or_none()
+    )
+    assert creds is not None
+    assert creds.access_token == "xoxp-test-access"
+    assert creds.slack_app_id == authorized_slack_app.id
+
+
+def test_callback_html_response_uses_json_dumps_for_slack_app_id(
+    client, db_session, user, authorized_slack_app
+):
+    """The OAuth callback HTML interpolates workspaceId, slackAppId, and
+    BroadcastChannel name via json.dumps. This test pins that contract — if
+    a future change reintroduces raw `{slack_app.id}` interpolation while
+    relying on the team-id regex to keep things safe, this test catches it
+    by verifying the JS literal is properly quoted."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    signed_state = _seed_state_for_user(db_session, user.id)
+
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "ok": True,
+            "authed_user": {"access_token": "xoxp-fake", "scope": "channels:read"},
+            "team": {"id": "T98765ABCD", "name": "Test"},
+        }
+    )
+    async_client_ctx = AsyncMock()
+    async_client_ctx.__aenter__ = AsyncMock(return_value=async_client_ctx)
+    async_client_ctx.__aexit__ = AsyncMock(return_value=False)
+    async_client_ctx.post = AsyncMock(return_value=mock_response)
+
+    with (
+        patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
+        patch("memory.api.slack.celery_app.send_task"),
+    ):
+        mock_httpx.return_value = async_client_ctx
+        response = client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    assert response.status_code == 200
+    html = response.text
+    # Each interpolated value lands as a JSON literal — strings get quotes,
+    # ints are bare. The presence of the quoted forms confirms json.dumps was used.
+    assert '"T98765ABCD"' in html  # workspace_id was JSON-encoded
+    assert f'"slack-oauth-{user.id}"' in html  # channel name was JSON-encoded
+    assert f"slackAppId: {authorized_slack_app.id}" in html  # int -> bare
+    # Sanity: no raw < or > from any interpolation slipped through.
+    # (Slack JSON-escapes '<' as < via json.dumps default.)
+    assert "<script>alert" not in html
+
+
 # ====== Model tests ======
 
 
@@ -642,6 +906,7 @@ def test_create_slack_app_returns_draft(client, db_session, user):
     assert body["setup_state"] == "draft"
     assert body["is_active"] is True
     assert body["is_owner"] is True
+    assert body["is_authorized"] is True  # owner is implicitly authorized
     assert body["created_by_user_id"] == user.id
     # Secrets must NOT be exposed.
     assert body["client_secret_configured"] is False
@@ -651,6 +916,37 @@ def test_create_slack_app_returns_draft(client, db_session, user):
     assert "client_secret_encrypted" not in body
     assert "signing_secret_encrypted" not in body
     assert body["authorized_users"] == []
+    assert body["authorized_user_ids"] == []
+
+
+def test_slack_app_response_contract():
+    """Pin the SlackAppResponse field set so a future divergence between
+    the backend Pydantic model and the frontend `SlackAppResponse`
+    TypeScript interface (frontend/src/hooks/useSlackWizard.ts) trips a
+    test rather than only manifesting at runtime as `undefined` reads.
+
+    The expected set MUST match the TS interface field-for-field; bump
+    both together when changing the wire shape.
+    """
+    from memory.api.slack import SlackAppResponse
+
+    expected = {
+        "id",
+        "client_id",
+        "name",
+        "setup_state",
+        "is_active",
+        "is_owner",
+        "is_authorized",
+        "created_by_user_id",
+        "created_at",
+        "updated_at",
+        "client_secret_configured",
+        "signing_secret_configured",
+        "authorized_users",
+        "authorized_user_ids",
+    }
+    assert set(SlackAppResponse.model_fields.keys()) == expected
 
 
 def test_create_slack_app_duplicate_client_id_returns_409(client, db_session, user):

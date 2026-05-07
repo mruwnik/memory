@@ -25,6 +25,12 @@ export type SlackAppSetupState =
   | 'live'
   | 'degraded'
 
+export interface SlackAppAuthorizedUser {
+  id: number
+  email: string
+  name: string
+}
+
 export interface SlackAppResponse {
   id: number
   client_id: string
@@ -36,6 +42,7 @@ export interface SlackAppResponse {
   client_secret_configured: boolean
   signing_secret_configured: boolean
   created_by_user_id: number | null
+  authorized_users: SlackAppAuthorizedUser[]
   authorized_user_ids: number[]
   created_at: string | null
   updated_at: string | null
