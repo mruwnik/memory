@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import make_session
 from memory.common.scopes import SCOPE_POLLING, SCOPE_POLLING_WRITE
 from memory.common.db.models import (
@@ -35,17 +36,19 @@ def get_current_user_id() -> int:
 
 
 def parse_datetime(s: str | None) -> datetime | None:
-    """Parse ISO datetime string with UTC normalization."""
+    """Parse ISO datetime string with UTC normalization.
+
+    Thin wrapper around :func:`memory.common.dates.parse_iso_datetime_utc`
+    that raises rather than returning None when the input is bad —
+    polling-tool callers want the noisy failure (it surfaces at the MCP
+    boundary as a tool-call error).
+    """
     if not s:
         return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        # Ensure UTC
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except ValueError:
+    dt = parse_iso_datetime_utc(s)
+    if dt is None:
         raise ValueError(f"Invalid datetime format: {s}")
+    return dt
 
 
 @polling_mcp.tool()

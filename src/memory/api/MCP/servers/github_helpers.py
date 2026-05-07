@@ -9,13 +9,13 @@ Project orchestration helpers (creation, attach, refresh, etc.) live in
 """
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Text, any_, desc, func
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from memory.common.dates import parse_iso_datetime
 from memory.common.access_control import (
     apply_access_filter_to_query,
     build_access_filter,
@@ -178,14 +178,21 @@ def list_issues(
             for key, value in project_field.items():
                 query = query.filter(GithubItem.project_fields[key].astext == value)
         if updated_since:
-            since_dt = datetime.fromisoformat(updated_since.replace("Z", "+00:00"))
+            since_dt = parse_iso_datetime(updated_since)
+            if since_dt is None:
+                raise ValueError(f"Invalid 'updated_since' datetime: {updated_since}")
             query = query.filter(GithubItem.github_updated_at >= since_dt)
         if updated_before:
-            before_dt = datetime.fromisoformat(updated_before.replace("Z", "+00:00"))
+            before_dt = parse_iso_datetime(updated_before)
+            if before_dt is None:
+                raise ValueError(f"Invalid 'updated_before' datetime: {updated_before}")
             query = query.filter(GithubItem.github_updated_at <= before_dt)
         if deadline_before:
             from sqlalchemy import or_, cast, Date
-            deadline_dt = datetime.fromisoformat(deadline_before.replace("Z", "+00:00")).date()
+            parsed = parse_iso_datetime(deadline_before)
+            if parsed is None:
+                raise ValueError(f"Invalid 'deadline_before' datetime: {deadline_before}")
+            deadline_dt = parsed.date()
             # Include items where either:
             # 1. Project field "EquiStamp.Due Date" <= deadline_before
             # 2. Milestone due_on <= deadline_before
@@ -240,7 +247,10 @@ def list_milestones(
             query = query.filter(Project.state == state)
 
         if deadline_before:
-            deadline_dt = datetime.fromisoformat(deadline_before.replace("Z", "+00:00")).date()
+            parsed = parse_iso_datetime(deadline_before)
+            if parsed is None:
+                raise ValueError(f"Invalid 'deadline_before' datetime: {deadline_before}")
+            deadline_dt = parsed.date()
             query = query.filter(Project.due_on.isnot(None))
             query = query.filter(Project.due_on <= deadline_dt)
 

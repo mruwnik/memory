@@ -1143,3 +1143,90 @@ def test_sync_notes_skips_all_profiles(mock_sync_note, mock_make_session, tmp_pa
     assert result["notes_num"] == 2
     assert result["new_notes"] == 1
     assert mock_sync_note.delay.call_count == 1
+
+
+# ----- Path-traversal hardening for sync_note + Note.save_to_file -----
+#
+# `notes.upsert` (the MCP tool) already validates filenames, but
+# `sync_notes` and `track_git_changes` re-fan-out into `sync_note` with
+# paths pulled from the filesystem / git remote. A `.md` file named
+# `../../etc/cron.d/poc.md` would otherwise be written outside
+# NOTES_STORAGE_DIR — arbitrary host file write at worker process privs.
+
+
+@pytest.mark.parametrize(
+    "bad_filename",
+    [
+        "../../etc/cron.d/poc",
+        "../escape.md",
+        "subdir/../../escape.md",
+        "/../../etc/passwd",  # leading slash is stripped, then escapes
+    ],
+)
+def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path):
+    """A path-traversal filename must be rejected before any DB or FS write."""
+    from memory.common import settings
+
+    # Anchor the resolution to a writable temp dir so the comparison is
+    # deterministic regardless of host config.
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+        # No mock_make_session here on purpose — the validation must
+        # raise before we ever try to open a DB session.
+        with pytest.raises(ValueError):
+            notes.sync_note(
+                subject="poc",
+                content="x",
+                filename=bad_filename,
+            )
+
+    # Nothing should have been written.
+    assert list(notes_dir.iterdir()) == []
+
+
+def test_note_save_to_file_rejects_traversal_filename(tmp_path):
+    """Defense in depth: Note.save_to_file refuses to write outside the dir."""
+    from memory.common import settings
+
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(exist_ok=True)
+    sentinel = tmp_path / "should-not-exist.md"
+
+    note = Note(
+        modality="text",
+        mime_type="text/markdown",
+        subject="poc",
+        content="malicious",
+        filename="../should-not-exist.md",  # escapes notes_dir
+    )
+
+    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+        with pytest.raises(ValueError):
+            note.save_to_file()
+
+    assert not sentinel.exists()
+    # The notes dir itself must be untouched.
+    assert list(notes_dir.iterdir()) == []
+
+
+def test_note_save_to_file_accepts_valid_relative_path(tmp_path):
+    """Sanity: a normal relative path still works after the validator."""
+    from memory.common import settings
+
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    note = Note(
+        modality="text",
+        mime_type="text/markdown",
+        subject="ok",
+        content="hello",
+        filename="subdir/ok.md",
+    )
+
+    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+        note.save_to_file()
+
+    assert (notes_dir / "subdir" / "ok.md").read_text() == "hello"

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,11 @@ HTTP_TIMEOUT = 30
 
 # Log directory on host where orchestrator writes session logs
 LOG_DIR = Path("/var/log/claude-sessions")
+
+# Strict session-id format. Duplicated from cloud_claude._SESSION_ID_RE so
+# the orchestrator client doesn't have to import the API layer (and so this
+# module can self-validate inputs that hit the host filesystem).
+_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
 
 
 class OrchestratorError(Exception):
@@ -574,7 +580,15 @@ class OrchestratorClient:
 
         The orchestrator writes logs to LOG_DIR/{session_id}.log.
         Returns None if no logs are available.
+
+        Validates ``session_id`` format here (defense in depth) — without
+        this, a malformed id like ``u1-x-../../../etc/hosts`` would resolve
+        to ``/etc/hosts.log`` on the host filesystem.
         """
+        if not _SESSION_ID_RE.match(session_id):
+            logger.warning("get_logs: rejecting malformed session_id")
+            return None
+
         log_file = LOG_DIR / f"{session_id}.log"
         if not log_file.exists():
             return None

@@ -5,11 +5,12 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from memory.api.auth import get_current_user
+from memory.api.auth import require_scope
 from memory.common.db.models import User
+from memory.common.scopes import SCOPE_ADMIN
 
 
 router = APIRouter(prefix="/api/docker", tags=["docker"])
@@ -107,9 +108,14 @@ def decode_docker_logs(data: bytes) -> str:
 
 @router.get("/containers")
 def list_containers(
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> list[ContainerInfo]:
-    """List allowed Docker containers and their status."""
+    """List allowed Docker containers and their status.
+
+    Admin-only: container metadata is operator infrastructure and these
+    same containers handle every other user's requests, so even the
+    container list reveals running fleet topology.
+    """
     try:
         with get_docker_client() as client:
             response = client.get("/containers/json", params={"all": True})
@@ -159,10 +165,17 @@ def get_logs(
     tail: int = Query(1000, ge=1, le=10000, description="Number of lines"),
     filter_text: str | None = Query(None, description="Filter logs containing text"),
     timestamps: bool = Query(True, description="Include timestamps"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> LogsResponse:
     """
     Get logs from a Docker container.
+
+    Admin-only: the memory-api / memory-worker / memory-ingest containers
+    handle every authenticated request and every Celery task in the system,
+    so their stdout/stderr stream contains other users' request paths,
+    search queries, validation-error bodies (which can include passwords),
+    and worker task arguments. Exposing this to non-admins is a multi-tenant
+    information leak.
 
     Filters by time range and optionally by text content.
     """

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from memory.common.dates import parse_iso_datetime
 from memory.common.access_control import (
     get_user_team_ids,
     has_admin_scope,
@@ -138,7 +139,7 @@ def parse_due_on(due_on_str: str | None) -> tuple[datetime | None, dict | None]:
     """
     if due_on_str is None:
         return None, None
-    try:
-        return datetime.fromisoformat(due_on_str.replace("Z", "+00:00")), None
-    except ValueError:
+    parsed = parse_iso_datetime(due_on_str)
+    if parsed is None:
         return None, {"error": "Invalid due_on format. Use ISO 8601.", "project": None}
+    return parsed, None

@@ -9,7 +9,74 @@ import pytest
 from starlette.requests import Request
 
 from memory.api import auth
+from memory.api.auth import is_whitelisted_path
 from memory.common import settings
+
+
+# --- AuthenticationMiddleware whitelist matching ----------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/health",
+        "/health/metrics",
+        "/authorize",
+        "/authorize/code",
+        "/token",
+        "/token/refresh",
+        "/mcp",
+        "/mcp/tools",
+        "/ui",
+        "/ui/index.html",
+        "/oauth/login",
+        "/oauth/callback/google",
+        "/.well-known/openid-configuration",
+        "/admin/statics/css/main.css",
+        "/google-drive/callback",
+        "/polls/respond",
+        "/polls/respond/abc-123",
+        "/claude/transfer/pull",
+        "/claude/transfer/push",
+    ],
+)
+def test_is_whitelisted_path_lets_real_routes_through(path):
+    assert is_whitelisted_path(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Latent prefix-overrun footguns: any one of these added as a real
+        # route would bypass auth in the old `startswith` impl.
+        "/healthcheck",
+        "/health-secret",
+        "/healthxxx",
+        "/register",  # /register entry was removed — must require auth now
+        "/register/finish",
+        "/registerme",
+        "/registers",
+        "/authorize-anything",
+        "/tokens",
+        "/tokenrevoke",
+        "/mcphidden",
+        "/mcp-admin",
+        "/uiAttacker",
+        "/uiconfig",
+        # Real-but-not-whitelisted endpoints
+        "/users",
+        "/secrets",
+        "/teams/1",
+        "/calendar-accounts",
+        "/google-drive/config",  # admin-gated; must NOT be whitelisted
+        "/polls",  # the public list endpoint is /polls/respond, /polls itself is auth'd
+        "/claude/u1-x-deadbeef/logs",  # gated by route-level user check
+        "",
+    ],
+)
+def test_is_whitelisted_path_blocks_prefix_overrun(path):
+    assert is_whitelisted_path(path) is False
 
 
 def make_request(query: str) -> Request:
@@ -309,14 +376,29 @@ def test_handle_api_key_use_updates_last_used():
 
 
 def test_handle_api_key_use_deletes_one_time_key():
-    """Test handle_api_key_use deletes one-time keys after use."""
+    """Test handle_api_key_use atomically deletes one-time keys after use.
+
+    The delete uses ``DELETE ... WHERE id=:id RETURNING id`` (SQLAlchemy core)
+    rather than ``db.delete(record)`` so concurrent consumers can't both
+    succeed — see CWE-367 / task 45825913.
+    """
     db = MagicMock()
+    # The atomic DELETE...RETURNING returns the deleted row's id
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = 1
+    db.execute.return_value = result
+
     key_record = MagicMock()
+    key_record.id = 1
     key_record.is_one_time = True
 
-    auth.handle_api_key_use(key_record, db)
+    won = auth.handle_api_key_use(key_record, db)
 
-    db.delete.assert_called_once_with(key_record)
+    assert won is True
+    # ORM-level delete is NOT used (it would non-atomic and racy)
+    db.delete.assert_not_called()
+    # Atomic SQL DELETE was issued exactly once
+    db.execute.assert_called_once()
     db.commit.assert_called_once()
 
 
@@ -469,3 +551,225 @@ def test_get_current_user_falls_back_to_session_auth_without_request_state():
     db.get.assert_not_called()
     # Verify fallback auth was used
     mock_get_session.assert_called_once_with(request, db)
+
+
+# ====== One-time API key race condition (CWE-367) ======
+
+
+def _one_time_key_fixture(key_id: int = 99) -> MagicMock:
+    """Build a MagicMock that walks like a valid one-time APIKey row."""
+    record = MagicMock()
+    record.id = key_id
+    record.key = "ot_secret"
+    record.key_type = "one_time"
+    record.is_valid.return_value = True
+    record.is_one_time = True
+    record.user = MagicMock()
+    return record
+
+
+def _make_db_for_atomic_delete(rows_returned: int) -> MagicMock:
+    """Mock SQLAlchemy DB whose execute(delete()) returns one row, then None.
+
+    Models the real Postgres semantics: the first DELETE...RETURNING wins
+    and gets back the row id; the second sees zero rows.
+    """
+    db = MagicMock()
+    results = []
+    for _ in range(rows_returned):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = 99  # id of the deleted row
+        results.append(result)
+    # Subsequent calls return "no rows" — the row is already gone.
+    no_row = MagicMock()
+    no_row.scalar_one_or_none.return_value = None
+    db.execute.side_effect = results + [no_row, no_row, no_row]
+    return db
+
+
+@patch("memory.api.auth.lookup_api_key")
+def test_one_time_key_race_only_one_winner(mock_lookup):
+    """Two concurrent authentications with the same ot_* key must not both succeed."""
+    db = _make_db_for_atomic_delete(rows_returned=1)
+    record = _one_time_key_fixture()
+    mock_lookup.return_value = record
+
+    # First call wins the atomic delete.
+    user1, key1 = auth.authenticate_by_api_key("ot_secret", db)
+    # Second concurrent call: the row is gone, RETURNING yields nothing.
+    user2, key2 = auth.authenticate_by_api_key("ot_secret", db)
+
+    assert (user1, key1) == (record.user, record)
+    assert (user2, key2) == (None, None), (
+        "Race-loser must not authenticate — one-time means single use"
+    )
+
+
+def test_handle_api_key_use_one_time_atomic_delete():
+    """handle_api_key_use uses DELETE...RETURNING for one-time keys."""
+    db = _make_db_for_atomic_delete(rows_returned=1)
+    record = _one_time_key_fixture()
+
+    won = auth.handle_api_key_use(record, db)
+
+    assert won is True
+    # The atomic statement was issued exactly once
+    assert db.execute.call_count == 1
+    # And we committed
+    db.commit.assert_called_once()
+    # And we did NOT use the ORM-level delete (which is non-atomic)
+    db.delete.assert_not_called()
+
+
+def test_handle_api_key_use_regular_key_no_delete():
+    """Regular keys: no DELETE statement; just last_used_at + commit."""
+    db = MagicMock()
+    record = _one_time_key_fixture()
+    record.is_one_time = False
+
+    won = auth.handle_api_key_use(record, db)
+
+    assert won is True
+    db.execute.assert_not_called()
+    db.delete.assert_not_called()
+    db.commit.assert_called_once()
+
+
+def test_handle_api_key_use_one_time_loser_returns_false():
+    """If the row is already gone (race-loser), handle_api_key_use returns False."""
+    db = _make_db_for_atomic_delete(rows_returned=0)  # delete returns no row
+    record = _one_time_key_fixture()
+
+    won = auth.handle_api_key_use(record, db)
+
+    assert won is False
+
+
+# ====== is_expired (tz-aware UTC handling) ======
+
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def test_is_expired_naive_assumed_utc_in_past():
+    # Strip tzinfo to mimic how Postgres returns naive UTC datetimes.
+    past_naive = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    assert auth.is_expired(past_naive) is True
+
+
+def test_is_expired_naive_assumed_utc_in_future():
+    future_naive = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None)
+    assert auth.is_expired(future_naive) is False
+
+
+def test_is_expired_aware_utc_in_past():
+    past_utc = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert auth.is_expired(past_utc) is True
+
+
+def test_is_expired_aware_utc_in_future():
+    future_utc = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert auth.is_expired(future_utc) is False
+
+
+def test_is_expired_aware_non_utc_converts_correctly():
+    """A datetime tagged with a non-UTC zone must be converted, not relabeled.
+
+    Repro for the get_user_from_token bug: a token expiring at
+    2025-01-01T01:00:00+02:00 represents 2024-12-31T23:00:00 UTC. The old
+    `.replace(tzinfo=UTC)` form would treat it as 2025-01-01T01:00:00 UTC,
+    granting two extra hours of validity.
+    """
+    plus_two = timezone(timedelta(hours=2))
+    # 1 hour from "now" UTC, expressed in +02:00. astimezone-correct path
+    # treats this as ~1h in the future; relabel-incorrect path would treat
+    # it as ~3h in the future (still future) — we use a tighter check.
+    far_future_in_plus2 = (datetime.now(timezone.utc) + timedelta(hours=1)).astimezone(plus_two)
+    assert auth.is_expired(far_future_in_plus2) is False
+
+    # Now a value that's in the past in UTC but would *look* future if you
+    # only relabeled. 1 hour ago UTC, expressed in -05:00:
+    minus_five = timezone(timedelta(hours=-5))
+    one_hour_ago_in_minus5 = (datetime.now(timezone.utc) - timedelta(hours=1)).astimezone(minus_five)
+    # If we only relabeled the tzinfo (the bug), we'd take the wall-clock
+    # time of the -05:00 representation and compare it to UTC `now` — that
+    # comparison is wrong. The fixed code converts and gets True (expired).
+    assert auth.is_expired(one_hour_ago_in_minus5) is True
+
+
+def test_is_expired_none_treated_as_expired():
+    """Defense-in-depth: a NULL expires_at is expired (fail-closed)."""
+    assert auth.is_expired(None) is True
+
+
+def test_get_user_from_token_uses_is_expired():
+    """Smoke test: get_user_from_token reads session.user only when fresh."""
+    db = MagicMock()
+    session = MagicMock()
+    session.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    session.user = MagicMock()
+    db.get.return_value = session
+
+    result = auth.get_user_from_token("session-uuid", db)
+    assert result is None  # Expired → no user
+
+
+def test_get_user_from_token_returns_user_when_session_fresh():
+    db = MagicMock()
+    session = MagicMock()
+    session.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    user = MagicMock()
+    session.user = user
+    db.get.return_value = session
+
+    result = auth.get_user_from_token("session-uuid", db)
+    assert result is user
+
+
+# ====== create_user TOCTOU on duplicate email ======
+
+
+from fastapi import HTTPException as _HTTPException  # noqa: E402
+from sqlalchemy.exc import IntegrityError as _IntegrityError  # noqa: E402
+
+
+def test_create_user_early_check_returns_400_when_user_exists():
+    """Existing user → 400 without ever calling commit()."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = MagicMock()  # existing
+
+    with pytest.raises(_HTTPException) as exc:
+        auth.create_user("a@b", "pw", "Name", db)
+
+    assert exc.value.status_code == 400
+    db.commit.assert_not_called()
+
+
+def test_create_user_commit_integrityerror_returns_400():
+    """Race: existence check passes, but a parallel commit landed first
+    and the unique index rejects ours. Must not surface as 500."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None  # no existing
+    db.commit.side_effect = _IntegrityError("INSERT", {}, None)
+
+    with patch.object(auth.HumanUser, "create_with_password", return_value=MagicMock()):
+        with pytest.raises(_HTTPException) as exc:
+            auth.create_user("a@b", "pw", "Name", db)
+
+    assert exc.value.status_code == 400
+    db.rollback.assert_called_once()
+
+
+def test_create_user_happy_path_commits_and_refreshes():
+    """No race, no existing user → user is added, committed, and refreshed."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    fake_user = MagicMock()
+    with patch.object(auth.HumanUser, "create_with_password", return_value=fake_user):
+        result = auth.create_user("a@b", "pw", "Name", db)
+
+    assert result is fake_user
+    db.add.assert_called_once_with(fake_user)
+    db.commit.assert_called_once()
+    db.refresh.assert_called_once_with(fake_user)
+    db.rollback.assert_not_called()

@@ -275,9 +275,96 @@ def test_snapshot_deduplication():
     """Test that uploading the same content returns existing snapshot."""
 
 
-@pytest.mark.skip("Not implemented - needs FastAPI TestClient setup")
-def test_user_isolation():
-    """Test that users cannot see each other's snapshots."""
+def test_snapshot_dedup_is_per_user(db_session, admin_user, regular_user):
+    """Two users uploading bytes with the same content_hash must each get
+    their own row — global dedup would leak the original uploader's
+    metadata (claude_account_email, summary, etc.) to the second uploader.
+    """
+    from memory.common.db.models import ClaudeConfigSnapshot
+
+    shared_hash = "a" * 64
+
+    snap_a = ClaudeConfigSnapshot(
+        user_id=admin_user.id,
+        name="user-a-snapshot",
+        content_hash=shared_hash,
+        claude_account_email="user-a@example.com",
+        subscription_type="pro",
+        summary='{"skills": ["secret-a"]}',
+        filename=f"{admin_user.id}/aaaa_user-a.tar.gz",
+        size=123,
+    )
+    snap_b = ClaudeConfigSnapshot(
+        user_id=regular_user.id,
+        name="user-b-snapshot",
+        content_hash=shared_hash,
+        claude_account_email="user-b@example.com",
+        subscription_type="free",
+        summary='{"skills": ["secret-b"]}',
+        filename=f"{regular_user.id}/aaaa_user-b.tar.gz",
+        size=456,
+    )
+    db_session.add_all([snap_a, snap_b])
+    # Must NOT raise IntegrityError — uniqueness is now per (user_id, content_hash).
+    db_session.commit()
+
+    # Per-user dedup lookup — what upload_snapshot uses — must only see
+    # the caller's own row.
+    found_for_a = (
+        db_session.query(ClaudeConfigSnapshot)
+        .filter(
+            ClaudeConfigSnapshot.content_hash == shared_hash,
+            ClaudeConfigSnapshot.user_id == admin_user.id,
+        )
+        .one()
+    )
+    assert found_for_a.id == snap_a.id
+    assert found_for_a.claude_account_email == "user-a@example.com"
+
+    found_for_b = (
+        db_session.query(ClaudeConfigSnapshot)
+        .filter(
+            ClaudeConfigSnapshot.content_hash == shared_hash,
+            ClaudeConfigSnapshot.user_id == regular_user.id,
+        )
+        .one()
+    )
+    assert found_for_b.id == snap_b.id
+    assert found_for_b.claude_account_email == "user-b@example.com"
+
+
+def test_snapshot_dedup_rejects_same_user_duplicate(db_session, admin_user):
+    """Same user re-uploading the same bytes still hits the per-user
+    unique constraint (would surface as the dedup-return path in
+    upload_snapshot)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from memory.common.db.models import ClaudeConfigSnapshot
+
+    shared_hash = "b" * 64
+    db_session.add(
+        ClaudeConfigSnapshot(
+            user_id=admin_user.id,
+            name="first",
+            content_hash=shared_hash,
+            filename=f"{admin_user.id}/bbbb_first.tar.gz",
+            size=10,
+        )
+    )
+    db_session.commit()
+
+    db_session.add(
+        ClaudeConfigSnapshot(
+            user_id=admin_user.id,
+            name="duplicate",
+            content_hash=shared_hash,
+            filename=f"{admin_user.id}/bbbb_duplicate.tar.gz",
+            size=10,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
 
 @pytest.mark.skip("Not implemented - needs FastAPI TestClient setup")

@@ -14,6 +14,7 @@ import aiohttp
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import UserSession, WatchedMarket
 from memory.common.markets import (
@@ -194,7 +195,9 @@ async def history(
                 continue
             try:
                 if isinstance(ts, str):
-                    pt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    pt = parse_iso_datetime(ts)
+                    if pt is None:
+                        continue
                 else:
                     pt = datetime.fromtimestamp(ts, tz=timezone.utc)
 
@@ -385,12 +388,7 @@ async def resolved(
     if sources is None:
         sources = ["manifold", "kalshi"]  # Polymarket doesn't have easy resolved API
 
-    since_dt = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            pass
+    since_dt = parse_iso_datetime(since)
 
     resolve_funcs = {
         "manifold": get_manifold_resolved,

@@ -7,7 +7,7 @@ from typing import cast
 
 import redis
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
 from memory.common.celery_app import (
@@ -173,6 +173,24 @@ def sync_note(
         filename = filename.lstrip("/")
         if not filename.endswith(".md"):
             filename = f"{filename}.md"
+        # Defense in depth: the MCP `notes.upsert` tool already validates
+        # this, but `sync_notes` and `track_git_changes` re-fan-out into
+        # this task with paths pulled from the filesystem / git remote
+        # (which we don't trust). A filename like ``../../etc/cron.d/poc``
+        # would otherwise resolve outside NOTES_STORAGE_DIR when
+        # `Note.save_to_file()` writes the content. Reject early so we
+        # never persist a Note row pointing outside the storage dir.
+        try:
+            paths.validate_path_within_directory(
+                settings.NOTES_STORAGE_DIR, filename
+            )
+        except ValueError as exc:
+            logger.error(
+                "Refusing to sync note with unsafe filename %r: %s",
+                filename,
+                exc,
+            )
+            raise
 
     with make_session() as session:
         existing_note = check_content_exists(session, Note, sha256=sha256)

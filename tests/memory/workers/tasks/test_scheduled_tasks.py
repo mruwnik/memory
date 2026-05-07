@@ -938,3 +938,101 @@ def test_spawn_claude_session_api_failure(mock_post, claude_session_task, db_ses
 
     with pytest.raises(ValueError, match="API returned 503"):
         scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session)
+
+
+# ----- run_id sanitization regression tests -----
+
+
+def test_sanitize_slug_strips_shell_metachars():
+    """Direct test of the helper used by spawn_claude_session."""
+    assert scheduled_tasks.sanitize_slug("normal-name") == "normal-name"
+    # Path traversal segments get hyphenated.
+    assert scheduled_tasks.sanitize_slug("../../etc/passwd") == "etc-passwd"
+    # Spaces become hyphens.
+    assert (
+        scheduled_tasks.sanitize_slug("branch with spaces") == "branch-with-spaces"
+    )
+    # Lowercase.
+    assert scheduled_tasks.sanitize_slug("UPPER") == "upper"
+    # All-punctuation strips to empty.
+    assert scheduled_tasks.sanitize_slug("...") == ""
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_sanitises_user_run_id(mock_post, db_session, sample_user):
+    """User-supplied run_id used to flow through verbatim, which would let
+    a scheduler caller embed shell metacharacters or path-traversal
+    segments into the CLAUDE_RUN_ID env var (and from there into the
+    container entrypoint's branch-creation step). Pin that the same
+    `sanitize_slug` applied to the task.topic path is now applied to
+    user-supplied run_id too."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Daily review",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test",
+                "run_id": "../../etc/passwd",
+            }
+        },
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+    posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
+    # Path-traversal characters must be gone.
+    assert ".." not in posted_run_id
+    assert "/" not in posted_run_id
+    # No leading hyphen — would be interpreted as a flag.
+    assert not posted_run_id.startswith("-")
+    # Still has the timestamp suffix.
+    assert re.search(r"-\d{8}-\d{6}$", posted_run_id)
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawn_claude_session_run_id_falls_back_when_slug_empty(
+    mock_post, db_session, sample_user
+):
+    """A run_id consisting entirely of punctuation strips to "" and would
+    yield a leading-hyphen branch name that the git CLI rejects. Falls
+    back to the task-id stub instead."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        topic="Daily review",
+        data={
+            "spawn_config": {
+                "environment_id": 1,
+                "initial_prompt": "test",
+                "run_id": "...",  # all punctuation
+            }
+        },
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    mock_response = Mock()
+    mock_response.ok = True
+    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
+    mock_post.return_value = mock_response
+
+    scheduled_tasks.spawn_claude_session(task, db=db_session)
+
+    posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
+    # Falls back to task-<task-id-stub>-<timestamp>
+    assert posted_run_id.startswith("task-")
+    assert not posted_run_id.startswith("-")
+    assert re.search(r"-\d{8}-\d{6}$", posted_run_id)

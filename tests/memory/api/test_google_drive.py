@@ -308,3 +308,120 @@ def test_callback_scope_parsing_handles_space_separated():
     assert "email" in granted_scopes
     assert "profile" in granted_scopes
     assert "https://www.googleapis.com/auth/drive.readonly" in granted_scopes
+
+
+# Access-control tests for /google-drive/config (admin-only)
+#
+# This config is a system-wide singleton: every user's Google OAuth flow
+# uses it. A non-admin who can write or delete it can re-target every
+# subsequent OAuth consent screen at their own client_id and capture
+# tokens for any Drive/Gmail/Calendar user. POST and DELETE must therefore
+# require admin scope; GET is informational (no secrets) and stays open.
+
+
+def _credentials_json_bytes() -> bytes:
+    """Minimal valid Google OAuth credentials JSON payload."""
+    import json as _json
+
+    return _json.dumps(
+        {
+            "web": {
+                "client_id": "fake-client-id",
+                "client_secret": "fake-client-secret",
+                "project_id": "fake-project",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["https://example.com/callback"],
+                "javascript_origins": [],
+            }
+        }
+    ).encode("utf-8")
+
+
+def test_upload_oauth_config_forbidden_for_non_admin(regular_client, db_session):
+    """A non-admin user must not be able to overwrite the global Google OAuth config."""
+    from memory.common.db.models.sources import GoogleOAuthConfig
+
+    response = regular_client.post(
+        "/google-drive/config",
+        files={"file": ("creds.json", _credentials_json_bytes(), "application/json")},
+    )
+
+    assert response.status_code == 403
+    # No row should have been created.
+    assert (
+        db_session.query(GoogleOAuthConfig)
+        .filter(GoogleOAuthConfig.name == "default")
+        .count()
+        == 0
+    )
+
+
+def test_delete_oauth_config_forbidden_for_non_admin(regular_client, db_session):
+    """A non-admin user must not be able to delete the global Google OAuth config."""
+    from memory.common.db.models.sources import GoogleOAuthConfig
+
+    config = GoogleOAuthConfig(
+        name="default",
+        client_id="legit-client-id",
+        client_secret="legit-secret",
+        redirect_uris=["https://example.com/callback"],
+    )
+    db_session.add(config)
+    db_session.commit()
+
+    response = regular_client.delete("/google-drive/config")
+
+    assert response.status_code == 403
+    # Config must still exist.
+    assert (
+        db_session.query(GoogleOAuthConfig)
+        .filter(GoogleOAuthConfig.name == "default")
+        .count()
+        == 1
+    )
+
+
+def test_upload_oauth_config_allowed_for_admin(client, db_session):
+    """Admin (default test client uses scopes=['*']) can write the OAuth config."""
+    from memory.common.db.models.sources import GoogleOAuthConfig
+
+    response = client.post(
+        "/google-drive/config",
+        files={"file": ("creds.json", _credentials_json_bytes(), "application/json")},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["client_id"] == "fake-client-id"
+    assert (
+        db_session.query(GoogleOAuthConfig)
+        .filter(GoogleOAuthConfig.name == "default")
+        .count()
+        == 1
+    )
+
+
+def test_delete_oauth_config_allowed_for_admin(client, db_session):
+    """Admin can delete the OAuth config."""
+    from memory.common.db.models.sources import GoogleOAuthConfig
+
+    config = GoogleOAuthConfig(
+        name="default",
+        client_id="legit-client-id",
+        client_secret="legit-secret",
+        redirect_uris=["https://example.com/callback"],
+    )
+    db_session.add(config)
+    db_session.commit()
+
+    response = client.delete("/google-drive/config")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted"}
+    assert (
+        db_session.query(GoogleOAuthConfig)
+        .filter(GoogleOAuthConfig.name == "default")
+        .count()
+        == 0
+    )

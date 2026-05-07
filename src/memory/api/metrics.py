@@ -7,16 +7,20 @@ system metrics, and aggregated summaries.
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 
-from memory.api.auth import get_current_user
+from memory.api.auth import require_scope
 from memory.common.db.connection import make_session
 from memory.common.db.models import MetricEvent, User
+from memory.common.scopes import SCOPE_ADMIN
 
-# Metrics endpoints require authentication as they may expose timing data
-# with user identifiers in labels.
+# Metrics endpoints are admin-only: every event row carries `labels`
+# containing identifiers like `user_id`, raw tool/task names, and (for
+# Celery task events) task arguments. A non-admin reading these gets a
+# real-time view of every other user's activity. The MCP metrics
+# middleware writes `user_id` into labels for every tool call.
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
@@ -68,7 +72,7 @@ def get_metrics_summary(
     metric_type: str | None = Query(None, description="Filter by type (task, mcp_call, system)"),
     hours: int = Query(24, ge=1, le=720, description="Hours of data to summarize"),
     name: str | None = Query(None, description="Filter by specific metric name"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> dict:
     """
     Get aggregated metrics summary.
@@ -153,7 +157,7 @@ def get_task_metrics(
     hours: int = Query(24, ge=1, le=720, description="Hours of data"),
     name: str | None = Query(None, description="Filter by task name"),
     limit: int = Query(100, ge=1, le=1000, description="Max events to return"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> dict:
     """
     Get Celery task metrics.
@@ -197,7 +201,7 @@ def get_mcp_metrics(
     hours: int = Query(24, ge=1, le=720, description="Hours of data"),
     name: str | None = Query(None, description="Filter by tool name"),
     limit: int = Query(100, ge=1, le=1000, description="Max events to return"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> dict:
     """
     Get MCP tool call metrics.
@@ -240,7 +244,7 @@ def get_mcp_metrics(
 def get_system_metrics(
     hours: int = Query(1, ge=1, le=168, description="Hours of data"),
     name: str | None = Query(None, description="Filter by metric name"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> dict:
     """
     Get system/process metrics (CPU, memory, disk).
@@ -289,7 +293,7 @@ def get_raw_metrics(
     hours: int = Query(1, ge=1, le=24, description="Hours of data"),
     limit: int = Query(100, ge=1, le=1000, description="Max events"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    _user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
 ) -> dict:
     """
     Get raw metric events with pagination.

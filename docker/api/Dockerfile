@@ -64,10 +64,13 @@ USER kb
 
 # Set environment variables
 ENV PORT=8000
-# FORWARDED_ALLOW_IPS controls which IPs can set X-Forwarded-* headers
-# Set to specific proxy IPs in production (e.g., "10.0.0.1,10.0.0.2")
-# Default "*" is for development/containerized deployments behind trusted proxies
-ENV FORWARDED_ALLOW_IPS="*"
+# FORWARDED_ALLOW_IPS controls which IPs Uvicorn trusts to set X-Forwarded-*
+# headers (and thus rewrite scope["client"] from XFF before request handling).
+# Default to loopback only: an attacker setting XFF over a direct connection
+# is no longer trusted, which is what the rate limiter relies on. Operators
+# running behind a real reverse proxy must set this to the proxy's IP(s) and
+# mirror the same set in RATE_LIMIT_TRUSTED_PROXIES.
+ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1"
 EXPOSE 8000
 
 CMD uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS" 

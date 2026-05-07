@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
@@ -13,6 +12,7 @@ from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import discord as discord_client
+from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import (
     SCOPE_DISCORD,
     SCOPE_DISCORD_ADMIN,
@@ -335,20 +335,12 @@ async def channel_history(
         limit = 200
 
     # Parse datetime filters
-    before_dt = None
-    after_dt = None
-
-    if before:
-        try:
-            before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid 'before' datetime format: {before}")
-
-    if after:
-        try:
-            after_dt = datetime.fromisoformat(after.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid 'after' datetime format: {after}")
+    before_dt = parse_iso_datetime(before)
+    if before and before_dt is None:
+        raise ValueError(f"Invalid 'before' datetime format: {before}")
+    after_dt = parse_iso_datetime(after)
+    if after and after_dt is None:
+        raise ValueError(f"Invalid 'after' datetime format: {after}")
 
     with make_session() as session:
         return await asyncio.to_thread(
