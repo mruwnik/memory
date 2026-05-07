@@ -669,3 +669,80 @@ def test_handle_duplicate_sha256_with_existing_data(db_session: Session):
     existing_in_db = db_session.query(SourceItem).filter_by(sha256=b"existing").first()
     assert existing_in_db is not None
     assert str(existing_in_db.content) == "original"  # Original should be preserved
+
+
+def test_handle_duplicate_sha256_records_expunged_in_session_info(db_session: Session):
+    """Regression: callers need a way to see what got silently expunged so
+    bulk-ingest counters and post-flush ``.id`` access can branch correctly.
+    The listener writes the dropped objects to ``session.info['expunged_dupes']``.
+    """
+    # Pre-existing row in the DB
+    pre = SourceItem(sha256=b"pre-existing", content="seed", modality="text")
+    db_session.add(pre)
+    db_session.commit()
+
+    # Two new items: one collides with the DB row, one is intra-batch dup,
+    # one is unique.
+    db_collision = SourceItem(
+        sha256=b"pre-existing", content="dup of db row", modality="text"
+    )
+    intra_a = SourceItem(sha256=b"intra-batch", content="first", modality="text")
+    intra_b = SourceItem(sha256=b"intra-batch", content="second", modality="text")
+    unique = SourceItem(sha256=b"fresh", content="new", modality="text")
+    for it in (db_collision, intra_a, intra_b, unique):
+        db_session.add(it)
+    db_session.commit()
+
+    expunged = db_session.info.get("expunged_dupes", [])
+
+    # Two were dropped (db_collision + intra_b); intra_a and unique persisted.
+    expunged_ids = {id(obj) for obj in expunged}
+    assert id(db_collision) in expunged_ids
+    assert id(intra_b) in expunged_ids
+    assert id(intra_a) not in expunged_ids
+    assert id(unique) not in expunged_ids
+    assert len(expunged) == 2
+
+    # And only the right rows committed.
+    sha_in_db = {row[0] for row in db_session.query(SourceItem.sha256).all()}
+    assert sha_in_db == {b"pre-existing", b"intra-batch", b"fresh"}
+
+
+def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: Session):
+    """Successive flushes with no SourceItems should not surface a stale
+    ``expunged_dupes`` list from a previous flush."""
+    # Flush 1: produce an expunge so session.info has a non-empty list
+    db_session.add(SourceItem(sha256=b"x", content="a", modality="text"))
+    db_session.add(SourceItem(sha256=b"x", content="b", modality="text"))
+    db_session.commit()
+    assert db_session.info.get("expunged_dupes")  # non-empty
+
+    # Flush 2: no new SourceItems — list must be reset
+    db_session.commit()
+    assert db_session.info.get("expunged_dupes") == []
+
+
+def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
+    """Pure-unit regression: previously the dead ``if not new_items: return``
+    after the loop never short-circuited because ``new_items`` is computed
+    pre-loop and never modified, so we always issued
+    ``SourceItem.sha256.in_({})`` against the DB even when no item had a
+    sha256. The fix tests ``items`` (the dict populated by the loop)
+    instead, so all-None batches skip the DB query.
+    """
+    from unittest.mock import MagicMock
+    from memory.common.db.models import source_item
+
+    fake_session = MagicMock()
+    fake_session.info = {}
+    # Two items with no sha256 — items dict will stay empty.
+    item_a = SourceItem(sha256=None, content="a", modality="text")
+    item_b = SourceItem(sha256=None, content="b", modality="text")
+    fake_session.new = [item_a, item_b]
+
+    source_item.handle_duplicate_sha256(fake_session, None, None)
+
+    # The DB query MUST NOT have been issued.
+    fake_session.query.assert_not_called()
+    # Empty list because nothing was expunged.
+    assert fake_session.info["expunged_dupes"] == []

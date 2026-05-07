@@ -4,6 +4,7 @@ Database models for the knowledge base system.
 
 from __future__ import annotations
 
+import logging
 import pathlib
 import re
 from datetime import datetime
@@ -43,6 +44,8 @@ import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
 from memory.common.scopes import SensitivityLevelLiteral as SensitivityLevel
 
+logger = logging.getLogger(__name__)
+
 PREVIEW_MAX_LENGTH = 300
 
 
@@ -73,32 +76,64 @@ class SourceItemPayload(TypedDict):
 
 @event.listens_for(Session, "before_flush")
 def handle_duplicate_sha256(session, flush_context, instances):
-    """
-    Event listener that efficiently checks for duplicate sha256 values before flush
-    and removes items with duplicate sha256 from the session.
+    """Drop duplicate-sha256 ``SourceItem`` rows from the session before flush.
 
-    Uses a single query to identify all duplicates rather than querying for each item.
+    Fires on every ``Session.flush()`` (including those implicit in commits)
+    across the entire codebase. Items in ``session.new`` whose sha256 is
+    either repeated within the same batch or already present in the DB are
+    expunged so the flush only writes net-new content. Uses a single
+    ``IN (...)`` query rather than per-item lookups.
+
+    The list of expunged objects is attached to
+    ``session.info["expunged_dupes"]`` (overwritten on each flush). Bulk
+    ingest paths that count len(committed) or rely on ``item.id`` being
+    populated post-flush should consult that list — silent expunge with no
+    caller signal previously made successful-looking commits silently drop
+    rows.
     """
     # Find all SourceItem objects being added
     new_items = [obj for obj in session.new if isinstance(obj, SourceItem)]
     if not new_items:
+        # Reset so a previous flush's list isn't mistaken for this one's.
+        session.info["expunged_dupes"] = []
         return
 
-    items = {}
+    expunged: list[SourceItem] = []
+    items: dict[bytes, SourceItem] = {}
     for item in new_items:
         try:
-            if (sha256 := item.sha256) is None:
-                continue
-
-            if sha256 in items:
-                session.expunge(item)
-                continue
-
-            items[sha256] = item
-        except (AttributeError, TypeError):
+            sha256 = item.sha256
+        except (AttributeError, TypeError) as exc:
+            # An attribute/type error here means a SourceItem subclass has a
+            # broken sha256 descriptor — a real bug we should surface, not
+            # silently skip. Log loudly and continue so the rest of the batch
+            # still processes (matching the old swallow-and-continue behavior
+            # for resilience, but not silently).
+            logger.warning(
+                "handle_duplicate_sha256: could not read sha256 from %r (%s); "
+                "skipping. This usually indicates a SourceItem subclass bug.",
+                type(item).__name__,
+                exc,
+            )
             continue
 
-    if not new_items:
+        if sha256 is None:
+            continue
+
+        if sha256 in items:
+            # Intra-batch duplicate: keep the first, drop the rest.
+            session.expunge(item)
+            expunged.append(item)
+            continue
+
+        items[sha256] = item
+
+    # Bug fix: previously this branch checked `new_items` (recomputed at the
+    # top and never modified inside the loop) rather than `items`, so it never
+    # short-circuited and we always issued ``SourceItem.sha256.in_({})`` —
+    # a needless DB roundtrip on every flush whose new items have sha256=None.
+    if not items:
+        session.info["expunged_dupes"] = expunged
         return
 
     # Query database for existing items with these sha256 values in a single query
@@ -113,6 +148,9 @@ def handle_duplicate_sha256(session, flush_context, instances):
     for sha256 in existing_sha256s:
         if sha256 in items:
             session.expunge(items[sha256])
+            expunged.append(items[sha256])
+
+    session.info["expunged_dupes"] = expunged
 
 
 def clean_filename(filename: str) -> str:
