@@ -296,14 +296,29 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
     if task.message:
         spawn_config["initial_prompt"] = task.message
 
-    # Auto-suffix run_id with execution timestamp to avoid branch conflicts
+    # Auto-suffix run_id with execution timestamp to avoid branch conflicts.
+    # ALWAYS apply sanitize_slug — the run_id flows into the container as
+    # CLAUDE_RUN_ID and is used by the entrypoint to construct a
+    # `claude/<run_id>` git branch name. Letting a user-supplied value
+    # through unsanitised would let a scheduler caller embed shell
+    # metacharacters / path-traversal segments / leading hyphens that
+    # `git checkout -b` would either fail on or interpret as flags. The
+    # task.topic path was already slugified; the explicit run_id path
+    # was the one that trusted user input.
     now_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    if spawn_config.get("run_id"):
-        spawn_config["run_id"] = f"{spawn_config['run_id']}-{now_str}"
+    user_run_id = spawn_config.get("run_id")
+    if user_run_id:
+        slug = sanitize_slug(str(user_run_id))
     else:
         raw = task.topic or f"task-{str(task.id)[:8]}"
         slug = sanitize_slug(raw)
-        spawn_config["run_id"] = f"{slug}-{now_str}"
+    if not slug:
+        # `sanitize_slug` strips to empty for input that's all
+        # punctuation/whitespace; fall back to the task-id stub rather
+        # than producing a "claude/-<timestamp>" branch with a leading
+        # hyphen (which `git checkout -b` will reject).
+        slug = f"task-{str(task.id)[:8]}"
+    spawn_config["run_id"] = f"{slug}-{now_str}"
 
     # NOTE: INTERNAL_API_URL should only point to container-internal or
     # localhost addresses. The session token is sent over HTTP (not HTTPS).

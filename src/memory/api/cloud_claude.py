@@ -429,8 +429,17 @@ async def spawn_session(
     if request.enable_playwright:
         env["ENABLE_PLAYWRIGHT"] = "1"
 
-    # Set run ID for branch naming (used by entrypoint to create claude/<run_id> branch)
-    env["CLAUDE_RUN_ID"] = request.run_id or session_id
+    # Set run ID for branch naming (used by entrypoint to create
+    # claude/<run_id> branch). Sanitise the user-supplied value so a
+    # caller can't smuggle shell metacharacters or a leading hyphen
+    # past the entrypoint's `git checkout -b`. Falls back to session_id
+    # (already format-validated upstream) if the slug strips to empty.
+    if request.run_id:
+        slug = re.sub(r"[^a-z0-9-]", "-", request.run_id.lower())
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")[:50]
+        env["CLAUDE_RUN_ID"] = slug or session_id
+    else:
+        env["CLAUDE_RUN_ID"] = session_id
 
     # Add custom environment variables (with validation)
     if request.custom_env:
