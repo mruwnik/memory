@@ -59,14 +59,13 @@ logger = logging.getLogger(__name__)
 
 
 # Re-export the canonical rate-limit key helper from common.rate_limit so
-# existing imports of ``memory.api.app.rate_limit_key`` and the
-# ``--patch app._trusted_proxies`` in tests keep working. The actual
-# implementation lives in common/rate_limit.py and is shared with the
-# (non-SlowAPI) per-endpoint rate limits in polls.py and elsewhere.
-from memory.common.rate_limit import (  # noqa: E402
-    _trusted_proxies,
-    rate_limit_key,
-)
+# existing imports of ``memory.api.app.rate_limit_key`` keep working. The
+# actual implementation lives in common/rate_limit.py and is shared with
+# the (non-SlowAPI) per-endpoint rate limits in polls.py and elsewhere.
+# We intentionally do NOT re-export _trusted_proxies — no test patches
+# ``app._trusted_proxies`` (existing tests in test_rate_limit_key.py
+# patch ``memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES`` directly).
+from memory.common.rate_limit import rate_limit_key  # noqa: E402
 
 
 # Rate limiter setup
