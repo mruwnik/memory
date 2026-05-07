@@ -750,7 +750,7 @@ def test_create_user_commit_integrityerror_returns_400():
     and the unique index rejects ours. Must not surface as 500."""
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = None  # no existing
-    db.commit.side_effect = _IntegrityError("INSERT", {}, None)
+    db.commit.side_effect = _IntegrityError("INSERT", {}, Exception("simulated"))
 
     with patch.object(auth.HumanUser, "create_with_password", return_value=MagicMock()):
         with pytest.raises(_HTTPException) as exc:

@@ -687,7 +687,6 @@ async def test_complete_oauth_flow_token_expires_at_is_tz_aware_utc(
 @pytest.mark.asyncio
 async def test_complete_oauth_flow_garbage_expires_in_falls_back_to_default(caplog):
     """A non-integer expires_in must default to 3600 with a warning, not crash."""
-    from datetime import timezone as tz
 
     class FakeMcp:
         id = 1

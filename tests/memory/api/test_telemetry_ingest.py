@@ -104,7 +104,7 @@ def test_ingest_within_cap_succeeds(app_client, small_cap):
 
     with (
         patch("memory.api.telemetry.parse_otlp_json", return_value=[{"id": 1}]) as mock_parse,
-        patch("memory.api.telemetry.write_events_to_db") as mock_write,
+        patch("memory.api.telemetry.write_events_to_db"),
     ):
         response = app_client.post(
             "/telemetry/ingest",

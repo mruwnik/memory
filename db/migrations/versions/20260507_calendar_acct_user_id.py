@@ -24,7 +24,7 @@ via ``PATCH /calendar-accounts/{id}`` (or a manual UPDATE) to set
 a real cross-tenant leak and we prefer secure-default-with-followup over
 silent over-disclosure. Document this in your release notes.
 
-Revision ID: 20260507_calendar_account_user_id
+Revision ID: 20260507_calendar_acct_user_id
 Revises: 20260507_article_feed_user_id
 Create Date: 2026-05-07
 """
@@ -35,7 +35,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260507_calendar_account_user_id"
+revision: str = "20260507_calendar_acct_user_id"
 down_revision: Union[str, None] = "20260507_article_feed_user_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

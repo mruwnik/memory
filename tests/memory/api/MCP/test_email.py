@@ -16,30 +16,71 @@ class MockFastMCP:
         return decorator
 
 
-_mock_fastmcp = MagicMock()
-_mock_fastmcp.FastMCP = MockFastMCP
-_mock_fastmcp.server = MagicMock()
-_mock_fastmcp.server.dependencies = MagicMock()
-_mock_fastmcp.server.dependencies.get_access_token = MagicMock(return_value=None)
-sys.modules["fastmcp"] = _mock_fastmcp
-sys.modules["fastmcp.server"] = _mock_fastmcp.server
-sys.modules["fastmcp.server.dependencies"] = _mock_fastmcp.server.dependencies
+# See test_organizer.py for the rationale: applying these patches at
+# module-load time pollutes sys.modules globally during pytest collection
+# and breaks any later test that imports the real mcp.* symbols. The
+# autouse fixture below scopes the patching to this file's tests only.
+_MODULES_TO_MOCK = (
+    "fastmcp",
+    "fastmcp.server",
+    "fastmcp.server.dependencies",
+    "mcp",
+    "mcp.types",
+    "mcp.server",
+    "mcp.server.auth",
+    "mcp.server.auth.handlers",
+    "mcp.server.auth.handlers.authorize",
+    "mcp.server.auth.handlers.token",
+    "mcp.server.auth.provider",
+    "mcp.server.fastmcp",
+    "mcp.server.fastmcp.server",
+    "memory.api.MCP.base",
+    "memory.api.MCP.servers.email",
+)
 
-# Mock mcp submodules
-_mock_mcp = MagicMock()
-sys.modules["mcp"] = _mock_mcp
-sys.modules["mcp.types"] = MagicMock()
-sys.modules["mcp.server"] = MagicMock()
-sys.modules["mcp.server.auth"] = MagicMock()
-sys.modules["mcp.server.auth.handlers"] = MagicMock()
-sys.modules["mcp.server.auth.handlers.authorize"] = MagicMock()
-sys.modules["mcp.server.auth.handlers.token"] = MagicMock()
-sys.modules["mcp.server.auth.provider"] = MagicMock()
-sys.modules["mcp.server.fastmcp"] = MagicMock()
-sys.modules["mcp.server.fastmcp.server"] = MagicMock()
 
-_mock_base = MagicMock()
-sys.modules["memory.api.MCP.base"] = _mock_base
+def _build_mocks():
+    mock_fastmcp = MagicMock()
+    mock_fastmcp.FastMCP = MockFastMCP
+    mock_fastmcp.server = MagicMock()
+    mock_fastmcp.server.dependencies = MagicMock()
+    mock_fastmcp.server.dependencies.get_access_token = MagicMock(return_value=None)
+    return {
+        "fastmcp": mock_fastmcp,
+        "fastmcp.server": mock_fastmcp.server,
+        "fastmcp.server.dependencies": mock_fastmcp.server.dependencies,
+        "mcp": MagicMock(),
+        "mcp.types": MagicMock(),
+        "mcp.server": MagicMock(),
+        "mcp.server.auth": MagicMock(),
+        "mcp.server.auth.handlers": MagicMock(),
+        "mcp.server.auth.handlers.authorize": MagicMock(),
+        "mcp.server.auth.handlers.token": MagicMock(),
+        "mcp.server.auth.provider": MagicMock(),
+        "mcp.server.fastmcp": MagicMock(),
+        "mcp.server.fastmcp.server": MagicMock(),
+        "memory.api.MCP.base": MagicMock(),
+        # Force re-import under our mocks.
+        "memory.api.MCP.servers.email": None,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _mock_mcp_modules():
+    originals = {name: sys.modules.get(name) for name in _MODULES_TO_MOCK}
+    for name, mock in _build_mocks().items():
+        if mock is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mock
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 from memory.common.db import connection as db_connection  # noqa: E402
 from memory.common.db.models import EmailAccount, UserSession  # noqa: E402

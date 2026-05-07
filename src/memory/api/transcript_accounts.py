@@ -14,11 +14,8 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
-from memory.common.celery_app import (
-    RESCAN_TRANSCRIPT_ACCOUNT,
-    SYNC_TRANSCRIPT_ACCOUNT,
-    app as celery_app,
-)
+from memory.common.celery_app import RESCAN_TRANSCRIPT_ACCOUNT, SYNC_TRANSCRIPT_ACCOUNT
+from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import TranscriptAccount
@@ -169,7 +166,9 @@ def create_account(
         db.rollback()
         logger.info(
             "TranscriptAccount create race for user_id=%s provider=%s name=%s",
-            user.id, data.provider, data.name,
+            user.id,
+            data.provider,
+            data.name,
         )
         raise HTTPException(
             status_code=400,
@@ -253,7 +252,9 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a quick sync for a transcript account."""
-    get_user_account(db, TranscriptAccount, account_id, user)  # Verify ownership; raises 404 otherwise.
+    get_user_account(
+        db, TranscriptAccount, account_id, user
+    )  # Verify ownership; raises 404 otherwise.
     task = celery_app.send_task(SYNC_TRANSCRIPT_ACCOUNT, args=[account_id])
     return {"task_id": task.id, "status": "scheduled"}
 
@@ -265,6 +266,8 @@ def trigger_rescan(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a full rescan for a transcript account."""
-    get_user_account(db, TranscriptAccount, account_id, user)  # Verify ownership; raises 404 otherwise.
+    get_user_account(
+        db, TranscriptAccount, account_id, user
+    )  # Verify ownership; raises 404 otherwise.
     task = celery_app.send_task(RESCAN_TRANSCRIPT_ACCOUNT, args=[account_id])
     return {"task_id": task.id, "status": "scheduled"}
