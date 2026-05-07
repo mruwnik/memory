@@ -302,8 +302,14 @@ app.conf.update(
         f"{TRANSCRIPTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{REPORTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-reports"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
+        # Verification scans (orphan detection, batch source verification) can
+        # be slow; route them to their own queue so they can be scaled
+        # independently of the maintenance worker. Without this, verification
+        # was routed to ``maintenance`` while the ``verification`` queue was
+        # listed in QUEUES with no producer — workers consumed an empty
+        # queue and verification tasks blocked the maintenance pool.
         f"{VERIFICATION_ROOT}.*": {
-            "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-verification"
         },
         f"{SESSIONS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
@@ -430,10 +436,32 @@ def setup_on_configure(sender, **_):
     qdrant.setup_qdrant()
 
 
-# Load custom tasks at import time so they're registered before the worker starts.
-# This must be after app and conf are fully set up.
-from memory.workers.custom_task_loader import load_custom_tasks  # noqa: E402
+# Custom-task loading is deferred to worker / beat startup signals so
+# that importing this module from the API process (via jobs.py and
+# friends) doesn't execute arbitrary user code from CUSTOM_TASKS_DIR.
+# Custom task files can have import-time side effects (DB connections,
+# network calls, signal-handler registration); running those in the
+# API container at uvicorn startup violated the "imports should be free
+# of side effects" principle and made the API/worker boundary leaky.
+from celery.signals import beat_init, worker_init  # noqa: E402
 
-loaded = load_custom_tasks()
-if loaded:
-    publish_custom_schedule_to_redis()
+_CUSTOM_TASKS_LOADED = False
+
+
+@worker_init.connect
+@beat_init.connect
+def _load_custom_tasks_on_start(**_):
+    """Load custom tasks once when a worker or beat process starts.
+
+    Idempotent: in some Celery configurations the init signals can fire
+    multiple times (e.g. worker prefork model). The module-level guard
+    prevents re-loading and re-publishing the schedule.
+    """
+    global _CUSTOM_TASKS_LOADED
+    if _CUSTOM_TASKS_LOADED:
+        return
+    _CUSTOM_TASKS_LOADED = True
+    from memory.workers.custom_task_loader import load_custom_tasks
+
+    if load_custom_tasks():
+        publish_custom_schedule_to_redis()

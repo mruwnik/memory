@@ -43,8 +43,13 @@ ENV GIT_USER_NAME=${GIT_USER_NAME:-memory}
 RUN git config --global user.email "${GIT_USER_EMAIL}" && \
     git config --global user.name "${GIT_USER_NAME}"
 
-# Default queues to process
-ENV QUEUES="backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,verification"
+# Default queues to process. Must stay aligned with the route map in
+# src/memory/common/celery_app.py:task_routes — every queue name a task
+# routes to (via SLACK_ROOT, FORUMS_ROOT, etc.) needs to appear here OR
+# in the docker-compose override or the task pile up in Redis with no
+# consumer. The default is the superset; out-of-the-box `docker run`
+# should consume every queue the codebase publishes to.
+ENV QUEUES="backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
 ENV PYTHONPATH="/app"
 
 ENTRYPOINT ["./entry.sh"] 
