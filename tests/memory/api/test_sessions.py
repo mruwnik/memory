@@ -584,7 +584,7 @@ def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
     assert sum(c.total_tokens for c in calls) == 100 + 50 + 25 + 10
 
 
-# ====== parse_event_timestamp ======
+# ====== parse_iso_datetime (moved here from the deleted parse_event_timestamp wrapper) ======
 
 
 @pytest.mark.parametrize(
@@ -595,10 +595,10 @@ def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
         ("2026-05-07T01:23:45.500Z", "2026-05-07T01:23:45.500000+00:00"),
     ],
 )
-def test_parse_event_timestamp_accepts_valid(raw, expected_iso):
-    from memory.api.sessions import parse_event_timestamp
+def test_parse_iso_datetime_accepts_valid(raw, expected_iso):
+    from memory.common.dates import parse_iso_datetime
 
-    parsed = parse_event_timestamp(raw)
+    parsed = parse_iso_datetime(raw)
     assert parsed is not None
     assert parsed.isoformat() == expected_iso
 
@@ -607,7 +607,7 @@ def test_parse_event_timestamp_accepts_valid(raw, expected_iso):
     "raw",
     ["", None, "not a timestamp", "2026-13-01T00:00:00Z"],
 )
-def test_parse_event_timestamp_returns_none_on_invalid(raw):
-    from memory.api.sessions import parse_event_timestamp
+def test_parse_iso_datetime_returns_none_on_invalid(raw):
+    from memory.common.dates import parse_iso_datetime
 
-    assert parse_event_timestamp(raw) is None
+    assert parse_iso_datetime(raw) is None

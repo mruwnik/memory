@@ -270,14 +270,6 @@ def extract_tool_calls_from_message(message: dict[str, Any]) -> list[ToolCall]:
     ]
 
 
-def parse_event_timestamp(timestamp_str: str | None) -> datetime | None:
-    """Thin wrapper around :func:`memory.common.dates.parse_iso_datetime`
-    kept for callers that imported the local name. Returns None on
-    missing/invalid input.
-    """
-    return parse_iso_datetime(timestamp_str)
-
-
 def count_transcript_events(transcript_path: str) -> int:
     """Count total events in a transcript file."""
     transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
@@ -457,7 +449,7 @@ def extract_tool_usage_telemetry(
     if not tool_calls:
         return []
 
-    event_timestamp = parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+    event_timestamp = parse_iso_datetime(event.timestamp) or datetime.now(timezone.utc)
 
     return [
         TelemetryEvent(
@@ -738,7 +730,7 @@ def extract_tool_usage_from_transcript(
         # through to inclusion (matches prior behaviour: don't drop
         # events because of a flaky clock).
         if from_time or to_time:
-            event_time = parse_event_timestamp(event.get("timestamp"))
+            event_time = parse_iso_datetime(event.get("timestamp"))
             if event_time is not None:
                 if from_time and event_time < from_time:
                     continue
