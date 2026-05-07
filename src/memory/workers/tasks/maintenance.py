@@ -591,19 +591,6 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
     }
 
 
-# Mapping of source types to (model, item query function)
-DATA_SOURCE_TYPES = {
-    "email_account": "EmailAccount",
-    "slack_channel": "SlackChannel",
-    "slack_workspace": "SlackWorkspace",
-    "discord_channel": "DiscordChannel",
-    "discord_server": "DiscordServer",
-    "calendar_account": "CalendarAccount",
-    "google_folder": "GoogleFolder",
-    "article_feed": "ArticleFeed",
-}
-
-
 def get_items_for_source(
     session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
 ):
@@ -618,6 +605,7 @@ def get_items_for_source(
         DiscordMessage,
         GoogleDoc,
         MailMessage,
+        Meeting,
         SlackMessage,
     )
 
@@ -709,6 +697,15 @@ def get_items_for_source(
             .limit(limit)
             .all()
         )
+    elif source_type == "transcript_account":
+        return (
+            session.query(Meeting)
+            .options(selectinload(Meeting.chunks))
+            .filter(Meeting.transcript_account_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
     else:
         raise ValueError(f"Unknown source type: {source_type}")
 
@@ -720,6 +717,7 @@ def get_data_source_model(source_type: str):
         CalendarAccount,
         EmailAccount,
         GoogleFolder,
+        TranscriptAccount,
     )
 
     models = {
@@ -731,6 +729,7 @@ def get_data_source_model(source_type: str):
         "calendar_account": CalendarAccount,
         "google_folder": GoogleFolder,
         "article_feed": ArticleFeed,
+        "transcript_account": TranscriptAccount,
     }
     if source_type not in models:
         raise ValueError(f"Unknown source type: {source_type}")
