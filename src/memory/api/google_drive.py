@@ -20,7 +20,13 @@ from memory.common.db.models.sources import (
     GoogleFolder,
     GoogleOAuthConfig,
 )
-from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.common.scopes import SCOPE_ADMIN
+from memory.api.auth import (
+    get_current_user,
+    get_user_account,
+    require_scope,
+    resolve_user_filter,
+)
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
@@ -172,10 +178,16 @@ class BrowseResponse(BaseModel):
 async def upload_oauth_config(
     file: UploadFile,
     name: str = "default",
-    user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
     db: DBSession = Depends(get_session),
 ) -> OAuthConfigResponse:
-    """Upload Google OAuth credentials JSON file."""
+    """Upload Google OAuth credentials JSON file.
+
+    Admin-only: this configures the system-wide Google OAuth client used by
+    every user's Drive/Gmail/Calendar integration. Allowing non-admins to
+    write here would let them swap the client_id/secret/redirect_uris and
+    intercept every subsequent OAuth consent flow.
+    """
     if not file.filename or not file.filename.endswith(".json"):
         raise HTTPException(status_code=400, detail="File must be a JSON file")
 
@@ -247,10 +259,14 @@ def get_config(
 
 @router.delete("/config")
 def delete_config(
-    user: User = Depends(get_current_user),
+    _user: User = require_scope(SCOPE_ADMIN),
     db: DBSession = Depends(get_session),
 ):
-    """Delete OAuth configuration."""
+    """Delete OAuth configuration.
+
+    Admin-only: see ``upload_oauth_config`` for rationale. A non-admin
+    delete would be a multi-tenant DoS for every Google-connected user.
+    """
     config = (
         db.query(GoogleOAuthConfig).filter(GoogleOAuthConfig.name == "default").first()
     )
