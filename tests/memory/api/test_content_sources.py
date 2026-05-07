@@ -211,3 +211,78 @@ def test_upload_report_admin_can_set_allowed_connect_urls(
     call_kwargs = mock_dispatch_job.call_args.kwargs
     assert call_kwargs["task_kwargs"]["allow_scripts"] is True
     assert call_kwargs["task_kwargs"]["allowed_connect_urls"] == ["https://api.example.com"]
+
+
+# ====== Forum sync — admin-gated, rate-limited, max_items capped ======
+
+
+@pytest.fixture
+def reset_forum_sync_rate_limit_cache():
+    """Make sure stale Redis state from earlier tests doesn't leak in."""
+    from memory.common import rate_limit
+    rate_limit.reset_cache()
+    yield
+    rate_limit.reset_cache()
+
+
+def test_forum_sync_rejects_non_admin(regular_client: TestClient):
+    """Regression: trigger_forum_sync was previously open to any authenticated
+    user, letting a low-privilege contributor blow through the embedding
+    budget by issuing thousands of max_items=1000 requests. Now restricted
+    to admin scope.
+    """
+    with patch("memory.api.content_sources.celery_app") as mock_celery:
+        response = regular_client.post(
+            "/forums/sync",
+            json={"min_karma": 10, "limit": 50, "max_items": 1000},
+        )
+    assert response.status_code == 403
+    assert "admin" in response.json()["detail"].lower()
+    mock_celery.send_task.assert_not_called()
+
+
+def test_forum_sync_admin_caps_max_items_server_side(
+    client: TestClient, reset_forum_sync_rate_limit_cache
+):
+    """Even an admin caller cannot exceed the server-side max_items ceiling.
+    The previous endpoint forwarded the caller's value verbatim, so a
+    request with max_items=1_000_000 would happily burn through that many
+    items' worth of embeddings.
+    """
+    from memory.api.content_sources import FORUM_SYNC_MAX_ITEMS_CAP
+
+    fake_task = type("T", (), {"id": "task-xyz"})()
+    with patch("memory.api.content_sources.celery_app") as mock_celery:
+        mock_celery.send_task.return_value = fake_task
+        response = client.post(
+            "/forums/sync",
+            json={"min_karma": 10, "limit": 50, "max_items": 1_000_000},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_celery.send_task.call_args.kwargs["kwargs"]
+    assert call_kwargs["max_items"] == FORUM_SYNC_MAX_ITEMS_CAP
+
+
+def test_forum_sync_rate_limited(
+    client: TestClient, reset_forum_sync_rate_limit_cache
+):
+    """Per-user rate limit: 1/minute. Second consecutive call must 429."""
+    fake_task = type("T", (), {"id": "task-xyz"})()
+    with patch("memory.api.content_sources.celery_app") as mock_celery:
+        mock_celery.send_task.return_value = fake_task
+
+        first = client.post(
+            "/forums/sync",
+            json={"min_karma": 10, "limit": 50, "max_items": 100},
+        )
+        second = client.post(
+            "/forums/sync",
+            json={"min_karma": 10, "limit": 50, "max_items": 100},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "rate limit" in second.json()["detail"].lower()
+    # Only one task was actually enqueued.
+    assert mock_celery.send_task.call_count == 1
