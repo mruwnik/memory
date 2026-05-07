@@ -674,3 +674,54 @@ def test_list_jobs_valid_datetime_still_works(client: TestClient, job_for_user):
     assert response.status_code == 200
     ids = {j["id"] for j in response.json()}
     assert job_for_user.id in ids
+
+
+# ---------- parse_iso_datetime_query unit-level coverage ----------
+#
+# The endpoint-level tests above already pin the API contract (400 on
+# garbage, Z-suffix happy path). These exercise the helper directly so a
+# regression in just the helper (without breaking the endpoint) still
+# trips a test.
+
+from datetime import timezone as _tz
+
+from memory.api.jobs import parse_iso_datetime_query
+
+
+def test_parse_iso_datetime_query_passthrough_none():
+    assert parse_iso_datetime_query("x", None) is None
+
+
+@pytest.mark.parametrize(
+    "raw, expected_offset",
+    [
+        ("2025-01-02T03:04:05Z", _tz.utc),  # Z-suffix
+        ("2025-01-02T03:04:05+00:00", _tz.utc),  # explicit +00:00
+        ("2025-01-02T03:04:05", _tz.utc),  # naive → coerced to UTC
+    ],
+)
+def test_parse_iso_datetime_query_returns_utc_aware(raw, expected_offset):
+    parsed = parse_iso_datetime_query("x", raw)
+    assert parsed is not None
+    assert parsed.utcoffset() == expected_offset.utcoffset(parsed)
+
+
+def test_parse_iso_datetime_query_preserves_explicit_offset():
+    """A non-UTC offset must survive intact — the helper only fills in
+    the tz when the input is naive, never relabels."""
+    parsed = parse_iso_datetime_query("x", "2025-01-02T03:04:05+05:00")
+    assert parsed is not None
+    assert parsed.utcoffset() is not None
+    # +05:00 is 18000s, must NOT be relabeled to UTC.
+    assert parsed.utcoffset().total_seconds() == 5 * 3600
+
+
+def test_parse_iso_datetime_query_garbage_raises_400():
+    """Non-ISO input surfaces as HTTPException(400), with the param name
+    in the detail so the client can identify which arg was bad."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        parse_iso_datetime_query("created_after", "yesterday")
+    assert exc.value.status_code == 400
+    assert "created_after" in exc.value.detail

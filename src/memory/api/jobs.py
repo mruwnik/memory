@@ -1,6 +1,6 @@
 """API endpoints for job status tracking."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, resolve_user_filter
 from memory.common.access_control import has_admin_scope
+from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import get_session
 from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStatus
 from memory.common import jobs as job_utils
@@ -35,22 +36,20 @@ def can_access_job(job, current_user: User) -> bool:
 def parse_iso_datetime_query(name: str, value: str | None) -> datetime | None:
     """Parse an ISO-8601 datetime query parameter, returning a 400 on garbage.
 
-    Datetimes without an explicit timezone are interpreted as UTC so that
-    downstream comparisons against tz-aware ``PendingJob.created_at`` are
-    consistent. ``datetime.fromisoformat("yesterday")`` would otherwise
-    raise ``ValueError`` and surface as a 500 to the caller.
+    Delegates to ``memory.common.dates.parse_iso_datetime_utc`` so this
+    call site joins the rest of the codebase's ISO parsing (and picks up
+    Z-suffix support for free). Datetimes without an explicit timezone
+    are interpreted as UTC for consistency with tz-aware
+    ``PendingJob.created_at`` comparisons.
     """
     if value is None:
         return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as e:
+    parsed = parse_iso_datetime_utc(value)
+    if parsed is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid ISO-8601 datetime for '{name}': {e}",
+            detail=f"Invalid ISO-8601 datetime for '{name}'",
         )
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
 
 
