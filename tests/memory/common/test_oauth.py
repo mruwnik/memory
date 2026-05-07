@@ -1,5 +1,6 @@
 """Tests for OAuth 2.0 flow handling."""
 
+import logging
 import pytest
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
@@ -14,6 +15,7 @@ from memory.common.oauth import (
     register_oauth_client,
     issue_challenge,
     complete_oauth_flow,
+    token_id,
 )
 from memory.common.db.models import MCPServer
 
@@ -538,3 +540,73 @@ class TestCompleteOauthFlow:
 
         assert status == 500
         assert "Failed to get OAuth endpoints" in message
+
+
+# ----- Log redaction regression -----
+#
+# Previously several call sites in oauth.py / oauth_provider.py logged
+# raw authorization codes and access-token prefixes, which made replay
+# from log aggregators trivial. Pin the redaction here.
+
+
+def test_token_id_is_short_non_reversible_and_stable():
+    """token_id should hash, not preview — and round-trip the same input."""
+    code = "ac_3pq_secret_DO_NOT_LOG"
+
+    digest = token_id(code)
+
+    assert len(digest) == 8
+    # Must not be a prefix of the original (the historical "first 20 chars" log).
+    assert digest not in code
+    # Stable across calls (correlation id, not random).
+    assert token_id(code) == digest
+
+
+@pytest.mark.asyncio
+async def test_issue_challenge_does_not_log_raw_state(caplog):
+    """issue_challenge must log a SHA-prefix id, not the raw state value."""
+    mcp_server = Mock()
+    mcp_server.mcp_server_url = "https://example.com"
+    mcp_server.client_id = "client-id"
+    mcp_server.id = 1
+
+    endpoints = OAuthEndpoints(
+        authorization_endpoint="https://example.com/auth",
+        registration_endpoint="https://example.com/register",
+        token_endpoint="https://example.com/token",
+        redirect_uri="https://myapp.com/callback",
+    )
+
+    with caplog.at_level(logging.INFO, logger="memory.common.oauth"):
+        await issue_challenge(mcp_server, endpoints)
+
+    state = mcp_server.state
+    code_verifier = mcp_server.code_verifier
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    # Raw state and verifier must never appear in the log line.
+    assert state not in log_text
+    assert code_verifier not in log_text
+    # Their SHA-prefix correlation ids should.
+    assert token_id(state) in log_text
+    assert token_id(code_verifier) in log_text
+
+
+@pytest.mark.asyncio
+async def test_complete_oauth_flow_invalid_state_does_not_log_raw_state(caplog):
+    """The error path for an invalid state must not echo the raw state value."""
+    state = "extremely-secret-state-value-please-no"
+
+    with caplog.at_level(logging.ERROR, logger="memory.common.oauth"):
+        status, _message = await complete_oauth_flow(
+            cast(Any, None),  # simulates the "no MCP server for this state" branch
+            "code-irrelevant",
+            state,
+        )
+
+    assert status == 400
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert state not in log_text
+    # The truncated 20-char prefix that used to be logged must also be gone.
+    assert state[:20] not in log_text
+    # But a correlation id must still be present so logs are useful.
+    assert token_id(state) in log_text

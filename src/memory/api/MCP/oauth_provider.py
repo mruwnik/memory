@@ -243,8 +243,11 @@ class SimpleOAuthProvider(OAuthProvider):
                 # Always include SCOPE_READ/SCOPE_WRITE for FastMCP endpoint auth
                 scopes: list[str] = sorted(set(base_scopes) | {SCOPE_READ, SCOPE_WRITE})
 
+                # Tokens themselves stay out of the log; correlate via the
+                # SHA-prefix id so a leaked log can't be replayed.
                 logger.info(
-                    f"verify_token: user={user_session.user_id}, scopes={scopes}, client={client_id}"
+                    f"verify_token: token_id={token_id(token)}, "
+                    f"user={user_session.user_id}, scopes={scopes}, client={client_id}"
                 )
                 return FastMCPAccessToken(
                     token=token,
@@ -448,7 +451,10 @@ class SimpleOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> Optional[AuthorizationCode]:
         """Load an authorization code."""
-        logger.info(f"Loading authorization code: {authorization_code}")
+        # Log a SHA-prefix correlation id, never the raw code. Auth codes
+        # are short-lived single-use credentials; whoever can grep the logs
+        # can replay them otherwise.
+        logger.info(f"Loading authorization code: id={token_id(authorization_code)}")
         with make_session() as session:
             auth_code = (
                 session.query(OAuthState)
@@ -456,14 +462,16 @@ class SimpleOAuthProvider(OAuthProvider):
                 .first()
             )
             if not auth_code:
-                logger.error(f"Invalid authorization code: {authorization_code}")
+                logger.error(
+                    f"Invalid authorization code: id={token_id(authorization_code)}"
+                )
                 raise ValueError("Invalid authorization code")
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
                 logger.warning(
-                    "Authorization code %s requested by client %r but issued to %r",
-                    authorization_code,
+                    "Authorization code id=%s requested by client %r but issued to %r",
+                    token_id(authorization_code),
                     client.client_id,
                     auth_code.client_id,
                 )
@@ -475,7 +483,10 @@ class SimpleOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         """Exchange authorization code for tokens."""
-        logger.info(f"Exchanging authorization code: {authorization_code}")
+        # Same redaction as load_authorization_code — never log the raw code.
+        logger.info(
+            f"Exchanging authorization code: id={token_id(authorization_code.code)}"
+        )
         with make_session() as session:
             auth_code = (
                 session.query(OAuthState)
@@ -484,21 +495,25 @@ class SimpleOAuthProvider(OAuthProvider):
             )
 
             if not auth_code:
-                logger.error(f"Invalid authorization code: {authorization_code.code}")
+                logger.error(
+                    f"Invalid authorization code: id={token_id(authorization_code.code)}"
+                )
                 raise ValueError("Invalid authorization code")
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
                 logger.warning(
-                    "Authorization code %s exchange attempted by client %r but issued to %r",
-                    authorization_code.code,
+                    "Authorization code id=%s exchange attempted by client %r but issued to %r",
+                    token_id(authorization_code.code),
                     client.client_id,
                     auth_code.client_id,
                 )
                 raise ValueError("Authorization code not issued to this client")
 
             if not auth_code.user:
-                logger.error(f"No user found for auth code: {authorization_code.code}")
+                logger.error(
+                    f"No user found for auth code: id={token_id(authorization_code.code)}"
+                )
                 raise ValueError("Invalid authorization code")
 
             # Extract data needed for token creation
