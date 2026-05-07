@@ -1672,3 +1672,93 @@ async def test_count_items_with_source_ids_filter(mock_make_session):
     result = await count_items.fn(filters={"source_ids": [1, 2, 3]})
 
     assert result["total"] == 3
+
+
+# ====== audit-logging on search and fetch ======
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.log_search_access")
+@patch("memory.api.MCP.servers.core.get_mcp_current_user")
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.filter_source_ids")
+async def test_search_logs_access(
+    mock_filter_ids,
+    mock_extract,
+    mock_search_base,
+    mock_get_user,
+    mock_log_search,
+):
+    """Regression: ``core.search`` must call log_search_access with the
+    user id, query string, and result count. Previously the audit-log
+    helper existed but was never invoked, falsifying the "all access is
+    logged" claim in access_control.py and AccessLog's docstring.
+    """
+    mock_extract.extract_text.return_value = "x"
+    mock_filter_ids.return_value = None
+    fake_results = [MagicMock(), MagicMock(), MagicMock()]
+    for r in fake_results:
+        r.model_dump.return_value = {}
+    mock_search_base.return_value = fake_results
+
+    mock_user = MagicMock()
+    mock_user.id = 7
+    mock_get_user.return_value = mock_user
+
+    await search.fn(query="hello world")
+
+    mock_log_search.assert_called_once_with(7, "hello world", 3)
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.log_search_access")
+@patch("memory.api.MCP.servers.core.get_mcp_current_user")
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.filter_source_ids")
+async def test_search_logging_failure_does_not_fail_request(
+    mock_filter_ids,
+    mock_extract,
+    mock_search_base,
+    mock_get_user,
+    mock_log_search,
+):
+    """A logging failure must not surface as a search error — the audit
+    log is best-effort, the user's search must still return.
+    """
+    mock_extract.extract_text.return_value = "x"
+    mock_filter_ids.return_value = None
+    mock_search_base.return_value = []
+    mock_user = MagicMock()
+    mock_user.id = 7
+    mock_get_user.return_value = mock_user
+    mock_log_search.side_effect = RuntimeError("DB blew up")
+
+    # Must not raise.
+    results = await search.fn(query="hello")
+    assert results == []
+    mock_log_search.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.log_search_access")
+@patch("memory.api.MCP.servers.core.get_mcp_current_user")
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.filter_source_ids")
+async def test_search_skips_logging_when_no_user(
+    mock_filter_ids,
+    mock_extract,
+    mock_search_base,
+    mock_get_user,
+    mock_log_search,
+):
+    """No user id (anonymous / disabled-auth dev mode) → no log row attempt."""
+    mock_extract.extract_text.return_value = "x"
+    mock_filter_ids.return_value = None
+    mock_search_base.return_value = []
+    mock_get_user.return_value = None
+
+    await search.fn(query="anonymous")
+    mock_log_search.assert_not_called()
