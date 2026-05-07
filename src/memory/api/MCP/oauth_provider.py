@@ -31,7 +31,7 @@ from memory.common.db.models.users import (
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
 )
-from memory.api.auth import lookup_api_key, handle_api_key_use
+from memory.api.auth import lookup_api_key, handle_api_key_use, is_expired
 from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)
@@ -147,8 +147,6 @@ def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     (which can happen with some Postgres drivers / pool configs) is
     properly converted instead of silently relabeled.
     """
-    from memory.api.auth import is_expired
-
     if is_expired(db_refresh_token.expires_at):
         logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
         db_refresh_token.revoked = True  # type: ignore
