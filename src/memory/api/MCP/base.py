@@ -17,12 +17,13 @@ from memory.api.MCP.servers import (
     get_server_instance,
     is_server_enabled,
 )
+from memory.api.auth import authenticate_user
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState
-from memory.common.db.models.users import HumanUser
 from memory.common.qdrant import get_qdrant_client
+from memory.common.rate_limit import check_rate_limit_spec
 
 logger = logging.getLogger(__name__)
 engine = get_engine()
@@ -147,22 +148,50 @@ async def login_page(request: Request):
     return login_form(request, form_data, None)
 
 
+def client_ip_for(request: Request) -> str:
+    """Best-effort client IP. The X-Forwarded-For trust issue is tracked
+    separately; this still gives us an IP-shaped key for rate-limiting."""
+    return request.client.host if request.client else "unknown"
+
+
 @mcp.custom_route("/oauth/login", methods=["POST"])
 async def handle_login(request: Request):
-    """Handle login form submission."""
+    """Handle login form submission.
+
+    Rate-limited per (client IP, email) to bound credential-stuffing rate
+    against a single account even when the attacker rotates source IPs.
+    Uses authenticate_user so a missing user still incurs a dummy bcrypt
+    check, defeating timing-based email enumeration.
+    """
     form = await request.form()
     # Only pass through whitelisted OAuth parameters to prevent injection
     oauth_params = {
         key: value for key, value in form.items()
         if key in ALLOWED_OAUTH_PARAMS
     }
+
+    email_raw = str(form.get("email") or "").strip()
+    password = str(form.get("password", ""))
+    # Lower-case for the bucket key only; the DB query stays case-sensitive
+    # because that's the existing behaviour and CI auth code paths key on it.
+    email_key = email_raw.lower()
+    ip_key = client_ip_for(request)
+    bucket_keys = [
+        f"login:ip:{ip_key}",
+        f"login:email:{email_key}" if email_key else None,
+    ]
+    for key in bucket_keys:
+        if key and not check_rate_limit_spec(key, settings.API_RATE_LIMIT_AUTH):
+            logger.warning("Login rate-limit exceeded for %s", key)
+            return login_form(
+                request,
+                oauth_params,
+                "Too many login attempts. Please wait a minute and try again.",
+            )
+
     with make_session() as session:
-        user = (
-            session.query(HumanUser)
-            .filter(HumanUser.email == form.get("email"))
-            .first()
-        )
-        if not user or not user.is_valid_password(str(form.get("password", ""))):
+        user = authenticate_user(email_raw, password, session)
+        if not user:
             logger.warning("Login failed - invalid credentials")
             return login_form(request, oauth_params, "Invalid email or password")
 

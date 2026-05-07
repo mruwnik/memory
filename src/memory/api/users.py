@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
+from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import APIKey, APIKeyType, BotUser, HumanUser, User
 from memory.common.db.models.users import hash_password, verify_password
+from memory.common.rate_limit import check_rate_limit_spec
 from memory.common.scopes import (
     SCOPE_ADMIN,
     VALID_SCOPES,
@@ -326,6 +328,17 @@ def change_password(
     """Change current user's password. Requires current password verification."""
     if user.user_type != "human":
         raise HTTPException(status_code=400, detail="Only human users can change passwords")
+
+    # Per-user rate limit on the current_password check itself.
+    # Prevents an attacker who has stolen a session/token from brute-forcing
+    # the user's current password to escalate to a full password rotation.
+    if not check_rate_limit_spec(
+        f"change_password:user:{user.id}", settings.API_RATE_LIMIT_AUTH
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many password-change attempts. Please wait and try again.",
+        )
 
     human_user = db.get(HumanUser, user.id)
     if not human_user:
