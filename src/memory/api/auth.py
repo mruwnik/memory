@@ -242,7 +242,13 @@ def authenticate_by_api_key(
     # (for one-time keys). This prevents DetachedInstanceError on lazy load.
     user = matched_key.user
     if not handle_api_key_use(matched_key, db):
-        # Concurrent request consumed the one-time key first.
+        # Concurrent request consumed the one-time key first. Debug-level
+        # so it stays out of normal production logs unless an operator is
+        # chasing a "401 from a fresh key" report and bumps verbosity.
+        logger.debug(
+            "One-time API key %s consumed by concurrent request; this request loses race",
+            matched_key.id,
+        )
         return None, None
     return user, matched_key
 
