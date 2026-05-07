@@ -297,3 +297,176 @@ async def test_add_inherits_project(db_session, admin_user, admin_session, sampl
         )
 
     assert result["entry"]["project_id"] == sample_item.project_id
+
+
+# =============================================================================
+# Per-target-type access control (the audit task)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_list_all_blocks_non_member_on_project(
+    db_session, regular_user, user_session, sample_project
+):
+    """A user without team membership in a project must NOT read its journal entries."""
+    # Plant a non-private entry on the project so there's something to leak.
+    db_session.add(
+        JournalEntry(
+            target_type="project",
+            target_id=sample_project.id,
+            creator_id=999,  # someone else
+            project_id=sample_project.id,
+            content="confidential project note",
+            private=False,
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(list_all)(
+                target_id=sample_project.id,
+                target_type="project",
+            )
+
+
+@pytest.mark.asyncio
+async def test_list_all_allows_member_on_project(
+    db_session, user_session, sample_project, user_with_project_access
+):
+    """A user WITH team membership in a project may read its journal entries."""
+    db_session.add(
+        JournalEntry(
+            target_type="project",
+            target_id=sample_project.id,
+            creator_id=user_with_project_access.id,
+            project_id=sample_project.id,
+            content="member-visible note",
+            private=False,
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await get_fn(list_all)(
+            target_id=sample_project.id,
+            target_type="project",
+        )
+
+    assert result["total"] == 1
+    assert result["entries"][0]["content"] == "member-visible note"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_non_member_on_project(
+    db_session, regular_user, user_session, sample_project
+):
+    """A user without team membership cannot plant journal entries on a project."""
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(add)(
+                target_id=sample_project.id,
+                content="<misinformation>",
+                target_type="project",
+            )
+
+    # No entry was created
+    rows = (
+        db_session.query(JournalEntry)
+        .filter(JournalEntry.target_id == sample_project.id)
+        .filter(JournalEntry.target_type == "project")
+        .all()
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_list_all_blocks_non_member_on_team(
+    db_session, regular_user, user_session
+):
+    """A user not in a team must NOT read its journal entries."""
+    other_team = Team(name="Other Team", slug="other-team", is_active=True)
+    db_session.add(other_team)
+    db_session.commit()
+
+    db_session.add(
+        JournalEntry(
+            target_type="team",
+            target_id=other_team.id,
+            creator_id=999,
+            project_id=None,
+            content="other-team-internal note",
+            private=False,
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(list_all)(
+                target_id=other_team.id,
+                target_type="team",
+            )
+
+
+@pytest.mark.asyncio
+async def test_list_all_blocks_non_creator_on_poll(
+    db_session, regular_user, user_session
+):
+    """Polls have no project_id; only the creator (or admin) can read its journal."""
+    from memory.common.db.models.polls import AvailabilityPoll
+    from datetime import datetime, timedelta, timezone
+
+    poll = AvailabilityPoll(
+        title="someone else's poll",
+        datetime_start=datetime.now(timezone.utc),
+        datetime_end=datetime.now(timezone.utc) + timedelta(days=7),
+        user_id=999,  # owned by a different user
+    )
+    db_session.add(poll)
+    db_session.commit()
+
+    db_session.add(
+        JournalEntry(
+            target_type="poll",
+            target_id=poll.id,
+            creator_id=999,
+            project_id=None,
+            content="poll-creator note",
+            private=False,
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(list_all)(
+                target_id=poll.id,
+                target_type="poll",
+            )
+
+
+@pytest.mark.asyncio
+async def test_admin_bypasses_per_type_gate(
+    db_session, admin_session, sample_project
+):
+    """Admins bypass the per-target-type access gate (existing behaviour preserved)."""
+    db_session.add(
+        JournalEntry(
+            target_type="project",
+            target_id=sample_project.id,
+            creator_id=999,
+            project_id=sample_project.id,
+            content="admin should see this",
+            private=False,
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(list_all)(
+            target_id=sample_project.id,
+            target_type="project",
+        )
+
+    assert result["total"] == 1

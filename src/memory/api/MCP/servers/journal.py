@@ -6,9 +6,19 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 from sqlalchemy import or_
 
-from memory.api.MCP.access import get_mcp_current_user, get_project_roles_by_user_id
+from memory.api.MCP.access import (
+    UserProxy,
+    get_mcp_current_user,
+    get_project_roles_by_user_id,
+)
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.common.access_control import has_admin_scope, user_can_access
+from memory.common.access_control import (
+    has_admin_scope,
+    user_can_access,
+    user_can_access_project,
+    user_can_access_team,
+)
+from memory.common.db.models.users import User
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import JournalEntry, SourceItem
@@ -28,6 +38,52 @@ TARGET_MODELS: dict[str, type] = {
     "team": Team,
     "poll": AvailabilityPoll,
 }
+
+
+def can_access_journal_target(
+    session,
+    user: UserProxy | User,
+    target_type: str,
+    target: Any,
+    project_roles: dict[int, str] | None,
+) -> bool:
+    """Per-target-type access gate for journal add/list_all.
+
+    Pre-fix the journal MCP tools only checked access for ``source_item``
+    targets and let project / team / poll targets through unchecked, so any
+    user with SCOPE_READ could read every non-private entry on any project
+    or team in the instance, and any SCOPE_WRITE caller could plant entries
+    on those targets. This function centralises the per-type gates so add
+    and list_all share one source of truth.
+
+    Returns True for admins (they bypass everywhere).
+    """
+    if has_admin_scope(user):
+        return True
+
+    if target_type == "source_item":
+        return user_can_access(user, target, project_roles)
+
+    if target_type == "project":
+        # The target IS the project — gate on team membership in it.
+        return user_can_access_project(session, user, target.id)  # type: ignore[arg-type]
+
+    if target_type == "team":
+        # Gate on team membership.
+        return user_can_access_team(session, user, target.id)  # type: ignore[arg-type]
+
+    if target_type == "poll":
+        # Polls have no project_id (per the model), so default to the most
+        # conservative rule: only the poll's creator may journal it. If a
+        # broader access model is ever defined for polls (e.g. anyone with
+        # the slug can read the poll, but only the creator can journal it),
+        # update this branch — but never silently widen by leaving it open.
+        target_user_id = getattr(target, "user_id", None)
+        return target_user_id is not None and target_user_id == user.id
+
+    # Unknown target type — fail closed. Validation in
+    # ``get_target_and_project_id`` should have caught this earlier.
+    return False
 
 
 def get_target_and_project_id(
@@ -100,10 +156,15 @@ async def add(
         # Verify target exists and get project_id for access control
         target, project_id = get_target_and_project_id(session, target_type, target_id)
 
-        # Check access to target (for source_items only - others have different access models)
-        if target_type == "source_item" and not has_admin_scope(user):
-            if not user_can_access(user, target, project_roles):
-                raise ValueError(f"{target_type} {target_id} not found or access denied")
+        # Per-type access gate. Pre-fix only source_item was gated, so a
+        # SCOPE_WRITE caller could plant entries on any project/team/poll
+        # they had no membership in.
+        if not can_access_journal_target(
+            session, user, target_type, target, project_roles
+        ):
+            # "not found or access denied" wording matches the source_item
+            # branch and avoids leaking the target's existence.
+            raise ValueError(f"{target_type} {target_id} not found or access denied")
 
         # Create journal entry
         entry = JournalEntry(
@@ -160,10 +221,13 @@ async def list_all(
         # Verify target exists
         target, _ = get_target_and_project_id(session, target_type, target_id)
 
-        # Check access to target (for source_items only)
-        if target_type == "source_item" and not has_admin_scope(user):
-            if not user_can_access(user, target, project_roles):
-                raise ValueError(f"{target_type} {target_id} not found or access denied")
+        # Per-type access gate. Pre-fix only source_item was gated, so a
+        # SCOPE_READ caller could read every non-private entry on any
+        # project/team/poll across the instance.
+        if not can_access_journal_target(
+            session, user, target_type, target, project_roles
+        ):
+            raise ValueError(f"{target_type} {target_id} not found or access denied")
 
         # Build query with target type and id filter
         user_id = user.id
