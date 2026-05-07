@@ -24,12 +24,17 @@ logger = logging.getLogger(__name__)
 # inspection, and the value cannot collide with any real data (unlike the
 # previous `project_id == -1` magic value, which a future caller storing
 # negative project IDs in test fixtures or partition shards could trip).
-NO_ACCESS: list[dict[str, Any]] = []
+#
+# Immutable tuple rather than `[]`: a mutable list singleton can be
+# corrupted by a stray `result.append(...)` before the `is`-check, polluting
+# every subsequent caller. ``()`` is identity-comparable, falsy, and
+# can't be mutated.
+NO_ACCESS: tuple[dict[str, Any], ...] = ()
 
 
 def build_access_qdrant_filter(
     access_filter: "AccessFilter | None",
-) -> list[dict[str, Any]]:
+) -> "list[dict[str, Any]] | tuple[dict[str, Any], ...]":
     """
     Build Qdrant filter conditions from an AccessFilter.
 
@@ -41,11 +46,11 @@ def build_access_qdrant_filter(
 
     Three meaningful return values:
 
-    - ``[]``: superadmin / no filtering needed. Caller must apply no
-      access filter to the Qdrant query.
-    - ``NO_ACCESS`` (a distinct empty-list singleton): user has no
-      access at all. Caller must short-circuit and return zero results.
-      Detect with ``is NO_ACCESS``; do not compare with ``==``.
+    - ``[]`` (fresh empty list): superadmin / no filtering needed. Caller
+      must apply no access filter to the Qdrant query.
+    - ``NO_ACCESS`` (distinct empty-tuple singleton): user has no access
+      at all. Caller must short-circuit and return zero results. Detect
+      with ``is NO_ACCESS``; do not compare with ``==``.
     - non-empty list: ``should`` conditions to include in the Qdrant
       filter.
 
