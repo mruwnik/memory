@@ -179,10 +179,17 @@ class SpawnRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
-        """Ensure exactly one of snapshot_id or environment_id is provided."""
-        if self.snapshot_id and self.environment_id:
+        """Ensure exactly one of snapshot_id or environment_id is provided.
+
+        NOTE: explicit ``is None`` checks rather than truthy checks. Integer
+        ``0`` is falsy in Python, so ``if self.snapshot_id`` would treat
+        ``snapshot_id=0`` as unset and silently pass through to the
+        environment branch. DB autoincrement starts at 1 in practice, but
+        the validator's contract is "exactly one set" — enforce it.
+        """
+        if self.snapshot_id is not None and self.environment_id is not None:
             raise ValueError("Cannot specify both snapshot_id and environment_id")
-        if not self.snapshot_id and not self.environment_id:
+        if self.snapshot_id is None and self.environment_id is None:
             raise ValueError("Must specify either snapshot_id or environment_id")
         return self
 
@@ -368,7 +375,7 @@ async def spawn_session(
     volume_name: str | None = None
     environment: ClaudeEnvironment | None = None
 
-    if request.snapshot_id:
+    if request.snapshot_id is not None:
         # Static snapshot mode: extract fresh each time into a new volume
         snapshot = (
             db.query(ClaudeConfigSnapshot)

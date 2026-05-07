@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from memory.api.cloud_claude import (
     SpawnRequest,
@@ -49,6 +50,55 @@ def test_make_session_id_unique():
     """Test that session IDs are unique."""
     ids = {make_session_id(1) for _ in range(100)}
     assert len(ids) == 100  # All unique
+
+
+# ====== SpawnRequest mutual-exclusivity validation ======
+
+
+def test_spawn_request_rejects_both_ids_set():
+    """Both snapshot_id and environment_id set is a 422."""
+    with pytest.raises(ValidationError, match="Cannot specify both"):
+        SpawnRequest(snapshot_id=1, environment_id=2)
+
+
+def test_spawn_request_rejects_neither_id_set():
+    """Neither set is a 422 (the contract is "exactly one")."""
+    with pytest.raises(ValidationError, match="Must specify either"):
+        SpawnRequest()
+
+
+def test_spawn_request_rejects_zero_with_other_id_set():
+    """Regression: snapshot_id=0 + environment_id=5 must be REJECTED.
+
+    The previous truthy check (`if self.snapshot_id and ...`) treated
+    integer 0 as unset, so this combination silently passed validation
+    and was then routed to the environment branch, dropping the user's
+    snapshot_id=0 input. With explicit `is None` checks the validator
+    correctly recognises both fields as set and raises 422.
+
+    DB autoincrement starts at 1 in practice, but the contract is
+    "exactly one set" — enforce it.
+    """
+    with pytest.raises(ValidationError, match="Cannot specify both"):
+        SpawnRequest(snapshot_id=0, environment_id=5)
+    with pytest.raises(ValidationError, match="Cannot specify both"):
+        SpawnRequest(snapshot_id=5, environment_id=0)
+
+
+@pytest.mark.parametrize("id_value", [0, 1, 99])
+def test_spawn_request_accepts_only_snapshot_id(id_value):
+    """Snapshot-only (any int including 0) must validate."""
+    req = SpawnRequest(snapshot_id=id_value)
+    assert req.snapshot_id == id_value
+    assert req.environment_id is None
+
+
+@pytest.mark.parametrize("id_value", [0, 1, 99])
+def test_spawn_request_accepts_only_environment_id(id_value):
+    """Environment-only (any int including 0) must validate."""
+    req = SpawnRequest(environment_id=id_value)
+    assert req.environment_id == id_value
+    assert req.snapshot_id is None
 
 
 def test_get_user_id_from_session_valid():
