@@ -370,6 +370,13 @@ async def test_get_user_person_via_discord_account(db_session, admin_user, admin
 
 
 # ====== _create_one_time_key scope-intersection tests ======
+#
+# OAuth in this codebase is just the MCP-server gate; the real auth runs off
+# user.scopes. In production, ``verify_token`` returns ``user.scopes ∪
+# {read, write}``, so ``access_token.scopes`` (= granted_scopes here) is
+# always a superset of user.scopes and the intersection collapses to
+# ``user.scopes``. These cases pin the math anyway so a future change that
+# narrows access_token.scopes can't silently break the contract.
 
 
 from contextlib import contextmanager  # noqa: E402
@@ -378,34 +385,37 @@ from contextlib import contextmanager  # noqa: E402
 @pytest.mark.parametrize(
     "user_scopes,granted_scopes,expected",
     [
-        # Admin-on-token: don't restrict (e.g., direct admin API key call).
-        # NB: no SCOPE_READ floor anymore — see _create_one_time_key for why.
+        # Both sides admin (e.g., direct admin API-key call): pass user's
+        # literal scopes through.
         (["*"], ["*"], {"*"}),
-        # OAuth caps admin user down to consented set.
+        # Token holds admin but user doesn't: user gets their own scopes —
+        # admin token doesn't escalate them.
+        (["read"], ["*"], {"read"}),
+        # Hypothetical narrow token (doesn't happen via verify_token today):
+        # user is admin, token isn't → de-escalate to the token's set.
+        # Pinned so a future verify_token change that DOES emit narrower
+        # scopes flows through correctly.
         (["*"], ["read", "write", "claudeai"], {"read", "write", "claudeai"}),
-        # OAuth read-only → key is read-only even if user is admin.
         (["*"], ["read"], {"read"}),
-        # Intersection only: user has {teams}, grant has rich scope set
-        # → {teams}. No SCOPE_READ floor — user didn't consent to read at
-        # this minting site, so we don't widen.
-        (["teams"], ["read", "write", "teams", "claudeai"], {"teams"}),
-        # User without "claudeai" doesn't get it, even if grant includes it.
+        # Realistic OAuth shape: granted = user.scopes ∪ {read, write}.
+        # User sees their full scope set on the issued key.
+        (["teams"], ["read", "write", "teams"], {"teams"}),
+        (["github"], ["github", "read", "write"], {"github"}),
+        # Pure intersection branch (neither side admin, hypothetical
+        # narrower token): user without "claudeai" doesn't get it.
         (["read"], ["read", "write", "claudeai"], {"read"}),
-        # Empty intersection: user has {teams}, grant has {claudeai}, neither
-        # has read. Resulting key has no scopes — useless, but honest. The
-        # alternative (silently widen with read) violates the OAuth grant.
+        # Empty intersection: empty-scope key is the honest signal. Every
+        # has_scope check rejects it — harmless rather than a regression.
         (["teams"], ["claudeai"], set()),
-        # Empty user scopes: same — empty key is the honest signal that the
-        # user has nothing to grant. The previous "always add read" was the
-        # exact bug Parvati flagged.
         ([], ["read", "write"], set()),
     ],
 )
-def test_create_one_time_key_scope_capping(user_scopes, granted_scopes, expected):
-    """Unit-test the scope-capping logic of _create_one_time_key with mocks.
+def test_create_one_time_key_scope_intersection(user_scopes, granted_scopes, expected):
+    """Pin the intersection math in _create_one_time_key.
 
-    Doesn't require a real DB; verifies that the APIKey is created with
-    the correct intersected scope set.
+    The function is intentionally permissive in production — see the
+    docstring. These cases pin the algebra so changes to verify_token (or
+    the cap logic) surface here.
     """
     from memory.api.MCP.servers import meta
 
@@ -464,73 +474,45 @@ def _mcp_auth_context_with_scopes(session_token: str, scopes: list[str]):
 
 
 @pytest.mark.asyncio
-async def test_one_time_key_scopes_capped_by_oauth_grant(db_session, admin_session):
-    """The minted one-time key MUST NOT exceed the access token's scopes.
+async def test_one_time_key_pins_intersection_for_narrow_token(
+    db_session, admin_session
+):
+    """If access_token.scopes were ever narrower than user.scopes, the
+    issued one-time key would track the narrower set.
 
-    Regression: previously the key was minted with `user_scopes | {read, write}`,
-    so an admin user (`scopes=["*"]`) authorising an OAuth client for only
-    `{read, write, claudeai}` would still hand the client a one-time key with
-    admin authority. That bypasses the OAuth consent boundary entirely.
+    Production access_token.scopes today = ``user.scopes ∪ {read, write}``
+    (see ``SimpleOAuthProvider.verify_token``), so this branch never
+    actually fires — OAuth is just the MCP-server gate, real auth is the
+    session/api-key path. We pin the math anyway so a future verify_token
+    change that narrows scopes would propagate without a parallel edit.
     """
     from memory.common.db.models import APIKey
 
-    # admin_user has scopes=["*"]; OAuth grant is the standard limited set.
     granted = ["read", "write", "claudeai"]
 
     with _mcp_auth_context_with_scopes(admin_session.id, granted):
         result = await get_user.fn(generate_one_time_key=True)
 
     assert result["authenticated"] is True
-    one_time_key = result.get("one_time_key")
-    assert one_time_key is not None
-
-    # Look up the freshly-minted key and assert its scopes are bounded.
-    stored = (
-        db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).first()
-    )
-    assert stored is not None
-    # Crucial: no admin "*" — even though the user has it.
-    assert "*" not in stored.scopes
-    # Must NOT contain any scope outside the OAuth grant.
-    extra = set(stored.scopes) - set(granted) - {"read"}
-    assert extra == set(), f"Key scopes leak past OAuth grant: {extra}"
-
-
-@pytest.mark.asyncio
-async def test_one_time_key_does_not_grant_write_when_oauth_was_read_only(
-    db_session, admin_session
-):
-    """A read-only OAuth grant must yield a read-only one-time key."""
-    from memory.common.db.models import APIKey
-
-    with _mcp_auth_context_with_scopes(admin_session.id, ["read"]):
-        result = await get_user.fn(generate_one_time_key=True)
-
     assert result.get("one_time_key") is not None
+
     stored = (
         db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).first()
     )
     assert stored is not None
-    assert "write" not in stored.scopes
+    # admin user, narrower hypothetical token → de-escalate to token's set.
     assert "*" not in stored.scopes
-    assert "read" in stored.scopes
+    assert set(stored.scopes) <= set(granted)
 
 
 @pytest.mark.asyncio
-async def test_one_time_key_intersects_user_and_oauth_scopes(
+async def test_one_time_key_intersects_when_token_is_narrower_than_user(
     db_session, regular_user
 ):
-    """Issued scopes are the intersection of user-held and OAuth-granted.
-
-    A user holding ["teams"] who consents to ["read", "write", "teams", "claudeai"]
-    should get a key with {teams, read} — not the union ({teams, read, write,
-    claudeai}). And conversely a user without "claudeai" shouldn't get it
-    even if the OAuth grant included it.
-    """
+    """Same hypothetical-narrow-token pin for non-admin users."""
     from datetime import datetime, timedelta
     from memory.common.db.models import APIKey, UserSession
 
-    # Build a session for the regular_user
     sess = UserSession(
         id="regular-session-token",
         user_id=regular_user.id,
@@ -548,8 +530,9 @@ async def test_one_time_key_intersects_user_and_oauth_scopes(
         db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
     )
     assert stored is not None
-    # User had {"teams"}; intersect with grant gives {"teams"}; floor adds "read".
-    assert set(stored.scopes) == {"teams", "read"}
+    # user.scopes = {"teams"}, granted has "teams" so intersection = {"teams"}.
+    # User without "claudeai" shouldn't get it even though the grant lists it.
+    assert set(stored.scopes) == {"teams"}
 
 
 # ====== get_forecasts tests ======
