@@ -371,15 +371,16 @@ def _fetch_chunks_by_title(
     # Normalize titles for matching
     titles_lower = [t.lower() for t in titles[:5]]
 
-    # Import here to avoid circular dependency
-    from memory.api.search.bm25 import apply_access_filter
+    # Use the canonical helper (the bm25.apply_access_filter alias was
+    # deprecated; both call sites now route through the same function).
+    from memory.common.access_control import apply_access_filter_to_query
 
     access_filter = (filters or {}).get("access_filter")
 
     with make_session() as db:
         # Query sources in requested modalities, applying access control
         sources_query = db.query(SourceItem).filter(SourceItem.modality.in_(modalities))
-        sources_query = apply_access_filter(sources_query, access_filter)
+        sources_query = apply_access_filter_to_query(sources_query, access_filter)
         sources = (
             sources_query
             .limit(200)  # Reduced from 500; access filter narrows the set

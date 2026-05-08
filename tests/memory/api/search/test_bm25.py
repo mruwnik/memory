@@ -8,10 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memory.api.search import bm25
-from memory.api.search.bm25 import apply_access_filter
 from memory.api.search.types import SearchFilters
 from memory.common import extract
-from memory.common.access_control import AccessFilter
+from memory.common.access_control import (
+    AccessFilter,
+    apply_access_filter_to_query as apply_access_filter,
+)
 
 # Superadmin/no-filter SearchFilters. ``search_bm25`` and
 # ``search_bm25_chunks`` now require an explicit ``access_filter`` key

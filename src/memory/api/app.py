@@ -480,15 +480,29 @@ app.mount("/", mcp_http_app)
 
 
 def main(reload: bool = False):
-    """Run the FastAPI server in debug mode with auto-reloading."""
+    """Run the FastAPI server (default log level: info).
+
+    The previous hardcoded ``log_level="debug"`` made Uvicorn emit raw
+    request lines (including query strings) at every request. That is
+    fine for active dev sessions but becomes a credential-leak vector
+    when this entrypoint is invoked in any non-dev context (e.g. an
+    operator running ``python -m memory.api.app`` once on a server with
+    journald scraping logs): the validation-error handler at
+    ``handle_validation_error`` carefully redacts sensitive query params,
+    but Uvicorn's access log fires *before* that handler and logs the
+    raw request line. Reading ``LOG_LEVEL`` from env makes the verbose
+    behaviour opt-in instead of the default.
+    """
     import uvicorn
+
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
 
     uvicorn.run(
         "memory.api.app:app",
         host="0.0.0.0",
         port=8000,
         reload=reload,
-        log_level="debug",
+        log_level=log_level,
     )
 
 

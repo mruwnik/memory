@@ -14,7 +14,7 @@ from sqlalchemy import func, text, or_, exists, select
 from memory.api.search.embeddings import require_access_filter
 from memory.api.search.types import SearchFilters
 from memory.common import extract
-from memory.common.access_control import AccessFilter, apply_access_filter_to_query
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
@@ -39,15 +39,6 @@ _STOPWORDS = frozenset([
     "during", "before", "after", "above", "below", "between", "under", "again",
     "further", "then", "once", "here", "there", "any", "being", "doing",
 ])
-
-
-def apply_access_filter(query, access_filter: AccessFilter | None):
-    """Backwards-compatible alias for :func:`apply_access_filter_to_query`.
-
-    Older code paths in this module call ``apply_access_filter``; new code
-    should use the canonical helper in ``memory.common.access_control``.
-    """
-    return apply_access_filter_to_query(query, access_filter)
 
 
 def build_tsquery(query: str) -> str:
@@ -141,7 +132,9 @@ async def search_bm25(
 
         # Apply access control filter (requires source join)
         if access_filter is not None:
-            items_query = apply_access_filter(items_query, access_filter)
+            items_query = apply_access_filter_to_query(
+                items_query, access_filter
+            )
 
         # Apply person filter (requires source join)
         # Include items where: no people associations exist OR person is associated
