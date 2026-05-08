@@ -114,7 +114,14 @@ RESERVED_ENV_VARS = {
 # * Inside the spawned container the SSH key + GITHUB_TOKEN are already in
 #   the env, so a malicious clone can also exfiltrate via outbound HTTP/SSH.
 #
-# Defense: allowlist schemes to {https, ssh, git} (urlparse-able), accept
+# * ``git://`` (bare git wire protocol) provides no TLS, no integrity, and
+#   no authentication, so an on-path attacker can swap the repo content
+#   between this side and the operator's git server. GitHub disabled
+#   ``git://`` access in 2022; most other forges followed. Symmetric risk
+#   with ``http://`` (also rejected). Anonymous read-only access still
+#   works via the scp-like ``user@host:path`` form over SSH.
+#
+# Defense: allowlist schemes to {https, ssh} (urlparse-able), accept
 # the common scp-like ``user@host:path`` form for ssh, and reject leading
 # hyphens / control characters / over-length values.
 #
@@ -123,7 +130,7 @@ RESERVED_ENV_VARS = {
 # construction. So a malicious ``repo_url`` is rejected at the same boundary
 # whether it arrives via ``POST /spawn`` or via a stored ``POST /schedule``.
 
-GIT_REPO_URL_SCHEMES: frozenset[str] = frozenset({"https", "ssh", "git"})
+GIT_REPO_URL_SCHEMES: frozenset[str] = frozenset({"https", "ssh"})
 GIT_REPO_URL_MAX_LEN = 2000  # generous; attacker is the one paying the cost
 GIT_REPO_URL_FORBIDDEN_CHARS: frozenset[str] = frozenset({"\x00", "\r", "\n"})
 
@@ -158,7 +165,7 @@ def validate_git_repo_url(url: str) -> str:
     * length above ``GIT_REPO_URL_MAX_LEN``
     * empty string
     * any other ``ext::``, ``transport-helper::``, ``http://``,
-      ``file://`` URL (non-allowlisted scheme)
+      ``git://``, ``file://`` URL (non-allowlisted scheme)
     """
     if not url:
         raise ValueError("repo_url must not be empty")
@@ -185,8 +192,9 @@ def validate_git_repo_url(url: str) -> str:
         if parsed.scheme not in GIT_REPO_URL_SCHEMES:
             raise ValueError(
                 f"repo_url scheme must be one of {sorted(GIT_REPO_URL_SCHEMES)} "
-                f"(got {parsed.scheme!r}); ext::, transport-helper:: and "
-                f"file:// are deliberately excluded"
+                f"(got {parsed.scheme!r}); ext::, transport-helper::, "
+                f"git:// (no TLS / MITM-able) and file:// are deliberately "
+                f"excluded"
             )
         if not parsed.hostname:
             raise ValueError("repo_url must include a hostname")

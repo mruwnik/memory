@@ -124,13 +124,13 @@ def test_spawn_request_accepts_only_environment_id(id_value):
 @pytest.mark.parametrize(
     "url",
     [
-        # https/ssh/git URL forms
+        # https/ssh URL forms (git:// is deliberately excluded — see the
+        # rejection parametrization for the threat-model rationale)
         "https://github.com/owner/repo.git",
         "https://github.com/owner/repo",
         "https://gitlab.example.com:8443/group/proj.git",
         "ssh://git@github.com/owner/repo.git",
         "ssh://user@gitea.local:2222/proj/repo.git",
-        "git://example.com/repo",
         # scp-like SSH form (git's native abbreviated SSH syntax)
         "git@github.com:owner/repo.git",
         "user_name@host.example.com:path/to/repo.git",
@@ -140,8 +140,10 @@ def test_spawn_request_accepts_only_environment_id(id_value):
     ],
 )
 def test_validate_git_repo_url_accepts_valid_forms(url):
-    """The validator passes well-shaped git URLs (https/ssh/git +
-    scp-like ``user@host:path``)."""
+    """The validator passes well-shaped git URLs (https/ssh +
+    scp-like ``user@host:path``). Note: ``git://`` is NOT accepted —
+    it's bare-wire-protocol with no TLS and no integrity, MITM-able by
+    any on-path observer (GitHub disabled it in 2022)."""
     assert validate_git_repo_url(url) == url
 
 
@@ -162,6 +164,13 @@ def test_validate_git_repo_url_accepts_valid_forms(url):
         ("transport-helper::sh -c whoami", "non-allowlisted scheme"),
         # ── http:// (non-TLS) — leaks credentials, not in allowlist
         ("http://github.com/owner/repo.git", "non-allowlisted scheme"),
+        # ── git:// (bare git wire protocol) — no TLS, no integrity, no
+        # authentication; MITM-able by any on-path observer. Symmetric
+        # risk with http:// above. Most public forges (GitHub etc.)
+        # disabled this protocol; we follow suit.
+        ("git://github.com/owner/repo", "non-allowlisted scheme"),
+        ("git://example.com/repo.git", "non-allowlisted scheme"),
+        ("GIT://github.com/owner/repo", "non-allowlisted scheme"),
         # ── file:// — local-disk read primitive
         ("file:///etc/passwd", "non-allowlisted scheme"),
         ("file:///root/.ssh/id_rsa", "non-allowlisted scheme"),
@@ -207,9 +216,12 @@ def test_git_repo_url_schemes_allowlist_does_not_include_dangerous_ones():
     """Belt-and-suspenders: the constant itself must NOT contain any of
     the historically-dangerous git URL schemes. A future contributor
     "adding http for convenience" would be visible to a grep on this
-    constant."""
-    forbidden = {"http", "ftp", "file", "ext", "transport-helper", "ldap"}
+    constant. ``git`` is in the forbidden set because the bare
+    git-wire-protocol is unauthenticated/unencrypted and MITM-able."""
+    forbidden = {"http", "git", "ftp", "file", "ext", "transport-helper", "ldap"}
     assert not (GIT_REPO_URL_SCHEMES & forbidden)
+    # Positive shape: only the two schemes we deliberately allow.
+    assert GIT_REPO_URL_SCHEMES == frozenset({"https", "ssh"})
 
 
 # --- Pydantic field_validator wiring on SpawnRequest -----------------------
