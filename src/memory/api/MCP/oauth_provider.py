@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import (
+    APIKey,
     OAuthClientInformation,
     OAuthRefreshToken,
     OAuthState,
@@ -182,6 +183,39 @@ def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
         return cast(str, oauth_state.client_id), list(cast(list[str], oauth_state.scopes) or [])
     user_scopes = user_session.user.scopes if user_session.user else []
     return "frontend", list(user_scopes or [])
+
+
+def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
+    """Resolve effective scopes for a request authenticated by API key.
+
+    The previous implementation used ``api_key_record.scopes or list(user.scopes or [])``,
+    which conflated two distinct values:
+
+    * ``scopes is None`` → "no override; inherit user scopes" (the intent
+      documented in the column docstring).
+    * ``scopes == []`` → an explicit empty list, set by an admin/UI to
+      mean "no override scopes." Falsy ``[]`` triggered the same fallback,
+      silently re-granting the user's full system scopes (incl. ``"*"``).
+
+    That collapse was a privilege-escalation footgun: an admin trying to
+    create a low-privilege key by passing ``scopes=[]`` got an admin key.
+    This helper distinguishes the two cases:
+
+    * ``None`` → inherit user scopes (or [SCOPE_READ] if the user has none).
+    * Non-empty list → use as-is.
+    * Explicit empty list → fail closed: ``[SCOPE_READ]`` only, never the
+      user's system scopes. This is the safe default for "this key has no
+      privileges beyond read."
+    """
+    override = api_key_record.scopes
+    if override is None:
+        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
+        # user themselves has no scopes set (matches prior behaviour).
+        return list(user.scopes or []) or [SCOPE_READ]
+    # Explicit list — empty list means "no privileges beyond read",
+    # NOT "fall back to user.scopes". This is the security-critical
+    # distinction.
+    return list(override) or [SCOPE_READ]
 
 
 def create_refresh_token_record(
@@ -421,8 +455,10 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.info(
                     f"User {user.name} (id={user.id}) authenticated via API key"
                 )
-                # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
+                # ``scopes is None`` inherits user scopes; ``scopes == []``
+                # is treated as "no override privileges" (read-only), NOT
+                # silent fallback to user.scopes — see resolve_api_key_scopes.
+                scopes = resolve_api_key_scopes(api_key_record, user)
                 # Handle API key usage (update last_used_at, delete one-time keys)
                 handle_api_key_use(api_key_record, session)
                 return FastMCPAccessToken(
@@ -822,8 +858,10 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.info(
                     f"User {user.name} (id={user.id}) authenticated via API key"
                 )
-                # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
+                # ``scopes is None`` inherits user scopes; ``scopes == []``
+                # is treated as "no override privileges" (read-only), NOT
+                # silent fallback to user.scopes — see resolve_api_key_scopes.
+                scopes = resolve_api_key_scopes(api_key_record, user)
                 # Handle API key usage (update last_used_at, delete one-time keys)
                 handle_api_key_use(api_key_record, session)
                 return AccessToken(

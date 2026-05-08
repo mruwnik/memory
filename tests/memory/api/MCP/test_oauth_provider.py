@@ -9,6 +9,7 @@ from sqlalchemy.pool import QueuePool
 
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
+    resolve_api_key_scopes,
     resolve_session_scopes,
     make_token,
 )
@@ -341,6 +342,117 @@ async def test_verify_token_with_api_key_uses_key_scopes_when_set(db_session):
     assert "write" in result.scopes
     assert "organizer" in result.scopes
     assert "*" not in result.scopes
+
+
+# --- resolve_api_key_scopes — empty-list privilege-escalation regression ---
+#
+# Pre-fix bug: ``api_key.scopes or list(user.scopes or [])`` collapsed
+# ``None`` and ``[]`` to the same fallback. An admin who passes
+# ``scopes=[]`` to "make a low-privilege key" got a key carrying
+# ``user.scopes`` — including ``["*"]``. Now ``[]`` is treated as
+# "no override privileges" and falls through to ``[SCOPE_READ]``.
+
+
+def test_resolve_api_key_scopes_none_inherits_user_scopes():
+    """``scopes=None`` is the documented inherit-from-user case (hermetic)."""
+    user = MagicMock(spec=User)
+    user.scopes = ["organizer", "github"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert sorted(resolve_api_key_scopes(key, user)) == ["github", "organizer"]
+
+
+def test_resolve_api_key_scopes_empty_list_does_not_inherit_user_scopes():
+    """REGRESSION: ``scopes=[]`` must NOT silently grant user.scopes.
+
+    A key with explicit empty scopes should be the most-restricted state,
+    not the most-permissive.
+    """
+    user = MagicMock(spec=User)
+    user.scopes = ["*"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = []
+    resolved = resolve_api_key_scopes(key, user)
+    assert "*" not in resolved, "Empty-list override silently granted admin"
+    # Falls back to read-only (which is the safe default).
+    assert resolved == ["read"]
+
+
+def test_resolve_api_key_scopes_explicit_list_used_verbatim():
+    """Non-empty explicit override is used as-is, ignoring user.scopes."""
+    user = MagicMock(spec=User)
+    user.scopes = ["*"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = ["read", "organizer"]
+    assert sorted(resolve_api_key_scopes(key, user)) == ["organizer", "read"]
+
+
+def test_resolve_api_key_scopes_inherit_with_no_user_scopes_defaults_to_read():
+    """If we inherit from a user with no scopes, default to [SCOPE_READ]."""
+    user = MagicMock(spec=User)
+    user.scopes = []
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert resolve_api_key_scopes(key, user) == ["read"]
+
+
+def test_resolve_api_key_scopes_inherit_with_user_scopes_none():
+    """``user.scopes`` itself is None (uninitialised) — fall back to read."""
+    user = MagicMock(spec=User)
+    user.scopes = None
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert resolve_api_key_scopes(key, user) == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_verify_token_empty_api_key_scopes_does_not_inherit_user_admin(db_session):
+    """End-to-end regression: empty-list key on an admin user must not grant ``*``."""
+    user = create_test_user(db_session, scopes=["*"])
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=APIKeyType.INTERNAL,
+        name="Empty-scope key",
+        scopes=[],
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    key_value = api_key.key
+
+    provider = SimpleOAuthProvider()
+    result = await provider.verify_token(key_value)
+
+    assert result is not None
+    # The empty-list key must NOT silently re-grant the user's admin scope.
+    assert "*" not in result.scopes
+    # It collapses to the safe default — read only.
+    assert result.scopes == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_load_access_token_empty_api_key_scopes_does_not_inherit_user_admin(
+    db_session,
+):
+    """Same regression but via load_access_token (the second call site)."""
+    user = create_test_user(db_session, scopes=["*"])
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=APIKeyType.INTERNAL,
+        name="Empty-scope key 2",
+        scopes=[],
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    key_value = api_key.key
+
+    provider = SimpleOAuthProvider()
+    result = await provider.load_access_token(key_value)
+
+    assert result is not None
+    assert "*" not in result.scopes
+    assert result.scopes == ["read"]
 
 
 # --- One-time API key tests ---
