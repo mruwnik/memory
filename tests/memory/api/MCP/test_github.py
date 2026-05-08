@@ -428,14 +428,14 @@ def test_list_issues_url_construction(db_session, sample_issues):
 # =============================================================================
 
 
-def test_fetch_issue_found(db_session, sample_issues):
+def test_fetch_issue_found(db_session, admin_user, sample_issues):
     """Test getting details for an existing issue."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=1)
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin_user)
 
     assert result["number"] == 1
     assert result["title"] == "Fix authentication bug"
@@ -444,7 +444,7 @@ def test_fetch_issue_found(db_session, sample_issues):
     assert result["project_fields"]["EquiStamp.Client"] == "Redwood"
 
 
-def test_fetch_issue_not_found(db_session, sample_issues):
+def test_fetch_issue_not_found(db_session, admin_user, sample_issues):
     """Test getting details for a non-existent issue."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
@@ -452,17 +452,17 @@ def test_fetch_issue_not_found(db_session, sample_issues):
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
         with pytest.raises(ValueError, match="not found"):
-            fetch_issue(repo="owner/repo1", number=999)
+            fetch_issue(repo="owner/repo1", number=999, user=admin_user)
 
 
-def test_fetch_issue_pr(db_session, sample_issues):
+def test_fetch_issue_pr(db_session, admin_user, sample_issues):
     """Test getting details for a PR."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=50)
+        result = fetch_issue(repo="owner/repo1", number=50, user=admin_user)
 
     assert result["kind"] == "pr"
     assert result["state"] == "merged"
@@ -616,14 +616,14 @@ def sample_pr_with_data(db_session):
     return pr
 
 
-def test_fetch_issue_includes_pr_data(db_session, sample_pr_with_data):
+def test_fetch_issue_includes_pr_data(db_session, admin_user, sample_pr_with_data):
     """Test that fetch_issue includes PR data for PRs."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=999)
+        result = fetch_issue(repo="owner/repo1", number=999, user=admin_user)
 
     assert result["kind"] == "pr"
     assert "pr_data" in result
@@ -637,14 +637,14 @@ def test_fetch_issue_includes_pr_data(db_session, sample_pr_with_data):
     assert "diff --git" in result["pr_data"]["diff"]
 
 
-def test_fetch_issue_no_pr_data_for_issues(db_session, sample_issues):
+def test_fetch_issue_no_pr_data_for_issues(db_session, admin_user, sample_issues):
     """Test that fetch_issue does not include pr_data for issues."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=1)
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin_user)
 
     assert result["kind"] == "issue"
     assert "pr_data" not in result
