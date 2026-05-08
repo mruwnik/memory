@@ -21,8 +21,49 @@ from memory.common.data_source_access import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 router = APIRouter(prefix="/calendar-accounts", tags=["calendar-accounts"])
+
+
+def _validate_caldav_url(url: str | None) -> None:
+    """Refuse a CalDAV URL that would leak credentials or reach internal hosts.
+
+    Two distinct attacks are gated:
+
+    * **Credential exfil / laundering**: an authenticated user can set
+      ``caldav_url=http://attacker.example.com/caldav/`` and the worker
+      would later POST Basic Auth (the user's stored caldav_password)
+      to attacker. Forcing ``https://`` keeps creds off the wire in
+      cleartext; ``validate_public_url`` rejects internal hosts so the
+      same trick can't point the worker at, e.g.,
+      ``http://qdrant:6333/``.
+
+    * **Internal port probe**: same recon surface as the IMAP test
+      endpoint — a private/loopback URL combined with the worker's
+      sync error reporting leaks reachability of internal services.
+
+    Caller passes ``None`` to mean "field unchanged"; we no-op in that
+    case (the existing row was validated at write time).
+    """
+    if url is None:
+        return
+    try:
+        validate_public_url(url)
+    except UnsafeURLError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid caldav_url: {exc}"
+        ) from exc
+    # Force HTTPS. Plain http:// would still pass validate_public_url for
+    # a public hostname, but Basic Auth over plain HTTP travels in the
+    # clear and is a credential-leak primitive against any on-path
+    # observer (the worker network may not be hostile but the user's
+    # ISP / WiFi commonly is).
+    if not url.lower().startswith("https://"):
+        raise HTTPException(
+            status_code=400,
+            detail="caldav_url must use https:// (refuses cleartext credentials)",
+        )
 
 
 class CalendarAccountCreate(BaseModel):
@@ -154,6 +195,12 @@ def create_account(
                 status_code=400,
                 detail="CalDAV accounts require caldav_url, caldav_username, and caldav_password",
             )
+        # SSRF + cleartext-credential guard on the user-supplied URL.
+        # Without this, an attacker can store
+        # caldav_url=http://attacker.example.com/caldav and the worker
+        # later sends Basic Auth (the user's caldav_password) to the
+        # attacker (CWE-918, CWE-522).
+        _validate_caldav_url(data.caldav_url)
     elif data.calendar_type == "google":
         if not data.google_account_id:
             raise HTTPException(
@@ -216,6 +263,7 @@ def update_account(
     if updates.name is not None:
         account.name = updates.name
     if updates.caldav_url is not None:
+        _validate_caldav_url(updates.caldav_url)
         account.caldav_url = updates.caldav_url
     if updates.caldav_username is not None:
         account.caldav_username = updates.caldav_username
