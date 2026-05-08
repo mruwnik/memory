@@ -31,7 +31,7 @@ before issuing the next hop. ``stream_download_*`` use it transparently.
 import logging
 import pathlib
 from typing import Any, Mapping
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -52,6 +52,15 @@ DEFAULT_MAX_REDIRECTS = 5
 # between syscall overhead and burst RAM. 8 KiB (the previous helpers'
 # default) is fine too; bigger chunks just mean fewer syscalls.
 _CHUNK_SIZE = 64 * 1024
+
+# Header names that must be stripped on cross-host redirects to mirror
+# the credential-leak defence built into ``requests.Session.rebuild_auth``
+# (and also drop ``Cookie``, which the bare ``requests.get`` path does
+# not auto-protect because the cookie jar lives on ``Session``). Stored
+# lowercase for case-insensitive matching.
+_SENSITIVE_REDIRECT_HEADERS = frozenset(
+    {"authorization", "proxy-authorization", "cookie"}
+)
 
 
 def _content_length_exceeds_cap(
@@ -82,6 +91,46 @@ def _content_length_exceeds_cap(
     return False
 
 
+def _is_cross_host_redirect(old_url: str, new_url: str) -> bool:
+    """Return True if a hop should be treated as cross-origin for header purposes.
+
+    Comparison is on ``(scheme, hostname, port)`` — we strip on any of
+    the three changing. This is stricter than ``requests``'s
+    ``Session.should_strip_auth`` (which keeps headers across the common
+    ``http`` → ``https`` upgrade on default ports) but the conservative
+    side is the safe side: we'd rather force a caller to re-supply a
+    header than silently leak it through a same-host scheme/port flip
+    that an attacker controls. Hostname comparison is case-insensitive.
+    """
+    old = urlparse(old_url)
+    new = urlparse(new_url)
+    old_host = (old.hostname or "").lower()
+    new_host = (new.hostname or "").lower()
+    return (
+        old.scheme != new.scheme
+        or old_host != new_host
+        or old.port != new.port
+    )
+
+
+def _strip_sensitive_headers(
+    headers: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a copy of ``headers`` with auth-like names removed.
+
+    Match is case-insensitive against
+    :data:`_SENSITIVE_REDIRECT_HEADERS`. Returns ``None`` unchanged so
+    callers can keep the ``headers=None`` no-op shape.
+    """
+    if not headers:
+        return headers if headers is None else dict(headers)
+    return {
+        k: v
+        for k, v in headers.items()
+        if k.lower() not in _SENSITIVE_REDIRECT_HEADERS
+    }
+
+
 def safe_get(
     url: str,
     *,
@@ -104,6 +153,14 @@ def safe_get(
     redirect targets are still validated). The kwargs are passed through
     to ``requests.get`` (``stream``, ``timeout``, ``headers``, ...);
     ``allow_redirects`` is forced off internally.
+
+    On a cross-host redirect (different scheme, hostname, or port), the
+    ``Authorization``, ``Proxy-Authorization``, and ``Cookie`` headers
+    are stripped before the next request — mirroring the
+    ``requests.Session.rebuild_auth`` credential-leak defence which the
+    bare ``requests.get`` path doesn't get for free. This protects callers
+    that pass per-host bearer tokens against an attacker who controls
+    the ``Location`` of a public 302 hop.
 
     Raises:
         UnsafeURLError: initial or any redirect target failed SSRF policy,
@@ -144,6 +201,20 @@ def safe_get(
         # The attacker controls the Location header even when the initial
         # URL was clean.
         validate_public_url(next_url)
+
+        # Drop credential-shaped headers before the cross-host next-hop.
+        # We do this AFTER URL validation so a same-host 302 (the common
+        # case) keeps every header untouched.
+        if _is_cross_host_redirect(current_url, next_url):
+            stripped = _strip_sensitive_headers(kwargs.get("headers"))
+            if stripped != kwargs.get("headers"):
+                logger.info(
+                    "Stripping sensitive headers on cross-host redirect: %s -> %s",
+                    current_url,
+                    next_url,
+                )
+                kwargs["headers"] = stripped
+
         current_url = next_url
 
     raise UnsafeURLError(

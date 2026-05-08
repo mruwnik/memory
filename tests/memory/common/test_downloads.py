@@ -338,3 +338,193 @@ def test_stream_download_to_path_blocks_unsafe_redirect(tmp_path: pathlib.Path):
     assert not dest.exists()
 
 
+# --- safe_get cross-host header stripping --------------------------------
+# Mirrors requests.Session.rebuild_auth: any caller that passes
+# per-host credentials in headers (Authorization, Proxy-Authorization,
+# Cookie) must not leak them to a second host the attacker chooses via
+# the Location of a 302 from a public URL.
+
+
+def test_safe_get_strips_authorization_on_cross_host_redirect():
+    """Authorization must not leak to a different host on a 302."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://attacker.example/2"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+
+    captured: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        captured.append({"url": url, "headers": kwargs.get("headers")})
+        return [hop, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get(
+            "http://api.example/me",
+            headers={"Authorization": "Bearer s3cret", "User-Agent": "ua"},
+        )
+
+    # First hop sees the Authorization header (same host).
+    assert captured[0]["headers"] == {
+        "Authorization": "Bearer s3cret",
+        "User-Agent": "ua",
+    }
+    # Second hop must NOT see Authorization (cross-host); benign headers stay.
+    assert "Authorization" not in (captured[1]["headers"] or {})
+    assert captured[1]["headers"] == {"User-Agent": "ua"}
+
+
+@pytest.mark.parametrize(
+    "header_name",
+    [
+        "Authorization",
+        "authorization",
+        "AUTHORIZATION",
+        "Proxy-Authorization",
+        "proxy-authorization",
+        "Cookie",
+        "cookie",
+        "COOKIE",
+    ],
+)
+def test_safe_get_strip_is_case_insensitive(header_name: str):
+    """Header-name matching for stripping is case-insensitive."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://attacker.example/2"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get(
+            "http://api.example/me",
+            headers={header_name: "secret-value", "Accept": "*/*"},
+        )
+
+    # First request: header present.
+    assert header_name in (captured[0] or {})
+    # Second request: header gone irrespective of casing; "Accept" survives.
+    second = captured[1] or {}
+    assert all(k.lower() != header_name.lower() for k in second)
+    assert second.get("Accept") == "*/*"
+
+
+def test_safe_get_keeps_headers_on_same_host_redirect():
+    """A redirect within the same scheme+host+port keeps every header."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://api.example/v2/me"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop, final][len(captured) - 1]
+
+    headers = {"Authorization": "Bearer s3cret", "Cookie": "session=abc"}
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get("http://api.example/me", headers=headers)
+
+    # Both hops see the full header set — same-host redirects don't strip.
+    assert captured[0] == headers
+    assert captured[1] == headers
+
+
+def test_safe_get_strips_on_scheme_change_same_host():
+    """We err on the strip side for ``http`` → ``https`` on the same host
+    (stricter than requests' rebuild_auth, but cheap insurance against
+    same-host scheme-flip games)."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="https://api.example/me"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get(
+            "http://api.example/me",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+    assert captured[0] == {"Authorization": "Bearer s3cret"}
+    assert "Authorization" not in (captured[1] or {})
+
+
+def test_safe_get_strips_on_port_change_same_host():
+    """Port flip on the same host also strips — mirrors scheme-flip rationale."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://api.example:8080/me"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get(
+            "http://api.example/me",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+    assert "Authorization" not in (captured[1] or {})
+
+
+def test_safe_get_no_headers_no_change():
+    """``headers=None`` must remain a no-op after a cross-host redirect."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://other.example/2"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get("http://api.example/me")  # no headers kwarg
+
+    # Neither call gets headers; no headers got materialised by the strip path.
+    assert captured == [None, None]
+
+
+def test_safe_get_strip_persists_across_chained_redirects():
+    """Once stripped, the header stays stripped on subsequent same-host hops.
+
+    Threat model: cross-host redirect to attacker.example, then attacker
+    bounces back to api.example/secondary — header must not reappear.
+    """
+    hop1 = _FakeChunkResponse(
+        [], status_code=302, location="http://attacker.example/middle"
+    )
+    hop2 = _FakeChunkResponse(
+        [], status_code=302, location="http://attacker.example/inner"
+    )
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    captured: list[dict | None] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs.get("headers"))
+        return [hop1, hop2, final][len(captured) - 1]
+
+    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+        safe_get(
+            "http://api.example/me",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+
+    assert captured[0] == {"Authorization": "Bearer s3cret"}
+    # Second and third hops both lack the header — strip must persist.
+    assert "Authorization" not in (captured[1] or {})
+    assert "Authorization" not in (captured[2] or {})
+
+
