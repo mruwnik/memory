@@ -20,13 +20,10 @@ Both return ``None`` on any failure (size cap, HTTP error, network
 error). The reason is logged at WARNING.
 """
 
-from __future__ import annotations
-
 import logging
 import pathlib
 from typing import Mapping
 
-import httpx
 import requests
 
 logger = logging.getLogger(__name__)
@@ -120,49 +117,14 @@ def stream_download_to_path(
     headers: Mapping[str, str] | None = None,
     timeout: float = 30.0,
     follow_redirects: bool = True,
-    use_httpx: bool = False,
 ) -> bool:
     """Stream ``url`` directly to ``destination``. Returns True on success.
 
     Cleans up the partial file if the size cap is exceeded mid-stream so
     we never leave an incomplete file behind. The destination's parent
     directory is created if it doesn't exist.
-
-    ``use_httpx`` selects the httpx client (matches the existing
-    Slack-file path) instead of ``requests``. Both behave the same way
-    semantically; httpx's stream API is just slightly different so we
-    keep them on separate code paths rather than ducktype them.
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if use_httpx:
-        return _stream_with_httpx(
-            url,
-            destination,
-            max_bytes,
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-        )
-    return _stream_with_requests(
-        url,
-        destination,
-        max_bytes,
-        headers=headers,
-        timeout=timeout,
-        follow_redirects=follow_redirects,
-    )
-
-
-def _stream_with_requests(
-    url: str,
-    destination: pathlib.Path,
-    max_bytes: int,
-    *,
-    headers: Mapping[str, str] | None,
-    timeout: float,
-    follow_redirects: bool,
-) -> bool:
     try:
         with requests.get(
             url,
@@ -183,45 +145,6 @@ def _stream_with_requests(
                 url,
             )
     except requests.RequestException as e:
-        logger.warning("Failed to download %s: %s", url, e)
-        destination.unlink(missing_ok=True)
-        return False
-
-
-def _stream_with_httpx(
-    url: str,
-    destination: pathlib.Path,
-    max_bytes: int,
-    *,
-    headers: Mapping[str, str] | None,
-    timeout: float,
-    follow_redirects: bool,
-) -> bool:
-    try:
-        with httpx.Client(
-            timeout=timeout, follow_redirects=follow_redirects
-        ) as client:
-            with client.stream(
-                "GET", url, headers=dict(headers) if headers else None
-            ) as response:
-                response.raise_for_status()
-
-                if _content_length_exceeds_cap(response.headers, max_bytes, url):
-                    return False
-
-                return _write_streaming(
-                    destination,
-                    response.iter_bytes(chunk_size=_CHUNK_SIZE),
-                    max_bytes,
-                    url,
-                )
-    except httpx.HTTPStatusError as e:
-        logger.warning(
-            "Failed to download %s: HTTP %s", url, e.response.status_code
-        )
-        destination.unlink(missing_ok=True)
-        return False
-    except httpx.HTTPError as e:
         logger.warning("Failed to download %s: %s", url, e)
         destination.unlink(missing_ok=True)
         return False

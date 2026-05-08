@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -142,8 +143,6 @@ def _build_item_class_map() -> dict[str, type[SourceItem]]:
     both — the API endpoint at api/source_items.py uses class name, the
     Celery dispatch loop in process_raw_items uses polymorphic identity.
     """
-    from sqlalchemy import inspect as sa_inspect
-
     mapper = sa_inspect(SourceItem)
     out: dict[str, type[SourceItem]] = {}
     for ident, sub_mapper in mapper.polymorphic_map.items():

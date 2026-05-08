@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pathlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
@@ -15,7 +15,7 @@ from memory.common.downloads import (
 
 
 class _FakeChunkResponse:
-    """Lightweight stand-in for a streaming requests/httpx response."""
+    """Lightweight stand-in for a streaming requests response."""
 
     def __init__(
         self,
@@ -41,10 +41,6 @@ class _FakeChunkResponse:
             raise self._raises
 
     def iter_content(self, chunk_size: int):
-        yield from self._chunks
-
-    # httpx-style aliases used by the httpx code path
-    def iter_bytes(self, chunk_size: int):
         yield from self._chunks
 
 
@@ -142,21 +138,3 @@ def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl)
     assert result == b"ok"
 
 
-def test_stream_download_to_path_via_httpx(tmp_path: pathlib.Path):
-    """The httpx code path exists for callers that need its specific stream API
-    (Slack-file ingest passes auth headers; httpx's stream context manager is
-    what download_slack_file used pre-extraction)."""
-    fake = _FakeChunkResponse([b"hello"], content_length=5)
-
-    fake_client = MagicMock()
-    fake_client.__enter__ = lambda self: fake_client
-    fake_client.__exit__ = lambda *args: False
-    fake_client.stream.return_value = fake
-
-    dest = tmp_path / "httpx_out.bin"
-    with patch("memory.common.downloads.httpx.Client", return_value=fake_client):
-        ok = stream_download_to_path(
-            "http://example.com/f", dest, max_bytes=1024, use_httpx=True
-        )
-    assert ok is True
-    assert dest.read_bytes() == b"hello"

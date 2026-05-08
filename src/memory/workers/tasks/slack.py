@@ -186,15 +186,11 @@ def download_slack_file(
     filename = f"{url_hash}{ext}"
     local_path = file_dir / filename
 
-    # httpx is required because the Slack download includes the bot token
-    # in the Authorization header — ``stream_download_to_path`` accepts a
-    # mapping just like the inline httpx call did.
     if not stream_download_to_path(
         url,
         local_path,
         SLACK_FILE_MAX_BYTES,
         headers=headers,
-        use_httpx=True,
     ):
         return None
 

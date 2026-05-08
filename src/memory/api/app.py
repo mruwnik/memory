@@ -22,6 +22,7 @@ from memory.common.access_control import (
     user_can_access,
 )
 from memory.common.csp import sanitize_csp_source_list
+from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
@@ -56,16 +57,6 @@ from memory.api.celery_overview import router as celery_overview_router
 from memory.api.MCP.base import mcp
 
 logger = logging.getLogger(__name__)
-
-
-# Re-export the canonical rate-limit key helper from common.rate_limit so
-# existing imports of ``memory.api.app.rate_limit_key`` keep working. The
-# actual implementation lives in common/rate_limit.py and is shared with
-# the (non-SlowAPI) per-endpoint rate limits in polls.py and elsewhere.
-# We intentionally do NOT re-export _trusted_proxies — no test patches
-# ``app._trusted_proxies`` (existing tests in test_rate_limit_key.py
-# patch ``memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES`` directly).
-from memory.common.rate_limit import rate_limit_key  # noqa: E402
 
 
 # Rate limiter setup

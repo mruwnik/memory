@@ -20,8 +20,6 @@ Two surfaces:
 The release path uses an atomic Lua script keyed off a per-acquisition
 random token, so we only ever delete a lock that we still own.
 """
-from __future__ import annotations
-
 import contextlib
 import logging
 import uuid
