@@ -7,13 +7,12 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import requests
 from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as md
 from PIL import Image as PILImage
 
 from memory.common import paths, settings
-from memory.common.downloads import stream_download_to_path
+from memory.common.downloads import safe_get, stream_download_to_path
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -64,14 +63,22 @@ def fetch_html(url: str, as_bytes: bool = False, validate_url: bool = True) -> s
     if validate_url and not is_safe_url(url):
         raise ValueError(f"URL failed SSRF validation: {url}")
 
-    response = requests.get(
-        url,
-        timeout=30,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
-        },
-        stream=True,
-    )
+    # ``safe_get`` follows redirects manually and re-validates each Location
+    # target — without this an attacker-controlled public URL can 302 to
+    # cloud IMDS or docker-network services. We pass ``validate_url=False``
+    # because the initial URL was already validated above.
+    try:
+        response = safe_get(
+            url,
+            validate_url=False,
+            timeout=30,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
+            },
+            stream=True,
+        )
+    except UnsafeURLError as e:
+        raise ValueError(f"URL failed SSRF validation during redirect: {e}") from e
     response.raise_for_status()
 
     # Check Content-Length header

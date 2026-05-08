@@ -9,9 +9,11 @@ import pytest
 import requests
 
 from memory.common.downloads import (
+    safe_get,
     stream_download_to_bytes,
     stream_download_to_path,
 )
+from memory.common.ssrf import UnsafeURLError
 
 
 class _FakeChunkResponse:
@@ -23,12 +25,17 @@ class _FakeChunkResponse:
         *,
         content_length: int | None = None,
         raises_on_status: Exception | None = None,
+        status_code: int = 200,
+        location: str | None = None,
     ) -> None:
         self._chunks = chunks
         self.headers: dict[str, str] = {}
         if content_length is not None:
             self.headers["Content-Length"] = str(content_length)
+        if location is not None:
+            self.headers["Location"] = location
         self._raises = raises_on_status
+        self.status_code = status_code
 
     def __enter__(self):
         return self
@@ -36,12 +43,30 @@ class _FakeChunkResponse:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def close(self) -> None:
+        pass
+
     def raise_for_status(self) -> None:
         if self._raises is not None:
             raise self._raises
 
     def iter_content(self, chunk_size: int):
         yield from self._chunks
+
+
+@pytest.fixture(autouse=True)
+def _stub_ssrf_validation():
+    """Disable real DNS lookups in unit tests.
+
+    ``safe_get`` calls ``validate_public_url`` which does ``getaddrinfo``;
+    we don't want that hitting the network in unit tests. Individual tests
+    that want to assert validation behaviour patch the function themselves
+    after entering this fixture's stub.
+    """
+    with patch(
+        "memory.common.downloads.validate_public_url", return_value=None
+    ) as m:
+        yield m
 
 
 def test_stream_download_to_bytes_returns_body_within_cap():
@@ -136,5 +161,180 @@ def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl)
     with patch("memory.common.downloads.requests.get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result == b"ok"
+
+
+# --- safe_get redirect handling -----------------------------------------
+# The whole point of safe_get is that ``requests``'s default redirect
+# follower runs inside one ``urlopen`` and never re-checks the Location
+# target. Without these tests a future contributor could "simplify"
+# safe_get back to ``allow_redirects=True`` and reintroduce the SSRF.
+
+
+def test_safe_get_returns_response_when_no_redirect():
+    """Non-3xx response is returned directly."""
+    fake = _FakeChunkResponse([b"ok"], status_code=200)
+    with patch("memory.common.downloads.requests.get", return_value=fake):
+        response = safe_get("http://example.com/f")
+    assert response is fake
+
+
+def test_safe_get_follows_safe_redirect_chain():
+    """Multiple 302s to public URLs are followed; final response returned."""
+    hop1 = _FakeChunkResponse([], status_code=302, location="http://a.example/2")
+    hop2 = _FakeChunkResponse([], status_code=302, location="http://b.example/3")
+    final = _FakeChunkResponse([b"final"], status_code=200)
+
+    with patch(
+        "memory.common.downloads.requests.get",
+        side_effect=[hop1, hop2, final],
+    ):
+        response = safe_get("http://start.example/1")
+    assert response is final
+
+
+def test_safe_get_blocks_redirect_to_private_ip():
+    """A 302 → http://169.254.169.254 (AWS IMDS) must raise, not be fetched.
+
+    This is the redirect-bypass SSRF: initial URL passes validation
+    (public IP), then the attacker-controlled response 302s to cloud
+    metadata. The fix is to revalidate every Location target.
+    """
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://169.254.169.254/latest/meta-data/"
+    )
+    # Real validate_public_url must run for the redirect target.
+    with patch("memory.common.downloads.validate_public_url") as mock_validate:
+        mock_validate.side_effect = [None, UnsafeURLError("non-public IP")]
+        with patch(
+            "memory.common.downloads.requests.get", return_value=hop
+        ) as mock_get:
+            with pytest.raises(UnsafeURLError):
+                safe_get("http://attacker.example/")
+    # First call (initial URL) and second call (redirect target) both validated.
+    assert mock_validate.call_count == 2
+    # We must NOT have issued the second GET to the IMDS endpoint.
+    assert mock_get.call_count == 1
+
+
+def test_safe_get_initial_url_validation_can_be_skipped():
+    """validate_url=False skips initial check (caller already validated)
+    but still validates redirect targets."""
+    hop = _FakeChunkResponse([], status_code=301, location="http://b.example/")
+    final = _FakeChunkResponse([b"x"], status_code=200)
+    with patch("memory.common.downloads.validate_public_url") as mock_validate:
+        with patch(
+            "memory.common.downloads.requests.get",
+            side_effect=[hop, final],
+        ):
+            safe_get("http://start.example/", validate_url=False)
+    # Only the redirect target was validated, not the initial URL.
+    assert mock_validate.call_count == 1
+
+
+def test_safe_get_caps_redirect_count():
+    """Beyond ``max_redirects`` the chain is broken, not followed forever."""
+    # Six hops → cap of 5 should reject.
+    hops = [
+        _FakeChunkResponse([], status_code=302, location=f"http://h{i}.example/")
+        for i in range(7)
+    ]
+    with patch(
+        "memory.common.downloads.requests.get", side_effect=hops
+    ):
+        with pytest.raises(UnsafeURLError, match="Too many redirects"):
+            safe_get("http://start.example/", max_redirects=5)
+
+
+def test_safe_get_detects_redirect_loop():
+    """A 302 back to the start URL must be detected as a loop."""
+    loop = _FakeChunkResponse([], status_code=302, location="http://start.example/")
+    # requests.get gets called repeatedly with the same URL; loop detection
+    # fires once we revisit a URL we've already seen.
+    with patch(
+        "memory.common.downloads.requests.get", return_value=loop
+    ):
+        with pytest.raises(UnsafeURLError, match="loop"):
+            safe_get("http://start.example/")
+
+
+def test_safe_get_does_not_follow_when_follow_redirects_false():
+    """With follow_redirects=False the 3xx is returned to the caller."""
+    redirect = _FakeChunkResponse(
+        [], status_code=302, location="http://other.example/"
+    )
+    with patch("memory.common.downloads.requests.get", return_value=redirect):
+        response = safe_get("http://start.example/", follow_redirects=False)
+    assert response is redirect
+    assert response.status_code == 302
+
+
+def test_safe_get_returns_3xx_without_location_header():
+    """3xx without Location is unusual but not a redirect to follow."""
+    weird = _FakeChunkResponse([b"body"], status_code=304)  # no Location
+    with patch("memory.common.downloads.requests.get", return_value=weird):
+        response = safe_get("http://start.example/")
+    assert response is weird
+
+
+def test_safe_get_resolves_relative_redirect():
+    """Servers commonly return ``Location: /path`` — must be resolved
+    against the current URL before validation."""
+    relative_hop = _FakeChunkResponse(
+        [], status_code=302, location="/internal-only"
+    )
+    final = _FakeChunkResponse([b"ok"], status_code=200)
+    captured: list[str] = []
+
+    def fake_validate(url: str) -> None:
+        captured.append(url)
+
+    with patch(
+        "memory.common.downloads.validate_public_url", side_effect=fake_validate
+    ):
+        with patch(
+            "memory.common.downloads.requests.get",
+            side_effect=[relative_hop, final],
+        ):
+            safe_get("http://start.example/page")
+
+    # The relative redirect resolved to start.example/internal-only.
+    assert captured == [
+        "http://start.example/page",
+        "http://start.example/internal-only",
+    ]
+
+
+def test_stream_download_to_bytes_blocks_unsafe_redirect():
+    """The redirect SSRF defence is plumbed through to the streaming helper."""
+    redirect = _FakeChunkResponse(
+        [], status_code=302, location="http://10.0.0.5/secret"
+    )
+    with patch("memory.common.downloads.validate_public_url") as mock_validate:
+        mock_validate.side_effect = [None, UnsafeURLError("10.0.0.5 is private")]
+        with patch(
+            "memory.common.downloads.requests.get", return_value=redirect
+        ):
+            result = stream_download_to_bytes(
+                "http://attacker.example/", max_bytes=1024
+            )
+    # SSRF rejection on redirect → None, just like other download failures.
+    assert result is None
+
+
+def test_stream_download_to_path_blocks_unsafe_redirect(tmp_path: pathlib.Path):
+    redirect = _FakeChunkResponse(
+        [], status_code=302, location="http://192.168.1.1/admin"
+    )
+    dest = tmp_path / "out.bin"
+    with patch("memory.common.downloads.validate_public_url") as mock_validate:
+        mock_validate.side_effect = [None, UnsafeURLError("192.168.1.1 is private")]
+        with patch(
+            "memory.common.downloads.requests.get", return_value=redirect
+        ):
+            ok = stream_download_to_path(
+                "http://attacker.example/", dest, max_bytes=1024
+            )
+    assert ok is False
+    assert not dest.exists()
 
 
