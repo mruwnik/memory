@@ -41,7 +41,6 @@ def test_validate_disable_auth_safe_loopback(safe_disable_auth_settings):
         "http://localhost:8000",
         "http://127.0.0.1:8000",
         "http://[::1]:8000",
-        "http://0.0.0.0:8000",
     ],
 )
 def test_loopback_urls_recognized(safe_disable_auth_settings, monkeypatch, loopback_url):
@@ -56,6 +55,13 @@ def test_loopback_urls_recognized(safe_disable_auth_settings, monkeypatch, loopb
         "http://192.168.1.10",
         "https://10.0.0.5:8080",
         "http://memory.local",
+        # 0.0.0.0 is INADDR_ANY (bind on all interfaces). A SERVER_URL of
+        # 0.0.0.0 is a statement of intent to reach the API from elsewhere
+        # on the network, NOT a loopback declaration — it must NOT bypass
+        # the DISABLE_AUTH=true safety check. See _is_loopback_url
+        # docstring for the OS-dependent dialing footguns.
+        "http://0.0.0.0:8000",
+        "http://0.0.0.0",
     ],
 )
 def test_non_loopback_server_url_blocks(safe_disable_auth_settings, monkeypatch, prod_url):

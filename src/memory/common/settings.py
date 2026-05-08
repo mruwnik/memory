@@ -351,13 +351,23 @@ def _is_loopback_url(url: str) -> bool:
     We deliberately accept only the exact loopback hostnames; anything
     else (including IPv6 link-local, .local mDNS, private RFC1918, etc.)
     is treated as non-loopback so the safety check fails closed.
+
+    ``0.0.0.0`` is intentionally **not** in the loopback set even though
+    "the box itself" is a common interpretation. ``0.0.0.0`` is the
+    wildcard bind address (``INADDR_ANY``) — semantically "listen on
+    every interface" — so a ``SERVER_URL=http://0.0.0.0:8000`` is a
+    statement of intent to reach the API from elsewhere on the network,
+    not a loopback declaration. The platform's resolution of dialing
+    ``0.0.0.0`` is also OS-dependent (loopback on Linux, the public IP
+    on Windows / some routed setups) so silently treating it as
+    loopback would be a false-negative for the safety check.
     """
     if not url:
         return True
     from urllib.parse import urlparse
 
     host = (urlparse(url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+    return host in {"localhost", "127.0.0.1", "::1"}
 
 
 def validate_disable_auth_safety() -> None:

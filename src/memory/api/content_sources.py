@@ -41,7 +41,16 @@ async def read_upload_with_cap(
 ) -> bytes:
     """Read the entire UploadFile body but refuse to exceed ``cap_bytes``.
 
-    Mirrors the streaming-cap pattern in ``cloud_claude.transfer_push``:
+    Borrows the early-413 + chunked-read shape of
+    ``cloud_claude.transfer_push``, but unlike ``transfer_push`` this
+    helper does **not** stream the body to a destination — it buffers
+    every chunk in memory and returns ``bytes``. Peak RAM use is therefore
+    bounded by ``cap_bytes`` (plus a transient ~2× spike during the final
+    ``b"".join``), not by the chunk size; callers that hand the result to
+    ``Path.write_bytes`` will buffer once more on disk-write. The cap is
+    purely a DoS bound, not a streaming guarantee. (See follow-up audit
+    task for a real ``read_upload_streaming_to(destination)`` variant
+    that would let large uploads bypass API RAM entirely.)
 
     1. If a ``request`` is supplied, do the cheap pre-check on the
        declared ``Content-Length`` so an honestly-too-large client gets
