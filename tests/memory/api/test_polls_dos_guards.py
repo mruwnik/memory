@@ -12,11 +12,13 @@ import pytest
 from fastapi import HTTPException
 
 from memory.api.polls import (
+    MAX_EMAIL_LENGTH,
     MAX_POLL_AVAILABILITIES_PER_REQUEST,
     POLL_RESPONSE_RATE_LIMIT,
     PollResponseRequest,
     enforce_poll_response_rate_limit,
     reject_oversized_poll_request,
+    sanitize_email,
 )
 from memory.common import rate_limit
 
@@ -244,3 +246,84 @@ def test_rate_limit_honors_xff_from_trusted_proxy():
         with pytest.raises(HTTPException) as exc_info:
             enforce_poll_response_rate_limit(request_alice, "slug-y")
     assert exc_info.value.status_code == 429
+
+
+# ====== sanitize_email ======
+#
+# /polls/respond is a public unauthenticated endpoint, so respondent_email
+# was a stored-XSS / DoS / PII-harvest sink (CWE-20, CWE-79). The fix is
+# the same hardening pattern as sanitize_name: trim, length-cap, basic
+# shape check, HTML-escape on the way in.
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("alice@example.com", "alice@example.com"),
+        # Whitespace is trimmed.
+        ("  bob@example.com  ", "bob@example.com"),
+        # Plus-addressing and dots survive intact.
+        ("alice+tag@sub.example.co.uk", "alice+tag@sub.example.co.uk"),
+    ],
+)
+def test_sanitize_email_accepts_valid(raw, expected):
+    assert sanitize_email(raw) == expected
+
+
+def test_sanitize_email_html_escapes_metachars():
+    """Defense-in-depth: any <, >, & embedded in the address is escaped on
+    the way in, so a future renderer that drops the value into HTML
+    inherits a safe default.
+    """
+    # Crafted to pass the shape check (one @, dot in domain) while smuggling
+    # an HTML payload — the kind of thing that bites if we ever email or
+    # render the value verbatim.
+    out = sanitize_email("a<svg>@evil.example")
+    assert out is not None
+    assert "<svg>" not in out
+    assert "&lt;svg&gt;" in out
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "no-at-sign",
+        "@nolocal.example",
+        "no-domain@",
+        "two@@ats.example",
+        "no-tld@nodomain",
+        "spaces in@local.example",
+        "newline\n@injection.example",  # CRLF injection
+        "carriage\r@injection.example",
+        "\x01ctrl@example.com",  # control char
+    ],
+)
+def test_sanitize_email_rejects_malformed(raw):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(raw)
+    assert exc_info.value.status_code == 400
+
+
+def test_sanitize_email_rejects_oversized():
+    """RFC 5321 caps at 254 chars. Above that we 400 to prevent column-
+    overflow / DoS via multi-megabyte payloads."""
+    from fastapi import HTTPException
+
+    over = "a" * (MAX_EMAIL_LENGTH + 1) + "@example.com"
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(over)
+    assert exc_info.value.status_code == 400
+    assert "characters or less" in exc_info.value.detail
+
+
+def test_sanitize_email_at_cap_passes():
+    """Exactly MAX_EMAIL_LENGTH chars must still be accepted."""
+    local = "a" * (MAX_EMAIL_LENGTH - len("@example.com"))
+    addr = f"{local}@example.com"
+    assert len(addr) == MAX_EMAIL_LENGTH
+    assert sanitize_email(addr) == addr

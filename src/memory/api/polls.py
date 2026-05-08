@@ -266,6 +266,10 @@ def validate_slot(slot: AvailabilitySlot, poll: AvailabilityPoll) -> None:
 
 MAX_NAME_LENGTH = 255
 
+# RFC 5321 caps an email address (local-part + "@" + domain) at 254 chars.
+# Anything longer is either malformed or a DoS / column-overflow attempt.
+MAX_EMAIL_LENGTH = 254
+
 
 def sanitize_name(name: str | None) -> str | None:
     """Sanitize respondent name: trim, limit length, escape HTML."""
@@ -281,6 +285,51 @@ def sanitize_name(name: str | None) -> str | None:
         )
     # Escape HTML entities to prevent XSS
     return html.escape(name)
+
+
+def sanitize_email(email: str | None) -> str | None:
+    """Sanitize respondent email: trim, length-cap, basic shape check, escape.
+
+    The poll respond endpoints are public (no auth), so this field is a
+    canonical PII / DoS / stored-XSS sink (CWE-20, CWE-79). Mirror the
+    discipline applied to ``respondent_name``: enforce a length ceiling
+    well below the column limit, reject obviously-malformed values, and
+    HTML-escape on the way in so any future renderer that drops the value
+    into HTML inherits a safe-by-default behavior.
+
+    We intentionally do *not* use ``pydantic.EmailStr`` here: it would
+    accept perfectly-valid addresses containing characters that future
+    renderers might mishandle (display-name forms, IDN punycode, etc.),
+    and adding an MX/DNS check on a public unauthenticated endpoint is
+    its own SSRF-adjacent footgun. A loose shape check (one ``@``, both
+    sides non-empty, no whitespace/CRLF) is enough at this layer.
+    """
+    if email is None:
+        return None
+    email = email.strip()
+    if not email:
+        return None
+    if len(email) > MAX_EMAIL_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Email must be {MAX_EMAIL_LENGTH} characters or less",
+        )
+    # Reject control chars, whitespace, and CRLF — the latter is a header-
+    # injection vector if the value ever flows into an outbound mail header.
+    if any(c.isspace() or ord(c) < 0x20 for c in email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email contains invalid whitespace or control characters",
+        )
+    parts = email.split("@")
+    if len(parts) != 2 or not parts[0] or not parts[1] or "." not in parts[1]:
+        raise HTTPException(
+            status_code=400,
+            detail="Email must be of the form local@domain.tld",
+        )
+    # Defense-in-depth: HTML-escape for any future UI/email pipeline that
+    # forgets to escape on render. Valid email chars survive unchanged.
+    return html.escape(email)
 
 
 def deduplicate_slots(slots: list[AvailabilitySlot]) -> list[AvailabilitySlot]:
@@ -324,8 +373,9 @@ def submit_response(
     if not poll.is_open:
         raise HTTPException(status_code=400, detail="Poll is closed")
 
-    # Sanitize name
+    # Sanitize name and email (public endpoint — must validate strictly)
     sanitized_name = sanitize_name(data.respondent_name)
+    sanitized_email = sanitize_email(data.respondent_email)
 
     # Deduplicate and validate all slots
     unique_slots = deduplicate_slots(data.availabilities)
@@ -335,7 +385,7 @@ def submit_response(
     response = PollResponse(
         poll_id=poll.id,
         respondent_name=sanitized_name,
-        respondent_email=data.respondent_email,
+        respondent_email=sanitized_email,
     )
     db.add(response)
     db.flush()
@@ -425,7 +475,7 @@ def update_response(
     if data.respondent_name is not None:
         response.respondent_name = sanitize_name(data.respondent_name)
     if data.respondent_email is not None:
-        response.respondent_email = data.respondent_email
+        response.respondent_email = sanitize_email(data.respondent_email)
 
     # Replace availabilities atomically using bulk delete
     db.query(PollAvailability).filter(PollAvailability.response_id == response.id).delete()
