@@ -21,11 +21,65 @@ from memory.common.data_source_access import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
+from memory.common.ssrf import UnsafeURLError, validate_public_hostname
 from memory.workers.email import imap_connection
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
+
+# Standard IMAP / SMTP service ports. We refuse to open connections to
+# arbitrary ports because the test endpoint surfaces connect-vs-refuse
+# differential timing/error shapes that double as a TCP-probe primitive
+# on the API container's network. Restricting to the known ports
+# eliminates the recon surface — a legitimate IMAP host always serves
+# 143 or 993 — while still letting operators self-host on either.
+_ALLOWED_IMAP_PORTS: frozenset[int] = frozenset({143, 993})
+_ALLOWED_SMTP_PORTS: frozenset[int] = frozenset({25, 465, 587, 2525})
+
+
+def _validate_imap_settings(server: str | None, port: int | None) -> None:
+    """Refuse private/loopback/link-local IMAP servers and non-standard ports.
+
+    Wraps ``validate_public_hostname`` (rejects internal addresses,
+    DNS-resolves) and adds a port allowlist. Raises HTTPException(400)
+    on violation so the validation error reaches the caller as a 400
+    rather than crashing the request handler.
+    """
+    if server is not None:
+        try:
+            validate_public_hostname(server)
+        except UnsafeURLError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid imap_server: {exc}"
+            ) from exc
+    if port is not None and port not in _ALLOWED_IMAP_PORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"imap_port must be one of {sorted(_ALLOWED_IMAP_PORTS)} "
+                "(standard IMAP ports)"
+            ),
+        )
+
+
+def _validate_smtp_settings(server: str | None, port: int | None) -> None:
+    """Same hostname/port allowlist treatment for the SMTP companion fields."""
+    if server is not None:
+        try:
+            validate_public_hostname(server)
+        except UnsafeURLError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid smtp_server: {exc}"
+            ) from exc
+    if port is not None and port not in _ALLOWED_SMTP_PORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"smtp_port must be one of {sorted(_ALLOWED_SMTP_PORTS)} "
+                "(standard SMTP ports)"
+            ),
+        )
 
 
 class EmailAccountCreate(BaseModel):
@@ -204,6 +258,16 @@ def create_account(
         if not google_account or google_account.user_id != user.id:
             raise HTTPException(status_code=400, detail="Google account not found")
 
+    # SSRF / port-probe guard on user-supplied IMAP/SMTP host:port. The
+    # test_connection endpoint below opens a TCP connection from inside
+    # the API container's network position, so an unvalidated server
+    # name is a generic recon primitive against postgres/redis/qdrant/
+    # AWS metadata (CWE-918, CWE-200). Validation is skipped for Gmail
+    # accounts (which use Google OAuth, not user-supplied IMAP servers).
+    if data.account_type == "imap":
+        _validate_imap_settings(data.imap_server, data.imap_port)
+        _validate_smtp_settings(data.smtp_server, data.smtp_port)
+
     # Block non-admins from tagging accounts into projects they aren't in.
     assert_project_membership(db, user, data.project_id)
 
@@ -257,6 +321,13 @@ def update_account(
     snap_pid, snap_sens = account.project_id, account.sensitivity
     if updates.name is not None:
         account.name = updates.name
+    # Same SSRF / port-allowlist guard as create_account, applied
+    # whenever the user changes server/port. We validate against the
+    # newly-supplied value, not the row's current state.
+    if updates.imap_server is not None or updates.imap_port is not None:
+        _validate_imap_settings(updates.imap_server, updates.imap_port)
+    if updates.smtp_server is not None or updates.smtp_port is not None:
+        _validate_smtp_settings(updates.smtp_server, updates.smtp_port)
     if updates.imap_server is not None:
         account.imap_server = updates.imap_server
     if updates.imap_port is not None:
@@ -347,8 +418,30 @@ def test_connection(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Test IMAP connection for an email account."""
+    """Test IMAP connection for an email account.
+
+    Re-validates ``imap_server`` against the SSRF allowlist before
+    connecting. The stored row passed validation at write time, but
+    DNS may have rebinding since (the column is just a hostname; we
+    re-resolve here and refuse if it now points at a private address).
+    """
     account = get_user_account(db, EmailAccount, account_id, user)
+
+    # DNS-rebinding window: re-validate at connect-time. Without this,
+    # an attacker who controls a public DNS name can flip the A record
+    # between create_account's validation and this test, pointing at
+    # an internal address. Gmail accounts have no imap_server (they
+    # use the Google API), so skip the check for those.
+    if account.imap_server:
+        try:
+            validate_public_hostname(account.imap_server)
+        except UnsafeURLError as exc:
+            logger.warning(
+                "IMAP connection test refused for account %s: %s",
+                account_id,
+                exc,
+            )
+            return {"status": "error", "message": "Connection failed"}
 
     try:
         with imap_connection(account) as conn:
@@ -364,26 +457,15 @@ def test_connection(
                 "folders": folder_count,
             }
     except Exception as e:
-        # Log full error internally but return sanitized message
+        # Log full error internally; return a generic message so the
+        # connect-vs-refuse-vs-auth-failed differential can't be used
+        # to enumerate internal hosts/ports (the previous branched
+        # responses leaked which hosts were reachable from the API
+        # container's network).
         logger.warning(
-            f"IMAP connection test failed for account {account_id}: {type(e).__name__}: {e}"
+            "IMAP connection test failed for account %s: %s: %s",
+            account_id,
+            type(e).__name__,
+            e,
         )
-        # Return generic error type without potentially sensitive details
-        error_type = type(e).__name__
-        if "authentication" in str(e).lower() or "login" in str(e).lower():
-            return {
-                "status": "error",
-                "message": "Authentication failed - check username/password",
-            }
-        elif "timeout" in str(e).lower() or "timed out" in str(e).lower():
-            return {
-                "status": "error",
-                "message": "Connection timed out - check server address",
-            }
-        elif "refused" in str(e).lower() or "connect" in str(e).lower():
-            return {
-                "status": "error",
-                "message": "Connection refused - check server address and port",
-            }
-        else:
-            return {"status": "error", "message": f"Connection failed ({error_type})"}
+        return {"status": "error", "message": "Connection failed"}

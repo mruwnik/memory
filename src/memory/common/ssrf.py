@@ -105,3 +105,43 @@ def validate_public_url(url: str) -> None:
             raise UnsafeURLError(
                 f"Hostname {hostname} resolves to non-public IP: {addr}"
             )
+
+
+def validate_public_hostname(hostname: str) -> None:
+    """Schemeless variant of :func:`validate_public_url` for non-HTTP servers.
+
+    Use for things like IMAP/SMTP/CalDAV server names where the user
+    supplies a bare hostname (no ``https://`` scheme) and the worker
+    later opens a TCP connection to it. Same ``is_safe_ip`` policy: an
+    IP-literal or every resolved A/AAAA record must be public.
+    Raises ``UnsafeURLError`` on violation; returns silently on success.
+
+    Caller should re-validate immediately before connecting (DNS
+    rebinding window).
+    """
+    if not hostname or not isinstance(hostname, str):
+        raise UnsafeURLError("hostname must be a non-empty string")
+    hostname = hostname.strip()
+    if not hostname:
+        raise UnsafeURLError("hostname must not be blank")
+
+    # Direct IP literal — no DNS lookup.
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip = None
+
+    if ip is not None:
+        if not is_safe_ip(ip):
+            raise UnsafeURLError(f"hostname targets non-public IP: {ip}")
+        return
+
+    addrs = resolve_hostname(hostname)
+    if not addrs:
+        raise UnsafeURLError(f"Could not resolve hostname: {hostname}")
+
+    for addr in addrs:
+        if not is_safe_ip(addr):
+            raise UnsafeURLError(
+                f"Hostname {hostname} resolves to non-public IP: {addr}"
+            )
