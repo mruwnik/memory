@@ -51,13 +51,16 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
 
     Returns the key string (only available at creation time).
 
-    The minted key carries the user's full ``user.scopes``. OAuth in this
-    codebase is just the MCP-server gate — real authorization runs off the
-    user's session/api-key scopes — so we deliberately don't try to cap by
-    the OAuth grant here. ``access_token.scopes`` from ``verify_token``
-    is already ``user.scopes ∪ {read, write}``, so the intersection below
-    is a no-op for OAuth callers and just the user's literal scopes for
-    direct-API-key callers.
+    The issued key carries ``user.scopes ∩ access_token.scopes`` (with a
+    short-circuit for either side carrying admin — see the conditional
+    below). In production today ``access_token.scopes`` from
+    ``verify_token`` equals ``user.scopes ∪ {read, write}``, so the
+    intersection collapses to ``user.scopes`` and the cap is a no-op for
+    OAuth callers — but the math is here so a future ``verify_token``
+    change that DOES emit narrower access-token scopes flows through
+    correctly without a parallel edit. For direct-API-key callers
+    (where ``access_token.scopes`` carries the API key's resolved
+    scopes) the intersection is the live cap.
     """
     user_scopes = set(user_session.user.scopes or [])
     access_token = get_access_token()
@@ -284,11 +287,12 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
     """Get information about the authenticated user.
 
     Args:
-        generate_one_time_key: If True, generates a one-time API key for client operations.
-                               The key will be deleted after first use. Requires the
-                               admin scope (``*``) — the minted key carries the user's
-                               full system scopes, so we deliberately restrict who can
-                               trigger that escalation path.
+        generate_one_time_key: If True, generates a one-time API key for
+            client operations. The key will be deleted after first use.
+            Requires the admin scope (``*``) on either the underlying
+            user or the OAuth grant — see the gate comment below for
+            why this is defence-in-depth on top of the intersection
+            cap that ``_create_one_time_key`` already applies.
     """
     with make_session() as session:
         result = _get_current_user(session)
@@ -297,11 +301,14 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
             user_scopes = set((result.get("user") or {}).get("scopes") or [])
             access_token = get_access_token()
             granted_scopes = set(access_token.scopes or []) if access_token else set()
-            # Only callers carrying admin (either on the user or on
-            # the OAuth grant) may mint a one-time key. Without this
-            # gate, a read-only OAuth client can call get_user(...,
-            # generate_one_time_key=True) and walk away with a key
-            # bearing user.scopes — confused-deputy escalation.
+            # Defence-in-depth: only callers carrying admin (either on
+            # the user or on the OAuth grant) may mint a one-time key.
+            # ``_create_one_time_key`` separately caps the issued key's
+            # scopes via ``user.scopes ∩ granted_scopes``, so a non-admin
+            # OAuth grant could not in fact escalate beyond what the
+            # caller already had — but minting key material at all from
+            # a non-admin path is a confused-deputy shape we'd rather
+            # refuse outright than rely on the intersection arithmetic.
             if SCOPE_ADMIN not in user_scopes and SCOPE_ADMIN not in granted_scopes:
                 raise PermissionError(
                     "generate_one_time_key requires the admin scope (*)"
