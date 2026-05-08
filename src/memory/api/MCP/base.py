@@ -23,7 +23,7 @@ from memory.common.db.connection import make_session, get_engine
 from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState
 from memory.common.qdrant import get_qdrant_client
-from memory.common.rate_limit import check_rate_limit_spec
+from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
 
 logger = logging.getLogger(__name__)
 engine = get_engine()
@@ -148,12 +148,6 @@ async def login_page(request: Request):
     return login_form(request, form_data, None)
 
 
-def client_ip_for(request: Request) -> str:
-    """Best-effort client IP. The X-Forwarded-For trust issue is tracked
-    separately; this still gives us an IP-shaped key for rate-limiting."""
-    return request.client.host if request.client else "unknown"
-
-
 @mcp.custom_route("/oauth/login", methods=["POST"])
 async def handle_login(request: Request):
     """Handle login form submission.
@@ -162,6 +156,17 @@ async def handle_login(request: Request):
     against a single account even when the attacker rotates source IPs.
     Uses authenticate_user so a missing user still incurs a dummy bcrypt
     check, defeating timing-based email enumeration.
+
+    The IP bucket key is derived via ``rate_limit_key`` (NOT
+    ``request.client.host`` directly): the latter blindly trusts
+    ``X-Forwarded-For`` whenever Uvicorn is started with
+    ``--proxy-headers`` and a wildcard / overshooting
+    ``FORWARDED_ALLOW_IPS``. Under that misconfiguration a remote
+    attacker could rotate XFF per request to mint a fresh IP bucket
+    and defeat the credential-stuffing rate-limit. ``rate_limit_key``
+    honors XFF only when the immediate TCP peer is in
+    ``RATE_LIMIT_TRUSTED_PROXIES``, matching the pattern used by every
+    other rate-limited endpoint in the codebase (polls, etc).
     """
     form = await request.form()
     # Only pass through whitelisted OAuth parameters to prevent injection
@@ -175,7 +180,7 @@ async def handle_login(request: Request):
     # Lower-case for the bucket key only; the DB query stays case-sensitive
     # because that's the existing behaviour and CI auth code paths key on it.
     email_key = email_raw.lower()
-    ip_key = client_ip_for(request)
+    ip_key = rate_limit_key(request)
     bucket_keys = [
         f"login:ip:{ip_key}",
         f"login:email:{email_key}" if email_key else None,
