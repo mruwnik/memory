@@ -1412,7 +1412,7 @@ def test_require_can_write_at_sensitivity_matrix(
     """Pure-unit test of the sensitivity-vs-role gate."""
     from unittest.mock import patch
 
-    from memory.api.MCP.servers.people import require_can_write_at_sensitivity
+    from memory.api.MCP.access import require_can_write_at_sensitivity
 
     user = MagicMock()
     user.id = 7
@@ -1421,7 +1421,7 @@ def test_require_can_write_at_sensitivity_matrix(
     project_roles = {} if project_role is None else {42: project_role}
 
     with patch(
-        "memory.api.MCP.servers.people.get_project_roles_by_user_id",
+        "memory.api.MCP.access.get_project_roles_by_user_id",
         return_value=project_roles,
     ):
         if expected_raises:
@@ -1433,7 +1433,7 @@ def test_require_can_write_at_sensitivity_matrix(
 
 def test_require_can_write_at_sensitivity_rejects_typoed_value():
     """Typo'd / attacker-supplied sensitivity strings must be rejected up front."""
-    from memory.api.MCP.servers.people import require_can_write_at_sensitivity
+    from memory.api.MCP.access import require_can_write_at_sensitivity
 
     user = MagicMock()
     user.id = 7

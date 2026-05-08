@@ -11,8 +11,11 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
+    ALLOWED_SENSITIVITIES,
     get_mcp_current_user,
     get_project_roles_by_user_id,
+    require_can_write_at_sensitivity,
+    require_project_membership,
 )
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
@@ -22,7 +25,6 @@ from memory.common.access_control import (
     get_accessible_team_ids,
     has_admin_scope,
     user_can_access,
-    user_can_create_in_project,
     user_can_edit,
 )
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
@@ -44,13 +46,6 @@ from memory.common.db.models.sources import GithubUser
 logger = logging.getLogger(__name__)
 
 people_mcp = FastMCP("memory-people")
-
-
-# The full set of sensitivity strings the access-control matrix understands.
-# Anything outside this set must be rejected at the write boundary —
-# previously a typo or attacker-supplied string was stored verbatim,
-# producing an "invisible" tidbit that no read-side filter matched.
-ALLOWED_SENSITIVITIES = frozenset({"public", "basic", "internal", "confidential"})
 
 
 def _person_to_dict(person: Person) -> dict[str, Any]:
@@ -89,64 +84,6 @@ def _tidbit_to_dict(tidbit: PersonTidbit) -> dict[str, Any]:
         "creator_id": tidbit.creator_id,
         "created_at": tidbit.inserted_at.isoformat() if tidbit.inserted_at else None,
     }
-
-
-def require_project_membership(user: Any, project_id: int) -> None:
-    """Enforce that the caller may write to ``project_id``.
-
-    Admins can assign any project; regular users must be a member.  Raises
-    ``PermissionError`` otherwise.  Centralised so ``tidbit_add`` and
-    ``tidbit_update`` (and any future caller) can't drift on what counts as
-    "may set project_id".
-
-    Note: this checks *membership only*, not role. The sensitivity-vs-role
-    matrix is enforced separately by :func:`require_can_write_at_sensitivity`
-    so callers that want both should call both — the previous comment here
-    that read-side enforcement alone was sufficient was wrong: a contributor
-    could plant a `confidential` tidbit that downstream high-role readers
-    would treat as in-band content.
-    """
-    if user and has_admin_scope(user):
-        return
-    user_id = getattr(user, "id", None) if user else None
-    if user_id is None:
-        raise PermissionError("Cannot verify project membership without user ID")
-    if project_id not in get_project_roles_by_user_id(user_id):
-        raise PermissionError(f"You are not a member of project {project_id}")
-
-
-def require_can_write_at_sensitivity(
-    user: Any, project_id: int, sensitivity: str
-) -> None:
-    """Enforce the sensitivity-vs-role matrix on writes.
-
-    A contributor on the project can write `public`/`basic`; a manager can
-    additionally write `internal`; an admin can write `confidential`. The
-    matrix is :data:`memory.common.access_control.ROLE_SENSITIVITY`. Raises
-    ``ValueError`` for an unrecognised sensitivity (rejected up front so
-    typo'd values don't get stored verbatim and produce content the
-    read-side filters can't match), and ``PermissionError`` when the user
-    holds the project but at too low a role.
-
-    Pairs with :func:`require_project_membership`: callers that accept
-    ``project_id`` AND ``sensitivity`` from user input should call both.
-    """
-    if sensitivity not in ALLOWED_SENSITIVITIES:
-        raise ValueError(
-            f"Invalid sensitivity {sensitivity!r}; must be one of "
-            f"{sorted(ALLOWED_SENSITIVITIES)}."
-        )
-    if user and has_admin_scope(user):
-        return
-    user_id = getattr(user, "id", None) if user else None
-    if user_id is None:
-        raise PermissionError("Cannot verify project role without user ID")
-    project_roles = get_project_roles_by_user_id(user_id)
-    if not user_can_create_in_project(user, project_id, sensitivity, project_roles):
-        raise PermissionError(
-            f"Your role on project {project_id} does not permit creating "
-            f"{sensitivity!r} content."
-        )
 
 
 def _filter_tidbits_by_access(

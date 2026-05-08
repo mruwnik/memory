@@ -5,25 +5,34 @@ Provides functions to build access filters and log access from MCP tool context.
 """
 
 import logging
-from typing import TYPE_CHECKING, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol, overload
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session, scoped_session
 
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.auth import handle_api_key_use, lookup_api_key
+from memory.api.auth import handle_api_key_use, is_expired, lookup_api_key
 from memory.common.access_control import (
     AccessFilter,
+    SensitivityLevel,
     build_access_filter,
     get_user_project_roles,
     has_admin_scope,
+    user_can_create_in_project,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import User, UserSession
 from memory.common.db.models.access import log_access
 
 logger = logging.getLogger(__name__)
+
+
+# The full set of sensitivity strings the access-control matrix understands.
+# Anything outside this set must be rejected at the write boundary —
+# previously a typo or attacker-supplied string was stored verbatim,
+# producing an "invisible" record that no read-side filter matched.
+ALLOWED_SENSITIVITIES: frozenset[str] = frozenset(s.value for s in SensitivityLevel)
 
 
 class UserLike(Protocol):
@@ -105,8 +114,6 @@ def is_session_expired(user_session: UserSession) -> bool:
     A session with no expires_at is treated as expired (fail-closed) by
     is_expired().
     """
-    from memory.api.auth import is_expired
-
     return is_expired(user_session.expires_at)
 
 
@@ -231,6 +238,62 @@ def build_user_access_filter_from_dict(user_dict: dict) -> AccessFilter | None:
     # This queries User -> Person -> team_members -> project_teams
     project_roles = get_project_roles_by_user_id(user_id)
     return build_access_filter(user_proxy, project_roles)  # type: ignore[arg-type]
+
+
+def require_project_membership(user: Any, project_id: int) -> None:
+    """Enforce that the caller may write to ``project_id``.
+
+    Admins can assign any project; regular users must be a member.  Raises
+    ``PermissionError`` otherwise.
+
+    Note: this checks *membership only*, not role. The sensitivity-vs-role
+    matrix is enforced separately by :func:`require_can_write_at_sensitivity`,
+    so write paths that accept both ``project_id`` AND ``sensitivity`` from
+    user input should call both. Read-side enforcement alone is not enough:
+    a contributor could plant a `confidential` item that downstream high-role
+    readers would treat as in-band content.
+    """
+    if user and has_admin_scope(user):
+        return
+    user_id = getattr(user, "id", None) if user else None
+    if user_id is None:
+        raise PermissionError("Cannot verify project membership without user ID")
+    if project_id not in get_project_roles_by_user_id(user_id):
+        raise PermissionError(f"You are not a member of project {project_id}")
+
+
+def require_can_write_at_sensitivity(
+    user: Any, project_id: int, sensitivity: str
+) -> None:
+    """Enforce the sensitivity-vs-role matrix on writes.
+
+    A contributor on the project can write `public`/`basic`; a manager can
+    additionally write `internal`; an admin can write `confidential`. The
+    matrix is :data:`memory.common.access_control.ROLE_SENSITIVITY`. Raises
+    ``ValueError`` for an unrecognised sensitivity (rejected up front so
+    typo'd values don't get stored verbatim and produce content the
+    read-side filters can't match), and ``PermissionError`` when the user
+    holds the project but at too low a role.
+
+    Pairs with :func:`require_project_membership`: callers that accept
+    ``project_id`` AND ``sensitivity`` from user input should call both.
+    """
+    if sensitivity not in ALLOWED_SENSITIVITIES:
+        raise ValueError(
+            f"Invalid sensitivity {sensitivity!r}; must be one of "
+            f"{sorted(ALLOWED_SENSITIVITIES)}."
+        )
+    if user and has_admin_scope(user):
+        return
+    user_id = getattr(user, "id", None) if user else None
+    if user_id is None:
+        raise PermissionError("Cannot verify project role without user ID")
+    project_roles = get_project_roles_by_user_id(user_id)
+    if not user_can_create_in_project(user, project_id, sensitivity, project_roles):
+        raise PermissionError(
+            f"Your role on project {project_id} does not permit creating "
+            f"{sensitivity!r} content."
+        )
 
 
 def log_search_access(
