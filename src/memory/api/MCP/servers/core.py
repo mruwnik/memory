@@ -83,12 +83,10 @@ def get_current_user_access_filter() -> AccessFilter | None:
       - For APIKey tokens: ``api_key.scopes`` if the override is set,
         else ``user.scopes``. An admin who mints a ``[\"read\"]``-scoped
         integration key therefore gets a non-None AccessFilter for
-        that key — the ``APIKey.scopes`` override is no longer
-        decorative on the data layer.
-
-    Previously this read ``user.scopes`` directly from the DB, which
-    silently ignored ``APIKey.scopes`` and let a leaked least-privilege
-    integration key inherit the underlying admin's full data access.
+        that key — the ``APIKey.scopes`` override is honoured at the
+        data layer (not just at the visibility / OAuth-gate layer), so
+        a leaked least-privilege integration key cannot inherit the
+        underlying user's full data access.
     """
     access_token = get_access_token()
     if access_token is None:
