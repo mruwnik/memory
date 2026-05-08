@@ -22,6 +22,7 @@ from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
     filter_projects_query,
+    get_user_project_roles,
     get_user_team_ids,
     has_admin_scope,
 )
@@ -69,6 +70,37 @@ projects_mcp = FastMCP("memory-projects")
 # positive integers, and 0 is unambiguous. The two conventions coexist intentionally;
 # unifying them would add complexity without benefit.
 _UNSET = "__UNSET__"
+
+
+# Team roles `lead` and `admin` map to project roles `manager` and `admin`
+# respectively (see access_control.role_mapping). These are the two roles
+# considered "authoritative" for administering a project — a `member`
+# (project role `contributor`) can read but cannot delete or wholesale-
+# replace the team list. Centralised here so delete() and update_project()
+# stay in lockstep.
+_PROJECT_ADMIN_ROLES = frozenset({"manager", "admin"})
+
+
+def caller_can_administer_project(session, user, project_id: int) -> bool:
+    """Return True iff ``user`` may delete or wholesale-replace teams on ``project_id``.
+
+    A caller is authoritative for a project if any of the following hold:
+
+    1. They have the global admin scope (``"*"``) — superadmin bypass.
+    2. They hold ``lead`` or ``admin`` role in at least one team currently
+       assigned to the project (i.e. their *project role* is ``manager``
+       or ``admin``).
+
+    A bare ``member`` / ``contributor`` is NOT authoritative; they can read
+    the project (filter_projects_query lets them through) but they cannot
+    administer it. The previous behaviour conflated read access with
+    administer authority, letting a contributor on any one of N assigned
+    teams delete the project or kick the other teams off it.
+    """
+    if has_admin_scope(user):
+        return True
+    project_roles = get_user_project_roles(session, user)
+    return project_roles.get(project_id) in _PROJECT_ADMIN_ROLES
 
 
 def _project_error_response(exc: ProjectError) -> dict:
@@ -921,11 +953,37 @@ async def update_project(
         if not parent:
             return {"error": f"Parent project not found: {parent_id}", "project": None}
 
-        # Check for circular reference
+        # Check for circular reference. The previous loop only exited when
+        # the parent chain hit ``project_id`` (the would-be cycle through
+        # the row being updated) or reached the root. If the existing data
+        # already contained a cycle not involving ``project_id`` (e.g.
+        # A→B→C→A introduced by raw SQL, a buggy migration, or a race
+        # between two concurrent upserts), the walk would loop forever and
+        # hang an event-loop slot — repeatable into an API DoS.
+        #
+        # Track every ancestor we've seen and bail on either a repeat or a
+        # depth cap. MAX_PARENT_DEPTH is generous: real hierarchies in this
+        # app are <10 deep.
+        MAX_PARENT_DEPTH = 100
+        visited: set[int] = {project_id}
         current = parent
+        depth = 0
         while current.parent_id is not None:
-            if current.parent_id == project_id:
-                return {"error": "Circular parent reference detected", "project": None}
+            if current.parent_id in visited:
+                return {
+                    "error": "Circular parent reference detected",
+                    "project": None,
+                }
+            visited.add(cast(int, current.parent_id))
+            depth += 1
+            if depth >= MAX_PARENT_DEPTH:
+                return {
+                    "error": (
+                        f"Project hierarchy too deep (>{MAX_PARENT_DEPTH}); "
+                        "the parent chain may be corrupted."
+                    ),
+                    "project": None,
+                }
             current = session.get(Project, current.parent_id)
             if not current:
                 break
@@ -967,8 +1025,23 @@ async def update_project(
                 "project": None,
             }
 
-        # Non-admins must be a member of at least one specified team
+        # Non-admins must already have authority on the project via at least
+        # one *current* team. Without this, a bare contributor on team A could
+        # call upsert(team_ids=[their_own_team]) and use the wholesale-replace
+        # to kick every other team off the project (de-facto hijack).
+        # Read access alone (i.e. being a member of one of the new team_ids)
+        # is not sufficient for replacement.
         if not has_admin_scope(user):
+            if not caller_can_administer_project(session, user, project.id):
+                return {
+                    "error": (
+                        "Forbidden: replacing the team list requires lead or "
+                        "admin role on at least one of the project's current "
+                        "teams."
+                    ),
+                    "project": None,
+                }
+
             user_team_ids = get_user_team_ids(session, user)
             accessible_team_ids = set(team_ids) & user_team_ids
             if not accessible_team_ids:
@@ -1237,7 +1310,12 @@ async def delete(
     """
     Delete a standalone project.
 
-    Requires access to the project via team membership.
+    Requires lead/admin role in at least one team currently assigned to the
+    project (or the global admin scope). A bare ``member``/``contributor``
+    can read the project but cannot delete it — the previous version only
+    enforced "has access via team membership", letting any contributor on
+    any assigned team destroy the project.
+
     GitHub-backed projects cannot be deleted (they are synced from GitHub).
     Children of deleted projects will have their parent_id set to NULL.
 
@@ -1266,6 +1344,23 @@ async def delete(
         if project.repo_id is not None:
             return {
                 "error": "Cannot delete GitHub-backed projects. Close them in GitHub instead."
+            }
+
+        # Authority check: read access via team membership is necessary but
+        # not sufficient for delete. Require lead/admin on a current team
+        # (or global admin scope). See caller_can_administer_project.
+        if not caller_can_administer_project(session, user, project.id):
+            logger.warning(
+                "Project delete rejected: user %s lacks lead/admin role on any "
+                "team of project %s",
+                getattr(user, "id", "?"),
+                project_id,
+            )
+            return {
+                "error": (
+                    "Forbidden: deleting a project requires lead or admin role "
+                    "on at least one of its teams."
+                )
             }
 
         # Children will have parent_id set to NULL via ON DELETE SET NULL

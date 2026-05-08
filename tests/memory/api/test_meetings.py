@@ -46,7 +46,12 @@ def test_create_meeting_queues_job(client: TestClient, user):
     call_kwargs = mock_dispatch.call_args.kwargs
     assert call_kwargs["job_type"] == JobType.MEETING
     assert call_kwargs["external_id"] == "meeting-ext-123"
-    assert call_kwargs["exclude_from_params"] == ["transcript"]
+    # ``transcript`` is REQUIRED by process_meeting, so it must NOT be
+    # excluded from params — otherwise retry_failed_job would crash with
+    # TypeError. The size cap on the request bounds storage cost.
+    assert "exclude_from_params" not in call_kwargs or "transcript" not in (
+        call_kwargs.get("exclude_from_params") or []
+    )
     assert call_kwargs["task_kwargs"]["title"] == "Test Meeting"
     assert call_kwargs["task_kwargs"]["transcript"] == "Speaker 1: Hello\nSpeaker 2: Hi there"
 

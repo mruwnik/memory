@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 from unittest.mock import patch, Mock
 
 from memory.common.db.models import Book, BookSection

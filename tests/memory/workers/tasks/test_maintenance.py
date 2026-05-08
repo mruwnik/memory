@@ -19,8 +19,10 @@ from memory.workers.tasks.maintenance import (
     reingest_empty_source_items,
     update_metadata_for_item,
     update_metadata_for_source_items,
+    get_item_class,
     _payloads_equal,
 )
+import memory.workers.tasks.maintenance as maintenance_module
 
 
 @pytest.fixture
@@ -914,6 +916,118 @@ def test_update_metadata_for_item_missing_chunks_in_qdrant(db_session, qdrant):
     assert mock_set_payload.call_count == 1
 
 
+def test_update_metadata_for_item_per_chunk_failure_does_not_abort_loop(
+    db_session, qdrant
+):
+    """A transient failure on one chunk MUST NOT strand the rest with stale payload.
+
+    Pre-fix the try/except wrapped the whole loop, so a single failed
+    set_payload call left every chunk after it with stale ``project_id`` /
+    ``sensitivity`` — an access-control consistency bug when sources get
+    reprojected. The error count was also pegged to 1 regardless of how
+    many chunks actually went unprocessed.
+    """
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk_ids = [str(uuid.uuid4()) for _ in range(5)]
+    chunks = [
+        Chunk(
+            id=chunk_id,
+            source=item,
+            content=f"Test chunk content {i}",
+            embedding_model="test-model",
+        )
+        for i, chunk_id in enumerate(chunk_ids)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+
+    payloads = {
+        cid: {"tags": ["existing"], "source_id": item.id, "old_field": "x"}
+        for cid in chunk_ids
+    }
+
+    # Make set_payload fail on the middle chunk only.
+    failing_chunk = chunk_ids[2]
+
+    def fake_set_payload(client, collection, chunk_id, payload):
+        if chunk_id == failing_chunk:
+            raise RuntimeError("simulated qdrant blip")
+
+    with (
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.get_payloads",
+            return_value=payloads,
+        ),
+        patch(
+            "memory.workers.tasks.maintenance.qdrant.set_payload",
+            side_effect=fake_set_payload,
+        ) as mock_set_payload,
+    ):
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    # All 5 chunks were attempted (the loop did not abort on the failure).
+    assert mock_set_payload.call_count == 5
+    # 4 succeeded, 1 errored — the dashboard sees the true failure count.
+    assert result["status"] == "success"
+    assert result["updated_chunks"] == 4
+    assert result["errors"] == 1
+
+
+def test_update_metadata_for_item_setup_failure_returns_error(db_session):
+    """Failing get_payloads for the whole item is correctly reported as an error."""
+    item = MailMessage(
+        sha256=b"test_hash" + bytes(24),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="STORED",
+        message_id="<test@example.com>",
+        subject="Test Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Test content",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=item,
+        content="Test chunk content",
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+
+    with patch(
+        "memory.workers.tasks.maintenance.qdrant.get_payloads",
+        side_effect=RuntimeError("qdrant unreachable"),
+    ):
+        result = update_metadata_for_item(str(item.id), "MailMessage")
+
+    assert result["status"] == "error"
+    assert result["errors"] == 1
+    assert "qdrant unreachable" in result["error"]
+
+
 @pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
 def test_update_metadata_for_source_items_success(db_session, item_type):
     """Test updating metadata for all items of a given type."""
@@ -982,3 +1096,63 @@ def test_update_metadata_for_source_items_invalid_type(db_session):
     assert result["status"] == "error"
     assert "Unsupported item type invalid_type" in result["error"]
     assert "Available types:" in result["error"]
+
+
+# ====== get_item_class lookup tests ======
+
+
+@pytest.fixture(autouse=True)
+def reset_item_class_cache():
+    """Force the item-class lookup map to rebuild between tests."""
+    maintenance_module._ITEM_CLASSES = None
+    yield
+    maintenance_module._ITEM_CLASSES = None
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        # Polymorphic identity (snake_case) — what process_raw_items dispatches with.
+        "mail_message",
+        "blog_post",
+        # Class name (CapsCase) — what api/source_items.py:reingest_item dispatches with.
+        "MailMessage",
+        "BlogPost",
+    ],
+)
+def test_get_item_class_accepts_both_naming_conventions(key):
+    """get_item_class must resolve both polymorphic identity and class name.
+
+    The codebase has two callers using different conventions
+    (api/source_items.py uses __class__.__name__; process_raw_items uses
+    SourceItem.type which is the polymorphic discriminator). Both must
+    work — otherwise one of the dispatch paths is silently broken.
+    """
+    cls = get_item_class(key)
+    # Both naming conventions must resolve to a real SourceItem subclass.
+    assert issubclass(cls, SourceItem)
+
+
+def test_get_item_class_resolves_to_same_class_for_both_keys():
+    """Class-name lookup and polymorphic-identity lookup must agree."""
+    by_identity = get_item_class("mail_message")
+    by_classname = get_item_class("MailMessage")
+    assert by_identity is by_classname is MailMessage
+
+
+def test_get_item_class_rejects_unknown_type():
+    """Unknown type raises ValueError listing available types."""
+    with pytest.raises(ValueError, match="Unsupported item type"):
+        get_item_class("definitely_not_a_real_type")
+
+
+def test_get_item_class_does_not_use_private_class_registry():
+    """Regression: lookup must NOT rely on SourceItem.registry._class_registry,
+    which is a SQLAlchemy private attribute that has been reorganised
+    across versions and is keyed only by class name."""
+    # Build the public-API map and assert polymorphic identities are
+    # present — _class_registry only contains class names, so if anyone
+    # reverts to it these polymorphic-identity keys disappear.
+    m = maintenance_module._build_item_class_map()
+    assert "mail_message" in m
+    assert "blog_post" in m

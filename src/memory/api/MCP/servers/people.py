@@ -11,8 +11,11 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
+    ALLOWED_SENSITIVITIES,
     get_mcp_current_user,
     get_project_roles_by_user_id,
+    require_can_write_at_sensitivity,
+    require_project_membership,
 )
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
@@ -81,31 +84,6 @@ def _tidbit_to_dict(tidbit: PersonTidbit) -> dict[str, Any]:
         "creator_id": tidbit.creator_id,
         "created_at": tidbit.inserted_at.isoformat() if tidbit.inserted_at else None,
     }
-
-
-def require_project_membership(user: Any, project_id: int) -> None:
-    """Enforce that the caller may write to ``project_id``.
-
-    Admins can assign any project; regular users must be a member.  Raises
-    ``PermissionError`` otherwise.  Centralised so ``tidbit_add`` and
-    ``tidbit_update`` (and any future caller) can't drift on what counts as
-    "may set project_id".
-
-    Note: this checks *membership only*, not role.  Any project member
-    (contributor / manager / admin) may add or update a tidbit at any
-    sensitivity — the sensitivity-vs-role matrix is enforced on read
-    (see :func:`memory.common.access_control.user_can_access`), not on
-    write.  If we ever want write-side enforcement (e.g. only managers
-    may attach ``confidential`` tidbits), accept a ``min_role`` argument
-    here and gate ``tidbit_add`` / ``tidbit_update`` per sensitivity.
-    """
-    if user and has_admin_scope(user):
-        return
-    user_id = getattr(user, "id", None) if user else None
-    if user_id is None:
-        raise PermissionError("Cannot verify project membership without user ID")
-    if project_id not in get_project_roles_by_user_id(user_id):
-        raise PermissionError(f"You are not a member of project {project_id}")
 
 
 def _filter_tidbits_by_access(
@@ -988,6 +966,16 @@ async def tidbit_add(
 
     if project_id is not None:
         require_project_membership(user, project_id)
+        # Sensitivity-vs-role enforcement: a contributor can't seed
+        # `confidential` content into a project for higher-role readers.
+        require_can_write_at_sensitivity(user, project_id, sensitivity)
+    elif sensitivity not in ALLOWED_SENSITIVITIES:
+        # No project_id (creator-only mode): still validate the string so
+        # we don't store a typo'd / attacker-supplied value verbatim.
+        raise ValueError(
+            f"Invalid sensitivity {sensitivity!r}; must be one of "
+            f"{sorted(ALLOWED_SENSITIVITIES)}."
+        )
 
     task = celery_app.send_task(
         SYNC_PERSON_TIDBIT,
@@ -1046,6 +1034,33 @@ async def tidbit_update(
         if not user or not user_can_edit(user, tidbit):
             raise PermissionError("You can only edit tidbits you created")
 
+        # Resolve the final (project_id, sensitivity) pair so the
+        # sensitivity-vs-role check sees the post-update combination, not
+        # the partial one. ``project_id`` may be unchanged (use existing),
+        # cleared by an empty positional (we don't expose that API), or set
+        # to a new project; same for sensitivity.
+        new_project_id = project_id if project_id is not None else tidbit.project_id
+        new_sensitivity = (
+            sensitivity if sensitivity is not None else tidbit.sensitivity
+        )
+
+        if project_id is not None:
+            require_project_membership(user, project_id)
+        if (project_id is not None or sensitivity is not None) and new_project_id is not None:
+            # Either field is changing AND there's a project context; enforce
+            # sensitivity-vs-role on the resulting pair so a contributor
+            # can't elevate their own tidbit to confidential post-hoc.
+            require_can_write_at_sensitivity(
+                user, new_project_id, new_sensitivity
+            )
+        elif sensitivity is not None and sensitivity not in ALLOWED_SENSITIVITIES:
+            # Creator-only tidbit (no project_id): still reject typo'd
+            # sensitivities so we don't store unrecognised strings.
+            raise ValueError(
+                f"Invalid sensitivity {sensitivity!r}; must be one of "
+                f"{sorted(ALLOWED_SENSITIVITIES)}."
+            )
+
         if content is not None:
             tidbit.content = content
             tidbit.embed_status = "RAW"  # Re-embed with new content
@@ -1054,7 +1069,6 @@ async def tidbit_update(
         if tags is not None:
             tidbit.tags = list(tags)
         if project_id is not None:
-            require_project_membership(user, project_id)
             tidbit.project_id = project_id
         if sensitivity is not None:
             tidbit.sensitivity = sensitivity

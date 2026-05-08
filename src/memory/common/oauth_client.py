@@ -14,6 +14,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from memory.common import settings
@@ -128,6 +129,12 @@ def validate_and_consume_state(
 ) -> int | None:
     """Validate OAuth state from callback and consume it (one-time use).
 
+    The consume step is atomic: a single ``DELETE ... RETURNING`` claims the
+    row, so two concurrent callbacks for the same ``signed_state`` cannot
+    both succeed (one will see no row returned). The previous SELECT-then-
+    DELETE form left a race window covering signature/expiry checks where
+    both callers passed and both completed the OAuth flow.
+
     Args:
         db: Database session
         signed_state: State in "state.signature" format from callback
@@ -150,17 +157,31 @@ def validate_and_consume_state(
 
     original_state = signed_state.rsplit(".", 1)[0]
 
-    # Look up state in database
-    oauth_state = db.query(OAuthClientState).filter(
-        OAuthClientState.state == original_state,
-        OAuthClientState.provider == provider,
+    # Atomically claim the row — only the race-winner gets a result.
+    # The signature and expiry checks below run on the *returned* row, so
+    # an invalid state still gets consumed (preventing brute-force attempts
+    # against a single token, which mirrors the previous behaviour where
+    # bad-signature / expired states were also deleted before returning).
+    result = db.execute(
+        delete(OAuthClientState)
+        .where(OAuthClientState.state == original_state)
+        .where(OAuthClientState.provider == provider)
+        .returning(
+            OAuthClientState.id,
+            OAuthClientState.user_id,
+            OAuthClientState.expires_at,
+        )
     ).first()
+    db.commit()
 
-    if not oauth_state:
+    if result is None:
         # Don't enumerate other in-flight state values — that's an oracle
         # for an attacker who can read logs (CWE-532). Log only the
         # correlation id of the missing value plus a count of pending
         # states for the provider, useful for ops without leaking secrets.
+        # Note: the row may be missing because (a) it never existed, (b)
+        # it expired and was reaped, or (c) a concurrent callback already
+        # consumed it — all three are caller-indistinguishable by design.
         active_count = db.query(OAuthClientState).filter(
             OAuthClientState.provider == provider
         ).count()
@@ -170,21 +191,19 @@ def validate_and_consume_state(
         )
         return None
 
-    user_id = oauth_state.user_id
+    state_id, user_id, expires_at = result
     now = datetime.now(timezone.utc)
     logger.info(
-        f"Found state in database: id={oauth_state.id}, user_id={user_id}, "
-        f"expires_at={oauth_state.expires_at.isoformat()}, now={now.isoformat()}"
+        f"Consumed state from database: id={state_id}, user_id={user_id}, "
+        f"expires_at={expires_at.isoformat()}, now={now.isoformat()}"
     )
 
     # Check expiration
-    if oauth_state.expires_at < now:
+    if expires_at < now:
         logger.warning(
-            f"State expired: expires_at={oauth_state.expires_at.isoformat()}, "
-            f"now={now.isoformat()}, diff={(now - oauth_state.expires_at).total_seconds()}s"
+            f"State expired: expires_at={expires_at.isoformat()}, "
+            f"now={now.isoformat()}, diff={(now - expires_at).total_seconds()}s"
         )
-        db.delete(oauth_state)
-        db.commit()
         return None
 
     # Verify signature matches this user
@@ -195,13 +214,8 @@ def validate_and_consume_state(
             f"verified_corr={log_corr_id(verified_state)}, "
             f"expected_corr={log_corr_id(original_state)}"
         )
-        db.delete(oauth_state)
-        db.commit()
         return None
 
-    # Delete state (one-time use)
-    db.delete(oauth_state)
-    db.commit()
     logger.info(f"State validated and consumed successfully: user_id={user_id}")
 
     return user_id

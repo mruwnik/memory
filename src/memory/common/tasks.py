@@ -3,12 +3,19 @@ Common task utilities for task querying and management.
 """
 
 from datetime import datetime, timezone
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from sqlalchemy import or_
 
+from memory.common.access_control import (
+    AccessFilter,
+    apply_access_filter_to_query,
+)
 from memory.common.db.connection import DBSession
 from memory.common.db.models import Task
+
+if TYPE_CHECKING:
+    pass
 
 
 class TaskDict(TypedDict):
@@ -49,6 +56,7 @@ def get_tasks(
     due_after: datetime | None = None,
     limit: int = 100,
     offset: int = 0,
+    access_filter: "AccessFilter | None" = None,
 ) -> list[TaskDict]:
     """Get tasks with optional filters.
 
@@ -61,11 +69,23 @@ def get_tasks(
         due_after: Only tasks due after this date
         limit: Maximum number of tasks to return
         offset: Number of tasks to skip for pagination
+        access_filter: AccessFilter for the calling user, or None for superadmin
+            (sees all). Tasks inherit ``project_id``/``sensitivity``/``creator_id``
+            from SourceItem so the standard filter applies. Callers MUST pass a
+            non-superadmin filter for non-admin users; passing ``None`` means
+            "no filtering" (admin-only).
 
     Returns:
         List of task dictionaries, sorted by due_date (nulls last), then priority
     """
     query = session.query(Task)
+
+    # Apply access control filter — Task is a SourceItem subclass so the
+    # standard project/creator/person-override/public filter all apply.
+    # apply_access_filter_to_query is a no-op when access_filter is None
+    # (admin path); for non-admins it AND-joins the access conditions onto
+    # the query.
+    query = apply_access_filter_to_query(query, access_filter)
 
     # Status filter
     if status:
@@ -106,6 +126,13 @@ def get_tasks(
 
 def complete_task(session: DBSession, task_id: int) -> Task | None:
     """Mark a task as complete.
+
+    Note: this helper does NOT enforce access control — callers are
+    responsible for verifying the caller may edit this task before calling
+    (typically via ``user_can_edit``). Treating the helper as access-blind
+    keeps it usable from worker code that runs without a user context
+    (e.g. recurring-task auto-completion); MCP-tool callers must check
+    permission first.
 
     Args:
         session: Database session

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @app.task(name=SYNC_WEBPAGE)
 @tracked_task
-def sync_webpage(url: str, tags: Iterable[str] = []) -> dict:
+def sync_webpage(url: str, tags: Iterable[str] | None = None) -> dict:
     """
     Synchronize a webpage from a URL.
 
@@ -39,6 +39,7 @@ def sync_webpage(url: str, tags: Iterable[str] = []) -> dict:
     Returns:
         dict: Summary of what was processed
     """
+    tags = tags or []
     logger.info(f"Syncing webpage: {url}")
     article = parse_webpage(url)
     logger.debug(f"Article: {article.title} - {article.url}")
@@ -192,7 +193,7 @@ def add_article_feed(
     url: str,
     title: str | None = None,
     description: str | None = None,
-    tags: Iterable[str] = [],
+    tags: Iterable[str] | None = None,
     active: bool = True,
     check_interval: int = 60 * 24,  # 24 hours
 ) -> dict:
@@ -210,6 +211,7 @@ def add_article_feed(
     Returns:
         dict: Summary of the added feed
     """
+    tags = tags or []
     with make_session() as session:
         feed = session.query(ArticleFeed).filter(ArticleFeed.url == url).first()
         if feed:
@@ -232,7 +234,10 @@ def add_article_feed(
 @app.task(name=SYNC_WEBSITE_ARCHIVE)
 @tracked_task
 def sync_website_archive(
-    url: str, tags: Iterable[str] = [], max_pages: int = 100, add_feed: bool = True
+    url: str,
+    tags: Iterable[str] | None = None,
+    max_pages: int = 100,
+    add_feed: bool = True,
 ) -> dict:
     """
     Synchronize all articles from a website's archive.
@@ -245,6 +250,7 @@ def sync_website_archive(
     Returns:
         dict: Summary of archive sync operation
     """
+    tags = tags or []
     logger.info(f"Starting archive sync for: {url}")
 
     if add_feed:
@@ -256,6 +262,8 @@ def sync_website_archive(
                     title=url,
                     active=True,
                 )
+                session.add(feed)
+                session.commit()
 
     # Get archive fetcher for the website
     fetcher = get_archive_fetcher(url)

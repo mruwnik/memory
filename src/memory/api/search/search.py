@@ -9,8 +9,11 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import InvalidRequestError, ProgrammingError
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from memory.common import extract, settings
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
@@ -38,9 +41,6 @@ from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
-
-# Default config for when none is provided
-_DEFAULT_CONFIG = SearchConfig()
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +121,13 @@ def apply_source_boosts(
         for s in sources:
             try:
                 title = (getattr(s, "title", None) or "").lower()
-            except Exception:
-                # Some subclasses have deferred title columns that may fail to load
+            except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
+                # Polymorphic subclasses may have deferred/missing title columns
+                # (e.g. detached instance, schema drift). Anything broader was
+                # swallowing real DB errors and silently zeroing search quality.
+                logger.warning(
+                    "Could not load title for source %s: %s", s.id, e
+                )
                 title = ""
             source_map[s.id] = {
                 "title": title,
@@ -148,11 +153,17 @@ def apply_source_boosts(
                     score += RECALLED_TITLE_BOOST
                     break
 
-        # Apply popularity boost
+        # Apply popularity boost (additive, like the other boosts in this
+        # function). The previous implementation was multiplicative
+        # (`score *= (1 + POPULARITY_BOOST * (popularity - 1))`), which
+        # inverted direction for any negative score: cross-encoder
+        # rerankers emit unbounded real-valued logits including negatives,
+        # so popular bad-match items would rank *worse* than equally-bad
+        # unpopular items. Additive avoids that and matches how recency
+        # and title boosts compose.
         popularity = source_data.get("popularity", 1.0)
         if popularity != 1.0:
-            multiplier = 1.0 + POPULARITY_BOOST * (popularity - 1.0)
-            score *= multiplier
+            score += POPULARITY_BOOST * (popularity - 1.0)
 
         # Apply recency boost (exponential decay with half-life)
         inserted_at = source_data.get("inserted_at")
@@ -380,8 +391,13 @@ def _fetch_chunks_by_title(
         for source in sources:
             try:
                 title = getattr(source, "title", None)
-            except Exception:
-                # Polymorphic subclass attributes may fail to load with deferred loading
+            except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
+                # Polymorphic subclasses may have deferred/missing title columns
+                # (e.g. detached instance, schema drift). Anything broader was
+                # swallowing real DB errors.
+                logger.warning(
+                    "Could not load title for source %s: %s", source.id, e
+                )
                 title = None
             if title:
                 title_lower = title.lower()
@@ -408,7 +424,6 @@ def _fetch_chunks_by_title(
 
 async def _run_searches(
     search_data: list[extract.DataChunk],
-    data: list[extract.DataChunk],
     modalities: set[str],
     internal_limit: int,
     filters: SearchFilters,
@@ -546,11 +561,11 @@ async def _apply_reranking(
 
 async def search_chunks(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
-    filters: SearchFilters = {},
+    filters: SearchFilters | None = None,
     timeout: int = 2,
-    config: SearchConfig = _DEFAULT_CONFIG,
+    config: SearchConfig | None = None,
 ) -> list[Chunk]:
     """
     Search chunks using embedding similarity and optionally BM25.
@@ -567,6 +582,17 @@ async def search_chunks(
     - useReranking: Enable cross-encoder reranking
     - useQueryAnalysis: LLM-based query analysis (extracts modalities, cleans query, generates variants)
     """
+    # ``None`` sentinels: any defaults that look like containers must be
+    # constructed per call. A shared mutable default like ``filters={}``
+    # would let a future ``filters.setdefault(...)`` on the hot path
+    # leak across users via the shared dict identity.
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
+    if config is None:
+        config = SearchConfig()
+
     # Resolve enhancement flags: config overrides global settings
     use_bm25 = (
         config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
@@ -605,7 +631,7 @@ async def search_chunks(
 
     # Run searches and fuse scores
     fused_scores = await _run_searches(
-        search_data, data, modalities, internal_limit, filters, timeout, use_bm25,
+        search_data, modalities, internal_limit, filters, timeout, use_bm25,
         recalled_titles=recalled_content,
     )
 
@@ -622,14 +648,47 @@ async def search_chunks(
 
 
 async def search_sources(
-    chunks: Sequence[Chunk], previews: bool = False
+    chunks: Sequence[Chunk],
+    previews: bool = False,
+    filters: "SearchFilters | None" = None,
 ) -> list[SearchResult]:
+    """Load SourceItems for a fused set of chunks.
+
+    Final-merge layer of the documented three-layer access control:
+    Qdrant payload filter, BM25 SQL filter, AND this final query. Pre-fix,
+    this layer skipped the access check, so any future regression in the
+    upstream layers (e.g. an as_payload() refactor that drops project_id,
+    a stale-sensitivity ingestion race, or a Qdrant filter shape change)
+    would silently exfiltrate the parent SourceItem rows. The chunk-level
+    access filter is reused here verbatim so the three layers stay in
+    lock-step.
+
+    Fail-closed on missing filters: ``filters`` MUST contain an
+    ``access_filter`` key. A caller that doesn't thread filters through
+    is treated as a programming error and raises ``ValueError`` —
+    defense-in-depth that's only effective when callers remember to opt
+    in is a hint, not a defense (Parvati flagged in PR #77).
+    """
+    if filters is None or "access_filter" not in filters:
+        raise ValueError(
+            "search_sources requires `filters` with an `access_filter` key. "
+            "The final-merge access check is mandatory — a None/missing "
+            "filter would silently bypass the third layer of the documented "
+            "three-layer access control invariant."
+        )
+
     by_source = defaultdict(list)
     for chunk in chunks:
         by_source[chunk.source_id].append(chunk)
 
+    if not by_source:
+        return []
+
     with make_session() as db:
-        sources = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys())).all()
+        query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
+        query = apply_access_filter_to_query(query, filters["access_filter"])
+
+        sources = query.all()
         return [
             SearchResult.from_source_item(source, by_source[source.id], previews)
             for source in sources
@@ -638,9 +697,9 @@ async def search_sources(
 
 async def search(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
-    filters: SearchFilters = {},
-    config: SearchConfig = _DEFAULT_CONFIG,
+    modalities: set[str] | None = None,
+    filters: SearchFilters | None = None,
+    config: SearchConfig | None = None,
 ) -> list[SearchResult]:
     """
     Search across knowledge base using text query and optional files.
@@ -654,6 +713,12 @@ async def search(
     Returns:
     - List of search results sorted by score
     """
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
+    if config is None:
+        config = SearchConfig()
     allowed_modalities = modalities & ALL_COLLECTIONS.keys()
     chunks = await search_chunks(
         data,
@@ -670,6 +735,6 @@ async def search(
         else:
             logger.debug(f"Skipping scoring: query is {type(query_item).__name__}, not str")
 
-    sources = await search_sources(chunks, config.previews)
+    sources = await search_sources(chunks, config.previews, filters=filters)
     sources.sort(key=lambda x: x.search_score or 0, reverse=True)
     return sources[: config.limit]

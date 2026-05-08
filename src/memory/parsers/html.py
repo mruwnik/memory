@@ -1,9 +1,7 @@
 import hashlib
-import ipaddress
 import logging
 import pathlib
 import re
-import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -15,6 +13,8 @@ from markdownify import markdownify as md
 from PIL import Image as PILImage
 
 from memory.common import paths, settings
+from memory.common.downloads import stream_download_to_path
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -26,42 +26,24 @@ ALLOWED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", 
 
 
 def is_safe_url(url: str) -> bool:
-    """Check if URL is safe to fetch (not pointing to private/internal addresses).
+    """Return True iff ``url`` is safe to fetch (no internal/private targets).
 
-    Note: This has a TOCTOU (time-of-check-time-of-use) limitation - DNS could resolve
-    to a different IP between this check and the actual request. For higher security,
-    consider using a requests adapter that validates the connection IP, or running
-    fetches through a proxy that enforces network policy. This check still blocks
-    the most common SSRF vectors (localhost, obvious private IPs, failed DNS).
+    Thin wrapper around :func:`memory.common.ssrf.validate_public_url`; that
+    function is the canonical SSRF check (resolves all A/AAAA records via
+    ``getaddrinfo``, rejects the multicast/unspecified categories, supports
+    IPv6). The previous local implementation used ``socket.gethostbyname``
+    (single IPv4 record only) and missed multicast / unspecified / IPv6 —
+    bypassable via split-horizon DNS or AAAA-only hosts.
     """
     try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-
-        # Block localhost and common internal hostnames
-        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            return False
-
-        # Resolve hostname and check IP
-        try:
-            ip = socket.gethostbyname(hostname)
-            ip_obj = ipaddress.ip_address(ip)
-
-            # Block private, loopback, link-local, and reserved addresses
-            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
-                logger.warning(f"Blocked request to private/internal IP: {url} -> {ip}")
-                return False
-        except socket.gaierror:
-            # DNS resolution failed - could be internal hostname
-            logger.warning(f"DNS resolution failed for {hostname}, blocking")
-            return False
-
-        return True
-    except Exception as e:
-        logger.warning(f"Error validating URL {url}: {e}")
+        validate_public_url(url)
+    except UnsafeURLError as e:
+        logger.warning("Blocked unsafe URL %s: %s", url, e)
         return False
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("Error validating URL %s: %s", url, e)
+        return False
+    return True
 
 
 MAX_HTML_SIZE = 10 * 1024 * 1024  # 10 MB limit for HTML/feed downloads
@@ -248,37 +230,13 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
 
     # Download if not already cached
     if not local_path.exists():
-        try:
-            # Check Content-Length before downloading to avoid large files
-            response = requests.get(
-                url,
-                timeout=30,
-                headers={"User-Agent": "Mozilla/5.0"},
-                stream=True,
-            )
-            response.raise_for_status()
-
-            content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > MAX_IMAGE_SIZE:
-                logger.warning(
-                    f"Image too large ({content_length} bytes > {MAX_IMAGE_SIZE}): {url}"
-                )
-                return None
-
-            # Stream download with size limit (using list to avoid O(n^2) concatenation)
-            chunks = []
-            size = 0
-            for chunk in response.iter_content(chunk_size=8192):
-                size += len(chunk)
-                if size > MAX_IMAGE_SIZE:
-                    logger.warning(f"Image exceeded size limit during download: {url}")
-                    return None
-                chunks.append(chunk)
-            content = b"".join(chunks)
-
-            local_path.write_bytes(content)
-        except requests.RequestException as e:
-            logger.warning(f"Failed to download image {url}: {e}")
+        ok = stream_download_to_path(
+            url,
+            local_path,
+            MAX_IMAGE_SIZE,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if not ok:
             return None
 
     try:

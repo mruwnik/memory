@@ -29,6 +29,7 @@ from memory.common.scopes import (
     validate_scopes,
 )
 from memory.api.auth import get_current_user, get_token, require_scope
+from memory.common.access_control import has_admin_scope
 from memory.common.people import find_or_create_person
 
 if TYPE_CHECKING:
@@ -101,10 +102,34 @@ def user_to_response(user: User) -> UserResponse:
     )
 
 
-def has_admin_scope(user: User) -> bool:
-    """Check if user has admin scope."""
-    user_scopes = user.scopes or []
-    return SCOPE_ADMIN in user_scopes
+def require_self_or_admin(user_id: int, user: User) -> None:
+    """Raise 403 unless ``user`` is either the target ``user_id`` or an admin.
+
+    Centralises the standard self-or-admin authorisation check used
+    across this module's endpoints. The previous implementation had
+    five verbatim copies of ``if user_id != user.id and not
+    has_admin_scope(user): raise HTTPException(403, ...)``, which is
+    fertile ground for an audit-readability divergence (one site
+    grows an extra check; the others don't).
+    """
+    if user_id != user.id and not has_admin_scope(user):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
+def authorize_user_self_or_admin(
+    db: Session, user_id: int, user: User
+) -> User:
+    """Return the target ``User`` if caller is that user or an admin.
+
+    Raises 403 if not authorised; 404 if the user does not exist.
+    Convenience wrapper around :func:`require_self_or_admin` + a
+    ``db.get(User, user_id)`` 404 fetch.
+    """
+    require_self_or_admin(user_id, user)
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return target_user
 
 
 def link_person_to_user(db: Session, user: User) -> Person | None:
@@ -251,13 +276,7 @@ def get_user(
     db: Session = Depends(get_session),
 ) -> UserResponse:
     """Get a user by ID. Admins can get any user, others can only get themselves."""
-    if user_id != user.id and not has_admin_scope(user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
+    target_user = authorize_user_self_or_admin(db, user_id, user)
     return user_to_response(target_user)
 
 
@@ -270,14 +289,8 @@ def update_user(
 ) -> UserResponse:
     """Update a user. Admins can update any user, others can only update their own name/email."""
     is_admin = has_admin_scope(user)
-    is_self = user_id == user.id
 
-    if not is_self and not is_admin:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    target_user = authorize_user_self_or_admin(db, user_id, user)
 
     if updates.name is not None:
         target_user.name = updates.name
@@ -505,12 +518,7 @@ def list_user_api_keys(
     db: Session = Depends(get_session),
 ) -> list[APIKeyResponse]:
     """List all API keys for a user. Admins can list any user's keys."""
-    if user_id != user.id and not has_admin_scope(user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    authorize_user_self_or_admin(db, user_id, user)
 
     keys = db.query(APIKey).filter(APIKey.user_id == user_id).all()
     return [api_key_to_response(k) for k in keys]
@@ -524,12 +532,7 @@ def create_user_api_key(
     db: Session = Depends(get_session),
 ) -> APIKeyCreateResponse:
     """Create an API key for a user. Admins can create keys for any user."""
-    if user_id != user.id and not has_admin_scope(user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    authorize_user_self_or_admin(db, user_id, user)
 
     requested_scopes = data.scopes or []
 
@@ -583,8 +586,7 @@ def revoke_user_api_key(
     db: Session = Depends(get_session),
 ):
     """Revoke (soft-delete) an API key. Users can revoke their own, admins can revoke any."""
-    if user_id != user.id and not has_admin_scope(user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_self_or_admin(user_id, user)
 
     api_key = db.get(APIKey, key_id)
     if not api_key or api_key.user_id != user_id:
@@ -604,8 +606,7 @@ def delete_user_api_key(
     db: Session = Depends(get_session),
 ):
     """Permanently delete an API key. Users can delete their own, admins can delete any."""
-    if user_id != user.id and not has_admin_scope(user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_self_or_admin(user_id, user)
 
     api_key = db.get(APIKey, key_id)
     if not api_key or api_key.user_id != user_id:

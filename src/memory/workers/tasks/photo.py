@@ -161,12 +161,17 @@ def execute_photo_processing(
         return PhotoProcessingResult(status="error", error=str(e), photo_id=photo_id)
 
 
-def validate_and_parse_photo(file_path: str) -> tuple[Path, bytes, dict]:
+def validate_and_parse_photo(file_path: str) -> tuple[Path, bytes, dict, bytes]:
     """
     Validate file exists and extract photo data.
 
     Returns:
-        Tuple of (resolved path, file content, exif_data dict)
+        Tuple of (resolved path, file content, exif_data dict, sha256 digest).
+
+    The sha256 is computed once here so that ``sync_photo`` can both
+    dedupe-check by hash AND pass the value through to
+    ``create_photo_from_file`` without re-hashing the photo bytes
+    (which can be many megabytes on the ingestion hot path).
     """
     path = Path(file_path)
 
@@ -181,8 +186,9 @@ def validate_and_parse_photo(file_path: str) -> tuple[Path, bytes, dict]:
 
     content = path.read_bytes()
     exif_data = extract_exif_data(path)
+    sha256 = hashlib.sha256(content).digest()
 
-    return path, content, exif_data
+    return path, content, exif_data, sha256
 
 
 def create_photo_from_file(
@@ -190,9 +196,14 @@ def create_photo_from_file(
     content: bytes,
     exif_data: dict,
     tags: list[str],
+    sha256: bytes,
 ) -> Photo:
-    """Create a Photo model from file data."""
-    sha256 = hashlib.sha256(content).digest()
+    """Create a Photo model from file data.
+
+    ``sha256`` is required (rather than computed here) so callers can
+    avoid hashing the photo bytes twice. Pass the value returned from
+    ``validate_and_parse_photo``.
+    """
     taken_at = parse_exif_datetime(exif_data)
     camera = get_camera_info(exif_data)
     lat, lon = get_gps_coordinates(exif_data)
@@ -253,8 +264,7 @@ def sync_photo(
     logger.info(f"Processing new photo from {file_path} (job_id={job_id})")
 
     tags = tags or []
-    path, content, exif_data = validate_and_parse_photo(file_path)
-    sha256 = hashlib.sha256(content).digest()
+    path, content, exif_data, sha256 = validate_and_parse_photo(file_path)
 
     with make_session() as session:
         if job_id:
@@ -272,8 +282,9 @@ def sync_photo(
                 session.commit()
             return {"status": "already_exists", "photo_id": existing.id}
 
-        # Create new photo record
-        photo = create_photo_from_file(path, content, exif_data, tags)
+        # Create new photo record (reuse the hash already computed in
+        # validate_and_parse_photo to avoid hashing photo bytes twice).
+        photo = create_photo_from_file(path, content, exif_data, tags, sha256)
         session.add(photo)
         session.flush()
 

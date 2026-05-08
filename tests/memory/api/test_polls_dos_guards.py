@@ -169,3 +169,78 @@ def test_rate_limit_constant_format():
     count, window = rate_limit.parse_limit(POLL_RESPONSE_RATE_LIMIT)
     assert count == 10
     assert window == 60
+
+
+def test_rate_limit_does_not_trust_xff_from_untrusted_peer():
+    """Regression: enforce_poll_response_rate_limit previously used
+    slowapi.util.get_remote_address, which honors X-Forwarded-For whenever
+    Uvicorn was started with --proxy-headers. A remote attacker could rotate
+    XFF per request to mint fresh buckets and defeat the cap entirely.
+
+    Now that the function uses rate_limit_key, XFF must be ignored when the
+    immediate TCP peer is not in RATE_LIMIT_TRUSTED_PROXIES — the bucket key
+    falls back to the direct connection IP, so 11 requests from one peer
+    still hit the 10/minute cap regardless of how many XFF values the
+    attacker rotates through.
+    """
+    from starlette.datastructures import Headers
+
+    client = _stub_redis_client()
+
+    # 11 requests from the same peer 10.0.0.99, each with a DIFFERENT
+    # X-Forwarded-For. The pre-fix code would have created 11 buckets;
+    # the new code keys on 10.0.0.99 throughout.
+    requests_with_spoofed_xff = []
+    for i in range(11):
+        request = MagicMock()
+        request.client.host = "10.0.0.99"
+        request.headers = Headers({"X-Forwarded-For": f"203.0.113.{i}"})
+        requests_with_spoofed_xff.append(request)
+
+    with (
+        patch.object(rate_limit, "get_redis", return_value=client),
+        # Trust no proxies — the typical default for a public-facing API.
+        patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""),
+    ):
+        # First 10 succeed
+        for request in requests_with_spoofed_xff[:10]:
+            enforce_poll_response_rate_limit(request, "slug-x")
+        # 11th must 429 — XFF spoofing did not buy a fresh bucket
+        with pytest.raises(HTTPException) as exc_info:
+            enforce_poll_response_rate_limit(
+                requests_with_spoofed_xff[10], "slug-x"
+            )
+    assert exc_info.value.status_code == 429
+
+
+def test_rate_limit_honors_xff_from_trusted_proxy():
+    """When the immediate hop is a trusted proxy, the XFF original-client
+    IP is used — so two different real clients behind the same proxy each
+    get their own bucket (rather than sharing one bucket keyed on the
+    proxy's IP)."""
+    from starlette.datastructures import Headers
+
+    client = _stub_redis_client()
+    proxy_ip = "10.0.0.5"
+
+    request_alice = MagicMock()
+    request_alice.client.host = proxy_ip
+    request_alice.headers = Headers({"X-Forwarded-For": "203.0.113.7"})
+
+    request_bob = MagicMock()
+    request_bob.client.host = proxy_ip
+    request_bob.headers = Headers({"X-Forwarded-For": "203.0.113.8"})
+
+    with (
+        patch.object(rate_limit, "get_redis", return_value=client),
+        patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", proxy_ip),
+    ):
+        # Burn Alice's 10/minute allowance
+        for _ in range(10):
+            enforce_poll_response_rate_limit(request_alice, "slug-y")
+        # Bob still gets through — different XFF, separate bucket
+        enforce_poll_response_rate_limit(request_bob, "slug-y")
+        # 11th from Alice is denied
+        with pytest.raises(HTTPException) as exc_info:
+            enforce_poll_response_rate_limit(request_alice, "slug-y")
+    assert exc_info.value.status_code == 429

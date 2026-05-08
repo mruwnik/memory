@@ -13,6 +13,7 @@ from memory.api.auth import (
     resolve_user_filter,
 )
 from memory.common.access_control import has_admin_scope
+from memory.common.celery_app import SYNC_CALENDAR_ACCOUNT, app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -271,11 +272,9 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a calendar account."""
-    from memory.common.celery_app import app, SYNC_CALENDAR_ACCOUNT
-
     get_user_account(db, CalendarAccount, account_id, user)  # Verify ownership
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_CALENDAR_ACCOUNT,
         args=[account_id],
         kwargs={"force_full": force_full},

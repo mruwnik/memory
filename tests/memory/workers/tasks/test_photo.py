@@ -334,10 +334,14 @@ def test_validate_and_parse_photo_absolute_path(mock_path_class, mock_extract):
 
     mock_extract.return_value = {"Make": "Canon"}
 
-    result_path, content, exif = photo.validate_and_parse_photo("/absolute/path/photo.jpg")
+    result_path, content, exif, sha256 = photo.validate_and_parse_photo("/absolute/path/photo.jpg")
 
     assert content == b"fake image data"
     assert exif == {"Make": "Canon"}
+    # Hash is now computed inside validate_and_parse_photo so sync_photo
+    # can dedupe-check and create_photo_from_file can reuse it without
+    # rehashing the image bytes.
+    assert sha256 == hashlib.sha256(b"fake image data").digest()
 
 
 @patch("memory.workers.tasks.photo.extract_exif_data")
@@ -358,9 +362,10 @@ def test_validate_and_parse_photo_relative_path(mock_settings, mock_extract):
     with patch("memory.workers.tasks.photo.Path") as mock_path:
         # First call creates relative path object
         mock_path.return_value.is_absolute.return_value = False
-        result_path, content, exif = photo.validate_and_parse_photo("relative/photo.jpg")
+        result_path, content, exif, sha256 = photo.validate_and_parse_photo("relative/photo.jpg")
 
     assert content == b"image"
+    assert sha256 == hashlib.sha256(b"image").digest()
 
 
 @patch("memory.workers.tasks.photo.Path")
@@ -392,8 +397,9 @@ def test_create_photo_from_file_with_all_exif(
     content = b"fake jpg content"
     exif_data = {"Make": "Canon", "Model": "EOS 5D"}
     tags = ["vacation", "2023"]
+    sha256 = hashlib.sha256(content).digest()
 
-    result = photo.create_photo_from_file(path, content, exif_data, tags)
+    result = photo.create_photo_from_file(path, content, exif_data, tags, sha256)
 
     assert result.filename == "photos/vacation.jpg"
     assert result.mime_type == "image/jpeg"
@@ -424,8 +430,9 @@ def test_create_photo_from_file_with_all_exif(
 def test_create_photo_from_file_mime_types(extension, expected_mime):
     path = Path(f"/storage/image{extension}")
     content = b"data"
+    sha256 = hashlib.sha256(content).digest()
 
-    result = photo.create_photo_from_file(path, content, {}, [])
+    result = photo.create_photo_from_file(path, content, {}, [], sha256)
 
     assert result.mime_type == expected_mime
 
@@ -436,12 +443,17 @@ def test_create_photo_from_file_outside_storage_dir():
     # by core_fetch_file / serve_file), so refuse to ingest them.
     path = Path("/other/location/photo.jpg")
     content = b"data"
+    sha256 = hashlib.sha256(content).digest()
 
     with pytest.raises(ValueError):
-        photo.create_photo_from_file(path, content, {}, [])
+        photo.create_photo_from_file(path, content, {}, [], sha256)
 
 
-def test_create_photo_from_file_computes_sha256():
+def test_create_photo_from_file_uses_caller_sha256():
+    """create_photo_from_file no longer hashes content itself — it uses
+    the sha256 the caller provides. This avoids hashing photo bytes
+    twice on the ingestion hot path (once by sync_photo for dedupe, once
+    here)."""
     # Use the autouse mock_file_storage'd FILE_STORAGE_DIR so the path is
     # FILE_STORAGE_DIR-relative — the unified convention for SourceItem.
     path = settings.FILE_STORAGE_DIR / "photos" / "photo.jpg"
@@ -449,9 +461,10 @@ def test_create_photo_from_file_computes_sha256():
     content = b"test content"
     path.write_bytes(content)
 
-    result = photo.create_photo_from_file(path, content, {}, [])
-
     expected_hash = hashlib.sha256(content).digest()
+
+    result = photo.create_photo_from_file(path, content, {}, [], expected_hash)
+
     assert result.sha256 == expected_hash
 
 
@@ -546,7 +559,8 @@ def test_sync_photo_creates_new(
     mock_path = Path("/storage/photo.jpg")
     mock_content = b"image data"
     mock_exif = {"Make": "Canon"}
-    mock_validate.return_value = (mock_path, mock_content, mock_exif)
+    mock_sha = hashlib.sha256(mock_content).digest()
+    mock_validate.return_value = (mock_path, mock_content, mock_exif, mock_sha)
 
     mock_check.return_value = None  # No existing photo
 
@@ -572,7 +586,12 @@ def test_sync_photo_returns_existing(
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
 
-    mock_validate.return_value = (Path("/test.jpg"), b"data", {})
+    mock_validate.return_value = (
+        Path("/test.jpg"),
+        b"data",
+        {},
+        hashlib.sha256(b"data").digest(),
+    )
 
     existing_photo = MagicMock()
     existing_photo.id = 456
@@ -590,7 +609,12 @@ def test_sync_photo_returns_existing(
 def test_sync_photo_starts_job(mock_make_session, mock_job_utils, mock_validate):
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_validate.return_value = (Path("/test.jpg"), b"data", {})
+    mock_validate.return_value = (
+        Path("/test.jpg"),
+        b"data",
+        {},
+        hashlib.sha256(b"data").digest(),
+    )
 
     existing = MagicMock()
     existing.id = 123

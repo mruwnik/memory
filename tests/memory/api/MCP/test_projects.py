@@ -543,6 +543,103 @@ async def test_project_update_prevents_circular_parent(db_session, user_session,
     assert "circular" in result["error"].lower()
 
 
+def test_circular_parent_walk_terminates_on_orphan_cycle():
+    """Pure-unit regression: simulate an existing A→B→C→A cycle (none of
+    which is the project being updated) and verify the walk inside
+    update_project terminates with an error instead of looping.
+
+    We bypass the surrounding upsert by constructing the smallest fake
+    state the loop reads: a chain of objects with `.parent_id`, and a
+    `session.get(Project, id)` that returns them.
+    """
+    from unittest.mock import MagicMock
+
+    # Build the cycle: A(id=-50, parent=-52), B(id=-51, parent=-50), C(id=-52, parent=-51)
+    a = MagicMock(id=-50, parent_id=-52)
+    b = MagicMock(id=-51, parent_id=-50)
+    c = MagicMock(id=-52, parent_id=-51)
+    by_id = {-50: a, -51: b, -52: c}
+
+    fake_session = MagicMock()
+    fake_session.get.side_effect = lambda model, pk: by_id.get(pk)
+
+    # Simulate the loop logic from update_project. project_id is the row
+    # being updated (-1, NOT in the cycle). parent is c (which is in the
+    # cycle). The pre-fix loop would walk c→b→a→c→b→... forever; the
+    # post-fix loop terminates on the visited-set hit.
+    project_id = -1
+    parent = c
+
+    # Inline copy of the new logic (kept tiny so the test pins the
+    # algorithm independently of any source-tree changes).
+    MAX_PARENT_DEPTH = 100
+    visited: set[int] = {project_id}
+    current = parent
+    depth = 0
+    error = None
+    while current.parent_id is not None:
+        if current.parent_id in visited:
+            error = "Circular parent reference detected"
+            break
+        visited.add(current.parent_id)
+        depth += 1
+        if depth >= MAX_PARENT_DEPTH:
+            error = "too deep"
+            break
+        current = fake_session.get("Project", current.parent_id)
+        if not current:
+            break
+
+    assert error == "Circular parent reference detected"
+    # And it terminated within the cycle length (3 hops), nowhere near
+    # MAX_PARENT_DEPTH.
+    assert depth < 5
+
+
+@pytest.mark.asyncio
+async def test_project_update_detects_orphan_cycle_in_existing_data(
+    db_session, admin_session, teams_and_projects
+):
+    """Regression: a cycle in the parent chain that doesn't include the
+    project being updated must be detected, not infinite-looped.
+
+    Pre-fix: the walk only exited when the chain hit `project_id` or the
+    root. A cycle A→B→C→A in the existing data would loop forever for
+    *any* upsert pointing into it. Now we track every ancestor visited
+    and bail on a repeat.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+    from memory.common.db.models import Project
+
+    # Create a cycle in raw rows: A→B→C→A (none of these is project -1).
+    project_a = Project(id=-50, title="Cycle A", state="open")
+    project_b = Project(id=-51, title="Cycle B", state="open", parent_id=-50)
+    project_c = Project(id=-52, title="Cycle C", state="open", parent_id=-51)
+    db_session.add_all([project_a, project_b, project_c])
+    db_session.flush()
+    # Close the cycle by pointing A at C.
+    project_a.parent_id = -52
+    db_session.commit()
+
+    # Project -1 has no parent yet. Try to attach it to C (which is in the
+    # cycle). Pre-fix this hung forever; now it must surface a clean error.
+    mock_token = make_mock_access_token(admin_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            title="Project One", project_id=-1, parent_id=-52
+        )
+
+    assert "error" in result
+    err = result["error"].lower()
+    # Either the cycle-detection or depth-cap message is acceptable; both
+    # are non-hang outcomes which is the regression we care about.
+    assert "circular" in err or "too deep" in err
+
+
 # =============================================================================
 # project_delete tests
 # =============================================================================
@@ -582,6 +679,158 @@ async def test_project_delete_success(db_session, user_session, teams_and_projec
 
     assert result.get("success") is True
     assert result["deleted_id"] == -2
+
+
+@pytest.mark.asyncio
+async def test_project_delete_rejects_bare_member(
+    db_session, user_session, teams_and_projects
+):
+    """Regression: a contributor (team `member`) on one of the project's teams
+    must NOT be able to delete the project. Previously delete only checked
+    that filter_projects_query found the row — i.e. that the caller had
+    read access — which let any contributor on any assigned team destroy
+    the project. The new authority check requires lead/admin on a current
+    team (or global admin scope).
+    """
+    from memory.api.MCP.servers.projects import delete
+
+    # regular_user is a `member` on team_alpha which owns project_one (-1).
+    # That gives read access but not authority to delete.
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(delete)(-1)
+
+    assert "error" in result
+    assert "Forbidden" in result["error"] or "lead or admin" in result["error"]
+    # The project must NOT have been deleted.
+    db_session.expire_all()
+    assert (
+        db_session.query(Project).filter(Project.id == -1).first() is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_delete_allowed_for_admin_scope(
+    db_session, admin_session, teams_and_projects
+):
+    """Global admin scope must keep the bypass — admins can delete any project."""
+    from memory.api.MCP.servers.projects import delete
+
+    mock_token = make_mock_access_token(admin_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        # project_one — admin has no team membership but global scope wins.
+        result = await get_fn(delete)(-1)
+
+    assert result.get("success") is True
+    assert result["deleted_id"] == -1
+
+
+@pytest.mark.asyncio
+async def test_project_upsert_rejects_team_replacement_by_bare_member(
+    db_session, user_session, teams_and_projects
+):
+    """Regression: a contributor on team_alpha must not be able to call
+    upsert(team_ids=[only_their_team]) on a project where they only have
+    `member`/`contributor` role. Wholesale-replacing the team list is the
+    hijack vector — kicks every other team off the project.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+
+    # project_one (-1) has team_alpha. regular_user is `member` on team_alpha
+    # — read access yes, administer authority no.
+    team_alpha_id = teams_and_projects["team_alpha"].id
+
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            project_id=-1, team_ids=[team_alpha_id]
+        )
+
+    assert "error" in result
+    err = result["error"].lower()
+    assert "forbidden" in err or "lead or admin" in err
+
+    # Team list must be unchanged.
+    db_session.expire_all()
+    project_one = db_session.query(Project).filter(Project.id == -1).first()
+    assert project_one is not None
+    current_team_ids = {t.id for t in project_one.teams}
+    assert team_alpha_id in current_team_ids
+
+
+@pytest.mark.asyncio
+async def test_project_upsert_team_replacement_allowed_for_lead(
+    db_session, user_session, teams_and_projects
+):
+    """A user with lead/manager role on a current team can replace the team
+    list. regular_user is `lead` on team_beta (project_two), so they can
+    administer project_two.
+    """
+    from memory.api.MCP.servers.projects import upsert as project_upsert
+
+    team_beta_id = teams_and_projects["team_beta"].id
+
+    mock_token = make_mock_access_token(user_session.id)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(project_upsert)(
+            project_id=-2, team_ids=[team_beta_id]
+        )
+
+    # Should not be the new "Forbidden" error — the lead is authorised.
+    if "error" in result:
+        assert "Forbidden" not in result["error"]
+        assert "lead or admin" not in result["error"]
+
+
+@pytest.mark.parametrize(
+    "scopes,project_role,expected",
+    [
+        # Global admin scope wins regardless of project role
+        (["*"], None, True),
+        (["*"], "contributor", True),
+        # No admin scope: only manager/admin grant authority
+        ([], "contributor", False),
+        ([], "manager", True),
+        ([], "admin", True),
+        # No project membership at all → no authority
+        ([], None, False),
+        # Other scopes don't grant project authority either
+        (["projects:write"], "contributor", False),
+        (["projects:write"], "manager", True),
+    ],
+)
+def test_caller_can_administer_project_unit(scopes, project_role, expected):
+    """Pure-unit test of the role gate: admin scope OR manager/admin project role."""
+    from unittest.mock import patch
+
+    from memory.api.MCP.servers.projects import caller_can_administer_project
+
+    user = MagicMock()
+    user.scopes = scopes
+
+    project_roles = {} if project_role is None else {42: project_role}
+    fake_session = MagicMock()
+    with patch(
+        "memory.api.MCP.servers.projects.get_user_project_roles",
+        return_value=project_roles,
+    ):
+        assert caller_can_administer_project(fake_session, user, 42) is expected
 
 
 # =============================================================================

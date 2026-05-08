@@ -17,6 +17,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def extract_status_priority(
+    project_fields: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Extract status and priority from a GitHub Projects v2 fields dict.
+
+    Returns ``(status, priority)``; either may be ``None`` if not found.
+    Only scalar field values (str/int/float) are accepted: GitHub's
+    Projects v2 schema can ship structured payloads (e.g. iteration or
+    milestone field values come through as nested dicts), and stringifying
+    those would write the dict's repr into the database column.
+
+    Single source of truth used by both the MCP fetch path
+    (``api/MCP/servers/github_helpers.py``) and the worker ingest path
+    (``workers/tasks/github.py``).
+    """
+    status: str | None = None
+    priority: str | None = None
+    for key, value in project_fields.items():
+        if value is None or not isinstance(value, (str, int, float)):
+            continue
+        key_lower = key.lower()
+        if "status" in key_lower and status is None:
+            status = str(value)
+        elif "priority" in key_lower and priority is None:
+            priority = str(value)
+    return status, priority
+
+
 class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
     """Mixin providing GitHub Projects (v2) methods."""
 

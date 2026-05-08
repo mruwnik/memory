@@ -313,17 +313,21 @@ def test_apply_source_boosts_none_title(mock_make_session):
 
 
 @pytest.mark.parametrize(
-    "popularity,initial_score,expected_multiplier",
+    "popularity,initial_score,expected_delta",
     [
-        (1.0, 0.5, 1.0),  # Default popularity, no change
-        (2.0, 0.5, 1.0 + POPULARITY_BOOST),  # High popularity
-        (0.5, 0.5, 1.0 - POPULARITY_BOOST * 0.5),  # Low popularity
-        (1.5, 1.0, 1.0 + POPULARITY_BOOST * 0.5),  # Moderate popularity
+        (1.0, 0.5, 0.0),  # Default popularity, no change
+        (2.0, 0.5, POPULARITY_BOOST),  # High popularity, +POPULARITY_BOOST
+        (0.5, 0.5, -POPULARITY_BOOST * 0.5),  # Low popularity, small penalty
+        (1.5, 1.0, POPULARITY_BOOST * 0.5),  # Moderate popularity
+        # Regression for the multiplicative-on-negative-scores bug:
+        # additive boost preserves direction even when the input score
+        # is negative (e.g. cross-encoder reranker logits).
+        (2.0, -0.5, POPULARITY_BOOST),
     ],
 )
 @patch("memory.api.search.search.make_session")
-def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_score, expected_multiplier):
-    """Should boost chunks based on source popularity."""
+def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_score, expected_delta):
+    """Should boost chunks based on source popularity (additive)."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
     mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
@@ -337,7 +341,7 @@ def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_s
     chunks = [_make_boost_chunk(1, initial_score)]
     apply_source_boosts(chunks, set())  # No query terms, just popularity
 
-    expected = initial_score * expected_multiplier
+    expected = initial_score + expected_delta
     assert chunks[0].relevance_score == pytest.approx(expected)
 
 
@@ -366,8 +370,8 @@ def test_apply_source_boosts_multiple_sources(mock_make_session):
     chunks = [_make_boost_chunk(1, 0.5), _make_boost_chunk(2, 0.5)]
     apply_source_boosts(chunks, set())
 
-    # Source 1 should be boosted
-    assert chunks[0].relevance_score == pytest.approx(0.5 * (1.0 + POPULARITY_BOOST))
+    # Source 1 should be boosted (additive)
+    assert chunks[0].relevance_score == pytest.approx(0.5 + POPULARITY_BOOST)
     # Source 2 should be unchanged (popularity = 1.0)
     assert chunks[1].relevance_score == 0.5
 
@@ -605,3 +609,135 @@ def test_recency_boost_ordering(mock_make_session):
 
     # Newer content should have higher score
     assert chunks[0].relevance_score > chunks[1].relevance_score
+
+
+# =============================================================================
+# Defense-in-depth regression: search_sources final-merge access filter
+# =============================================================================
+
+
+def test_search_sources_applies_final_access_filter_when_filters_provided():
+    """When ``filters['access_filter']`` is provided, search_sources must
+    apply it. This is the third layer of the documented three-layer
+    defense-in-depth (Qdrant payload + BM25 SQL + final merge).
+
+    Pre-fix the final-merge query had no filter: a regression in the
+    upstream Qdrant/BM25 layer would leak SourceItem rows here.
+    """
+    import asyncio
+    import sys
+
+    # Sidestep the package-shadowing trap: the package's __init__ does
+    # ``from .search import search``, which rebinds ``memory.api.search.search``
+    # to the function. The submodule is still importable as a string key.
+    search_module = sys.modules["memory.api.search.search"]
+
+    # A chunk-shaped stub. search_sources only reads ``source_id`` from
+    # each chunk, so a MagicMock with that attribute is sufficient.
+    chunk = MagicMock()
+    chunk.source_id = 42
+
+    fake_filter_arg_seen = []
+    fake_query = MagicMock()
+    fake_query.filter.return_value = fake_query
+    # Simulate "the access filter dropped every row"
+    fake_query.all.return_value = []
+
+    fake_db = MagicMock()
+    fake_db.__enter__ = lambda self: fake_db
+    fake_db.__exit__ = lambda *args: False
+    fake_db.query.return_value = fake_query
+
+    sentinel_access_filter = MagicMock(name="sentinel_access_filter")
+
+    def fake_apply(query, access_filter):
+        fake_filter_arg_seen.append(access_filter)
+        # Simulate the access filter further restricting; return a query
+        # whose .all() yields nothing.
+        return query
+
+    with (
+        patch(
+            "memory.api.search.search.make_session",
+            return_value=fake_db,
+        ),
+        patch(
+            "memory.api.search.search.apply_access_filter_to_query",
+            side_effect=fake_apply,
+        ) as mock_apply,
+    ):
+        result = asyncio.run(
+            search_module.search_sources(
+                chunks=[chunk],
+                previews=False,
+                filters={"access_filter": sentinel_access_filter},  # type: ignore
+            )
+        )
+
+    assert result == []
+    # The same access_filter the caller passed is what we applied.
+    mock_apply.assert_called_once()
+    assert fake_filter_arg_seen == [sentinel_access_filter]
+
+
+def test_search_sources_fails_closed_when_filters_missing():
+    """Regression for Parvati's IMPORTANT comment on PR #77: the previous
+    "DEBUG-log-and-trust-upstream" fallback let a caller that forgot to
+    thread filters silently bypass the final-merge access check —
+    defense-in-depth that's only effective when callers remember it
+    isn't defense-in-depth, it's a hint.
+
+    Now ``search_sources`` raises ValueError when ``filters`` is None or
+    has no ``access_filter`` key. Callers that legitimately want admin
+    access pass ``filters={'access_filter': None}`` explicitly.
+    """
+    import asyncio
+    import sys
+
+    search_module = sys.modules["memory.api.search.search"]
+
+    chunk = MagicMock()
+    chunk.source_id = 42
+
+    # filters=None: must raise.
+    try:
+        asyncio.run(search_module.search_sources(chunks=[chunk], previews=False))
+    except ValueError as e:
+        assert "access_filter" in str(e)
+    else:
+        raise AssertionError("search_sources(filters=None) should have raised")
+
+    # filters={}: also missing access_filter key — must raise.
+    try:
+        asyncio.run(
+            search_module.search_sources(
+                chunks=[chunk], previews=False, filters={}
+            )
+        )
+    except ValueError as e:
+        assert "access_filter" in str(e)
+    else:
+        raise AssertionError("search_sources(filters={}) should have raised")
+
+
+def test_search_sources_empty_chunks_returns_empty():
+    """Empty input must short-circuit before hitting the DB. The
+    fail-closed filter check still happens (so callers must pass filters
+    even with empty chunks) but the empty-list short-circuit fires
+    immediately after, so we never query."""
+    import asyncio
+    import sys
+
+    search_module = sys.modules["memory.api.search.search"]
+
+    with patch("memory.api.search.search.make_session") as mock_session:
+        result = asyncio.run(
+            search_module.search_sources(
+                chunks=[],
+                previews=False,
+                filters={"access_filter": None},
+            )
+        )
+
+    assert result == []
+    mock_session.assert_not_called()

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -128,16 +129,47 @@ def reingest_chunk(chunk_id: str, collection: str):
             session.commit()
 
 
+_ITEM_CLASSES: dict[str, type[SourceItem]] | None = None
+
+
+def _build_item_class_map() -> dict[str, type[SourceItem]]:
+    """Build a lookup table of {polymorphic_identity OR class name -> class}.
+
+    Uses SQLAlchemy's public ``inspect()`` API rather than the private
+    ``registry._class_registry`` (which is keyed only by class name and
+    has shifted across SQLAlchemy minor versions). Accepts both
+    polymorphic identities (e.g. ``"mail_message"``) and class names
+    (e.g. ``"MailMessage"``) because the codebase has historically passed
+    both — the API endpoint at api/source_items.py uses class name, the
+    Celery dispatch loop in process_raw_items uses polymorphic identity.
+    """
+    mapper = sa_inspect(SourceItem)
+    out: dict[str, type[SourceItem]] = {}
+    for ident, sub_mapper in mapper.polymorphic_map.items():
+        cls = sub_mapper.class_
+        if not hasattr(cls, "chunks"):
+            continue
+        out[ident] = cls
+        out[cls.__name__] = cls
+    return out
+
+
 def get_item_class(item_type: str) -> type[SourceItem]:
-    class_ = SourceItem.registry._class_registry.get(item_type)
-    if not class_:
-        available_types = ", ".join(sorted(SourceItem.registry._class_registry.keys()))
+    """Resolve an item-type string to its SourceItem subclass.
+
+    Accepts either the polymorphic identity (``"mail_message"``) or the
+    class name (``"MailMessage"``).
+    """
+    global _ITEM_CLASSES
+    if _ITEM_CLASSES is None:
+        _ITEM_CLASSES = _build_item_class_map()
+    cls = _ITEM_CLASSES.get(item_type)
+    if cls is None:
+        available = sorted(set(_ITEM_CLASSES.keys()))
         raise ValueError(
-            f"Unsupported item type {item_type}. Available types: {available_types}"
+            f"Unsupported item type {item_type}. Available types: {', '.join(available)}"
         )
-    if not hasattr(class_, "chunks"):
-        raise ValueError(f"Item type {item_type} does not have chunks")
-    return cast(type[SourceItem], class_)
+    return cast(type[SourceItem], cls)
 
 
 @app.task(name=REINGEST_ITEM)
@@ -184,8 +216,27 @@ def reingest_empty_source_items(item_type: str):
 @tracked_task
 def reingest_all_empty_source_items():
     logger.info("Reingesting all empty source items")
-    for item_type in SourceItem.registry._class_registry.keys():
-        reingest_empty_source_items.delay(item_type)  # type: ignore
+    # Iterate over polymorphic identities (the public API) rather than
+    # SourceItem.registry._class_registry, which is a SQLAlchemy private
+    # attribute keyed by class names and has shifted across versions.
+    global _ITEM_CLASSES
+    if _ITEM_CLASSES is None:
+        _ITEM_CLASSES = _build_item_class_map()
+    # _ITEM_CLASSES has both polymorphic identity AND class name keys
+    # mapping to the same classes; dedupe by class then pick a single
+    # canonical key (the polymorphic identity is preferred — it's what
+    # process_raw_items dispatches with).
+    seen_classes: set[type[SourceItem]] = set()
+    for key, cls in _ITEM_CLASSES.items():
+        if cls in seen_classes:
+            continue
+        # Polymorphic identities are the lower_snake_case keys; class
+        # names are CapsCase. Prefer polymorphic identity by spotting
+        # the snake_case form (no uppercase letters).
+        if key != key.lower():
+            continue
+        seen_classes.add(cls)
+        reingest_empty_source_items.delay(key)  # type: ignore
 
 
 @app.task(name=PROCESS_RAW_ITEM)
@@ -399,39 +450,62 @@ def update_metadata_for_item(item_id: str, item_type: str):
 
         collection = item.modality
 
+        # Setup is genuinely all-or-nothing: if get_payloads / as_payload
+        # fails we have no work to do for this item. Per-chunk failures
+        # below get their own try/except so a single network blip on one
+        # chunk doesn't strand the rest with stale payloads.
         try:
             current_payloads = qdrant.get_payloads(client, collection, chunk_ids)
-
-            # Get new metadata from source item
-            # Note: as_payload() triggers a lazy load of item.people. For single-item
-            # operations this N+1 cost is acceptable. Bulk operations should eager-load.
+            # Note: as_payload() triggers a lazy load of item.people. For
+            # single-item operations this N+1 cost is acceptable. Bulk
+            # operations should eager-load.
             new_metadata: dict[str, Any] = dict(item.as_payload())
             new_tags: set[str] = set(new_metadata.get("tags", []))
+        except Exception as e:
+            logger.error(f"Error preparing metadata update for item {item.id}: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "updated_chunks": 0,
+                "errors": 1,
+            }
 
-            for chunk_id in chunk_ids:
-                if chunk_id not in current_payloads:
-                    logger.warning(
-                        f"Chunk {chunk_id} not found in Qdrant collection {collection}"
-                    )
-                    continue
+        for chunk_id in chunk_ids:
+            if chunk_id not in current_payloads:
+                logger.warning(
+                    f"Chunk {chunk_id} not found in Qdrant collection {collection}"
+                )
+                continue
 
-                current_payload = current_payloads[chunk_id]
-                current_tags: set[str] = set(current_payload.get("tags", []))
+            current_payload = current_payloads[chunk_id]
+            current_tags: set[str] = set(current_payload.get("tags", []))
 
-                # Merge tags (combine existing and new tags)
-                merged_tags: list[str] = list(current_tags | new_tags)
-                updated_metadata: dict[str, Any] = dict(new_metadata)
-                updated_metadata["tags"] = merged_tags
+            # Merge tags (combine existing and new tags)
+            merged_tags: list[str] = list(current_tags | new_tags)
+            updated_metadata: dict[str, Any] = dict(new_metadata)
+            updated_metadata["tags"] = merged_tags
 
-                if _payloads_equal(current_payload, updated_metadata):
-                    continue
+            if _payloads_equal(current_payload, updated_metadata):
+                continue
 
+            # Per-chunk error handling: a transient failure on one chunk
+            # MUST NOT abort the loop. Otherwise items end up with mixed-
+            # state metadata — half the chunks have the new payload, half
+            # have stale ``project_id`` / ``sensitivity`` — which is an
+            # access-control consistency bug when sources get reprojected.
+            # Each error counts as one toward the returned ``errors`` so
+            # the dashboard sees the true failure count, not just "1".
+            try:
                 qdrant.set_payload(client, collection, chunk_id, updated_metadata)
                 updated_chunks += 1
-
-        except Exception as e:
-            logger.error(f"Error updating metadata for item {item.id}: {e}")
-            errors += 1
+            except Exception as e:
+                logger.error(
+                    "Failed to update chunk %s of item %s: %s",
+                    chunk_id,
+                    item.id,
+                    e,
+                )
+                errors += 1
 
     return {"status": "success", "updated_chunks": updated_chunks, "errors": errors}
 
@@ -591,19 +665,6 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
     }
 
 
-# Mapping of source types to (model, item query function)
-DATA_SOURCE_TYPES = {
-    "email_account": "EmailAccount",
-    "slack_channel": "SlackChannel",
-    "slack_workspace": "SlackWorkspace",
-    "discord_channel": "DiscordChannel",
-    "discord_server": "DiscordServer",
-    "calendar_account": "CalendarAccount",
-    "google_folder": "GoogleFolder",
-    "article_feed": "ArticleFeed",
-}
-
-
 def get_items_for_source(
     session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
 ):
@@ -618,6 +679,7 @@ def get_items_for_source(
         DiscordMessage,
         GoogleDoc,
         MailMessage,
+        Meeting,
         SlackMessage,
     )
 
@@ -709,6 +771,15 @@ def get_items_for_source(
             .limit(limit)
             .all()
         )
+    elif source_type == "transcript_account":
+        return (
+            session.query(Meeting)
+            .options(selectinload(Meeting.chunks))
+            .filter(Meeting.transcript_account_id == source_id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
     else:
         raise ValueError(f"Unknown source type: {source_type}")
 
@@ -720,6 +791,7 @@ def get_data_source_model(source_type: str):
         CalendarAccount,
         EmailAccount,
         GoogleFolder,
+        TranscriptAccount,
     )
 
     models = {
@@ -731,6 +803,7 @@ def get_data_source_model(source_type: str):
         "calendar_account": CalendarAccount,
         "google_folder": GoogleFolder,
         "article_feed": ArticleFeed,
+        "transcript_account": TranscriptAccount,
     }
     if source_type not in models:
         raise ValueError(f"Unknown source type: {source_type}")

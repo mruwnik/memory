@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from memory.common import settings
+from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import (
@@ -722,6 +723,7 @@ def update_folder(
         folder.active = updates.active
     if updates.exclude_folder_ids is not None:
         folder.exclude_folder_ids = updates.exclude_folder_ids
+
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
         folder.project_id = updates.project_id
@@ -784,8 +786,6 @@ def trigger_sync(
     db: DBSession = Depends(get_session),
 ):
     """Manually trigger a sync for a folder."""
-    from memory.common.celery_app import app, SYNC_GOOGLE_FOLDER
-
     get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
     folder = (
         db.query(GoogleFolder)
@@ -799,7 +799,7 @@ def trigger_sync(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_GOOGLE_FOLDER,
         args=[folder.id],
         kwargs={"force_full": force_full},

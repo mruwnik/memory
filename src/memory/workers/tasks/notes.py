@@ -2,10 +2,7 @@ import logging
 import pathlib
 import contextlib
 import subprocess
-import uuid
 from typing import cast
-
-import redis
 
 from memory.common import paths, settings
 from memory.common.db.connection import make_session
@@ -24,6 +21,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
+from memory.common.redis_lock import distributed_lock
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +36,18 @@ def git_notes_lock(operation: str = "sync"):
     Prevents concurrent git operations which could cause data loss due to
     git reset --hard and git clean -fd commands.
 
-    Uses atomic check-and-delete to ensure we only release our own lock,
-    not one acquired by another process if ours expired.
+    Raises RuntimeError if another git operation is already in progress.
+    Uses ownership-checked release (via the shared distributed_lock
+    helper) so we never delete another process's lock.
     """
-    redis_client = redis.from_url(settings.REDIS_URL)
     lock_key = f"memory:lock:git_notes:{operation}"
-    lock_value = str(uuid.uuid4())
-
-    # Try to acquire lock with NX (only if not exists) and expiry
-    acquired = redis_client.set(lock_key, lock_value, nx=True, ex=GIT_NOTES_LOCK_TIMEOUT)
-    if not acquired:
-        raise RuntimeError(f"Could not acquire git notes lock '{operation}' - another git operation in progress")
-
-    try:
+    with distributed_lock(lock_key, GIT_NOTES_LOCK_TIMEOUT) as lock:
+        if lock is None:
+            raise RuntimeError(
+                f"Could not acquire git notes lock '{operation}' - "
+                "another git operation in progress"
+            )
         yield
-    finally:
-        # Atomically release only if we still own the lock (prevents releasing another process's lock)
-        release_script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("del", KEYS[1])
-        else
-            return 0
-        end
-        """
-        redis_client.eval(release_script, 1, lock_key, lock_value)
 
 
 def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
@@ -91,10 +77,9 @@ def check_git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
         raise RuntimeError(f"`{' '.join(args)}` failed")
 
     if res.returncode != 0:
-        logger.error(f"Git command failed: {res.returncode}")
-        logger.error(f"stderr: {res.stderr}")
-        if res.stdout:
-            logger.error(f"stdout: {res.stdout}")
+        # git_command already logged stderr/stdout/returncode above; just
+        # raise with enough context for the caller. Duplicating the
+        # log block here was producing two copies of every git failure.
         raise RuntimeError(
             f"`{' '.join(args)}` failed with return code {res.returncode}"
         )

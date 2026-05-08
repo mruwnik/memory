@@ -428,14 +428,14 @@ def test_list_issues_url_construction(db_session, sample_issues):
 # =============================================================================
 
 
-def test_fetch_issue_found(db_session, sample_issues):
+def test_fetch_issue_found(db_session, admin_user, sample_issues):
     """Test getting details for an existing issue."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=1)
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin_user)
 
     assert result["number"] == 1
     assert result["title"] == "Fix authentication bug"
@@ -444,7 +444,7 @@ def test_fetch_issue_found(db_session, sample_issues):
     assert result["project_fields"]["EquiStamp.Client"] == "Redwood"
 
 
-def test_fetch_issue_not_found(db_session, sample_issues):
+def test_fetch_issue_not_found(db_session, admin_user, sample_issues):
     """Test getting details for a non-existent issue."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
@@ -452,17 +452,17 @@ def test_fetch_issue_not_found(db_session, sample_issues):
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
         with pytest.raises(ValueError, match="not found"):
-            fetch_issue(repo="owner/repo1", number=999)
+            fetch_issue(repo="owner/repo1", number=999, user=admin_user)
 
 
-def test_fetch_issue_pr(db_session, sample_issues):
+def test_fetch_issue_pr(db_session, admin_user, sample_issues):
     """Test getting details for a PR."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=50)
+        result = fetch_issue(repo="owner/repo1", number=50, user=admin_user)
 
     assert result["kind"] == "pr"
     assert result["state"] == "merged"
@@ -616,14 +616,14 @@ def sample_pr_with_data(db_session):
     return pr
 
 
-def test_fetch_issue_includes_pr_data(db_session, sample_pr_with_data):
+def test_fetch_issue_includes_pr_data(db_session, admin_user, sample_pr_with_data):
     """Test that fetch_issue includes PR data for PRs."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=999)
+        result = fetch_issue(repo="owner/repo1", number=999, user=admin_user)
 
     assert result["kind"] == "pr"
     assert "pr_data" in result
@@ -637,14 +637,14 @@ def test_fetch_issue_includes_pr_data(db_session, sample_pr_with_data):
     assert "diff --git" in result["pr_data"]["diff"]
 
 
-def test_fetch_issue_no_pr_data_for_issues(db_session, sample_issues):
+def test_fetch_issue_no_pr_data_for_issues(db_session, admin_user, sample_issues):
     """Test that fetch_issue does not include pr_data for issues."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
         mock_session.return_value.__exit__ = lambda s, *args: None
-        result = fetch_issue(repo="owner/repo1", number=1)
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin_user)
 
     assert result["kind"] == "issue"
     assert "pr_data" not in result
@@ -923,9 +923,95 @@ async def test_list_entities_accepts_limit_as_string():
 
 @pytest.mark.asyncio
 async def test_fetch_accepts_number_as_string():
-    """fetch should coerce string number to int."""
-    with patch("memory.api.MCP.servers.github.fetch_issue") as mock_fetch:
+    """fetch should coerce string number to int and pass the caller through."""
+    fake_user = type("U", (), {"id": 1, "scopes": ["github"]})()
+    with (
+        patch(
+            "memory.api.MCP.servers.github.get_mcp_current_user",
+            return_value=fake_user,
+        ),
+        patch("memory.api.MCP.servers.github.fetch_issue") as mock_fetch,
+    ):
         mock_fetch.return_value = {}
         await fetch.fn(type="issue", repo="o/r", number="46")  # type: ignore[arg-type]
 
-    mock_fetch.assert_called_once_with("o/r", 46)
+    # Caller is threaded through so fetch_issue can apply the access filter.
+    mock_fetch.assert_called_once_with("o/r", 46, user=fake_user)
+
+
+# =============================================================================
+# Cross-tenant IDOR blocking on fetch_* (the audit task)
+# =============================================================================
+
+
+def test_fetch_issue_blocks_user_without_project_access(db_session, sample_issues):
+    """A non-admin without project access must not fetch an issue tied to that project.
+
+    Pre-fix, fetch_issue was scoped by (repo_path, number) only, so any
+    SCOPE_GITHUB caller could read any issue body / PR diff in any repo
+    by enumerating numbers.
+    """
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    # Pin sample issue to a project the caller has no role in, with a
+    # different creator so creator-bypass doesn't fire.
+    issue = sample_issues[0]
+    issue.project_id = 12345
+    issue.creator_id = 1
+    issue.sensitivity = "confidential"
+    db_session.commit()
+
+    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        with patch(
+            "memory.api.MCP.servers.github_helpers.get_user_project_roles",
+            return_value={},
+        ):
+            with pytest.raises(ValueError, match="not found"):
+                fetch_issue(repo="owner/repo1", number=1, user=non_admin)
+
+
+def test_fetch_issue_allows_creator_without_project_access(db_session, sample_issues):
+    """Creator-override still works even without explicit project membership."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    issue = sample_issues[0]
+    issue.project_id = None
+    issue.creator_id = 999  # caller IS the creator
+    db_session.commit()
+
+    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        with patch(
+            "memory.api.MCP.servers.github_helpers.get_user_project_roles",
+            return_value={},
+        ):
+            result = fetch_issue(repo="owner/repo1", number=1, user=non_admin)
+
+    assert result["number"] == 1
+
+
+def test_fetch_issue_admin_bypasses_filter(db_session, sample_issues):
+    """Admin scope sees the issue regardless of project."""
+    from memory.api.MCP.servers.github_helpers import fetch_issue
+
+    issue = sample_issues[0]
+    issue.project_id = 12345
+    issue.creator_id = 1
+    issue.sensitivity = "confidential"
+    db_session.commit()
+
+    admin = type("U", (), {"id": 999, "scopes": ["*"]})()
+
+    with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
+        mock_session.return_value.__enter__ = lambda s: db_session
+        mock_session.return_value.__exit__ = lambda s, *args: None
+        result = fetch_issue(repo="owner/repo1", number=1, user=admin)
+
+    assert result["number"] == 1

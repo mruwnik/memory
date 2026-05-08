@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -44,6 +46,33 @@ def token_id(token: str) -> str:
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
+
+
+def compute_pkce_challenge(code_verifier: str) -> str:
+    """Compute the S256 PKCE code_challenge from a code_verifier.
+
+    Per RFC 7636 §4.2, the S256 transformation is::
+
+        code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
+
+    where the base64url encoding has trailing ``=`` padding stripped.
+    """
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def verify_pkce(code_verifier: str, expected_challenge: str) -> bool:
+    """Constant-time PKCE S256 verification.
+
+    Returns True iff ``compute_pkce_challenge(code_verifier) == expected_challenge``
+    using ``hmac.compare_digest`` to avoid timing oracles. Both sides being
+    fixed-length base64url SHA256 outputs makes the timing-channel risk small,
+    but compare_digest is the cheap right answer.
+    """
+    if not expected_challenge or not code_verifier:
+        return False
+    actual = compute_pkce_challenge(code_verifier)
+    return hmac.compare_digest(actual, expected_challenge)
 
 
 def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
@@ -170,6 +199,58 @@ def create_refresh_token_record(
         expires_at=create_expiration(REFRESH_TOKEN_LIFETIME),
         access_token_session_id=access_token_session_id,
     )
+
+
+def revoke_refresh_token_family(
+    db: Session, *, user_id: int, client_id: str
+) -> int:
+    """Revoke every active refresh token + paired access-token session for a (user, client) pair.
+
+    Used when a replay is detected (a revoked refresh token is re-presented,
+    or two concurrent exchanges race) — RFC 6819 §5.2.2.3 recommends treating
+    the whole family as compromised.
+
+    Returns the number of refresh tokens revoked. The caller is responsible
+    for committing the session.
+    """
+    # Find all currently-live refresh tokens for this (user, client) pair.
+    family = (
+        db.query(OAuthRefreshToken)
+        .filter(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.client_id == client_id,
+            OAuthRefreshToken.revoked == False,  # noqa: E712
+        )
+        .all()
+    )
+    if not family:
+        return 0
+
+    paired_session_ids = [
+        cast(str, t.access_token_session_id)
+        for t in family
+        if t.access_token_session_id is not None
+    ]
+
+    # Mark them all revoked in one UPDATE.
+    db.execute(
+        update(OAuthRefreshToken)
+        .where(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.client_id == client_id,
+            OAuthRefreshToken.revoked == False,  # noqa: E712
+        )
+        .values(revoked=True)
+    )
+
+    # Delete every paired access-token UserSession so the access tokens
+    # they minted die immediately too.
+    for sid in paired_session_ids:
+        sess = db.get(UserSession, sid)
+        if sess is not None:
+            db.delete(sess)
+
+    return len(family)
 
 
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
@@ -451,6 +532,20 @@ class SimpleOAuthProvider(OAuthProvider):
             )
             raise ValueError(f"Invalid redirect_uri: {redirect_uri_str}")
 
+        # PKCE is mandatory (RFC 7636; OAuth 2.1). Reject empty/missing
+        # code_challenge here so a malicious client can't strip PKCE by
+        # submitting an empty value at /authorize and later exchanging the
+        # auth code with no verifier. Upstream TokenHandler does compare
+        # SHA256(code_verifier) to code_challenge, but its Pydantic schema
+        # accepts an empty string, and an empty stored code_challenge would
+        # only fail-closed by accident (no SHA256 output equals ""). We
+        # fail-closed by intent instead.
+        code_challenge = (params.code_challenge or "").strip()
+        if not code_challenge:
+            raise ValueError(
+                "Missing PKCE code_challenge — PKCE is required (RFC 7636)"
+            )
+
         # Determine which scopes to grant
         requested_scopes = getattr(params, "scopes", None) or []
 
@@ -491,7 +586,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     params.redirect_uri_provided_explicitly
                 ).lower()
                 == "true",
-                code_challenge=params.code_challenge or "",
+                code_challenge=code_challenge,
                 scopes=requested_scopes,
                 expires_at=create_expiration(600),  # 10 min expiry
             )
@@ -639,6 +734,23 @@ class SimpleOAuthProvider(OAuthProvider):
                 )
                 raise ValueError("Authorization code expired")
 
+            # RFC 7636 PKCE defence-in-depth. The upstream MCP TokenHandler
+            # already verifies SHA256(code_verifier) == code_challenge before
+            # this method is called, but we fail-closed on an empty stored
+            # code_challenge here too: if we ever load an AuthorizationCode
+            # with an empty challenge (e.g. legacy row, future library
+            # change), do NOT exchange it. authorize() now refuses to store
+            # an empty challenge in the first place; this check guards the
+            # bottom of the funnel.
+            if not (authorization_code.code_challenge or "").strip():
+                logger.warning(
+                    "Authorization code id=%s has empty code_challenge — refusing exchange",
+                    token_id(authorization_code.code),
+                )
+                raise ValueError(
+                    "Authorization code is missing PKCE code_challenge"
+                )
+
             # Extract data needed for token creation
             auth_code_id = auth_code.id
             user_id = auth_code.user_id
@@ -651,13 +763,17 @@ class SimpleOAuthProvider(OAuthProvider):
             # UserSession references it for client_id/scopes lookup in
             # load_access_token() — clearing the code is enough to prevent
             # replay. (CWE-367 single-use enforcement.)
+            #
+            # We also clear ``code_challenge`` so the row can't be re-used as
+            # a PKCE oracle if a new ``code`` is ever forged into this id by
+            # a future bug — defence in depth, cheap to do.
             consumed = session.execute(
                 update(OAuthState)
                 .where(
                     OAuthState.id == auth_code_id,
                     OAuthState.code == authorization_code.code,
                 )
-                .values(code=None)
+                .values(code=None, code_challenge=None)
                 .returning(OAuthState.id)
             ).scalar_one_or_none()
             if consumed is None:
@@ -757,15 +873,35 @@ class SimpleOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        """Exchange refresh token for new access token."""
+        """Exchange refresh token for new access token (single-use rotation).
+
+        OAuth 2.1 / RFC 6819 §5.2.2.3 mandates single-use refresh tokens with
+        replay detection: a refresh token presented after it's already been
+        used is assumed compromised, so we revoke the *entire token family*
+        for that (user, client) pair.
+
+        Steps:
+          1. Look up the token without filtering on ``revoked`` so we can
+             distinguish "never existed" from "already used".
+          2. If the row is already revoked → replay attack assumed; revoke
+             every other refresh token for the same user+client and delete
+             their paired UserSessions, then refuse the exchange.
+          3. Atomically flip ``revoked`` from False to True
+             (``UPDATE ... WHERE revoked=False RETURNING id``). Race-losers
+             see no row and are treated as replays too.
+          4. Delete the paired access-token UserSession so the old access
+             token is dead.
+          5. Issue the replacement pair via ``make_token``.
+        """
         with make_session() as session:
-            # Load the refresh token from database
+            # Load WITHOUT the revoked filter — we need to tell apart
+            # "token never existed" (genuine bad token) from "token was
+            # already used" (potential replay).
             db_refresh_token = (
                 session.query(OAuthRefreshToken)
                 .filter(
                     OAuthRefreshToken.token == refresh_token.token,
                     OAuthRefreshToken.client_id == client.client_id,
-                    OAuthRefreshToken.revoked == False,  # noqa: E712
                 )
                 .first()
             )
@@ -774,7 +910,27 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(f"Refresh token not found: {token_id(refresh_token.token)}")
                 raise ValueError("Invalid refresh token")
 
-            # Validate refresh token
+            # Replay detection (RFC 6819 §5.2.2.3): a revoked refresh token
+            # presented again is treated as compromise — revoke the whole
+            # family so any in-flight attacker copy is dead too.
+            if cast(bool, db_refresh_token.revoked):
+                logger.warning(
+                    "Refresh token replay detected: id=%s user=%s client=%s — revoking family",
+                    token_id(refresh_token.token),
+                    db_refresh_token.user_id,
+                    client.client_id,
+                )
+                revoke_refresh_token_family(
+                    session,
+                    user_id=cast(int, db_refresh_token.user_id),
+                    client_id=cast(str, db_refresh_token.client_id),
+                )
+                session.commit()
+                raise ValueError(
+                    "Refresh token already used — token family revoked"
+                )
+
+            # Validate refresh token (expiry; also flips revoked=True if expired)
             validate_refresh_token(db_refresh_token)
 
             # Validate requested scopes are subset of original scopes
@@ -786,6 +942,45 @@ class SimpleOAuthProvider(OAuthProvider):
                     f"Requested scopes {requested_scopes} exceed original scopes {original_scopes}"
                 )
                 raise ValueError("Requested scopes exceed original authorization")
+
+            # Atomic single-use rotation. ``UPDATE … WHERE revoked=False
+            # RETURNING id`` lets only one of N concurrent exchanges win.
+            # The race-loser sees no row and is treated as a replay (per
+            # RFC 6819 — be conservative when in doubt).
+            consumed = session.execute(
+                update(OAuthRefreshToken)
+                .where(
+                    OAuthRefreshToken.id == db_refresh_token.id,
+                    OAuthRefreshToken.revoked == False,  # noqa: E712
+                )
+                .values(revoked=True)
+                .returning(OAuthRefreshToken.id)
+            ).scalar_one_or_none()
+            if consumed is None:
+                logger.warning(
+                    "Refresh token race-lost: id=%s — revoking family as suspected replay",
+                    token_id(refresh_token.token),
+                )
+                revoke_refresh_token_family(
+                    session,
+                    user_id=cast(int, db_refresh_token.user_id),
+                    client_id=cast(str, db_refresh_token.client_id),
+                )
+                session.commit()
+                raise ValueError(
+                    "Refresh token already used — token family revoked"
+                )
+
+            # Kill the paired access-token session so the old access token
+            # is dead the moment its refresh token is rotated. Without this,
+            # an attacker who already has a copy of the access token can
+            # keep using it for up to ACCESS_TOKEN_LIFETIME after the user
+            # legitimately rotates.
+            paired_session_id = db_refresh_token.access_token_session_id
+            if paired_session_id is not None:
+                old_session = session.get(UserSession, paired_session_id)
+                if old_session is not None:
+                    session.delete(old_session)
 
             return make_token(session, db_refresh_token, scopes)
 

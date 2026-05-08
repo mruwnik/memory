@@ -79,7 +79,7 @@ async def search_bm25(
     query: str,
     modalities: set[str],
     limit: int = 10,
-    filters: SearchFilters = SearchFilters(),
+    filters: SearchFilters | None = None,
 ) -> dict[str, float]:
     """
     Search chunks using PostgreSQL full-text search.
@@ -89,6 +89,8 @@ async def search_bm25(
     Returns:
     - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
     """
+    if filters is None:
+        filters = SearchFilters()
     tsquery = build_tsquery(query)
     if not tsquery:
         return {}
@@ -207,9 +209,9 @@ async def search_bm25(
 
 async def search_bm25_chunks(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
-    filters: SearchFilters = SearchFilters(),
+    filters: SearchFilters | None = None,
     timeout: float = 10,
 ) -> dict[str, float]:
     """
@@ -221,6 +223,10 @@ async def search_bm25_chunks(
     Returns:
     - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
     """
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = SearchFilters()
     # Extract query strings from each data chunk
     queries = [
         " ".join(c for c in chunk.data if isinstance(c, str))

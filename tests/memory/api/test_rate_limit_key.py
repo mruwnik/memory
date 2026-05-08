@@ -38,7 +38,7 @@ def make_request():
 def test_rate_limit_key_uses_direct_ip_when_no_trust(make_request):
     """Default config does not trust X-Forwarded-For — keying falls back
     to the direct connection IP regardless of header content."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request("203.0.113.7", {"X-Forwarded-For": "9.9.9.9"})
     with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""):
@@ -49,7 +49,7 @@ def test_rate_limit_key_uses_direct_ip_when_no_trust(make_request):
 def test_rate_limit_key_ignores_xff_from_untrusted_hop(make_request):
     """An attacker connecting directly (not via the trusted proxy) cannot
     use ``X-Forwarded-For`` to rotate buckets."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request(
         "1.2.3.4",
@@ -65,7 +65,7 @@ def test_rate_limit_key_ignores_xff_from_untrusted_hop(make_request):
 def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request):
     """Behind a real reverse proxy, the immediate hop is the proxy and
     the original client lives in ``X-Forwarded-For``."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request("10.0.0.5", {"X-Forwarded-For": "203.0.113.7"})
     with patch(
@@ -77,7 +77,7 @@ def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request):
 
 def test_rate_limit_key_uses_first_xff_entry(make_request):
     """RFC 7239 §5.2: the left-most XFF entry is the original client."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request(
         "10.0.0.5",
@@ -93,7 +93,7 @@ def test_rate_limit_key_uses_first_xff_entry(make_request):
 def test_rate_limit_key_falls_back_when_xff_empty(make_request):
     """Trusted proxy that didn't set XFF (e.g. a misconfigured one) → use
     the proxy's own IP rather than crashing."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request("10.0.0.5", {})
     with patch(
@@ -106,7 +106,7 @@ def test_rate_limit_key_falls_back_when_xff_empty(make_request):
 def test_rate_limit_key_wildcard_trusts_anyone(make_request):
     """Operators who explicitly opt out of the spoofing protection get
     the old behavior — XFF is honored regardless of the immediate hop."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request("1.2.3.4", {"X-Forwarded-For": "203.0.113.7"})
     with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "*"):
@@ -117,7 +117,7 @@ def test_rate_limit_key_wildcard_trusts_anyone(make_request):
 def test_rate_limit_key_handles_missing_client(make_request):
     """Test client with no ``request.client`` (e.g. ASGI lifespan) doesn't
     crash the key function."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     request = make_request(None, {"X-Forwarded-For": "9.9.9.9"})
     with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""):
@@ -148,7 +148,7 @@ def test_rate_limit_key_attacker_xff_rotation_is_no_op(make_request):
     request cannot mint fresh buckets unless they're connecting from a
     trusted hop. Keys for 10 different XFF values from the same direct
     IP all collapse to a single bucket."""
-    from memory.api.app import rate_limit_key
+    from memory.common.rate_limit import rate_limit_key
 
     keys = set()
     with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""):

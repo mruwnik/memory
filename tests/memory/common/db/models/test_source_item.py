@@ -669,3 +669,193 @@ def test_handle_duplicate_sha256_with_existing_data(db_session: Session):
     existing_in_db = db_session.query(SourceItem).filter_by(sha256=b"existing").first()
     assert existing_in_db is not None
     assert str(existing_in_db.content) == "original"  # Original should be preserved
+
+
+def test_handle_duplicate_sha256_records_expunged_in_session_info(db_session: Session):
+    """Regression: callers need a way to see what got silently expunged so
+    bulk-ingest counters and post-flush ``.id`` access can branch correctly.
+    The listener writes the dropped objects to ``session.info['expunged_dupes']``.
+    """
+    # Pre-existing row in the DB
+    pre = SourceItem(sha256=b"pre-existing", content="seed", modality="text")
+    db_session.add(pre)
+    db_session.commit()
+
+    # Two new items: one collides with the DB row, one is intra-batch dup,
+    # one is unique.
+    db_collision = SourceItem(
+        sha256=b"pre-existing", content="dup of db row", modality="text"
+    )
+    intra_a = SourceItem(sha256=b"intra-batch", content="first", modality="text")
+    intra_b = SourceItem(sha256=b"intra-batch", content="second", modality="text")
+    unique = SourceItem(sha256=b"fresh", content="new", modality="text")
+    for it in (db_collision, intra_a, intra_b, unique):
+        db_session.add(it)
+    db_session.commit()
+
+    expunged = db_session.info.get("expunged_dupes", [])
+
+    # Two were dropped (db_collision + intra_b); intra_a and unique persisted.
+    expunged_ids = {id(obj) for obj in expunged}
+    assert id(db_collision) in expunged_ids
+    assert id(intra_b) in expunged_ids
+    assert id(intra_a) not in expunged_ids
+    assert id(unique) not in expunged_ids
+    assert len(expunged) == 2
+
+    # And only the right rows committed.
+    sha_in_db = {row[0] for row in db_session.query(SourceItem.sha256).all()}
+    assert sha_in_db == {b"pre-existing", b"intra-batch", b"fresh"}
+
+
+def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: Session):
+    """Successive flushes with no SourceItems should not surface a stale
+    ``expunged_dupes`` list from a previous flush."""
+    # Flush 1: produce an expunge so session.info has a non-empty list
+    db_session.add(SourceItem(sha256=b"x", content="a", modality="text"))
+    db_session.add(SourceItem(sha256=b"x", content="b", modality="text"))
+    db_session.commit()
+    assert db_session.info.get("expunged_dupes")  # non-empty
+
+    # Flush 2: no new SourceItems — list must be reset
+    db_session.commit()
+    assert db_session.info.get("expunged_dupes") == []
+
+
+# ====== resolve_access_control independent-resolution regression ======
+
+
+# Build a non-ORM stand-in for the algorithm: SourceItem.resolve_access_control
+# walks self.get_data_source_chain() and picks project_id and sensitivity
+# independently. We test the algorithm itself by binding the unbound
+# SourceItem.resolve_access_control method to a plain attribute container,
+# bypassing SQLAlchemy's ORM descriptors. The behaviour we care about
+# (chain walking + independent field resolution) is in the BASE class —
+# subclasses just provide the chain.
+
+
+class _FakeMessage:
+    """Plain Python stand-in for a SourceItem subclass with hierarchical sources.
+
+    Has the same surface that resolve_access_control reads (project_id,
+    sensitivity, default_project_id, default_sensitivity, get_data_source_chain).
+    """
+
+    default_project_id: int | None = None
+    default_sensitivity: str = "basic"
+
+    def __init__(self, project_id, sensitivity, chain):
+        self.project_id = project_id
+        self.sensitivity = sensitivity
+        self._chain = chain
+
+    def get_data_source_chain(self):
+        return self._chain
+
+    # Bind the real method off SourceItem so we test the actual algorithm,
+    # not a hand-rolled clone.
+    def resolve_access_control(self):
+        from memory.common.db.models.source_item import SourceItem
+
+        return SourceItem.resolve_access_control(self)  # type: ignore[arg-type]
+
+
+class _FakeSource:
+    def __init__(self, project_id, sensitivity):
+        self.project_id = project_id
+        self.sensitivity = sensitivity
+
+
+@pytest.mark.parametrize(
+    "item_project,item_sensitivity,chain_specs,expected",
+    [
+        # Channel sets sensitivity but not project_id; workspace supplies project.
+        # Pre-fix: channel was dropped from consideration because the older
+        # get_data_source returned workspace whenever channel.project_id was
+        # None — so the channel's sensitivity override was lost. Post-fix:
+        # the chain walk picks each field independently.
+        (
+            None,
+            None,
+            [(None, "confidential"), (10, "basic")],
+            (10, "confidential"),
+        ),
+        # Channel has both → channel wins for both fields.
+        (
+            None,
+            None,
+            [(99, "confidential"), (10, "basic")],
+            (99, "confidential"),
+        ),
+        # Channel has neither → workspace supplies both.
+        (None, None, [(None, None), (10, "basic")], (10, "basic")),
+        # Item-level sensitivity wins over chain regardless.
+        (
+            None,
+            "internal",
+            [(None, "confidential"), (10, "basic")],
+            (10, "internal"),
+        ),
+        # Item-level project_id wins over chain regardless.
+        (
+            42,
+            None,
+            [(None, "confidential"), (10, "basic")],
+            (42, "confidential"),
+        ),
+        # Empty chain → class defaults (None / "basic").
+        (None, None, [], (None, "basic")),
+    ],
+)
+def test_resolve_access_control_walks_chain_independently(
+    item_project, item_sensitivity, chain_specs, expected
+):
+    chain = [_FakeSource(p, s) for p, s in chain_specs]
+    msg = _FakeMessage(item_project, item_sensitivity, chain)
+    assert msg.resolve_access_control() == expected
+
+
+def test_resolve_access_control_skips_chain_entries_without_either_field():
+    """Chain entries with both project_id=None and sensitivity=None are
+    transparent to the walk — the algorithm continues to the next entry."""
+    chain = [
+        _FakeSource(None, None),  # Empty entry — should be skipped
+        _FakeSource(7, "internal"),  # This one supplies both
+    ]
+    msg = _FakeMessage(None, None, chain)
+    assert msg.resolve_access_control() == (7, "internal")
+
+
+def test_resolve_access_control_field_resolution_uses_first_non_empty():
+    """Each field stops at the first non-empty source independently. So a
+    chain of [(None, 'X'), (P, 'Y')] gives (P, 'X') — the second source's
+    sensitivity is ignored because the first already supplied one."""
+    chain = [_FakeSource(None, "X"), _FakeSource(99, "Y")]
+    msg = _FakeMessage(None, None, chain)
+    assert msg.resolve_access_control() == (99, "X")
+
+
+def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
+    """Pure-unit regression: previously the dead ``if not new_items: return``
+    after the loop never short-circuited because ``new_items`` is computed
+    pre-loop and never modified, so we always issued
+    ``SourceItem.sha256.in_({})`` against the DB even when no item had a
+    sha256. The fix tests ``items`` (the dict populated by the loop)
+    instead, so all-None batches skip the DB query.
+    """
+    from unittest.mock import MagicMock
+    from memory.common.db.models import source_item
+
+    fake_session = MagicMock()
+    fake_session.info = {}
+    # Two items with no sha256 — items dict will stay empty.
+    item_a = SourceItem(sha256=None, content="a", modality="text")
+    item_b = SourceItem(sha256=None, content="b", modality="text")
+    fake_session.new = [item_a, item_b]
+
+    source_item.handle_duplicate_sha256(fake_session, None, None)
+
+    # The DB query MUST NOT have been issued.
+    fake_session.query.assert_not_called()
+    # Empty list because nothing was expunged.
+    assert fake_session.info["expunged_dupes"] == []

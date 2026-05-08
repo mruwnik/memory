@@ -11,19 +11,22 @@ Note: User data is not stored in a separate SlackUser table. Instead:
 - For linking users to People, store Slack IDs in Person.contact_info["slack"]
 """
 
+import contextlib
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import re
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 import redis
 from sqlalchemy.exc import IntegrityError
 
 from memory.common import paths, settings
+from memory.common.redis_lock import distributed_lock
+from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
@@ -66,35 +69,47 @@ USER_CACHE_TTL_SECONDS = 300
 # Lock TTL for channel sync (10 minutes) - safety timeout if task crashes
 CHANNEL_SYNC_LOCK_TTL_SECONDS = 600
 
+# Hard cap for downloaded Slack files. Slack itself allows up to 1 GB
+# uploads which would OOM the worker if we buffered the body. 100 MiB is
+# plenty for typical attachments (slides, PDFs, transcripts) and bounds
+# memory + disk pressure regardless of what users upload. Override via
+# SLACK_FILE_MAX_BYTES env var if you need to ingest larger files.
+SLACK_FILE_MAX_BYTES = int(os.getenv("SLACK_FILE_MAX_BYTES", 100 * 1024 * 1024))
+
 
 def get_redis_client() -> redis.Redis:
-    """Get Redis client for locking."""
+    """Get Redis client for locking and short-lived caches in this module."""
     return redis.from_url(settings.REDIS_URL)
 
 
-def acquire_channel_sync_lock(channel_id: str) -> bool:
-    """Try to acquire a lock for syncing a channel.
+def channel_sync_lock_key(channel_id: str) -> str:
+    return f"slack_channel_sync:{channel_id}"
 
-    Returns True if lock acquired, False if another sync is in progress.
+
+@contextlib.contextmanager
+def channel_sync_lock(channel_id: str):
+    """Distributed lock for syncing a single Slack channel.
+
+    Yields a Lock if acquired, or None if another sync is in progress.
+    Atomic ownership-checked release is handled by the underlying
+    ``distributed_lock`` helper — the previous bespoke
+    ``release_channel_sync_lock`` deleted the key without checking
+    the owner token, so a slow worker whose lock had already
+    expired could clobber another worker's freshly-acquired lock.
     """
-    client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    # SET NX (only if not exists) with TTL
-    return bool(client.set(lock_key, "1", nx=True, ex=CHANNEL_SYNC_LOCK_TTL_SECONDS))
-
-
-def release_channel_sync_lock(channel_id: str) -> None:
-    """Release the channel sync lock."""
-    client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    client.delete(lock_key)
+    with distributed_lock(
+        channel_sync_lock_key(channel_id), CHANNEL_SYNC_LOCK_TTL_SECONDS
+    ) as lock:
+        yield lock
 
 
 def is_channel_sync_locked(channel_id: str) -> bool:
-    """Check if a channel sync is already in progress."""
+    """Check if a channel sync is already in progress (probe only).
+
+    Used to skip enqueueing redundant work; does NOT claim ownership.
+    """
     client = get_redis_client()
-    lock_key = f"slack_channel_sync:{channel_id}"
-    return client.exists(lock_key) > 0  # type: ignore[operator]
+    return client.exists(channel_sync_lock_key(channel_id)) > 0  # type: ignore[operator]
 
 
 def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
@@ -155,40 +170,31 @@ def resolve_mentions(content: str, users_by_id: dict[str, str]) -> str:
 def download_slack_file(
     url: str, headers: dict, message_ts: str, workspace_id: str
 ) -> str | None:
-    """Download a Slack file and save to disk. Returns relative path."""
-    try:
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
-            response = client.get(url, headers=headers)
-            response.raise_for_status()
+    """Download a Slack file and save to disk. Returns relative path.
 
-            # Create directory for this message
-            file_dir = (
-                settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
-            )
-            file_dir.mkdir(parents=True, exist_ok=True)
+    Uses streaming with a hard size cap so a single large upload (Slack's
+    1 GB max) can't OOM the worker. Pre-fix the call buffered the entire
+    body in RAM and held a second copy via ``response.content``.
+    """
+    file_dir = (
+        settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
+    )
 
-            # Generate filename from URL hash (SHA256 truncated for shorter filenames)
-            url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-            ext = pathlib.Path(url).suffix or ".dat"
-            ext = ext.split("?")[0][:10]  # Limit extension length
-            filename = f"{url_hash}{ext}"
-            local_path = file_dir / filename
+    url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+    ext = pathlib.Path(url).suffix or ".dat"
+    ext = ext.split("?")[0][:10]
+    filename = f"{url_hash}{ext}"
+    local_path = file_dir / filename
 
-            local_path.write_bytes(response.content)
-
-            # Return relative path
-            return paths.to_db_filename(local_path)
-
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"Failed to download Slack file from {url}: HTTP {e.response.status_code}"
-        )
+    if not stream_download_to_path(
+        url,
+        local_path,
+        SLACK_FILE_MAX_BYTES,
+        headers=headers,
+    ):
         return None
-    except Exception as e:
-        logger.error(
-            f"Failed to download Slack file from {url}: {type(e).__name__}: {e}"
-        )
-        return None
+
+    return paths.to_db_filename(local_path)
 
 
 def get_workspace_credentials(
@@ -486,17 +492,18 @@ def sync_slack_channel(
     ``slack_app_id`` scopes credential lookup and propagates to all
     enqueued downstream tasks.
     """
-    # Try to acquire lock - skip if another sync is already running
-    if not acquire_channel_sync_lock(channel_id):
-        logger.info(f"Skipping channel {channel_id} - sync already in progress")
-        return {"status": "skipped", "reason": "sync_in_progress"}
+    # Try to acquire lock - skip if another sync is already running.
+    # Release happens automatically on context-manager exit, with an
+    # ownership-checked Lua script (no plain `client.delete()` race).
+    with channel_sync_lock(channel_id) as lock:
+        if lock is None:
+            logger.info(
+                f"Skipping channel {channel_id} - sync already in progress"
+            )
+            return {"status": "skipped", "reason": "sync_in_progress"}
 
-    logger.info(f"Syncing Slack channel {channel_id}")
-
-    try:
+        logger.info(f"Syncing Slack channel {channel_id}")
         return _sync_slack_channel_impl(channel_id, slack_app_id)
-    finally:
-        release_channel_sync_lock(channel_id)
 
 
 def _sync_slack_channel_impl(

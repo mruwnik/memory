@@ -1079,6 +1079,53 @@ def test_project_status_extraction(github_repo, db_session, qdrant):
     }
 
 
+def test_extract_status_priority_skips_non_scalar_values():
+    """Regression: GitHub Projects v2 fields can ship structured payloads
+    (iteration / milestone field values are nested dicts/lists). The
+    worker copy of this logic used to ``str()`` whatever it found,
+    leaving ``"{'title': 'Sprint 1'}"`` etc. in the project_status DB
+    column. Both extraction paths must skip non-scalar values.
+    """
+    from memory.common.github import extract_status_priority
+
+    fields = {
+        "Status": "In Progress",
+        "Priority": 2,  # int is a scalar; must be coerced to str
+        # Structured field values (iteration / milestone): must be SKIPPED.
+        "Iteration": {"title": "Sprint 1", "startDate": "2026-01-01"},
+        "AssigneesField": [{"login": "alice"}],
+    }
+    status, priority = extract_status_priority(fields)
+    assert status == "In Progress"
+    assert priority == "2"  # numeric scalar coerced
+    # Crucially: the Iteration dict didn't sneak in as `status` via the
+    # second-status-field substring match either.
+
+
+def test_extract_status_priority_first_match_wins():
+    """If multiple fields match the substring, the first wins (preserving
+    historical behaviour). Locks in the contract."""
+    from memory.common.github import extract_status_priority
+
+    fields = {
+        "Project Status": "Done",
+        "Sub-status": "ignored",
+        "Priority": "High",
+    }
+    status, priority = extract_status_priority(fields)
+    assert status == "Done"
+    assert priority == "High"
+
+
+def test_extract_status_priority_skips_none():
+    """``None`` values must not match — even if the key contains
+    'status'/'priority'."""
+    from memory.common.github import extract_status_priority
+
+    fields = {"Status": None, "Priority": None}
+    assert extract_status_priority(fields) == (None, None)
+
+
 def test_project_fields_case_insensitive(github_repo, db_session, qdrant):
     """Test project field extraction is case insensitive."""
     data = GithubIssueData(

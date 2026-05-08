@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, NotRequired, TypedDict, cast
 
-import caldav
+from caldav.collection import Calendar
+from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
 from memory.common.celery_app import (
@@ -238,11 +239,13 @@ def fetch_caldav_events(
     - Limits memory usage for large calendars
     - Still returns recurring events with RRULE that overlap the range
     """
-    client = caldav.DAVClient(url=url, username=username, password=password)
+    client = DAVClient(url=url, username=username, password=password)
     principal = client.principal()
     events: list[EventData] = []
 
-    for calendar in principal.calendars():
+    # caldav annotates calendars() as `list | Coroutine` to support sync+async
+    # callers; we use the sync client so the runtime value is always a list.
+    for calendar in cast(list[Calendar], principal.calendars()):
         calendar_name = calendar.name or "Unknown"
 
         if calendar_ids and calendar.id not in calendar_ids:

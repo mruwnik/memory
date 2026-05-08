@@ -72,3 +72,37 @@ def test_load_custom_tasks_ignores_non_py_files(tmp_path):
     with patch.object(settings, "CUSTOM_TASKS_DIR", str(tmp_path)):
         result = load_custom_tasks()
     assert result == ["custom_tasks.task"]
+
+
+def test_celery_app_import_does_not_load_custom_tasks(tmp_path, monkeypatch):
+    """Regression: importing memory.common.celery_app must NOT execute
+    arbitrary user code from CUSTOM_TASKS_DIR.
+
+    The loader used to run at module top level, which meant the API
+    process (which imports memory.common.celery_app via jobs.py) would
+    execute every custom task file's import-time code on every uvicorn
+    boot — DB connections, network calls, monkey-patches, etc. The
+    loading is now deferred to celery worker_init / beat_init signals
+    that fire only on worker/beat startup.
+    """
+    # Place a custom task that flips a flag if it's loaded.
+    canary = tmp_path / "noisy.py"
+    canary.write_text(
+        "import os\n"
+        f"open({str(tmp_path / 'loaded')!r}, 'w').write('yes')\n"
+    )
+    monkeypatch.setattr(settings, "CUSTOM_TASKS_DIR", str(tmp_path))
+
+    # Re-import the module to simulate API-process startup. The signal
+    # handlers register, but worker_init / beat_init don't fire just
+    # from the import itself.
+    import importlib
+
+    import memory.common.celery_app as celery_module
+
+    importlib.reload(celery_module)
+
+    # If the loader had run at import time, the canary file would
+    # exist; with the deferred-to-signals change, it must not.
+    assert not (tmp_path / "loaded").exists()
+    assert celery_module._CUSTOM_TASKS_LOADED is False

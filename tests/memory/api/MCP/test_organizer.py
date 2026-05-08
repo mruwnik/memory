@@ -123,6 +123,43 @@ def reset_db_cache():
     db_connection._scoped_session = None
 
 
+class _AdminUserStub:
+    """Minimal stand-in for the admin UserProxy returned by get_mcp_current_user.
+
+    We don't want to import UserProxy here (that would tug in the auth chain
+    we're trying to mock out); a duck-typed object with ``id`` and ``scopes``
+    is enough for has_admin_scope/user_can_access/user_can_edit.
+    """
+
+    def __init__(self, user_id: int = 1) -> None:
+        self.id = user_id
+        self.scopes = ["*"]
+
+
+@pytest.fixture(autouse=True)
+def _mock_admin_user():
+    """Default to an admin user for organizer tests.
+
+    The pre-IDOR-fix tests called organizer tools without any auth context
+    and expected to see all tasks. After the fix, a None user blocks access
+    entirely. Defaulting to an admin preserves the original test semantics
+    while letting individual tests opt into a non-admin user (and verify
+    IDOR-blocking) by re-patching.
+    """
+    admin = _AdminUserStub()
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        yield admin
+
+
 def create_task_hash(title: str) -> bytes:
     """Create a hash for a task based on title."""
     return hashlib.sha256(f"task:{title}".encode()).digest()
@@ -422,19 +459,22 @@ async def test_fetch_not_found(db_session, sample_tasks):
 
 @pytest.mark.asyncio
 async def test_fetch_with_journal_entries(db_session, sample_tasks):
-    """Test fetching a task with include_journal=True returns journal_entries key.
+    """fetch(include_journal=True) must return entries attached to the
+    Task via the SourceItem polymorphic-identity convention.
 
-    Note: 'task' is not currently a valid target_type in the journal system.
-    The journal feature for tasks is a placeholder - this test verifies the
-    include_journal parameter adds the journal_entries key to the response,
-    but returns empty results until task support is added to the journal system.
+    Regression: the previous implementation filtered on
+    target_type='task', but the JournalEntry CheckConstraint only
+    permits ('source_item', 'project', 'team', 'poll') — so the query
+    always returned an empty list and silently misled callers into
+    thinking the task had no notes. Task is a polymorphic SourceItem,
+    so its journal entries live with target_type='source_item' and
+    target_id=<task_id>.
     """
     from memory.api.MCP.servers.organizer import fetch
-    from memory.common.db.models import HumanUser
+    from memory.common.db.models import HumanUser, JournalEntry
 
     task = sample_tasks[0]
 
-    # Create a user for the test
     user = HumanUser(
         name="Test Admin",
         email="admin-journal@example.com",
@@ -444,9 +484,20 @@ async def test_fetch_with_journal_entries(db_session, sample_tasks):
     db_session.add(user)
     db_session.commit()
 
+    # Attach a journal entry to the task using the canonical
+    # source_item target_type. With the wrong filter this entry was
+    # invisible; with the fix it surfaces.
+    entry = JournalEntry(
+        target_type="source_item",
+        target_id=task.id,
+        content="Investigated this task; root cause was foo.",
+        creator_id=user.id,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
     fetch_fn = get_fn(fetch)
 
-    # Mock make_session and get_mcp_current_user for the test
     with (
         patch(
             "memory.api.MCP.servers.organizer.make_session",
@@ -461,8 +512,9 @@ async def test_fetch_with_journal_entries(db_session, sample_tasks):
 
     assert result["success"] is True
     assert "journal_entries" in result
-    # Empty because 'task' is not a valid target_type in the journal system yet
-    assert len(result["journal_entries"]) == 0
+    # Must surface the source_item-targeted entry (was 0 under the bug).
+    assert len(result["journal_entries"]) == 1
+    assert "Investigated this task" in result["journal_entries"][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -831,3 +883,237 @@ async def test_list_tasks_various_priorities(
         results = await list_tasks_fn(priority=priority, include_completed=True)
 
     assert len(results) == expected_count
+
+
+# =============================================================================
+# Access control / IDOR-blocking tests (the audit task)
+#
+# Tasks are SourceItem subclasses and inherit project_id / sensitivity /
+# creator_id, so the standard access filter applies. Pre-fix, the organizer
+# tools skipped it entirely and any user with SCOPE_ORGANIZER could read /
+# list / update any task by ID enumeration.
+# =============================================================================
+
+
+class _NonAdminUserStub:
+    """Non-admin caller for IDOR tests. id=999 so it never collides with task creators."""
+
+    def __init__(self, user_id: int = 999) -> None:
+        self.id = user_id
+        self.scopes = ["organizer", "organizer:write"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_blocks_non_owner_without_project_access(db_session, sample_tasks):
+    """A non-admin without project access must NOT be able to fetch someone else's task."""
+    from memory.api.MCP.servers.organizer import fetch
+
+    # Pin the task to a project the caller has no membership in, set creator_id
+    # to a different user so creator-bypass doesn't trigger.
+    task = sample_tasks[0]
+    task.creator_id = 1  # owned by user 1
+    task.project_id = 12345  # caller has no role in this project
+    task.sensitivity = "confidential"
+    db_session.commit()
+
+    fetch_fn = get_fn(fetch)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},  # no project membership
+        ),
+    ):
+        result = await fetch_fn(task_id=task.id)
+
+    # Same "not found" wording as a missing row, so we don't leak existence.
+    assert "error" in result
+    assert "not found" in result["error"]
+    assert "task" not in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_allows_creator(db_session, sample_tasks):
+    """The task's creator can fetch it even without project access."""
+    from memory.api.MCP.servers.organizer import fetch
+
+    task = sample_tasks[0]
+    task.creator_id = 999  # owned by the calling user
+    task.project_id = None
+    db_session.commit()
+
+    fetch_fn = get_fn(fetch)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        result = await fetch_fn(task_id=task.id)
+
+    assert result.get("success") is True
+    assert result["task"]["task_title"] == "Urgent task due today"
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_filters_to_accessible(db_session, sample_tasks):
+    """list_tasks must only return tasks the caller has access to."""
+    from memory.api.MCP.servers.organizer import list_tasks
+
+    # One task owned by the caller (creator override) — visible.
+    sample_tasks[0].creator_id = 999
+    sample_tasks[0].project_id = None
+    sample_tasks[0].sensitivity = "basic"
+
+    # Another task owned by someone else, in a project the caller can't see.
+    sample_tasks[1].creator_id = 1
+    sample_tasks[1].project_id = 12345
+    sample_tasks[1].sensitivity = "confidential"
+
+    # Public task — anyone authenticated should see this.
+    sample_tasks[2].creator_id = 1
+    sample_tasks[2].project_id = None
+    sample_tasks[2].sensitivity = "public"
+    db_session.commit()
+
+    list_tasks_fn = get_fn(list_tasks)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        results = await list_tasks_fn()
+
+    titles = {r["task_title"] for r in results}
+    # Caller's own task and the public one are visible
+    assert "Urgent task due today" in titles
+    assert "Medium priority no date" in titles
+    # The other-user-confidential task must NOT appear
+    assert "High priority tomorrow" not in titles
+
+
+@pytest.mark.asyncio
+async def test_update_task_blocks_non_creator_non_admin(db_session, sample_tasks):
+    """A user who can READ a task but didn't create it cannot update it."""
+    from memory.api.MCP.servers.organizer import update_task
+
+    task = sample_tasks[0]
+    task.creator_id = 1  # owned by someone else
+    task.project_id = None
+    task.sensitivity = "public"  # readable to caller via public bypass
+    db_session.commit()
+
+    update_task_fn = get_fn(update_task)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        with pytest.raises(PermissionError, match="only update tasks you created"):
+            await update_task_fn(task_id=task.id, title="hijack")
+
+    # Title was not changed
+    db_session.refresh(task)
+    assert task.task_title == "Urgent task due today"
+
+
+@pytest.mark.asyncio
+async def test_update_task_blocks_non_accessible_with_not_found(db_session, sample_tasks):
+    """A user who CANNOT see the task gets 'not found' (no existence leak)."""
+    from memory.api.MCP.servers.organizer import update_task
+
+    task = sample_tasks[0]
+    task.creator_id = 1
+    task.project_id = 12345  # caller has no access
+    task.sensitivity = "confidential"
+    db_session.commit()
+
+    update_task_fn = get_fn(update_task)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        with pytest.raises(ValueError, match="not found"):
+            await update_task_fn(task_id=task.id, title="hijack")
+
+
+@pytest.mark.asyncio
+async def test_create_task_sets_creator_id(db_session):
+    """create_task must set creator_id so user_can_edit works thereafter."""
+    from memory.api.MCP.servers.organizer import create_task
+
+    create_task_fn = get_fn(create_task)
+    non_admin = _NonAdminUserStub()
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=non_admin,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        result = await create_task_fn(title="Task with creator id check")
+
+    task = db_session.query(Task).filter_by(id=result["id"]).first()
+    assert task is not None
+    assert task.creator_id == 999

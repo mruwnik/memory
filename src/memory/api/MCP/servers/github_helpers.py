@@ -374,45 +374,49 @@ def list_teams(
         return teams
 
 
-def extract_status_priority(
-    project_fields: dict[str, Any],
-) -> tuple[str | None, str | None]:
-    """Extract status and priority from project fields dict.
-
-    Returns (status, priority) tuple. Values are None if not found.
-    Only extracts string/numeric values, ignoring None and complex types.
-    """
-    status: str | None = None
-    priority: str | None = None
-    for key, value in project_fields.items():
-        # Skip None and complex types
-        if value is None or not isinstance(value, (str, int, float)):
-            continue
-        key_lower = key.lower()
-        if "status" in key_lower and status is None:
-            status = str(value)
-        elif "priority" in key_lower and priority is None:
-            priority = str(value)
-    return status, priority
+# extract_status_priority lives in memory.common.github.projects so the
+# worker ingest path can share the implementation. Re-exported here so
+# existing callers within this module keep working.
+from memory.common.github import extract_status_priority  # noqa: E402, F401
 
 
-def fetch_issue(repo: str, number: int) -> dict[str, Any]:
+def fetch_issue(repo: str, number: int, user: Any) -> dict[str, Any]:
     """Get full details of a specific GitHub issue or PR.
 
     Fetches project fields from GitHub if not cached in the database.
     Caches the result (including empty dict for issues not in projects)
     to avoid repeated API calls.
+
+    Args:
+        repo: Repository path (``"owner/name"``).
+        number: Issue or PR number within the repo.
+        user: Authenticated caller. **Required**. The standard access
+            filter (project + creator + person override + public bypass)
+            is applied to the lookup so a caller without access to the
+            issue's project sees ``"not found"`` rather than its content.
+            Made required to remove the previous ``user=None``-bypass
+            footgun (Parvati flagged on PR #77): a future internal caller
+            that forgot to thread the user would have silently bypassed
+            the access check.
     """
     with make_session() as session:
-        item = (
-            session.query(GithubItem)
-            .filter(
-                GithubItem.repo_path == repo,
-                GithubItem.number == number,
-                GithubItem.kind.in_(["issue", "pr"]),
-            )
-            .first()
+        query = session.query(GithubItem).filter(
+            GithubItem.repo_path == repo,
+            GithubItem.number == number,
+            GithubItem.kind.in_(["issue", "pr"]),
         )
+
+        # Apply the same central access filter as ``list_issues`` so a
+        # caller that can't see the issue via list also can't fetch it
+        # by enumerating (repo, number). GithubItem inherits SourceItem
+        # columns via single-table inheritance, so the filter resolves
+        # against the same row.
+        access_filter = build_access_filter(
+            user, get_user_project_roles(session, user)
+        )
+        query = apply_access_filter_to_query(query, access_filter)
+
+        item = query.first()
 
         if not item:
             raise ValueError(f"Issue #{number} not found in {repo}")
@@ -505,15 +509,25 @@ def fetch_project_fields_for_item(
         return None
 
 
-def fetch_milestone(repo: str, number: int) -> dict:
-    """Get full details of a specific milestone including its issues."""
+def fetch_milestone(repo: str, number: int, user: Any) -> dict:
+    """Get full details of a specific milestone including its issues.
+
+    ``user`` is **required**. The ``Project`` query is filtered by
+    ``filter_projects_query`` (same as ``list_milestones``) so a caller
+    without access to the milestone's project sees ``"not found"`` rather
+    than its description / issue list. The issue list inside the response
+    is also filtered by the standard SourceItem access filter so any
+    issues in the milestone the caller can't see are dropped.
+    Made required to close the previous ``user=None``-bypass footgun
+    (Parvati flagged on PR #77).
+    """
     with make_session() as session:
         parts = repo.split("/")
         if len(parts) != 2:
             raise ValueError(f"Invalid repo format: {repo}. Expected 'owner/name'")
         owner, name = parts
 
-        ms = (
+        ms_query = (
             session.query(Project)
             .join(GithubRepo)
             .filter(
@@ -521,8 +535,11 @@ def fetch_milestone(repo: str, number: int) -> dict:
                 GithubRepo.name == name,
                 Project.number == number,
             )
-            .first()
         )
+        if not has_admin_scope(user):
+            ms_query = filter_projects_query(session, user, ms_query)
+
+        ms = ms_query.first()
 
         if not ms:
             raise ValueError(f"Milestone #{number} not found in {repo}")
@@ -547,13 +564,19 @@ def fetch_milestone(repo: str, number: int) -> dict:
         total = open_count + closed_count
         progress = round(closed_count / total * 100, 1) if total > 0 else 0
 
-        # Get issues in milestone
-        issues = (
-            session.query(GithubItem)
-            .filter(GithubItem.milestone_id == ms.id)
-            .order_by(desc(GithubItem.github_updated_at))
-            .all()
+        # Get issues in milestone, gated by the same access filter as
+        # list_issues so the milestone payload doesn't leak issues the
+        # caller can't otherwise see.
+        issues_query = session.query(GithubItem).filter(
+            GithubItem.milestone_id == ms.id
         )
+        issues_access_filter = build_access_filter(
+            user, get_user_project_roles(session, user)
+        )
+        issues_query = apply_access_filter_to_query(
+            issues_query, issues_access_filter
+        )
+        issues = issues_query.order_by(desc(GithubItem.github_updated_at)).all()
 
         return {
             "id": ms.id,
@@ -571,17 +594,41 @@ def fetch_milestone(repo: str, number: int) -> dict:
         }
 
 
-def fetch_project(owner: str, project_number: int) -> dict:
-    """Get full details of a specific GitHub Project."""
+def fetch_project(
+    owner: str, project_number: int, user: Any
+) -> dict:
+    """Get full details of a specific GitHub Project.
+
+    ``user`` is **required**. GithubProject access is gated by ownership
+    of the underlying ``GithubAccount``: only the user who installed the
+    account (or an admin) may fetch projects under it. Pre-fix, the
+    lookup was scoped by ``(owner_login, number)`` only, letting any
+    user with SCOPE_GITHUB fetch any GitHub Project across tenants by
+    guessing owner+number. Made required to close the previous
+    ``user=None``-bypass footgun (Parvati flagged on PR #77).
+    """
     with make_session() as session:
-        project = (
-            session.query(GithubProject)
-            .filter(
-                GithubProject.owner_login.ilike(owner),
-                GithubProject.number == project_number,
-            )
-            .first()
+        query = session.query(GithubProject).filter(
+            GithubProject.owner_login.ilike(owner),
+            GithubProject.number == project_number,
         )
+        if not has_admin_scope(user):
+            # GithubProject doesn't go through SourceItem, so the standard
+            # AccessFilter doesn't apply. Gate by GithubAccount.user_id —
+            # the project belongs to whoever installed the account.
+            from memory.common.db.models.sources import GithubAccount
+
+            user_id = getattr(user, "id", None)
+            if user_id is None:
+                raise ValueError(
+                    f"Project #{project_number} not found for {owner}"
+                )
+            query = query.join(
+                GithubAccount,
+                GithubAccount.id == GithubProject.account_id,
+            ).filter(GithubAccount.user_id == user_id)
+
+        project = query.first()
 
         if not project:
             raise ValueError(f"Project #{project_number} not found for {owner}")

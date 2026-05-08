@@ -10,6 +10,7 @@ Provides endpoints for:
 import fcntl
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -175,31 +176,64 @@ class SessionListResponse(BaseModel):
     sessions: list[SessionResponse]
 
 
-def safe_loads(file: Path, start=0, end=None):
-    items = []
-    bad_lines = 0
-    for i, line in enumerate(file.read_text().splitlines()):
-        if i < start or not line.strip():
-            continue
-        # `end` is exclusive (read_transcript passes offset+limit). Using `>`
-        # here was off-by-one and returned one extra row per request.
-        if end is not None and i >= end:
-            return items
+def iter_transcript_events(
+    file: Path,
+    start: int = 0,
+    end: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream parsed JSONL events from a transcript file.
 
-        try:
-            items.append(json.loads(line))
-        except json.JSONDecodeError:
-            bad_lines += 1
+    Streaming line-by-line avoids loading the whole transcript into
+    memory: a long-lived Claude Code session can have hundreds of
+    megabytes of JSONL, and ``Path.read_text().splitlines()`` (the
+    previous implementation) was O(file_size) RAM and triggered
+    OOM-class memory pressure on paginated reads. With this
+    generator the read is O(start) — we still have to scan past
+    ``start`` lines to skip them, but each skipped line is
+    immediately discarded.
+
+    ``start`` and ``end`` are 0-indexed line numbers; ``end`` is
+    exclusive (``read_transcript`` passes ``offset + limit``, so
+    using ``>`` here was off-by-one and returned one extra row per
+    request). Blank lines do not advance the index (preserving prior
+    ``safe_loads`` behaviour).
+
+    Malformed JSON lines are counted and surfaced via a single
+    warning at the end (avoids silently dropping rows).
+    """
+    bad_lines = 0
+    with open(file) as fh:
+        for i, line in enumerate(fh):
+            if not line.strip():
+                continue
+            if i < start:
+                continue
+            if end is not None and i >= end:
+                break
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                bad_lines += 1
     if bad_lines:
-        # Surface corruption rather than silently returning a short list — a
-        # transcript with N malformed JSONL lines used to drop those rows
-        # without any indication, hiding ingest bugs.
+        # Surface corruption rather than silently dropping rows — a
+        # transcript with N malformed JSONL lines used to come back
+        # short, hiding ingest bugs.
         logger.warning(
             "transcript %s: %d unparseable JSON line(s) skipped",
             file,
             bad_lines,
         )
-    return items
+
+
+def safe_loads(file: Path, start: int = 0, end: int | None = None) -> list[dict[str, Any]]:
+    """Materialise the streamed events into a list.
+
+    Kept for callers that genuinely need random access to all events
+    (currently just ``read_transcript`` for the API response). New
+    callers should prefer ``iter_transcript_events`` directly so they
+    don't materialise the whole transcript at once.
+    """
+    return list(iter_transcript_events(file, start, end))
 
 
 @dataclass
@@ -270,14 +304,6 @@ def extract_tool_calls_from_message(message: dict[str, Any]) -> list[ToolCall]:
         )
         for i, name in enumerate(tool_names)
     ]
-
-
-def parse_event_timestamp(timestamp_str: str | None) -> datetime | None:
-    """Thin wrapper around :func:`memory.common.dates.parse_iso_datetime`
-    kept for callers that imported the local name. Returns None on
-    missing/invalid input.
-    """
-    return parse_iso_datetime(timestamp_str)
 
 
 def count_transcript_events(transcript_path: str) -> int:
@@ -459,7 +485,7 @@ def extract_tool_usage_telemetry(
     if not tool_calls:
         return []
 
-    event_timestamp = parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+    event_timestamp = parse_iso_datetime(event.timestamp) or datetime.now(timezone.utc)
 
     return [
         TelemetryEvent(
@@ -731,7 +757,10 @@ def extract_tool_usage_from_transcript(
 
     tool_stats: dict[str, dict] = {}
 
-    for event in safe_loads(transcript_file):
+    # Stream events line-by-line: this function doesn't need random
+    # access, so materialising the whole transcript was wasted RAM
+    # on long-lived sessions.
+    for event in iter_transcript_events(transcript_file):
         # Only process assistant messages with tool_use
         if event.get("type") != "assistant":
             continue
@@ -740,7 +769,7 @@ def extract_tool_usage_from_transcript(
         # through to inclusion (matches prior behaviour: don't drop
         # events because of a flaky clock).
         if from_time or to_time:
-            event_time = parse_event_timestamp(event.get("timestamp"))
+            event_time = parse_iso_datetime(event.get("timestamp"))
             if event_time is not None:
                 if from_time and event_time < from_time:
                     continue

@@ -34,8 +34,9 @@ def update_engagement_metrics(
 @tracked_task
 def sync_lesswrong_post(
     post: LessWrongPost,
-    tags: list[str] = [],
+    tags: list[str] | None = None,
 ):
+    tags = tags or []
     logger.info(f"Syncing LessWrong post {post['url']}")
     sha256 = create_content_hash(post["content"])
 
@@ -70,8 +71,9 @@ def sync_lesswrong(
     cooldown: float = 0.5,
     max_items: int = 1000,
     af: bool = False,
-    tags: list[str] = [],
+    tags: list[str] | None = None,
 ):
+    tags = tags or []
     if until:
         end_date = datetime.fromisoformat(until)
     else:

@@ -20,7 +20,6 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
 
 from memory.common import settings
-from memory.common.qdrant import initialize_collections
 from tests.providers.email_provider import MockEmailProvider
 
 
@@ -660,19 +659,20 @@ class _ResilientQdrantContainer:
         # 30s timeout (default is 5s) — under -n 4 xdist, 4 qdrant containers
         # share the host's docker engine and CPU, and the 5s default tripped
         # cascading ReadTimeouts on writes.
-        self._client = self._container.get_client(timeout=30)
+        client = self._container.get_client(timeout=30)
+        self._client = client
         from memory.common.collections import ALL_COLLECTIONS
         from memory.common.qdrant import ensure_collection_exists
         from concurrent.futures import ThreadPoolExecutor
 
         # Wipe any pre-existing collections left from a prior container life.
-        for col in self._client.get_collections().collections:
-            self._client.delete_collection(col.name)
+        for col in client.get_collections().collections:
+            client.delete_collection(col.name)
 
         def _init(name_params):
             name, params = name_params
             ensure_collection_exists(
-                self._client,
+                client,
                 collection_name=name,
                 dimension=params["dimension"],
                 distance=params.get("distance", "Cosine"),
@@ -984,7 +984,9 @@ def _stub_ssrf_validation():
     import importlib
     from memory.common import ssrf
 
-    noop = lambda url: None
+    def noop(url):
+        return None
+
     # Patch every module that imports it by-name so the binding inside that
     # module sees the no-op (`from memory.common.ssrf import validate_public_url`
     # is the common pattern).

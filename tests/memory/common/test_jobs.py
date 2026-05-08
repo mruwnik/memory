@@ -656,3 +656,134 @@ def test_tracked_task_passes_celery_retry_without_marking_failed():
 
     mark_failed.assert_not_called()
     mark_complete.assert_not_called()
+
+
+# =============================================================================
+# Required-kwarg validation in dispatch_job (audit fix)
+# =============================================================================
+
+
+def test_get_required_task_kwargs_handles_unregistered_task():
+    """An unknown task name returns empty set (graceful degrade)."""
+    assert job_utils.get_required_task_kwargs("definitely.not.a.task") == set()
+
+
+def test_get_required_task_kwargs_extracts_required_only():
+    """Required kwargs (no default) are returned; optional ones are not."""
+    @job_utils.celery_app.task(name="test.required_kwargs_task")
+    def _task(transcript: str, title: str | None = None, count: int = 0) -> None:
+        ...
+
+    required = job_utils.get_required_task_kwargs("test.required_kwargs_task")
+    assert required == {"transcript"}
+
+
+def test_dispatch_job_rejects_excluding_required_kwarg(db_session):
+    """Excluding a kwarg the worker requires must fail at dispatch time.
+
+    Pre-fix bug: meetings excluded ``transcript`` from params, then retry
+    crashed with TypeError because retry_failed_job rebuilds task_kwargs
+    from params alone. Catching the misuse here surfaces the bug at the
+    offending caller, not at retry time with a stranger pressing the button.
+    """
+    @job_utils.celery_app.task(name="test.required_kwarg_task")
+    def _task(transcript: str, title: str | None = None) -> None:
+        ...
+
+    with patch.object(
+        job_utils.celery_app, "send_task",
+    ):
+        with pytest.raises(ValueError, match="Cannot exclude required kwargs"):
+            job_utils.dispatch_job(
+                session=db_session,
+                job_type=JobType.MEETING,
+                task_name="test.required_kwarg_task",
+                task_kwargs={"transcript": "x", "title": "y"},
+                exclude_from_params=["transcript"],
+            )
+
+
+def test_dispatch_job_allows_excluding_optional_kwargs(db_session):
+    """Optional kwargs can still be excluded — only required ones are gated."""
+    @job_utils.celery_app.task(name="test.optional_kwarg_task")
+    def _task(transcript: str, title: str | None = None) -> None:
+        ...
+
+    with patch.object(
+        job_utils.celery_app, "send_task",
+        return_value=type("Task", (), {"id": "celery-opt"})(),
+    ):
+        # title is optional — excluding it must NOT raise.
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.optional_kwarg_task",
+            task_kwargs={"transcript": "x", "title": "y"},
+            exclude_from_params=["title"],
+        )
+
+    assert "title" not in result.job.params
+    assert result.job.params["transcript"] == "x"
+
+
+def test_dispatch_job_allows_excluding_job_id_kwarg(db_session):
+    """The dispatcher injects ``job_id`` itself, so excluding it is harmless."""
+    @job_utils.celery_app.task(name="test.job_id_task")
+    def _task(transcript: str, job_id: int) -> None:  # noqa: ARG001
+        ...
+
+    with patch.object(
+        job_utils.celery_app, "send_task",
+        return_value=type("Task", (), {"id": "celery-jid"})(),
+    ):
+        # job_id is required by signature but injected by the dispatcher,
+        # so excluding it must NOT raise.
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.job_id_task",
+            task_kwargs={"transcript": "x", "job_id": 99},
+            exclude_from_params=["job_id"],
+        )
+
+    assert result.job.params["transcript"] == "x"
+
+
+def test_retry_reconstructs_kwargs_when_nothing_excluded(db_session):
+    """End-to-end: a job whose params hold every required kwarg can be retried.
+
+    This is the regression the audit task is about — pre-fix, ``transcript``
+    was excluded so retry crashed; post-fix it's preserved in params and
+    retry sends it to the worker again.
+    """
+    @job_utils.celery_app.task(name="test.retry_e2e_task")
+    def _task(transcript: str, title: str | None = None) -> None:  # noqa: ARG001
+        ...
+
+    with patch.object(
+        job_utils.celery_app, "send_task",
+        return_value=type("Task", (), {"id": "celery-d1"})(),
+    ):
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.retry_e2e_task",
+            task_kwargs={"transcript": "the body", "title": "the title"},
+            # No exclude_from_params — transcript stays in params.
+        )
+
+    job = result.job
+    job.status = JobStatus.FAILED.value
+    db_session.commit()
+
+    with patch.object(
+        job_utils.celery_app, "send_task",
+        return_value=type("Task", (), {"id": "celery-d2"})(),
+    ) as mock_send:
+        job_utils.retry_failed_job(db_session, job)
+
+    # The retried task gets the full kwargs back, including transcript.
+    sent_kwargs = mock_send.call_args.kwargs["kwargs"]
+    assert sent_kwargs["transcript"] == "the body"
+    assert sent_kwargs["title"] == "the title"
+    assert sent_kwargs["job_id"] == job.id

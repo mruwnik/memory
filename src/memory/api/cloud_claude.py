@@ -10,10 +10,12 @@ Session IDs are prefixed with user_id to enable authorization filtering:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import secrets
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote, unquote, urlencode
@@ -136,10 +138,166 @@ def user_owns_session(user: User, session_id: str) -> bool:
     return owner_id == user.id
 
 
-# Strict session-id regex matching ``is_valid_session_id`` below; duplicated
-# at the top of the file so ``require_session_access`` can validate before
-# ``is_valid_session_id`` is defined further down.
+async def open_orchestrator_uds_request(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str] | None = None,
+    content: bytes | None = None,
+    timeout: float = 600.0,
+    stream: bool = False,
+    cant_reach_detail: str = "Cannot reach orchestrator",
+) -> tuple[httpx.Response, httpx.AsyncClient]:
+    """Open an httpx-over-Unix-socket request to the orchestrator and
+    return the response + client.
+
+    The orchestrator is reachable only via a Unix-domain socket, so
+    every transfer/proxy endpoint had to hand-roll the same
+    transport+client+send+ConnectError→502 boilerplate. The three
+    historical copies (transfer_pull, transfer_push, proxy_differ) had
+    drifted slightly in their aclose() orderings — fertile ground for
+    leaking httpx clients on error.
+
+    Caller MUST close the returned ``client`` (and the ``upstream_resp``
+    if not streaming). The helper handles the connect-error path
+    itself, so on a successful return the caller has both objects to
+    own; on a 502 the helper has already cleaned up.
+
+    Args:
+        method, url, headers, content, timeout: passed through to
+            ``client.build_request``.
+        stream: forwarded to ``client.send`` so streaming endpoints
+            can return without buffering the whole body.
+        cant_reach_detail: HTTP detail to use on ``httpx.ConnectError``.
+            Differs across endpoints (e.g. "Cannot reach differ
+            server" for the differ proxy).
+    """
+    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    client = httpx.AsyncClient(transport=transport, timeout=timeout)
+    try:
+        upstream_resp = await client.send(
+            client.build_request(
+                method=method,
+                url=url,
+                headers=headers,
+                content=content,
+            ),
+            stream=stream,
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=cant_reach_detail)
+    except Exception:
+        # Mirrors the historical behaviour: any failure during send
+        # must not leak the httpx client.
+        await client.aclose()
+        raise
+    return upstream_resp, client
+
+
+@contextlib.asynccontextmanager
+async def map_orchestrator_errors(
+    *,
+    log_msg: str | None = None,
+    log_level: int = logging.ERROR,
+    status_code: int | None = None,
+    detail_template: str | None = None,
+) -> AsyncIterator[None]:
+    """Translate ``OrchestratorError`` raised inside the block into ``HTTPException``.
+
+    Args:
+        log_msg: If set, log this prefix at ``log_level`` along with the
+            error before re-raising.
+        log_level: Log level for ``log_msg`` (default ERROR).
+        status_code: HTTP status to use. ``None`` (the default) means use
+            ``e.status_code`` if set, otherwise 502 — i.e. pass through
+            whatever the orchestrator told us.
+        detail_template: Template string for the HTTP detail; ``{e}`` is
+            substituted with the OrchestratorError instance. ``None``
+            means use ``str(e)``.
+
+    Use the ``with`` form at every previous copy of the
+    "try/except OrchestratorError -> HTTPException" pattern; the only
+    site this helper is *not* suitable for is the snapshot-cleanup
+    case in ``spawn_session``, which has bespoke teardown logic
+    interleaved with the re-raise.
+    """
+    try:
+        yield
+    except OrchestratorError as e:
+        if log_msg is not None:
+            logger.log(log_level, "%s: %s", log_msg, e)
+        final_status = (
+            status_code
+            if status_code is not None
+            else (e.status_code or 502)
+        )
+        final_detail = (
+            detail_template.format(e=e) if detail_template else str(e)
+        )
+        raise HTTPException(status_code=final_status, detail=final_detail) from e
+
+
+# Strict session-id regex used by both is_valid_session_id and the
+# require_session_access defense-in-depth check below.
 _SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
+
+
+def is_valid_session_id(session_id: str) -> bool:
+    """Validate session_id format (defense in depth).
+
+    Format: ``u{user_id}-{source}-{hex}`` where source is one of:
+      - ``e{env_id}``  for environment-based sessions   (e.g. u123-e456-abc123)
+      - ``s{snap_id}`` for snapshot-based sessions      (e.g. u123-s789-abc123)
+      - ``x``          for sessions without snapshot/environment (e.g. u123-x-abc123)
+    """
+    return bool(_SESSION_ID_RE.match(session_id))
+
+
+class UnsafeSubpathError(Exception):
+    """Internal sentinel: differ subpath contains a traversal or empty segment."""
+
+
+def check_no_traversal(differ_path: str) -> None:
+    """Raise ``UnsafeSubpathError`` if ``differ_path`` is unsafe to forward.
+
+    The subpath comes from the raw request bytes and may still contain
+    percent-encoded characters.  An attacker can smuggle traversal sequences
+    as ``%2e%2e``, ``..`` plain, or doubly-encoded as ``%252e%252e``.  Decode
+    in a fixed-point loop so all forms are caught: each iteration unwraps
+    one layer of percent-encoding, and we stop once the string stops
+    changing (which is the only safe way to know there's no more decoding
+    a downstream proxy could apply).
+
+    Empty segments (``a//b``) are also rejected because httpx (or a
+    downstream proxy) may normalise them into a different orchestrator
+    endpoint than what the user typed.
+
+    Shared between the HTTP and WebSocket differ proxies so both surfaces
+    stay in lock-step on what counts as "safe to forward".
+    """
+    prev = differ_path
+    while True:
+        decoded = unquote(prev)
+        if decoded == prev:
+            break
+        prev = decoded
+    for segment in decoded.split("/"):
+        if segment in ("", ".", ".."):
+            raise UnsafeSubpathError(segment)
+
+
+def validate_differ_subpath(differ_path: str) -> None:
+    """HTTP-shaped wrapper around :func:`check_no_traversal`.
+
+    Raises HTTPException 400 if the path contains traversal or empty segments.
+    """
+    try:
+        check_no_traversal(differ_path)
+    except UnsafeSubpathError as exc:
+        raise HTTPException(
+            status_code=400, detail="Path traversal not allowed"
+        ) from exc
 
 
 def require_session_access(user: User, session_id: str) -> None:
@@ -179,10 +337,17 @@ class SpawnRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
-        """Ensure exactly one of snapshot_id or environment_id is provided."""
-        if self.snapshot_id and self.environment_id:
+        """Ensure exactly one of snapshot_id or environment_id is provided.
+
+        NOTE: explicit ``is None`` checks rather than truthy checks. Integer
+        ``0`` is falsy in Python, so ``if self.snapshot_id`` would treat
+        ``snapshot_id=0`` as unset and silently pass through to the
+        environment branch. DB autoincrement starts at 1 in practice, but
+        the validator's contract is "exactly one set" — enforce it.
+        """
+        if self.snapshot_id is not None and self.environment_id is not None:
             raise ValueError("Cannot specify both snapshot_id and environment_id")
-        if not self.snapshot_id and not self.environment_id:
+        if self.snapshot_id is None and self.environment_id is None:
             raise ValueError("Must specify either snapshot_id or environment_id")
         return self
 
@@ -251,11 +416,8 @@ async def session_stats(
     operator concern, not a user-facing one).
     """
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         snapshot = await client.stats()
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     if has_admin_scope(user):
         return snapshot
@@ -297,13 +459,10 @@ async def session_stats_history(
             require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         result = await client.stats_history(
             session_id=session_id, since=since, max_points=max_points
         )
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     return result
 
@@ -327,11 +486,8 @@ async def container_stats(
         require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors():
         data = await client.container_stats(session_id)
-    except OrchestratorError as e:
-        status = e.status_code if e.status_code else 502
-        raise HTTPException(status_code=status, detail=str(e))
 
     if data is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -368,7 +524,7 @@ async def spawn_session(
     volume_name: str | None = None
     environment: ClaudeEnvironment | None = None
 
-    if request.snapshot_id:
+    if request.snapshot_id is not None:
         # Static snapshot mode: extract fresh each time into a new volume
         snapshot = (
             db.query(ClaudeConfigSnapshot)
@@ -474,11 +630,17 @@ async def spawn_session(
     # Determine Docker network for communication with Memory API
     networks = [f"memory-api-{settings.MEMORY_STACK}"]
 
+    # Track a freshly-created snapshot volume so we can roll back if container
+    # creation fails. Only the snapshot path is owned by this call; the
+    # environment-mode volume_name points at the user's persistent volume and
+    # MUST NOT be deleted on failure.
+    created_snapshot_volume: str | None = None
     try:
         # For snapshot-based sessions, create a temporary volume and init from snapshot
         if host_snapshot_path:
             volume_name = f"claude-snap-{session_id}"
             await client.create_initialized_volume(volume_name, host_snapshot_path)
+            created_snapshot_volume = volume_name
 
         result = await client.create_container(
             session_id,
@@ -489,6 +651,19 @@ async def spawn_session(
         )
     except OrchestratorError as e:
         logger.error(f"Failed to create session: {e}")
+        if created_snapshot_volume is not None:
+            # Best-effort cleanup of the orphan snapshot volume. The volume
+            # was created exclusively for the container we just failed to
+            # spawn — leaving it behind accumulates `claude-snap-*` volumes
+            # on the host with no way to attribute them later.
+            try:
+                await client.delete_volume(created_snapshot_volume)
+            except Exception:
+                logger.exception(
+                    "Failed to clean up orphan snapshot volume %s after "
+                    "create_container failure",
+                    created_snapshot_volume,
+                )
         raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     # Update environment usage stats if using an environment
@@ -612,11 +787,12 @@ async def list_sessions(
     """List active Claude sessions owned by the current user."""
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to list sessions",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         containers = await client.list_containers()
-    except OrchestratorError as e:
-        logger.error(f"Failed to list sessions: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     # Filter to only sessions owned by this user
     return [
@@ -642,11 +818,12 @@ async def get_session_info(
 
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to get session",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         container = await client.get_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to get session: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -670,11 +847,12 @@ async def kill_session(
 
     client = get_orchestrator_client()
 
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to stop session",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         success = await client.delete_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to stop session: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -695,11 +873,13 @@ async def list_panes(
     require_session_access(user, session_id)
 
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors(
+        log_msg=f"Failed to list panes for {session_id}",
+        log_level=logging.WARNING,
+        status_code=502,
+        detail_template="Failed to list panes: {e}",
+    ):
         return await client.relay_list_panes(session_id)
-    except OrchestratorError as e:
-        logger.warning(f"Failed to list panes for {session_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"Failed to list panes: {e}")
 
 
 @router.get("/{session_id}/attach")
@@ -717,11 +897,12 @@ async def get_attach_commands(
 
     # Verify the container exists
     client = get_orchestrator_client()
-    try:
+    async with map_orchestrator_errors(
+        log_msg="Failed to get session for attach",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
         container = await client.get_container(session_id)
-    except OrchestratorError as e:
-        logger.error(f"Failed to get session for attach: {e}")
-        raise HTTPException(status_code=503, detail=f"Orchestrator error: {e}")
 
     if container is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -817,20 +998,11 @@ async def transfer_pull(token: str = Query(...)) -> StreamingResponse:
     payload = verify_transfer_token(token, "read")
 
     upstream_url = container_files_url(payload.session_id, payload.path)
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=600.0)
-
-    try:
-        upstream_resp = await client.send(
-            client.build_request("GET", upstream_url),
-            stream=True,
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
-    except Exception:
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method="GET",
+        url=upstream_url,
+        stream=True,
+    )
 
     if upstream_resp.status_code >= 400:
         body = await upstream_resp.aread()
@@ -919,31 +1091,18 @@ async def transfer_push(request: Request) -> dict:
     body = b"".join(body_chunks)
 
     upstream_url = container_files_url(payload.session_id, payload.path)
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=600.0)
 
     forward_headers = {
         "content-type": "application/x-tar",
         "content-length": str(len(body)),
     }
 
-    try:
-        upstream_resp = await client.send(
-            client.build_request(
-                "PUT",
-                upstream_url,
-                headers=forward_headers,
-                content=body,
-            ),
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach orchestrator")
-    except Exception:
-        # Mirror the pull-side pattern: any failure during send must not leak
-        # the httpx client.
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method="PUT",
+        url=upstream_url,
+        headers=forward_headers,
+        content=body,
+    )
 
     try:
         resp_body = await upstream_resp.aread()
@@ -1102,25 +1261,15 @@ async def proxy_differ(
 
     body = await request.body()
 
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
-    client = httpx.AsyncClient(transport=transport, timeout=120.0)
-
-    try:
-        upstream_resp = await client.send(
-            client.build_request(
-                method=request.method,
-                url=upstream_url,
-                headers=headers,
-                content=body if body else None,
-            ),
-            stream=True,
-        )
-    except httpx.ConnectError:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail="Cannot reach differ server")
-    except Exception:
-        await client.aclose()
-        raise
+    upstream_resp, client = await open_orchestrator_uds_request(
+        method=request.method,
+        url=upstream_url,
+        headers=headers,
+        content=body if body else None,
+        timeout=120.0,
+        stream=True,
+        cant_reach_detail="Cannot reach differ server",
+    )
 
     content_type = upstream_resp.headers.get("content-type", "")
     is_streaming = "text/event-stream" in content_type
@@ -1277,66 +1426,6 @@ async def proxy_differ_ws(
             await websocket.close()
         except Exception:
             pass
-
-
-# --- WebSocket log streaming helpers ---
-
-
-class UnsafeSubpathError(Exception):
-    """Internal sentinel: differ subpath contains a traversal or empty segment."""
-
-
-def check_no_traversal(differ_path: str) -> None:
-    """Raise ``UnsafeSubpathError`` if ``differ_path`` is unsafe to forward.
-
-    The subpath comes from the raw request bytes and may still contain
-    percent-encoded characters.  An attacker can smuggle traversal sequences
-    as ``%2e%2e``, ``..`` plain, or doubly-encoded as ``%252e%252e``.  Decode
-    in a fixed-point loop so all forms are caught: each iteration unwraps
-    one layer of percent-encoding, and we stop once the string stops
-    changing (which is the only safe way to know there's no more decoding
-    a downstream proxy could apply).
-
-    Empty segments (``a//b``) are also rejected because httpx (or a
-    downstream proxy) may normalise them into a different orchestrator
-    endpoint than what the user typed.
-
-    Shared between the HTTP and WebSocket differ proxies so both surfaces
-    stay in lock-step on what counts as "safe to forward".
-    """
-    prev = differ_path
-    while True:
-        decoded = unquote(prev)
-        if decoded == prev:
-            break
-        prev = decoded
-    for segment in decoded.split("/"):
-        if segment in ("", ".", ".."):
-            raise UnsafeSubpathError(segment)
-
-
-def validate_differ_subpath(differ_path: str) -> None:
-    """HTTP-shaped wrapper around :func:`check_no_traversal`.
-
-    Raises HTTPException 400 if the path contains traversal or empty segments.
-    """
-    try:
-        check_no_traversal(differ_path)
-    except UnsafeSubpathError as exc:
-        raise HTTPException(
-            status_code=400, detail="Path traversal not allowed"
-        ) from exc
-
-
-def is_valid_session_id(session_id: str) -> bool:
-    """Validate session_id format (defense in depth).
-
-    Format: ``u{user_id}-{source}-{hex}`` where source is one of:
-      - ``e{env_id}``  for environment-based sessions   (e.g. u123-e456-abc123)
-      - ``s{snap_id}`` for snapshot-based sessions      (e.g. u123-s789-abc123)
-      - ``x``          for sessions without snapshot/environment (e.g. u123-x-abc123)
-    """
-    return bool(_SESSION_ID_RE.match(session_id))
 
 
 @router.websocket("/{session_id}/logs/stream")

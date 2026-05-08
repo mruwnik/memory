@@ -17,9 +17,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+# Sentinel returned by build_access_qdrant_filter when the user has no
+# access at all (no project access, no person override, no public bypass).
+# Compared with `is`, so consumers cannot accidentally match it via shape
+# inspection, and the value cannot collide with any real data (unlike the
+# previous `project_id == -1` magic value, which a future caller storing
+# negative project IDs in test fixtures or partition shards could trip).
+#
+# Immutable tuple rather than `[]`: a mutable list singleton can be
+# corrupted by a stray `result.append(...)` before the `is`-check, polluting
+# every subsequent caller. ``()`` is identity-comparable, falsy, and
+# can't be mutated.
+NO_ACCESS: tuple[dict[str, Any], ...] = ()
+
+
 def build_access_qdrant_filter(
     access_filter: "AccessFilter | None",
-) -> list[dict[str, Any]]:
+) -> "list[dict[str, Any]] | tuple[dict[str, Any], ...]":
     """
     Build Qdrant filter conditions from an AccessFilter.
 
@@ -29,9 +44,15 @@ def build_access_qdrant_filter(
     - Public bypass: sensitivity is "public"
     - Project access: project_id matches a project + sensitivity is allowed
 
-    If access_filter is None (superadmin), returns empty list (no filtering).
-    If access_filter has no conditions AND no person override AND no public bypass,
-    returns a filter that matches nothing.
+    Three meaningful return values:
+
+    - ``[]`` (fresh empty list): superadmin / no filtering needed. Caller
+      must apply no access filter to the Qdrant query.
+    - ``NO_ACCESS`` (distinct empty-tuple singleton): user has no access
+      at all. Caller must short-circuit and return zero results. Detect
+      with ``is NO_ACCESS``; do not compare with ``==``.
+    - non-empty list: ``should`` conditions to include in the Qdrant
+      filter.
 
     Note: Unlike BM25, Qdrant stores *resolved* values in the payload at ingestion
     time (project_id and sensitivity already include inheritance from data sources).
@@ -68,8 +89,12 @@ def build_access_qdrant_filter(
         should_conditions.append(project_condition)
 
     if not should_conditions:
-        # No access conditions at all - match nothing
-        return [{"key": "project_id", "match": {"value": -1}}]
+        # No access conditions at all - return the distinct NO_ACCESS
+        # sentinel. Consumers MUST detect this via `is NO_ACCESS` and
+        # short-circuit; otherwise the empty list would silently fall
+        # through as "no filter applied" — i.e. the user would see
+        # everything.
+        return NO_ACCESS
 
     return should_conditions
 
@@ -225,10 +250,10 @@ def merge_filters(
 
 async def search_chunks(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
     min_score: float = 0.3,
-    filters: SearchFilters = {},
+    filters: SearchFilters | None = None,
     multimodal: bool = False,
 ) -> dict[str, float]:
     """
@@ -245,6 +270,13 @@ async def search_chunks(
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    # ``None`` sentinels: shared mutable defaults would be a cross-request
+    # leak waiting to happen if anyone in this call chain ever mutates
+    # ``filters`` (e.g. ``filters.setdefault('access_filter', X)``).
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = {}
     search_filters: list[dict[str, Any]] = []
     for key, val in filters.items():
         if key in ("access_filter", "person_id"):
@@ -277,33 +309,19 @@ async def search_chunks(
     # Wrap in a nested Filter inside must for consistent structure
     access_filter = filters.get("access_filter")
     access_conditions = build_access_qdrant_filter(access_filter)
+    # IMPORTANT: detect "no access" via `is NO_ACCESS`, BEFORE the truthy
+    # check on access_conditions. Both `[]` (superadmin) and `NO_ACCESS`
+    # (deny everything) are empty lists; `is` is the only way to tell
+    # them apart. Getting this wrong = no filter applied = user sees
+    # everything they shouldn't.
+    if access_conditions is NO_ACCESS:
+        return {}
     if access_conditions:
         if "must" not in qdrant_filter:
             qdrant_filter["must"] = []
-        # Distinguish between "no access" and "has project access" cases:
-        #
-        # - "No access" case: build_access_qdrant_filter returns a single condition
-        #   with {"key": "project_id", "match": {"value": -1}}.
-        #   This is an impossible condition that matches nothing.
-        #
-        # - "Has access" case: Returns list of conditions that may include:
-        #   - Public bypass: {"key": "sensitivity", "match": {"value": "public"}}
-        #   - Person override: {"key": "people", "match": {"any": [...]}}
-        #   - Project access: {"must": [...]}
-        #
-        # We detect the "no access" case by checking for the specific impossible condition.
-        is_impossible_condition = (
-            len(access_conditions) == 1
-            and access_conditions[0].get("key") == "project_id"
-            and access_conditions[0].get("match", {}).get("value") == -1
-        )
-        if is_impossible_condition:
-            # User has no project access and no public bypass - return empty results
-            return {}
-
-        # Multiple project conditions - wrap as nested Filter with should
-        # The 'should' clause requires at least one condition to match by default
-        # This ensures proper AND semantics with other must conditions
+        # Wrap as nested Filter with should. The 'should' clause requires
+        # at least one condition to match by default. This ensures proper
+        # AND semantics with other must conditions.
         access_nested_filter = {
             "should": access_conditions,
         }
@@ -333,9 +351,9 @@ async def search_chunks(
 
 async def search_chunks_embeddings(
     data: list[extract.DataChunk],
-    modalities: set[str] = set(),
+    modalities: set[str] | None = None,
     limit: int = 10,
-    filters: SearchFilters = SearchFilters(),
+    filters: SearchFilters | None = None,
     timeout: int = 2,
 ) -> dict[str, float]:
     """
@@ -344,6 +362,10 @@ async def search_chunks_embeddings(
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    if modalities is None:
+        modalities = set()
+    if filters is None:
+        filters = SearchFilters()
     # Note: Multimodal embeddings typically produce higher similarity scores,
     # so we use a higher threshold (0.4) to maintain selectivity.
     # Text embeddings produce lower scores, so we use 0.25.

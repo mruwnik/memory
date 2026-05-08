@@ -3,8 +3,8 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 from pathlib import Path
 
-import fitz
-from memory.common import paths, settings  # PyMuPDF
+import fitz  # PyMuPDF
+from memory.common import paths
 
 logger = logging.getLogger(__name__)
 

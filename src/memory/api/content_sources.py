@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
@@ -19,6 +19,7 @@ from memory.common.celery_app import app as celery_app
 from memory.common.jobs import dispatch_job
 from memory.common.content_processing import clear_item_chunks
 from memory.common.db.models.source_items import Report
+from memory.common.rate_limit import check_rate_limit_spec
 
 logger = logging.getLogger(__name__)
 
@@ -418,11 +419,24 @@ async def upload_report(
 # === Forum Sync ===
 
 
+# Server-side ceiling on the per-request fan-out for /forums/sync. Independent
+# of the BaseModel default so a malicious caller can't request a higher value.
+# Picked so a single sync still does meaningful work without burning the whole
+# embedding budget on one call.
+FORUM_SYNC_MAX_ITEMS_CAP = 200
+
+# Per-user rate limit. The endpoint enqueues a Celery task that fans out to
+# LessWrong's API, embeds via OpenAI/Voyage (real money cost), and writes to
+# Postgres + Qdrant — far more expensive than a typical request, so the
+# bucket is much tighter than the API_RATE_LIMIT_DEFAULT 100/minute.
+FORUM_SYNC_RATE_LIMIT = "1/minute"
+
+
 class ForumSyncRequest(BaseModel):
     since: str | None = None
     min_karma: int = 10
-    limit: int = 50
-    max_items: int = 1000
+    limit: int = Field(default=50, ge=1, le=200)
+    max_items: int = Field(default=1000, ge=1)
     af: bool = False
     tags: list[str] = []
 
@@ -438,14 +452,46 @@ def trigger_forum_sync(
     request: ForumSyncRequest,
     user: User = Depends(get_current_user),
 ) -> ForumSyncResponse:
-    """Trigger a LessWrong forum sync with the given parameters."""
+    """Trigger a LessWrong forum sync with the given parameters.
+
+    Restricted to admin scope and rate-limited per-user — the underlying
+    Celery task fans out to a third-party API and runs paid embeddings, so
+    the previous "any authenticated user can call this with max_items=1000"
+    posture was a budget-burn / queue-flood vector.
+    """
+    if not has_admin_scope(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Forum sync is restricted to admin users.",
+        )
+
+    # Per-user rate limit: 1/minute. Keyed on user id alone — IP rotation
+    # would otherwise let a single admin mint a fresh bucket per request
+    # against an XFF-trusted proxy. (Earlier version of this concatenated
+    # ``rate_limit_key(http_request)`` to the user id; that compound key
+    # let a single user bypass the cap by rotating IPs/XFF, which is the
+    # opposite of what a per-user limit should do — Parvati flagged in
+    # PR #77.)
+    bucket_key = f"forum_sync:user:{user.id}"
+    if not check_rate_limit_spec(bucket_key, FORUM_SYNC_RATE_LIMIT):
+        raise HTTPException(
+            status_code=429,
+            detail="Forum sync rate limit exceeded. Please wait a minute and try again.",
+        )
+
+    # Cap max_items server-side regardless of caller value. Independent of
+    # the Pydantic default so a value above the cap is silently clamped
+    # rather than rejected — keeps the legitimate behaviour at the cap and
+    # prevents over-budget runs.
+    capped_max_items = min(request.max_items, FORUM_SYNC_MAX_ITEMS_CAP)
+
     task = celery_app.send_task(
         SYNC_LESSWRONG,
         kwargs={
             "since": request.since,
             "min_karma": request.min_karma,
             "limit": request.limit,
-            "max_items": request.max_items,
+            "max_items": capped_max_items,
             "af": request.af,
             "tags": request.tags,
         },

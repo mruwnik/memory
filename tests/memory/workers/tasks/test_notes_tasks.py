@@ -578,6 +578,38 @@ def test_check_git_command_git_failure(mock_git_command):
     )
 
 
+def test_check_git_command_does_not_double_log_on_failure(caplog):
+    """Regression: check_git_command must not duplicate the error log
+    that git_command already emitted on failure. Previously both
+    functions logged stderr/stdout/returncode independently, producing
+    two copies of every git failure in operator logs."""
+    repo_root = pathlib.Path("/test/repo")
+
+    # We want git_command's REAL error logging to fire (so we can count
+    # it), but we don't want subprocess to actually run. Patch
+    # subprocess.run to return a failing result.
+    failing = Mock()
+    failing.returncode = 1
+    failing.stdout = "out-text"
+    failing.stderr = "err-text"
+
+    with patch("memory.workers.tasks.notes.subprocess.run", return_value=failing):
+        # Force the early "no .git directory" return path in git_command.
+        with patch.object(pathlib.Path, "exists", return_value=True):
+            with caplog.at_level("ERROR", logger="memory.workers.tasks.notes"):
+                with pytest.raises(RuntimeError):
+                    notes.check_git_command(repo_root, "status")
+
+    # git_command emits exactly 3 ERROR records for a failure with
+    # non-empty stdout: "Git command failed", "stderr: ...",
+    # "stdout: ...". check_git_command must NOT emit another copy.
+    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(error_records) == 3, (
+        f"Expected exactly 3 error logs from git_command, got "
+        f"{len(error_records)}: {[r.getMessage() for r in error_records]}"
+    )
+
+
 @patch("memory.workers.tasks.notes.git_command")
 def test_check_git_command_multiple_args(mock_git_command):
     """Test check_git_command with multiple arguments."""
@@ -632,46 +664,46 @@ def test_check_git_command_whitespace_handling(mock_git_command):
     )
 
 
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.logger")
-def test_check_git_command_logs_errors(mock_logger, mock_git_command):
-    """Test check_git_command logs error details when git command fails."""
+@patch("memory.workers.tasks.notes.subprocess.run")
+def test_git_command_logs_errors(mock_run):
+    """git_command logs error details (returncode, stderr, stdout) when
+    the underlying git invocation fails. (Was previously asserted on
+    check_git_command, but that function no longer duplicates the
+    logging — the work happens in git_command, the single source.)"""
     mock_result = Mock()
     mock_result.returncode = 128
     mock_result.stdout = "some output"
     mock_result.stderr = "fatal: repository not found"
-    mock_git_command.return_value = mock_result
+    mock_run.return_value = mock_result
 
     repo_root = pathlib.Path("/test/repo")
 
-    with pytest.raises(RuntimeError):
-        notes.check_git_command(repo_root, "clone", "invalid-url")
+    with patch.object(pathlib.Path, "exists", return_value=True):
+        with patch("memory.workers.tasks.notes.logger") as mock_logger:
+            notes.git_command(repo_root, "clone", "invalid-url")
 
-    # Verify error logging
     mock_logger.error.assert_any_call("Git command failed: 128")
     mock_logger.error.assert_any_call("stderr: fatal: repository not found")
     mock_logger.error.assert_any_call("stdout: some output")
 
 
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.logger")
-def test_check_git_command_logs_errors_no_stdout(mock_logger, mock_git_command):
-    """Test check_git_command logs appropriately when there's no stdout."""
+@patch("memory.workers.tasks.notes.subprocess.run")
+def test_git_command_logs_errors_no_stdout(mock_run):
+    """git_command's stdout log line is suppressed when stdout is empty."""
     mock_result = Mock()
     mock_result.returncode = 1
     mock_result.stdout = ""
     mock_result.stderr = "error: command failed"
-    mock_git_command.return_value = mock_result
+    mock_run.return_value = mock_result
 
     repo_root = pathlib.Path("/test/repo")
 
-    with pytest.raises(RuntimeError):
-        notes.check_git_command(repo_root, "invalid-command")
+    with patch.object(pathlib.Path, "exists", return_value=True):
+        with patch("memory.workers.tasks.notes.logger") as mock_logger:
+            notes.git_command(repo_root, "invalid-command")
 
-    # Verify error logging - should not log stdout when empty
     mock_logger.error.assert_any_call("Git command failed: 1")
     mock_logger.error.assert_any_call("stderr: error: command failed")
-    # stdout logging should not have been called since stdout is empty
     stdout_calls = [
         call for call in mock_logger.error.call_args_list if "stdout:" in str(call)
     ]

@@ -79,13 +79,15 @@ def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
         if any(alias.lower() == name_lower for alias in (person.aliases or [])):
             return person
 
-    # Check if input looks like an email
+    # If the input looks like an email, do an exact (case-insensitive)
+    # match — NOT a substring match. The previous wildcards-on-both-sides
+    # ilike turned `bob@x.com` into a query that also matched
+    # `evilbob@x.com.attacker.tld`, and combined with the auto-link flow
+    # in users.link_person_to_user that lets a registering user
+    # accidentally inherit another Person's identity / team
+    # memberships. Delegate to find_person_by_email (exact-match path).
     if "@" in name_lower:
-        person = (
-            session.query(Person)
-            .filter(Person.contact_info["email"].astext.ilike(f"%{escape_like(name_lower)}%"))
-            .first()
-        )
+        person = find_person_by_email(session, name_lower)
         if person:
             return person
 

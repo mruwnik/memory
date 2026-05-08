@@ -39,8 +39,9 @@ class BookProcessingResult(TypedDict, total=False):
 MIN_SECTION_LENGTH = 100
 
 
-def create_book_from_ebook(ebook, tags: Iterable[str] = []) -> Book:
+def create_book_from_ebook(ebook, tags: Iterable[str] | None = None) -> Book:
     """Create a Book model from parsed ebook data."""
+    tags = tags or []
     return Book(
         title=ebook.title,
         author=ebook.author,
@@ -133,9 +134,10 @@ def validate_and_parse_book(file_path: str) -> Ebook:
 
 
 def create_book_and_sections(
-    ebook, session, tags: Iterable[str] = []
+    ebook, session, tags: Iterable[str] | None = None
 ) -> tuple[Book, list[BookSection]]:
     """Create book and all its sections with proper relationships."""
+    tags = tags or []
     # Create book
     book = create_book_from_ebook(ebook, tags)
     session.add(book)
@@ -293,7 +295,7 @@ def execute_book_processing(
 @safe_task_execution
 def sync_book(
     file_path: str,
-    tags: Iterable[str] = [],
+    tags: Iterable[str] | None = None,
     title: str = "",
     author: str = "",
     publisher: str = "",
@@ -318,6 +320,7 @@ def sync_book(
     Returns:
         dict: Summary of what was processed
     """
+    tags = tags or []
     logger.info(f"Processing new book from {file_path} (job_id={job_id})")
 
     ebook = validate_and_parse_book(file_path)

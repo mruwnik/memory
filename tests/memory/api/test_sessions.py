@@ -595,7 +595,7 @@ def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
     assert sum(c.total_tokens for c in calls) == 100 + 50 + 25 + 10
 
 
-# ====== parse_event_timestamp ======
+# ====== parse_iso_datetime (moved here from the deleted parse_event_timestamp wrapper) ======
 
 
 @pytest.mark.parametrize(
@@ -606,10 +606,10 @@ def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
         ("2026-05-07T01:23:45.500Z", "2026-05-07T01:23:45.500000+00:00"),
     ],
 )
-def test_parse_event_timestamp_accepts_valid(raw, expected_iso):
-    from memory.api.sessions import parse_event_timestamp
+def test_parse_iso_datetime_accepts_valid(raw, expected_iso):
+    from memory.common.dates import parse_iso_datetime
 
-    parsed = parse_event_timestamp(raw)
+    parsed = parse_iso_datetime(raw)
     assert parsed is not None
     assert parsed.isoformat() == expected_iso
 
@@ -618,7 +618,61 @@ def test_parse_event_timestamp_accepts_valid(raw, expected_iso):
     "raw",
     ["", None, "not a timestamp", "2026-13-01T00:00:00Z"],
 )
-def test_parse_event_timestamp_returns_none_on_invalid(raw):
-    from memory.api.sessions import parse_event_timestamp
+def test_parse_iso_datetime_returns_none_on_invalid(raw):
+    from memory.common.dates import parse_iso_datetime
 
-    assert parse_event_timestamp(raw) is None
+    assert parse_iso_datetime(raw) is None
+
+
+# ====== iter_transcript_events streaming ======
+
+
+def test_iter_transcript_events_does_not_load_whole_file(tmp_path):
+    """Regression: a paginated transcript read of an offset deep into a
+    large file must not load the whole file into memory before slicing.
+    The previous implementation called ``Path.read_text().splitlines()``
+    — O(file_size) RAM. The streaming generator is O(start) and can
+    short-circuit at ``end``.
+
+    We can't directly assert "didn't load the whole file" via memory
+    instrumentation in a test, but we CAN assert: when we ask for
+    events 5–10 with end=11 (exclusive), the generator stops reading
+    before line 11 and never touches lines beyond that. We test by
+    making the late portion of the file invalid JSON; with the bug,
+    the generator would have read those lines and emitted a warning.
+    With the fix, it short-circuits before reaching them.
+    """
+    from memory.api.sessions import iter_transcript_events
+
+    transcript = tmp_path / "huge.jsonl"
+    lines = [json.dumps({"i": i, "type": "x"}) for i in range(15)]
+    # Append corrupt lines beyond the requested window. Streaming
+    # version must never see them.
+    lines.extend(["this is not json", "neither is this"])
+    transcript.write_text("\n".join(lines) + "\n")
+
+    import logging
+
+    with patch.object(
+        logging.getLogger("memory.api.sessions"), "warning"
+    ) as mock_warn:
+        events = list(iter_transcript_events(transcript, start=5, end=11))
+
+    assert [e["i"] for e in events] == [5, 6, 7, 8, 9, 10]
+    # Streaming must short-circuit before reaching the corrupt tail —
+    # so no JSONDecodeError-warning should fire.
+    mock_warn.assert_not_called()
+
+
+def test_safe_loads_still_returns_a_list(tmp_path):
+    """The list-returning wrapper kept for read_transcript still works."""
+    from memory.api.sessions import safe_loads
+
+    transcript = tmp_path / "small.jsonl"
+    transcript.write_text(
+        "\n".join(json.dumps({"i": i}) for i in range(3)) + "\n"
+    )
+
+    items = safe_loads(transcript)
+    assert isinstance(items, list)
+    assert [e["i"] for e in items] == [0, 1, 2]

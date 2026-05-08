@@ -9,7 +9,6 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
-from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -49,11 +48,32 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
     """Create a one-time API key for the user.
 
     Returns the key string (only available at creation time).
-    The key includes OAuth scopes (read, write) plus the user's MCP tool scopes.
+
+    The minted key carries the user's full ``user.scopes``. OAuth in this
+    codebase is just the MCP-server gate — real authorization runs off the
+    user's session/api-key scopes — so we deliberately don't try to cap by
+    the OAuth grant here. ``access_token.scopes`` from ``verify_token``
+    is already ``user.scopes ∪ {read, write}``, so the intersection below
+    is a no-op for OAuth callers and just the user's literal scopes for
+    direct-API-key callers.
     """
-    # Combine OAuth scopes with user's MCP tool scopes
-    user_scopes = list(user_session.user.scopes or [])
-    scopes = list(set(user_scopes) | {SCOPE_READ, SCOPE_WRITE})
+    user_scopes = set(user_session.user.scopes or [])
+    access_token = get_access_token()
+    granted_scopes = set(access_token.scopes or []) if access_token else set()
+
+    # Intersection (or union with user.scopes when the token holds admin)
+    # rather than blind user.scopes assignment, so a future verify_token
+    # change that DOES narrow access_token.scopes will be reflected here
+    # without needing a parallel edit. Today both sides supply the same
+    # information; this just keeps them coupled.
+    if "*" in granted_scopes:
+        effective = user_scopes
+    elif "*" in user_scopes:
+        effective = granted_scopes
+    else:
+        effective = user_scopes & granted_scopes
+
+    scopes = sorted(effective)
 
     one_time_key = APIKey.create(
         user_id=user_session.user.id,

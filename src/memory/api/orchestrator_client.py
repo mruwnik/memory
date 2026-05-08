@@ -34,6 +34,103 @@ LOG_DIR = Path("/var/log/claude-sessions")
 # module can self-validate inputs that hit the host filesystem).
 _SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
 
+# Hard upper bound on bytes returned for a logs request. Even with a
+# correct seek-from-end tail, an attacker (or a chatty session) could
+# request ``tail=10_000_000`` and exhaust API memory. Truncate the
+# returned payload to keep the response bounded regardless of caller.
+LOG_TAIL_MAX_BYTES = int(os.getenv("LOG_TAIL_MAX_BYTES", 10 * 1024 * 1024))
+
+# Chunk size for the seek-from-end tail. 64 KiB balances syscall count
+# against memory: very small chunks read many times, very large chunks
+# undermine the point of avoiding a big read.
+_TAIL_READ_CHUNK = 64 * 1024
+
+
+def tail_log_text(log_file: Path, tail: int) -> str:
+    """Return the last ``tail`` lines of ``log_file`` as text.
+
+    Reads the file backwards in :data:`_TAIL_READ_CHUNK`-sized chunks
+    until ``tail+1`` newlines have been seen (the +1 lets us drop the
+    leading partial line — otherwise we'd return at most ``tail-1``
+    full lines plus a partial). For ``tail <= 0`` the function reads
+    the file when small, OR returns just the last
+    :data:`LOG_TAIL_MAX_BYTES` worth of bytes (with the leading partial
+    line dropped) when the file is larger — i.e. ``tail=0`` no longer
+    means "return the entire file" the way it used to; the response is
+    capped so a single request can't exhaust the API container even
+    against a multi-GB log. The final payload is always bounded by
+    :data:`LOG_TAIL_MAX_BYTES`, regardless of ``tail`` value, for the
+    same reason.
+    """
+    file_size = log_file.stat().st_size
+    if tail <= 0:
+        # Caller asked for the whole file. Still cap the payload to
+        # keep the response bounded.
+        with log_file.open("rb") as f:
+            if file_size > LOG_TAIL_MAX_BYTES:
+                f.seek(file_size - LOG_TAIL_MAX_BYTES)
+                # Drop the partial line at the start so callers get
+                # well-formed lines.
+                _ = f.readline()
+            return f.read().decode("utf-8", errors="replace")
+
+    # Small files: just read everything (seek-loop overhead isn't worth it).
+    if file_size <= _TAIL_READ_CHUNK:
+        with log_file.open("rb") as f:
+            data = f.read()
+        return _last_n_lines(data, tail).decode("utf-8", errors="replace")
+
+    # Seek-from-end loop: read backwards until we have ``tail+1`` newlines.
+    needed_newlines = tail + 1
+    pieces: list[bytes] = []
+    bytes_read = 0
+    found_newlines = 0
+    with log_file.open("rb") as f:
+        position = file_size
+        while position > 0 and found_newlines < needed_newlines:
+            read_size = min(_TAIL_READ_CHUNK, position)
+            position -= read_size
+            f.seek(position)
+            chunk = f.read(read_size)
+            pieces.append(chunk)
+            bytes_read += read_size
+            found_newlines += chunk.count(b"\n")
+            # Hard cap: even if newlines are sparse, don't read more than
+            # the response cap. Caller asked for "lines" — we truncate
+            # rather than try to honour an unbounded read.
+            if bytes_read >= LOG_TAIL_MAX_BYTES:
+                break
+
+    data = b"".join(reversed(pieces))
+    return _last_n_lines(data, tail).decode("utf-8", errors="replace")
+
+
+def _last_n_lines(data: bytes, tail: int) -> bytes:
+    """Return the last ``tail`` complete lines from ``data``.
+
+    Truncates the result to :data:`LOG_TAIL_MAX_BYTES` from the END so
+    we always show the most-recent slice rather than an arbitrary head.
+    """
+    if not data:
+        return b""
+    # ``splitlines`` followed by ``[-tail:]`` is the same allocation
+    # pattern the original code used, but on at most LOG_TAIL_MAX_BYTES
+    # of data rather than the whole file. Joining with b"\n" preserves
+    # the "no trailing newline" shape the original returned.
+    lines = data.splitlines()
+    selected = lines[-tail:] if tail > 0 else lines
+    out = b"\n".join(selected)
+    if len(out) > LOG_TAIL_MAX_BYTES:
+        out = out[-LOG_TAIL_MAX_BYTES:]
+    return out
+
+
+# Module-level alias used by :meth:`OrchestratorClient.get_logs` via
+# ``asyncio.to_thread``. Underscore-prefixed historically; the helper is
+# safe to call from anywhere so the prefix is misleading, but kept as
+# an alias for backwards compatibility with existing call sites.
+_tail_log_file = tail_log_text
+
 
 class OrchestratorError(Exception):
     """Error communicating with the orchestrator.
@@ -581,6 +678,12 @@ class OrchestratorClient:
         The orchestrator writes logs to LOG_DIR/{session_id}.log.
         Returns None if no logs are available.
 
+        Uses a seek-from-end tail so a multi-GB log file doesn't OOM the
+        API container. ``read_text()`` would buffer the entire file
+        (peak ~3× file size after splitlines + join) before discarding
+        all but the last N lines — for long-lived debug sessions that
+        log verbosely for hours, that's a single-request DoS.
+
         Validates ``session_id`` format here (defense in depth) — without
         this, a malformed id like ``u1-x-../../../etc/hosts`` would resolve
         to ``/etc/hosts.log`` on the host filesystem.
@@ -594,18 +697,16 @@ class OrchestratorClient:
             return None
 
         try:
-            content = await asyncio.to_thread(log_file.read_text)
-            if tail > 0:
-                lines = content.splitlines()
-                content = "\n".join(lines[-tail:])
-            return {
-                "session_id": session_id,
-                "source": "file",
-                "logs": content,
-            }
+            content = await asyncio.to_thread(_tail_log_file, log_file, tail)
         except OSError as e:
             logger.warning(f"Failed to read log file {log_file}: {e}")
             return None
+
+        return {
+            "session_id": session_id,
+            "source": "file",
+            "logs": content,
+        }
 
 
 # Singleton client instance

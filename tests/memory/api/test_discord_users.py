@@ -24,7 +24,6 @@ from memory.common.db.models import (
     DiscordUser,
     HumanUser,
     Person,
-    SourceItem,
 )
 
 

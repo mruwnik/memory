@@ -1,16 +1,14 @@
 import contextlib
 import logging
-import uuid
 from datetime import datetime
 from typing import Generator, cast
 
-import redis
 from sqlalchemy.exc import IntegrityError
 
-from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
+from memory.common.redis_lock import Lock, distributed_lock
 from memory.parsers.email import parse_email_message
 from memory.workers.email import (
     create_mail_message,
@@ -32,64 +30,22 @@ logger = logging.getLogger(__name__)
 EMAIL_SYNC_LOCK_TIMEOUT = 900
 
 
-class EmailSyncLock:
-    """Distributed lock for email sync with renewal capability."""
-
-    def __init__(self, account_id: int):
-        self.account_id = account_id
-        self.lock_key = f"memory:lock:email_sync:{account_id}"
-        self.lock_value = str(uuid.uuid4())
-        self.redis_client = redis.from_url(settings.REDIS_URL)
-        self.acquired = False
-
-    def extend(self) -> bool:
-        """Extend the lock TTL if we still own it. Returns True if successful."""
-        # Atomically check ownership and extend TTL
-        extend_script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("expire", KEYS[1], ARGV[2])
-        else
-            return 0
-        end
-        """
-        result = self.redis_client.eval(
-            extend_script, 1, self.lock_key, self.lock_value, EMAIL_SYNC_LOCK_TIMEOUT  # type: ignore[arg-type]
-        )
-        return bool(result)
-
-
 @contextlib.contextmanager
-def email_sync_lock(account_id: int) -> Generator[EmailSyncLock | None, None, None]:
+def email_sync_lock(account_id: int) -> Generator[Lock | None, None, None]:
     """Distributed lock for email account sync to prevent duplicate processing.
 
-    Yields an EmailSyncLock object if acquired (with extend() method for renewal),
-    or None if another sync is in progress.
-
-    Uses a unique lock value to prevent releasing another process's lock
-    if this lock expires during a long-running operation.
+    Yields a :class:`memory.common.redis_lock.Lock` if acquired (with
+    ``extend()`` for renewal during long syncs), or ``None`` if another
+    sync is in progress. Atomic check-and-delete release is handled by
+    the underlying helper so we never clobber another worker's lock.
     """
-    lock = EmailSyncLock(account_id)
-
-    lock.acquired = bool(
-        lock.redis_client.set(lock.lock_key, lock.lock_value, nx=True, ex=EMAIL_SYNC_LOCK_TIMEOUT)
-    )
-    if not lock.acquired:
-        logger.info(f"Email sync lock already held for account {account_id}, skipping")
-        yield None
-        return
-
-    try:
+    lock_key = f"memory:lock:email_sync:{account_id}"
+    with distributed_lock(lock_key, EMAIL_SYNC_LOCK_TIMEOUT) as lock:
+        if lock is None:
+            logger.info(
+                f"Email sync lock already held for account {account_id}, skipping"
+            )
         yield lock
-    finally:
-        # Only release the lock if we still own it (atomic check-and-delete)
-        release_script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("del", KEYS[1])
-        else
-            return 0
-        end
-        """
-        lock.redis_client.eval(release_script, 1, lock.lock_key, lock.lock_value)
 
 
 @app.task(name=PROCESS_EMAIL)
@@ -182,7 +138,7 @@ def process_email_batch(
     db: DBSession,
     messages: Generator[tuple[str, str], None, None],
     folder: str = "INBOX",
-    lock: EmailSyncLock | None = None,
+    lock: Lock | None = None,
 ) -> dict:
     """
     Process a batch of emails, queuing them for async processing.
@@ -207,10 +163,14 @@ def process_email_batch(
         # Extend lock periodically to prevent expiry during long syncs
         if lock and messages_found % LOCK_EXTEND_INTERVAL == 0:
             if not lock.extend():
-                logger.warning("Failed to extend lock, another sync may have started - aborting")
-                # Mark lock as not acquired to signal we should stop
-                lock.acquired = False
-                # Return partial stats - caller should check for incomplete sync
+                logger.warning(
+                    "Failed to extend lock, another sync may have started - aborting"
+                )
+                # Caller should check the returned `aborted` field. The
+                # outer email_sync_lock context manager will run its
+                # ownership-checked release in finally — which is now a
+                # no-op (correctly) because some other worker holds the
+                # lock.
                 return {
                     "messages_found": messages_found,
                     "new_messages": new_messages,
@@ -262,7 +222,7 @@ def sync_imap_messages(
     account: EmailAccount,
     db: DBSession,
     cutoff_date: datetime,
-    lock: EmailSyncLock | None = None,
+    lock: Lock | None = None,
 ) -> dict:
     """Sync emails from an IMAP account."""
     folders_to_process: list[str] = cast(list[str], account.folders) or ["INBOX"]
@@ -312,7 +272,7 @@ def sync_gmail_messages(
     account: EmailAccount,
     db: DBSession,
     cutoff_date: datetime,
-    lock: EmailSyncLock | None = None,
+    lock: Lock | None = None,
 ) -> dict:
     """Sync emails from a Gmail account using the Gmail API."""
     # Get all message IDs from Gmail (single API call)

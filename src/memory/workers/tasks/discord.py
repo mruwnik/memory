@@ -13,10 +13,10 @@ import pathlib
 from datetime import datetime
 from typing import Any, cast
 
-import requests
 from sqlalchemy import exc as sqlalchemy_exc
 
 from memory.common import paths, settings
+from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
     EDIT_DISCORD_MESSAGE,
@@ -41,48 +41,56 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE_SIZE = 50 * 1024 * 1024
 
 
+def safe_process_discord_message(
+    message: DiscordMessage,
+    session,
+    *,
+    message_id: int,
+    operation: str,
+) -> dict[str, Any]:
+    """Wrap ``process_content_item`` so callers don't repeat the IntegrityError path.
+
+    ``add_discord_message`` and ``edit_discord_message`` had three near-
+    identical try/except blocks that all logged + returned the same
+    error dict. Centralising it here keeps the error wording in lock-
+    step and makes it easy to add common-shape recovery (e.g. retry
+    with a backoff) in one place.
+    """
+    try:
+        return process_content_item(message, session)
+    except sqlalchemy_exc.IntegrityError as e:
+        logger.error(
+            "Integrity error %s Discord message %s: %s", operation, message_id, e
+        )
+        return {
+            "status": "error",
+            "error": "Integrity error",
+            "message_id": message_id,
+        }
+
+
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
-    """Download images from URLs and save to disk. Returns relative file paths."""
+    """Download images from URLs and save to disk. Returns relative file paths.
+
+    Filenames are SHA-256 truncated to match the convention in
+    parsers/html.py — pre-fix this site used MD5, an inconsistency that
+    showed the three sites had drifted independently.
+    """
     image_dir = settings.DISCORD_STORAGE_DIR / str(message_id)
     image_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths = []
     for url in image_urls:
-        try:
-            # Stream download with size limit to prevent OOM
-            with requests.get(url, timeout=30, stream=True) as response:
-                response.raise_for_status()
+        # SHA-256 truncated, matches parsers/html.py (was MD5 before).
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:32]
+        ext = pathlib.Path(url).suffix or ".jpg"
+        ext = ext.split("?")[0][:10]
+        filename = f"{url_hash}{ext}"
+        local_path = image_dir / filename
 
-                # Check Content-Length if available
-                content_length = response.headers.get("Content-Length")
-                if content_length and int(content_length) > MAX_IMAGE_SIZE:
-                    logger.warning(f"Skipping large image ({content_length} bytes): {url}")
-                    continue
-
-                # Generate filename from URL hash
-                url_hash = hashlib.md5(url.encode()).hexdigest()
-                ext = pathlib.Path(url).suffix or ".jpg"
-                ext = ext.split("?")[0]
-                filename = f"{url_hash}{ext}"
-                local_path = image_dir / filename
-
-                # Stream to file with size tracking
-                downloaded = 0
-                with local_path.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        downloaded += len(chunk)
-                        if downloaded > MAX_IMAGE_SIZE:
-                            logger.warning(f"Image exceeded size limit during download: {url}")
-                            local_path.unlink(missing_ok=True)
-                            break
-                        f.write(chunk)
-                    else:
-                        # Loop completed without break - download successful
-                        relative_path = paths.to_db_filename(local_path)
-                        saved_paths.append(str(relative_path))
-
-        except Exception as e:
-            logger.error(f"Failed to download/save image from {url}: {e}")
+        if not stream_download_to_path(url, local_path, MAX_IMAGE_SIZE):
+            continue
+        saved_paths.append(paths.to_db_filename(local_path))
 
     return saved_paths
 
@@ -156,16 +164,12 @@ def add_discord_message(
             if reactions is not None:
                 existing_msg.reactions = reactions  # type: ignore
 
-            try:
-                result = process_content_item(existing_msg, session)
-            except sqlalchemy_exc.IntegrityError as e:
-                logger.error(f"Integrity error editing Discord message {message_id}: {e}")
-                return {
-                    "status": "error",
-                    "error": "Integrity error",
-                    "message_id": message_id,
-                }
-            return result
+            return safe_process_discord_message(
+                existing_msg,
+                session,
+                message_id=message_id,
+                operation="editing",
+            )
 
         # Create new message
         discord_message = DiscordMessage(
@@ -204,17 +208,12 @@ def add_discord_message(
             if discord_user.person not in discord_message.people:
                 discord_message.people.append(discord_user.person)
 
-        try:
-            result = process_content_item(discord_message, session)
-        except sqlalchemy_exc.IntegrityError as e:
-            logger.error(f"Integrity error adding Discord message {message_id}: {e}")
-            return {
-                "status": "error",
-                "error": "Integrity error",
-                "message_id": message_id,
-            }
-
-        return result
+        return safe_process_discord_message(
+            discord_message,
+            session,
+            message_id=message_id,
+            operation="adding",
+        )
 
 
 @app.task(name=EDIT_DISCORD_MESSAGE)
@@ -248,17 +247,12 @@ def edit_discord_message(
             edited_at.replace("Z", "+00:00")
         )
 
-        try:
-            result = process_content_item(existing_msg, session)
-        except sqlalchemy_exc.IntegrityError as e:
-            logger.error(f"Integrity error editing Discord message {message_id}: {e}")
-            return {
-                "status": "error",
-                "error": "Integrity error",
-                "message_id": message_id,
-            }
-
-        return result
+        return safe_process_discord_message(
+            existing_msg,
+            session,
+            message_id=message_id,
+            operation="editing",
+        )
 
 
 @app.task(name=UPDATE_REACTIONS)

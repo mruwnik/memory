@@ -21,6 +21,8 @@ from memory.api.MCP.access import (
     build_user_access_filter_from_dict,
     get_mcp_current_user,
     get_project_roles_by_user_id,
+    log_item_access,
+    log_search_access,
 )
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
 from memory.common.access_control import (
@@ -279,6 +281,18 @@ async def search(
         config=config,
     )
 
+    # Audit-log the search. The AccessLog docstring (and access_control.py:13)
+    # claim "all access is logged, including superadmin access" — that's only
+    # true if we actually call log_search_access. Logged best-effort: a logging
+    # failure must not fail the user's search.
+    user = get_mcp_current_user()
+    user_id = getattr(user, "id", None) if user else None
+    if user_id is not None:
+        try:
+            log_search_access(user_id, query, len(results))
+        except Exception:
+            logger.exception("log_search_access failed for user_id=%s", user_id)
+
     return [result.model_dump() for result in results]
 
 
@@ -434,6 +448,18 @@ async def search_observations(
         ),
         config=config,
     )
+
+    # Audit-log the observation search. Best-effort.
+    user = get_mcp_current_user()
+    user_id = getattr(user, "id", None) if user else None
+    if user_id is not None:
+        try:
+            log_search_access(user_id, query, len(results))
+        except Exception:
+            logger.exception(
+                "log_search_access failed for user_id=%s in search_observations",
+                user_id,
+            )
 
     return [
         {
@@ -628,7 +654,31 @@ async def fetch(
         if id is not None and ids is None:
             if not results_by_id:
                 raise ValueError(f"Item {id} not found or not yet indexed")
+            # Audit-log the access. Best-effort: a logging failure must not
+            # fail the user's fetch.
+            if user_id is not None:
+                try:
+                    log_item_access(user_id, id)
+                except Exception:
+                    logger.exception(
+                        "log_item_access failed for user_id=%s item_id=%s",
+                        user_id,
+                        id,
+                    )
             return results_by_id[id]
+
+        # Audit-log every item the caller actually got (post-access-check).
+        if user_id is not None:
+            for accessed_id in results_by_id:
+                try:
+                    log_item_access(user_id, accessed_id)
+                except Exception:
+                    logger.exception(
+                        "log_item_access failed for user_id=%s item_id=%s "
+                        "in bulk fetch",
+                        user_id,
+                        accessed_id,
+                    )
 
         # Return results in the same order as the input ids
         return [results_by_id[i] for i in fetch_ids if i in results_by_id]

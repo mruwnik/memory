@@ -3,7 +3,7 @@ from datetime import datetime
 import logging
 from typing import Optional, cast, TypedDict, NotRequired, TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
@@ -142,6 +142,14 @@ class SearchFilters(MCPSearchFilters):
 
 
 class SearchConfig(BaseModel):
+    # ``frozen=True`` so a stray ``config.limit = 999`` somewhere in the
+    # call chain raises immediately instead of silently mutating a shared
+    # default. ``model_post_init`` still uses ``object.__setattr__`` to
+    # clamp values during construction, which bypasses the freeze (the
+    # post-init hook runs as part of model construction, not as a normal
+    # attribute set).
+    model_config = ConfigDict(frozen=True)
+
     limit: int = 20
     timeout: int = 20
     previews: bool = False

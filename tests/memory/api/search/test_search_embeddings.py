@@ -7,6 +7,7 @@ from memory.api.search.embeddings import (
     merge_filters,
     build_person_filter,
     build_access_qdrant_filter,
+    NO_ACCESS,
     search_chunks,
 )
 from memory.common.access_control import AccessFilter, AccessCondition
@@ -264,14 +265,31 @@ def test_build_access_qdrant_filter_superadmin():
 
 
 def test_build_access_qdrant_filter_no_access():
-    """Test that empty access filter with no public bypass returns impossible condition."""
+    """Test that empty access filter with no public bypass returns the
+    NO_ACCESS sentinel (not a magic project_id == -1 dict)."""
     access_filter = AccessFilter(conditions=[], include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
-    # Should return a condition that matches nothing
-    assert len(result) == 1
-    assert result[0]["key"] == "project_id"
-    assert result[0]["match"]["value"] == -1
+    # Identity-comparable sentinel: callers MUST detect this via
+    # `is NO_ACCESS` to distinguish from `[]` (superadmin / no filter).
+    assert result is NO_ACCESS
+
+
+def test_build_access_qdrant_filter_no_access_is_distinct_from_superadmin():
+    """The NO_ACCESS sentinel must NOT be equal-by-identity to the
+    superadmin empty-list return; otherwise consumers cannot tell the
+    'deny all' case from 'no filter needed' and would silently grant
+    full access."""
+    superadmin_result = build_access_qdrant_filter(None)
+    no_access_result = build_access_qdrant_filter(
+        AccessFilter(conditions=[], include_public=False)
+    )
+
+    # Both are empty list values, but they must NOT share identity:
+    # `is` is the only check the consumer uses to disambiguate.
+    assert superadmin_result == []
+    assert no_access_result is NO_ACCESS
+    assert superadmin_result is not NO_ACCESS
 
 
 def test_build_access_qdrant_filter_no_access_with_public():

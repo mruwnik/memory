@@ -13,9 +13,11 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
+from memory.common.celery_app import SYNC_ACCOUNT, app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
+from memory.workers.email import imap_connection
 
 logger = logging.getLogger(__name__)
 
@@ -314,11 +316,9 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an email account."""
-    from memory.common.celery_app import app, SYNC_ACCOUNT
-
     get_user_account(db, EmailAccount, account_id, user)  # Verify ownership
 
-    task = app.send_task(
+    task = celery_app.send_task(
         SYNC_ACCOUNT,
         args=[account_id],
         kwargs={"since_date": since_date},
@@ -334,8 +334,6 @@ def test_connection(
     db: Session = Depends(get_session),
 ):
     """Test IMAP connection for an email account."""
-    from memory.workers.email import imap_connection
-
     account = get_user_account(db, EmailAccount, account_id, user)
 
     try:
