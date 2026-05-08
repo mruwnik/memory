@@ -273,20 +273,6 @@ def test_sanitize_email_accepts_valid(raw, expected):
     assert sanitize_email(raw) == expected
 
 
-def test_sanitize_email_html_escapes_metachars():
-    """Defense-in-depth: any <, >, & embedded in the address is escaped on
-    the way in, so a future renderer that drops the value into HTML
-    inherits a safe default.
-    """
-    # Crafted to pass the shape check (one @, dot in domain) while smuggling
-    # an HTML payload — the kind of thing that bites if we ever email or
-    # render the value verbatim.
-    out = sanitize_email("a<svg>@evil.example")
-    assert out is not None
-    assert "<svg>" not in out
-    assert "&lt;svg&gt;" in out
-
-
 @pytest.mark.parametrize(
     "raw",
     [
@@ -299,6 +285,15 @@ def test_sanitize_email_html_escapes_metachars():
         "newline\n@injection.example",  # CRLF injection
         "carriage\r@injection.example",
         "\x01ctrl@example.com",  # control char
+        # HTML metacharacters: rejected at the shape-check layer to avoid
+        # the html.escape inflation footgun (a 252-char string of "<" would
+        # balloon to ~1k chars after escaping and overflow the
+        # respondent_email String(255) column on insert).
+        "a<svg>@evil.example",
+        "a>tag@evil.example",
+        "a&amp@evil.example",
+        'a"quote@evil.example',
+        "a'quote@evil.example",
     ],
 )
 def test_sanitize_email_rejects_malformed(raw):
@@ -327,3 +322,20 @@ def test_sanitize_email_at_cap_passes():
     addr = f"{local}@example.com"
     assert len(addr) == MAX_EMAIL_LENGTH
     assert sanitize_email(addr) == addr
+
+
+def test_sanitize_email_html_escape_does_not_overflow_column():
+    """Regression: discovered during validation of bf148366.
+
+    The 254-char input cap previously sat *before* html.escape, so an input
+    of 248 ``<`` chars + ``@a.b`` (252 chars) passed both the shape check
+    and the cap, then ballooned to ~1k chars after html.escape and 500'd on
+    insert into the String(255) column. With the metacharacter check the
+    pre-escape rejection short-circuits the inflation entirely.
+    """
+    from fastapi import HTTPException
+
+    addr = "<" * 248 + "@a.b"  # 252 chars, would have passed pre-fix
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(addr)
+    assert exc_info.value.status_code == 400

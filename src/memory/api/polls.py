@@ -321,6 +321,19 @@ def sanitize_email(email: str | None) -> str | None:
             status_code=400,
             detail="Email contains invalid whitespace or control characters",
         )
+    # Reject HTML metacharacters at the shape-check layer rather than relying
+    # on html.escape to massage them. The defense-in-depth html.escape below
+    # inflates each ``<`` / ``>`` / ``&`` / ``"`` / ``'`` to 4–6 chars, so a
+    # 252-char string of ``<`` would balloon to ~1k chars after escaping and
+    # overflow the ``respondent_email`` String(255) column on insert (500
+    # error rather than a clean 400). None of these chars are valid in an
+    # RFC-5321 addr-spec, so dropping them at the front door is also more
+    # honest than escaping them and pretending the address is well-formed.
+    if any(c in "<>&\"'" for c in email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email contains invalid HTML metacharacters",
+        )
     parts = email.split("@")
     if len(parts) != 2 or not parts[0] or not parts[1] or "." not in parts[1]:
         raise HTTPException(
@@ -328,7 +341,10 @@ def sanitize_email(email: str | None) -> str | None:
             detail="Email must be of the form local@domain.tld",
         )
     # Defense-in-depth: HTML-escape for any future UI/email pipeline that
-    # forgets to escape on render. Valid email chars survive unchanged.
+    # forgets to escape on render. With the metacharacter check above this is
+    # currently a no-op for accepted inputs, but the call is kept so a future
+    # relaxation of the metacharacter check (e.g. quoted local-parts) doesn't
+    # silently re-open the renderer-side risk.
     return html.escape(email)
 
 
