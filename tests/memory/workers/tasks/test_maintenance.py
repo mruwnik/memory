@@ -240,12 +240,12 @@ def test_check_batch(db_session, qdrant):
         "photo": {"correct": 2, "missing": 3, "total": 5},
     }
     db_session.commit()
-    for chunk in chunks[::2]:
+    # check_batch updates checked_at for *every* chunk it inspects (not only
+    # the ones that were found in qdrant) so a chunk waiting in the reingest
+    # queue isn't re-dispatched on the next hourly run.
+    for chunk in chunks:
         assert chunk.checked_at is not None
         assert chunk.checked_at.isoformat() > start_time.isoformat()
-    for chunk in chunks[1::2]:
-        assert chunk.checked_at is not None
-        assert chunk.checked_at.isoformat()[:19] == "2025-01-01T00:00:00"
 
 
 @pytest.mark.parametrize("batch_size", [4, 10, 100])

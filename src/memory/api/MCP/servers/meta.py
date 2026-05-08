@@ -190,15 +190,15 @@ class CollectionMetadata(TypedDict):
 def from_annotation(annotation: Annotated) -> SchemaArg | None:
     try:
         type_, description = get_args(annotation)
-        type_str = str(type_)
-        if type_str.startswith("typing."):
-            type_str = type_str[7:]
-        elif len((parts := type_str.split("'"))) > 1:
-            type_str = parts[1]
-        return SchemaArg(type=type_str, description=description)
-    except IndexError:
+    except (IndexError, ValueError):
         logger.error(f"Error from annotation: {annotation}")
         return None
+    type_str = str(type_)
+    if type_str.startswith("typing."):
+        type_str = type_str[7:]
+    elif len((parts := type_str.split("'"))) > 1:
+        type_str = parts[1]
+    return SchemaArg(type=type_str, description=description)
 
 
 def get_schema(klass: type[SourceItem]) -> dict[str, SchemaArg]:
@@ -208,9 +208,12 @@ def get_schema(klass: type[SourceItem]) -> dict[str, SchemaArg]:
     if not (payload_type := get_type_hints(klass.as_payload).get("return")):
         return {}
 
+    # include_extras=True preserves Annotated[T, "desc"]; without it (or with raw
+    # __annotations__) the model files' `from __future__ import annotations`
+    # leaves us with ForwardRef strings whose get_args() returns ().
     return {
         name: schema
-        for name, arg in payload_type.__annotations__.items()
+        for name, arg in get_type_hints(payload_type, include_extras=True).items()
         if (schema := from_annotation(arg))
     }
 

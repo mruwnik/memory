@@ -21,7 +21,6 @@ export interface Person {
   aliases: string[]
   contact_info: Record<string, string>
   tags: string[]
-  notes: string | null
   created_at: string | null
   tidbits?: Tidbit[]
 }

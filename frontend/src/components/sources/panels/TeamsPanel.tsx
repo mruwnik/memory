@@ -1066,13 +1066,6 @@ const MembersModal = ({
                     </div>
                   )}
 
-                  {selectedMember.person.notes && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">Notes</div>
-                      <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedMember.person.notes}</div>
-                    </div>
-                  )}
-
                   {/* Tidbits */}
                   {selectedMember.person.tidbits && selectedMember.person.tidbits.length > 0 && (
                     <div>

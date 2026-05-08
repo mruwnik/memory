@@ -413,8 +413,14 @@ def test_sync_comic_embedding_failure(
         title="Test Comic",
         author="https://example.com",
     )
+    # Sequences are not transactional in PostgreSQL — when other tests in the
+    # same suite advance the comic id sequence, the new comic's id won't be 1.
+    saved_comic = (
+        db_session.query(Comic).filter(Comic.url == "https://example.com/comic/1").first()
+    )
+    assert saved_comic is not None
     assert result == {
-        "comic_id": 1,
+        "comic_id": saved_comic.id,
         "title": "Test Comic",
         "status": "failed",
         "chunks_count": 0,

@@ -16,7 +16,6 @@ interface PersonCardProps {
 const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams, teamsLoading, tidbits, tidbitsLoading }: PersonCardProps) => {
   const hasDetails = (person.aliases && person.aliases.length > 0) ||
     (person.contact_info && Object.keys(person.contact_info).length > 0) ||
-    person.notes ||
     (teams && teams.length > 0) ||
     (tidbits && tidbits.length > 0)
 
@@ -151,18 +150,6 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
                   )
                 })}
               </dl>
-            </div>
-          )}
-
-          {/* Notes */}
-          {person.notes && (
-            <div className="mb-4">
-              <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-                Notes
-              </h4>
-              <div className="text-sm text-slate-700 whitespace-pre-wrap bg-white border border-slate-200 rounded-lg p-3">
-                {person.notes}
-              </div>
             </div>
           )}
 

@@ -215,11 +215,13 @@ def test_update_job_celery_task_id(db_session, sample_job):
 
 def test_list_jobs_no_filter(db_session):
     """Test listing all jobs."""
-    # Create multiple jobs
+    # Create multiple jobs with a unique tag in external_id so we can scope
+    # the assertion — under xdist, tracked_task tests on the same worker
+    # commit PendingJob rows that survive the per-test SAVEPOINT rollback.
     for i in range(3):
         job = PendingJob(
             job_type=JobType.MEETING.value,
-            external_id=f"ext-{i}",
+            external_id=f"list-no-filter-ext-{i}",
             params={},
             status=JobStatus.PENDING.value,
         )
@@ -227,8 +229,9 @@ def test_list_jobs_no_filter(db_session):
     db_session.commit()
 
     jobs = job_utils.list_jobs(db_session)
+    ours = [j for j in jobs if j.external_id and j.external_id.startswith("list-no-filter-ext-")]
 
-    assert len(jobs) == 3
+    assert len(ours) == 3
 
 
 def test_list_jobs_filter_by_status(db_session):

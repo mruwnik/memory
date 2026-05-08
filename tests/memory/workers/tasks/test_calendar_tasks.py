@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from memory.common.db.models import CalendarEvent, Person
+from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
 from memory.workers.tasks.calendar import (
@@ -105,7 +105,18 @@ def caldav_account(db_session) -> CalendarAccount:
 @pytest.fixture
 def google_account(db_session) -> GoogleAccount:
     """Create a Google account for testing."""
+    # GoogleAccount.user_id is NOT NULL (FK -> users.id), so create the
+    # owning user first.
+    user = HumanUser(
+        name="Calendar Test User",
+        email="calendar-test@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    db_session.add(user)
+    db_session.commit()
+
     account = GoogleAccount(
+        user_id=user.id,
         name="Test Google",
         email="test@gmail.com",
         access_token="test_access_token",

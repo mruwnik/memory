@@ -273,6 +273,18 @@ This matters because today's "file-private" helper often becomes tomorrow's "imp
 /home/ec2-user/memory/venv/bin/pytest
 ```
 
+### Running the slow suite faster
+
+The full slow suite (`pytest --run-slow`) takes ~4:30 serially. With `pytest-xdist` (in `requirements-dev.txt`) it drops to ~2:00:
+
+```bash
+~/.virtualenvs/memory/bin/pytest --run-slow -n 4 --dist loadfile
+```
+
+- `--dist loadfile` keeps every test from a file on the same worker. The default `--dist load` splits files across workers and triggers shared-state failures (qdrant container collisions, session-factory swap conflicts).
+- `-n 4` is the empirical sweet spot. `-n 8` was no faster (DB/qdrant contention dominates) and `-n auto` (10 on this Mac) hangs because docker can't bring up that many qdrant containers.
+- Stick with serial (`pytest`) when iterating on a single test — xdist hides per-test output until the run ends.
+
 ### Test Fixtures (`tests/conftest.py`)
 
 Use the existing DB and MCP fixtures instead of mocking. They provide real database sessions with automatic cleanup:

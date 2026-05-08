@@ -85,8 +85,11 @@ def sync_comic(
 ):
     """Synchronize a comic from a URL."""
     logger.info(f"syncing comic {url}")
-    if isinstance(published_date, str) and published_date:
-        published_date = dateutil_parser.parse(published_date)
+    if isinstance(published_date, str):
+        # Treat blank/whitespace strings as missing — Postgres rejects "" on
+        # a DateTime column. Only parse non-empty values.
+        stripped = published_date.strip()
+        published_date = dateutil_parser.parse(stripped) if stripped else None
     with make_session() as session:
         existing_comic = check_content_exists(session, Comic, url=url)
         if existing_comic:

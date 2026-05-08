@@ -193,8 +193,10 @@ def test_add_discord_message_edit_existing(db_session, sample_message_data, qdra
     # Add the message first
     discord.add_discord_message(**sample_message_data)
 
-    # Edit it via add_discord_message with is_edit=True
-    sample_message_data["content"] = "Edited content"
+    # Edit it via add_discord_message with is_edit=True. Use long-enough
+    # content so DiscordMessage.should_embed is True (it skips embedding for
+    # messages shorter than 20 chars, returning "skipped" instead).
+    sample_message_data["content"] = "Edited content with enough length to be embedded."
     sample_message_data["edited_at"] = "2024-01-01T13:00:00Z"
     sample_message_data["is_edit"] = True
 
@@ -207,7 +209,7 @@ def test_add_discord_message_edit_existing(db_session, sample_message_data, qdra
         .filter_by(message_id=sample_message_data["message_id"])
         .first()
     )
-    assert message.content == "Edited content"
+    assert message.content == "Edited content with enough length to be embedded."
     assert message.edited_at is not None
 
 

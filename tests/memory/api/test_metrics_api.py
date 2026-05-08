@@ -374,6 +374,11 @@ def test_get_raw_metrics_includes_all_fields(client, sample_metrics, db_session)
 
 def test_empty_metrics(client, db_session):
     """Test endpoints with no metrics."""
+    # Under xdist, the background metrics writer (started by tests on the
+    # same worker) may have committed rows we can't see through SAVEPOINT —
+    # delete any leftover rows so this test sees a clean state.
+    db_session.query(MetricEvent).delete()
+    db_session.commit()
     with patch("memory.api.metrics.make_session", return_value=db_session):
         summary_resp = client.get("/api/metrics/summary")
         tasks_resp = client.get("/api/metrics/tasks")

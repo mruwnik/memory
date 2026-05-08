@@ -465,19 +465,7 @@ async def test_load_access_token_does_not_grant_user_scopes_to_oauth_session(db_
     explicit per-session scope column, not implicit user-scope grant.
     """
     user = create_test_user(db_session, scopes=["organizer", "people"])
-
-    # OAuthClientInformation is the FK target for OAuthState.client_id; create it.
-    from memory.common.db.models import OAuthClientInformation
-    from decimal import Decimal
-
-    db_session.add(
-        OAuthClientInformation(
-            client_id="downscoped-client",
-            client_id_issued_at=Decimal(int(datetime.utcnow().timestamp())),
-            redirect_uris=["http://localhost/callback"],
-        )
-    )
-    db_session.flush()
+    create_oauth_client(db_session, client_id="downscoped-client")
     oauth_state = OAuthState(
         client_id="downscoped-client",
         user_id=user.id,
