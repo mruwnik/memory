@@ -247,7 +247,7 @@ def test_execute_scheduled_task_long_message(
     mock_send_notification.assert_called_once()
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_with_due_tasks(
     mock_delay, db_session, sample_user
 ):
@@ -290,7 +290,7 @@ def test_run_scheduled_tasks_with_due_tasks(
     assert mock_delay.call_count == 2
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_no_due_tasks(
     mock_delay, future_scheduled_task, db_session
 ):
@@ -304,7 +304,7 @@ def test_run_scheduled_tasks_no_due_tasks(
     mock_delay.assert_not_called()
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_disabled_task(
     mock_delay, db_session, sample_user
 ):
@@ -333,7 +333,7 @@ def test_run_scheduled_tasks_disabled_task(
     mock_delay.assert_not_called()
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_timezone_handling(
     mock_delay, db_session, sample_user
 ):
@@ -581,7 +581,7 @@ def test_send_notification_routes_to_email(mock_send_email):
     mock_send_email.assert_called_once_with(params)
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     mock_delay, db_session, sample_user
 ):
@@ -616,7 +616,7 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     assert task.next_scheduled_time > old_next_time
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
     mock_delay, db_session, sample_user
 ):
@@ -647,7 +647,7 @@ def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
     assert task.next_scheduled_time is None
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, sample_user):
     """Test that stale running executions are marked as failed."""
     # Create a task with a stale "running" execution (stuck for 3 hours)
@@ -688,7 +688,7 @@ def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, s
     assert stale_execution.finished_at is not None
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_skips_task_with_pending_execution(mock_delay, db_session, sample_user):
     """Test that due tasks with pending executions are not re-dispatched."""
     # Create a due task
@@ -728,7 +728,7 @@ def test_run_scheduled_tasks_skips_task_with_pending_execution(mock_delay, db_se
     assert executions[0].id == existing_execution.id
 
 
-@patch("memory.workers.tasks.scheduled_tasks.execute_scheduled_task.delay")
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_session, sample_user):
     """Test that stuck pending executions are re-dispatched."""
     # Create a task
@@ -761,8 +761,9 @@ def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_se
     # The stuck pending execution should be re-dispatched
     assert result["recovered_pending"] == 1
 
-    # Verify the execution was re-dispatched (delay called with its ID)
-    mock_delay.assert_called_with(stuck_pending.id)
+    # Verify the execution was re-dispatched (send_task called with its ID)
+    from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
+    mock_delay.assert_any_call(EXECUTE_SCHEDULED_TASK, args=[stuck_pending.id])
 
 
 # --- Claude session spawning tests ---

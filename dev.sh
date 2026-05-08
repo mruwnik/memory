@@ -19,51 +19,30 @@ docker run --rm -v memory_file_storage:/data busybox chown -R 1000:1000 /data
 POSTGRES_PASSWORD=543218ZrHw8Pxbs3YXzaVHq8YKVHwCj6Pz8RQkl8
 echo $POSTGRES_PASSWORD > secrets/postgres_password.txt
 
-# Create a temporary docker-compose override file to expose PostgreSQL
-echo -e "${YELLOW}Creating docker-compose override to expose PostgreSQL...${NC}"
-if [ ! -f docker-compose.override.yml ]; then
-    cat > docker-compose.override.yml << EOL
-version: "3.9"
-services:
-  qdrant:
-    ports:
-      - "6333:6333"
-
-  postgres:
-    ports:
-      # PostgreSQL port for local Celery result backend
-      - "15432:5432"
-
-  rabbitmq:
-    ports:
-      # UI only on localhost
-      - "15672:15672"
-      # AMQP port for local Celery clients (for local workers)
-      - "15673:5672"
-EOL
-fi
+# A docker-compose.override.yml is checked into the repo and already
+# exposes the right ports for local development (postgres → 15432,
+# qdrant → 6333, redis without password). We don't generate one here.
 
 if [ ! -f .env ]; then
     echo $POSTGRES_PASSWORD > .env
     cat >> .env << EOL
-CELERY_BROKER_PASSWORD=543218ZrHw8Pxbs3YXzaVHq8YKVHwCj6Pz8RQkl8
-
-RABBITMQ_HOST=localhost
 QDRANT_HOST=localhost
 DB_HOST=localhost
+REDIS_HOST=localhost
 
 VOYAGE_API_KEY=
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 
 DB_PORT=15432
-RABBITMQ_PORT=15673
 EOL
 fi
 
-# Start the containers
+# Start infrastructure services. The api/worker/migrate containers are not
+# started here — run `docker compose up -d` after this script when you want
+# the full stack, or run the API/workers locally against these services.
 echo -e "${GREEN}Starting docker containers...${NC}"
-docker-compose up -d postgres rabbitmq qdrant
+docker-compose up -d postgres redis qdrant
 
 # Wait for PostgreSQL to be ready
 echo -e "${YELLOW}Waiting for PostgreSQL to be ready...${NC}"
@@ -86,10 +65,12 @@ else
 fi
 
 echo -e "${GREEN}Development environment is ready!${NC}"
-echo -e "${YELLOW}PostgreSQL is available at localhost:5432${NC}"
-echo -e "${YELLOW}Username: kb${NC}"
-echo -e "${YELLOW}Password: (check secrets/postgres_password.txt)${NC}"
-echo -e "${YELLOW}Database: kb${NC}"
+echo -e "${YELLOW}PostgreSQL: localhost:15432  (user=kb, db=kb, password in secrets/postgres_password.txt)${NC}"
+echo -e "${YELLOW}Redis:      localhost:6379${NC}"
+echo -e "${YELLOW}Qdrant:     localhost:6333${NC}"
+echo ""
+echo -e "${GREEN}To bring up the API and workers as well, run:${NC}"
+echo -e "${YELLOW}docker compose up -d${NC}"
 echo ""
 echo -e "${GREEN}To stop the environment, run:${NC}"
-echo -e "${YELLOW}docker-compose down${NC}" 
+echo -e "${YELLOW}docker compose down${NC}"

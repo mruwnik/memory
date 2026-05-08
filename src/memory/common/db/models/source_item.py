@@ -348,7 +348,31 @@ source_item_people = Table(
 )
 
 
-class SourceItem(Base):
+class AccessControlMixin:
+    """Provides project_id / sensitivity / creator_id columns + class-level defaults.
+
+    Apply to any model that should be filterable by `build_access_filter` +
+    `apply_access_filter_to_query` in `memory.common.access_control`. The three
+    columns are the contract between models and the AC filter; per-table
+    indexes and the sensitivity CHECK constraint stay with each table.
+    """
+
+    project_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    sensitivity: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="basic", server_default="basic"
+    )
+    creator_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Subclasses can override these (e.g., Book / BlogPost default to "public").
+    default_project_id: int | None = None
+    default_sensitivity: str = "basic"
+
+
+class SourceItem(AccessControlMixin, Base):
     """Base class for all content in the system using SQLAlchemy's joined table inheritance."""
 
     __tablename__ = "source_item"
@@ -397,22 +421,8 @@ class SourceItem(Base):
         Integer, nullable=False, server_default="0"
     )
 
-    # Access control
-    project_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
-    )
-    sensitivity: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="basic", server_default="basic"
-    )
-    # Creator of the content (for creator-based access control)
-    creator_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-
-    # Class-level defaults for access control inheritance
-    # Subclasses can override (e.g., Book, BlogPost default to "public")
-    default_project_id: int | None = None
-    default_sensitivity: str = "basic"
+    # Access control columns (project_id / sensitivity / creator_id) and the
+    # default_* ClassVars come from `AccessControlMixin`.
 
     # Person associations (for filtering content by person)
     # Many-to-many relationship via source_item_people junction table

@@ -2,7 +2,7 @@
 
 import json
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -152,8 +152,19 @@ def test_ingest_session_event_appends_to_transcript(
         json={"session_id": session_id, "event": event2},
     )
 
-    # Check transcript file
-    transcript_file = sessions_storage_dir / f"{user.id}/{session_id}.jsonl"
+    # Production stores transcripts at <project_id>/<session_id>.jsonl. With
+    # no cwd in the request, project is None — so the prefix is the literal
+    # "None". Look up the actual stored path via the Session row instead of
+    # hard-coding the structure.
+    from memory.common.db.connection import make_session
+    from memory.common.db.models import Session as SessionRow
+
+    with make_session() as db:
+        session_row = db.get(SessionRow, UUID(session_id))
+        assert session_row is not None
+        transcript_path = session_row.transcript_path
+    assert transcript_path
+    transcript_file = sessions_storage_dir / transcript_path
     assert transcript_file.exists()
 
     lines = transcript_file.read_text().strip().split("\n")

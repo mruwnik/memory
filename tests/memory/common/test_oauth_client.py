@@ -22,7 +22,11 @@ from memory.common.oauth_client import (
 
 @pytest.fixture
 def oauth_user(db_session):
-    user = User(name="OAuth User", email="oauth@example.com")
+    user = User(
+        name="OAuth User",
+        email="oauth@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(user)
     db_session.commit()
     return user

@@ -46,7 +46,7 @@ const PersonFormModal = ({
     display_name: initialData?.display_name || '',
     aliases: initialData?.aliases?.join(', ') || '',
     tags: initialData?.tags?.join(', ') || '',
-    notes: initialData?.notes || '',
+    notes: '',
     email: initialData?.contact_info?.email || '',
     phone: initialData?.contact_info?.phone || '',
     github: initialData?.contact_info?.github || '',
@@ -141,12 +141,9 @@ const PersonFormModal = ({
         display_name: form.display_name || undefined,
         aliases: parseCommaSeparated(form.aliases),
         tags: parseCommaSeparated(form.tags),
-        notes: form.notes || undefined,
+        content: form.notes || undefined,
         contact_info: Object.keys(contact_info).length > 0 ? contact_info : undefined,
-        // Use replace mode for tags and aliases so removals work
-        replace_tags: true,
         replace_aliases: true,
-        replace_notes: true,
       }
       await onSubmit(data)
     } else {
@@ -155,7 +152,7 @@ const PersonFormModal = ({
         display_name: form.display_name,
         aliases: parseCommaSeparated(form.aliases),
         tags: parseCommaSeparated(form.tags),
-        notes: form.notes || undefined,
+        content: form.notes || undefined,
         contact_info: Object.keys(contact_info).length > 0 ? contact_info : undefined,
       }
       await onSubmit(data)
@@ -320,17 +317,17 @@ const PersonFormModal = ({
             </div>
           </div>
 
-          {/* Notes */}
+          {/* Add a tidbit */}
           <div>
             <label htmlFor="person-notes" className="block text-sm font-medium text-slate-700 mb-1">
-              Notes
+              Add a note
             </label>
             <textarea
               id="person-notes"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               rows={4}
-              placeholder="Free-form notes about this person..."
+              placeholder="Saved as a tidbit. Existing tidbits are shown on the person card."
               className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
             />
           </div>

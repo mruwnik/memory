@@ -21,7 +21,12 @@ def slack_user(db_session):
     existing = db_session.query(User).filter(User.id == 1).first()
     if existing:
         return existing
-    user = User(id=1, name="Test User", email="test@example.com")
+    user = User(
+        id=1,
+        name="Test User",
+        email="test@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
     db_session.add(user)
     db_session.commit()
     return user
@@ -248,6 +253,7 @@ def test_add_slack_message_no_author_skipped(db_session, sample_message_data, qd
     assert result["reason"] == "no_author"
 
 
+@pytest.mark.transactional_db
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
 def test_add_slack_message_unique_per_channel(
@@ -466,6 +472,7 @@ def test_add_slack_message_creates_channel_if_missing(
     assert channel.workspace_id == slack_workspace.id
 
 
+@pytest.mark.transactional_db
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
 def test_add_slack_message_race_merges_into_existing(

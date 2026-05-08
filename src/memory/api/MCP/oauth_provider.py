@@ -345,7 +345,39 @@ class SimpleOAuthProvider(OAuthProvider):
         )
 
     async def verify_token(self, token: str) -> FastMCPAccessToken | None:
-        """Verify an access token and return token info if valid."""
+        """Verify an access token and return token info if valid.
+
+        Two distinct scope concepts coexist in this system; do NOT conflate them:
+
+        1. **OAuth scopes** (``read``, ``write``, ``claudeai`` — see
+           ``ALLOWED_SCOPES``) gate the OAuth handshake itself. FastMCP's auth
+           middleware refuses tokens that don't carry the configured
+           ``required_scopes``; that's all these are for. They're negotiated
+           between the OAuth client and server at registration / authorization
+           time and stored on ``OAuthState.scopes``.
+
+        2. **System scopes** (``github``, ``slack``, ``*``, …) are set by an
+           admin on the ``User.scopes`` column and determine which MCP tools
+           the user can see and call. The user has no say in these — they
+           cannot grant themselves access to ``people`` tools by asking for
+           the ``people`` scope at OAuth registration. The visibility
+           middleware reads the scopes returned here and gates tools against
+           what the admin configured.
+
+        The token returned here is consumed by the visibility middleware, so
+        we expose ``User.scopes`` (system scopes) plus ``read``/``write`` (so
+        FastMCP's OAuth gate is satisfied even if the admin only granted a
+        named scope like ``github``). PR #76 briefly conflated the two by
+        sourcing scopes from ``OAuthState.scopes`` here, which silently
+        dropped admin privileges from any OAuth-authenticated user — the
+        token would carry only what the MCP client requested at registration
+        (``[read, write]``), so account-level admin (``user.scopes = ["*"]``)
+        never reached the visibility checker.
+
+        ``load_access_token`` separately uses the OAuth scopes (via
+        ``resolve_session_scopes``) — that's the right shape for the OAuth
+        auth gate, since FastMCP just checks for ``read`` there.
+        """
         with make_session() as session:
             # Try as OAuth access token first
             user_session = session.get(UserSession, token)
@@ -354,9 +386,21 @@ class SimpleOAuthProvider(OAuthProvider):
                 if user_session.expires_at < now:
                     return None
 
-                client_id, base_scopes = resolve_session_scopes(user_session)
-                # Always include SCOPE_READ/SCOPE_WRITE for FastMCP endpoint auth
-                scopes: list[str] = sorted(set(base_scopes) | {SCOPE_READ, SCOPE_WRITE})
+                user_scopes = (
+                    list(user_session.user.scopes or [])
+                    if user_session.user
+                    else []
+                )
+                # Add read/write so the OAuth gate passes regardless of which
+                # named scopes the admin granted on the user account.
+                scopes: list[str] = sorted(
+                    set(user_scopes) | {SCOPE_READ, SCOPE_WRITE}
+                )
+                client_id = (
+                    cast(str, user_session.oauth_state.client_id)
+                    if user_session.oauth_state is not None
+                    else "frontend"
+                )
 
                 # Tokens themselves stay out of the log; correlate via the
                 # SHA-prefix id so a leaked log can't be replayed.

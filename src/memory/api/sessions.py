@@ -193,8 +193,10 @@ def iter_transcript_events(
     immediately discarded.
 
     ``start`` and ``end`` are 0-indexed line numbers; ``end`` is
-    inclusive when provided. Blank lines do not advance the index
-    (preserving prior ``safe_loads`` behaviour).
+    exclusive (``read_transcript`` passes ``offset + limit``, so
+    using ``>`` here was off-by-one and returned one extra row per
+    request). Blank lines do not advance the index (preserving prior
+    ``safe_loads`` behaviour).
 
     Malformed JSON lines are counted and surfaced via a single
     warning at the end (avoids silently dropping rows).
@@ -206,7 +208,7 @@ def iter_transcript_events(
                 continue
             if i < start:
                 continue
-            if end is not None and i > end:
+            if end is not None and i >= end:
                 break
             try:
                 yield json.loads(line)

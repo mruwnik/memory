@@ -27,6 +27,7 @@ from discord import (
     abc,
 )
 from discord.ext import commands
+from sqlalchemy.exc import IntegrityError
 
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
@@ -238,6 +239,62 @@ class MessageCollector(commands.Bot):
             await self._process_message(after, is_edit=True)
         except Exception:
             logger.exception(f"Error processing message edit {after.id}")
+
+    async def on_guild_channel_create(self, channel: abc.GuildChannel) -> None:
+        """Persist newly-created text-like channels so name-based lookups work
+        before any message lands. Categories are intentionally skipped to match
+        the rest of the system, which only tracks messageable channels.
+        """
+        if not hasattr(channel, "send"):
+            return
+        try:
+            with make_session() as session:
+                ensure_channel(session, channel, channel.guild.id)  # type: ignore[arg-type]
+                session.commit()
+        except IntegrityError:
+            # Race with MCP's eager ensure_channel_record — the row is already
+            # present, no work to do. Don't let it surface as an error.
+            logger.debug(f"Channel {channel.id} already persisted (race with MCP)")
+        except Exception:
+            logger.exception(f"Failed to persist created channel {channel.id}")
+
+    async def on_guild_channel_update(
+        self, _before: abc.GuildChannel, after: abc.GuildChannel
+    ) -> None:
+        """Reflect renames and category-moves into the local DB so name-based
+        lookups stay accurate."""
+        if not hasattr(after, "send"):
+            return
+        try:
+            with make_session() as session:
+                ensure_channel(session, after, after.guild.id)  # type: ignore[arg-type]
+                session.commit()
+        except Exception:
+            logger.exception(f"Failed to update channel {after.id}")
+
+    async def on_guild_channel_delete(self, channel: abc.GuildChannel) -> None:
+        """Drop the local row when a channel disappears on Discord.
+
+        Channels with collected messages cannot be removed because
+        ``DiscordMessage.channel_id`` has no ``ondelete`` rule — those rows
+        are left in place (the messages they reference are still valuable
+        history). Without an explicit soft-delete column, this is the
+        conservative behavior.
+        """
+        try:
+            with make_session() as session:
+                record = session.get(DiscordChannel, channel.id)
+                if record is None:
+                    return
+                session.delete(record)
+                session.commit()
+        except IntegrityError:
+            logger.info(
+                f"Channel {channel.id} kept in DB after Discord delete "
+                f"(referenced by collected messages)"
+            )
+        except Exception:
+            logger.exception(f"Failed to delete channel {channel.id}")
 
     async def on_raw_reaction_add(self, payload: RawReactionActionEvent) -> None:
         """Handle reaction additions."""

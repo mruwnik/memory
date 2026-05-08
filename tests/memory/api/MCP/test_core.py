@@ -14,9 +14,10 @@ def mock_notes_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_settings(mock_notes_dir):
+def mock_settings(mock_notes_dir, tmp_path):
     """Mock settings with temporary notes directory."""
     with patch("memory.api.MCP.servers.notes.settings") as mock:
+        mock.FILE_STORAGE_DIR = tmp_path
         mock.NOTES_STORAGE_DIR = mock_notes_dir
         mock.CELERY_QUEUE_PREFIX = "test"
         yield mock
@@ -150,11 +151,11 @@ def _make_note(db_session, user_id: int, filename: str, content: str = "x"):
     note = Note(
         sha256=filename.encode() + b"\x00" + content.encode(),
         content=content,
-        modality="note",
+        modality="text",
         mime_type="text/markdown",
         size=len(content),
         filename=filename,
-        user_id=user_id,
+        creator_id=user_id,
     )
     db_session.add(note)
     db_session.commit()
@@ -169,7 +170,7 @@ async def test_note_files_handles_absolute_paths(
     from memory.api.MCP.servers.notes import note_files
     from tests.conftest import mcp_auth_context
 
-    _make_note(db_session, admin_user.id, "note.md")
+    _make_note(db_session, admin_user.id, "notes/note.md")
 
     with mcp_auth_context(admin_session.id):
         result = await note_files.fn(path="/")
@@ -185,9 +186,9 @@ async def test_note_files_lists_markdown_files(
     from memory.api.MCP.servers.notes import note_files
     from tests.conftest import mcp_auth_context
 
-    _make_note(db_session, admin_user.id, "note1.md", "content1")
-    _make_note(db_session, admin_user.id, "note2.md", "content2")
-    _make_note(db_session, admin_user.id, "subdir/nested.md", "nested")
+    _make_note(db_session, admin_user.id, "notes/note1.md", "content1")
+    _make_note(db_session, admin_user.id, "notes/note2.md", "content2")
+    _make_note(db_session, admin_user.id, "notes/subdir/nested.md", "nested")
 
     with mcp_auth_context(admin_session.id):
         result = await note_files.fn(path="/")

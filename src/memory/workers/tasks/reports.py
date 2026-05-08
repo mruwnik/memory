@@ -3,7 +3,7 @@ import pathlib
 
 from bs4 import BeautifulSoup
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Report
 from memory.common.celery_app import app, SYNC_REPORT
@@ -53,12 +53,22 @@ def sync_report(
     allowed_connect_urls: list[str] | None = None,
 ):
     tags = tags or []
-    filename = pathlib.Path(file_path).name
+    # Reports are flat under REPORT_STORAGE_DIR — using `.name` here
+    # intentionally collapses any subdirectory structure the caller may have
+    # encoded in `file_path`. The MCP `upsert` and REST `upload_report`
+    # callers both build `file_path` from a content-hash + safe-title or
+    # validated filename, so subdirs aren't expected. Honouring subdirs
+    # would require a contract change with both callers and is left as a
+    # follow-up if/when the use case appears.
+    basename = pathlib.Path(file_path).name
+    # Report.filename is FILE_STORAGE_DIR-relative (matches every other
+    # SourceItem subtype). Reports always live directly under reports/.
+    filename = paths.to_db_filename(settings.REPORT_STORAGE_DIR / basename)
     logger.info(f"Syncing report {filename} (format={report_format})")
 
     if content is not None:
         # MCP path: write content to file
-        dest = settings.REPORT_STORAGE_DIR / filename
+        dest = settings.REPORT_STORAGE_DIR / basename
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content)
         file_bytes = content.encode("utf-8")
@@ -75,7 +85,7 @@ def sync_report(
     # Convert HTML to markdown for searchable content (like BlogPost does)
     markdown_content = ""
     image_paths: list[str] = []
-    actual_file = settings.REPORT_STORAGE_DIR / filename
+    actual_file = settings.REPORT_STORAGE_DIR / basename
     if report_format == "html" and actual_file.exists():
         markdown_content, image_paths = convert_html_report(actual_file)
 

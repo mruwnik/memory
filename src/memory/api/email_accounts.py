@@ -4,7 +4,7 @@ import logging
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy.orm import Session
 
 from memory.api.auth import (
@@ -36,7 +36,7 @@ class EmailAccountCreate(BaseModel):
     use_ssl: bool = True
     # SMTP fields (optional - inferred from IMAP if not set)
     smtp_server: str | None = None
-    smtp_port: int | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
@@ -72,7 +72,7 @@ class EmailAccountUpdate(BaseModel):
     use_ssl: bool | None = None
     # SMTP fields (optional - inferred from IMAP if not set)
     smtp_server: str | None = None
-    smtp_port: int | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
     # Gmail fields
     google_account_id: int | None = None
     # Common fields
@@ -122,11 +122,11 @@ class EmailAccountResponse(BaseModel):
 
 
 def account_to_response(
-    account: EmailAccount, db: Session | None = None
+    account: EmailAccount, db: Session
 ) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
     google_account_info = None
-    if account.google_account_id and db:
+    if account.google_account_id:
         ga = db.get(GoogleAccount, account.google_account_id)
         if ga:
             google_account_info = GoogleAccountInfo(

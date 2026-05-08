@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from sqlalchemy import exc as sqlalchemy_exc
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
@@ -90,7 +90,7 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
 
         if not stream_download_to_path(url, local_path, MAX_IMAGE_SIZE):
             continue
-        saved_paths.append(str(local_path.relative_to(settings.FILE_STORAGE_DIR)))
+        saved_paths.append(paths.to_db_filename(local_path))
 
     return saved_paths
 

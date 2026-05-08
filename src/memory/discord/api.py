@@ -565,7 +565,7 @@ async def get_channel_permissions(channel_id: int, bot_id: int) -> dict[str, Any
         allow, deny = overwrite.pair()
         overwrites.append({
             "target_type": "role" if isinstance(target, Role) else "member",
-            "target_id": target.id,
+            "target_id": str(target.id),
             "target_name": target.name if isinstance(target, Role) else target.display_name,  # type: ignore[union-attr]
             "allow": [perm for perm, value in allow if value],
             "deny": [perm for perm, value in deny if value],

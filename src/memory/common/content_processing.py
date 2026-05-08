@@ -58,11 +58,18 @@ def clear_item_chunks(item: SourceItem, session) -> int:
         except IOError as e:
             logger.error(f"Error deleting chunks from Qdrant for item {item.id}: {e}")
 
-    # Delete from PostgreSQL
-    for chunk in item.chunks:
+    # Delete from PostgreSQL. Iterate a snapshot — `item.chunks` is the
+    # backing collection of the relationship, and the delete-orphan cascade
+    # mutates it as we iterate.
+    for chunk in list(item.chunks):
         session.delete(chunk)
 
     session.flush()
+    # Drop the in-memory collection so a subsequent assignment like
+    # `item.chunks = new_chunks` doesn't re-process the already-deleted
+    # instances (which would raise InvalidRequestError: "Instance has been
+    # deleted").
+    session.expire(item, ["chunks"])
     logger.info(f"Deleted {count} chunks for {item.__class__.__name__} {item.id}")
     return count
 

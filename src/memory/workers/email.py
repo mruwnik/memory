@@ -12,7 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, scoped_session
 
-from memory.common import collections, embedding, qdrant, settings
+from memory.common import collections, embedding, paths, qdrant, settings
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
@@ -71,7 +71,7 @@ def process_attachment(
         mime_type=attachment["content_type"],
         mail_message=message,
         content=content,
-        filename=file_path and str(file_path.relative_to(settings.FILE_STORAGE_DIR)),
+        filename=file_path and paths.to_db_filename(file_path),
     )
 
 

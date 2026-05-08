@@ -148,9 +148,14 @@ class SlackApp(Base):
         the relationship isn't already loaded. Webhook hot paths should
         `selectinload(SlackApp.authorized_users)` to avoid a per-call query.
         """
-        if user.id is not None and self.created_by_user_id == user.id:
+        if user.id is None:
+            return False
+        if self.created_by_user_id == user.id:
             return True
-        return user in self.authorized_users
+        # Match by id so the check still works when `user` and entries in
+        # `authorized_users` come from different sessions (or, in tests,
+        # one is a mock).
+        return any(u.id == user.id for u in self.authorized_users)
 
     def is_owner(self, user: User) -> bool:
         return user.id is not None and self.created_by_user_id == user.id

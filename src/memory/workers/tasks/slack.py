@@ -24,7 +24,7 @@ from typing import Any
 import redis
 from sqlalchemy.exc import IntegrityError
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.redis_lock import distributed_lock
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
@@ -198,7 +198,7 @@ def download_slack_file(
     ):
         return None
 
-    return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
+    return paths.to_db_filename(local_path)
 
 
 def get_workspace_credentials(

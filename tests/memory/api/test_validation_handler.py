@@ -105,7 +105,9 @@ def test_redact_validation_errors_recognizes_nested_sensitive_paths(loc_path):
     assert "ctx" not in out[0]
 
 
-@pytest.mark.parametrize("param", list(SENSITIVE_QUERY_PARAMS))
+# sorted() so xdist sees identical collection order across workers — list(set)
+# would be hash-randomized per process and break parallel collection.
+@pytest.mark.parametrize("param", sorted(SENSITIVE_QUERY_PARAMS))
 def test_redact_query_params_masks_sensitive(param: str):
     assert redact_query_params({param: "secret-value"})[param] == "***"
 

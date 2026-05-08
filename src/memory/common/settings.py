@@ -135,6 +135,16 @@ all_storage_dirs = storage_dirs + [CHUNK_STORAGE_DIR]
 for dir in all_storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)
 
+# NOTES_STORAGE_DIR and REPORT_STORAGE_DIR must live under FILE_STORAGE_DIR:
+# every Note/Report consumer (core_fetch_file, serve_file, paths.to_db_filename)
+# stores filenames as FILE_STORAGE_DIR-relative. An env-var override that
+# escaped FILE_STORAGE_DIR would silently break all those code paths.
+for storage_dir in (NOTES_STORAGE_DIR, REPORT_STORAGE_DIR):
+    if not storage_dir.resolve().is_relative_to(FILE_STORAGE_DIR.resolve()):
+        raise RuntimeError(
+            f"{storage_dir} must be inside FILE_STORAGE_DIR={FILE_STORAGE_DIR}"
+        )
+
 # Warn if using default /tmp storage - data will be lost on reboot
 if str(FILE_STORAGE_DIR).startswith("/tmp"):
     logger.warning(

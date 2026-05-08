@@ -125,6 +125,12 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": False,
     },
+    "person_tidbit": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": False,
+    },
 }
 TEXT_COLLECTIONS = {
     coll for coll, params in ALL_COLLECTIONS.items() if params.get("text")

@@ -102,6 +102,18 @@ def test_sync_person_tidbit_person_not_found(mock_make_session, qdrant):
 
 def test_sync_person_tidbit_with_access_control(mock_make_session, sample_person, qdrant):
     """Test that tidbits can have project_id and sensitivity."""
+    # creator_id is FK -> users.id; create the user so the FK is satisfied.
+    from memory.common.db.models import HumanUser
+
+    creator = HumanUser(
+        id=42,
+        name="Tidbit Creator",
+        email="tidbit-creator@example.com",
+        password_hash="bcrypt_hash_placeholder",
+    )
+    mock_make_session.add(creator)
+    mock_make_session.commit()
+
     result = people.sync_person_tidbit(
         person_id=sample_person.id,
         content="Confidential note",

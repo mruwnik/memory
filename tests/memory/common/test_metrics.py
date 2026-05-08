@@ -422,4 +422,8 @@ def test_start_metrics_writer_idempotent():
 
     assert metrics._writer_started is True
 
+    # Stop the thread before returning — otherwise it keeps emitting rows
+    # into other tests on the same xdist worker (e.g. test_empty_metrics).
+    stop_metrics_writer(timeout=2.0)
+
     stop_metrics_writer(timeout=2.0)

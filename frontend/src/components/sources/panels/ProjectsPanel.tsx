@@ -334,7 +334,6 @@ export const ProjectsPanel = () => {
                 aliases: [],
                 contact_info: {},
                 tags: [],
-                notes: null,
                 created_at: null,
               })
             }

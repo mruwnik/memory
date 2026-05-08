@@ -198,6 +198,7 @@ def test_check_batch_empty(db_session, qdrant):
     assert check_batch([]) == {}
 
 
+@pytest.mark.transactional_db
 def test_check_batch(db_session, qdrant):
     modalities = ["text", "photo", "mail"]
     chunks = [
@@ -207,6 +208,7 @@ def test_check_batch(db_session, qdrant):
             content="Test content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=datetime(2025, 1, 1),
         )
         for modality in modalities
@@ -240,12 +242,12 @@ def test_check_batch(db_session, qdrant):
         "photo": {"correct": 2, "missing": 3, "total": 5},
     }
     db_session.commit()
-    for chunk in chunks[::2]:
+    # check_batch updates checked_at for *every* chunk it inspects (not only
+    # the ones that were found in qdrant) so a chunk waiting in the reingest
+    # queue isn't re-dispatched on the next hourly run.
+    for chunk in chunks:
         assert chunk.checked_at is not None
         assert chunk.checked_at.isoformat() > start_time.isoformat()
-    for chunk in chunks[1::2]:
-        assert chunk.checked_at is not None
-        assert chunk.checked_at.isoformat()[:19] == "2025-01-01T00:00:00"
 
 
 @pytest.mark.parametrize("batch_size", [4, 10, 100])
@@ -263,6 +265,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
             content="Old content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=old_time,
         )
         for modality in modalities
@@ -278,6 +281,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
             content="Recent content",
             file_paths=None,
             embedding_model="test-model",
+            collection_name=modality,
             checked_at=now,
         )
         for modality in modalities
@@ -314,6 +318,7 @@ def test_reingest_missing_chunks(db_session, qdrant, batch_size):
 
 
 @pytest.mark.parametrize("item_type", ["MailMessage", "BlogPost"])
+@pytest.mark.transactional_db
 def test_reingest_item_success(db_session, qdrant, item_type):
     """Test successful reingestion of an item with existing chunks."""
     if item_type == "MailMessage":

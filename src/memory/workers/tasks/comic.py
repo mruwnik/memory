@@ -7,7 +7,7 @@ from dateutil import parser as dateutil_parser
 import feedparser
 import requests
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Comic, clean_filename
 from memory.parsers import comics
@@ -85,8 +85,11 @@ def sync_comic(
 ):
     """Synchronize a comic from a URL."""
     logger.info(f"syncing comic {url}")
-    if isinstance(published_date, str) and published_date:
-        published_date = dateutil_parser.parse(published_date)
+    if isinstance(published_date, str):
+        # Treat blank/whitespace strings as missing — Postgres rejects "" on
+        # a DateTime column. Only parse non-empty values.
+        stripped = published_date.strip()
+        published_date = dateutil_parser.parse(stripped) if stripped else None
     with make_session() as session:
         existing_comic = check_content_exists(session, Comic, url=url)
         if existing_comic:
@@ -116,7 +119,7 @@ def sync_comic(
         url=url,
         published=published_date,
         author=author,
-        filename=filename.resolve().relative_to(settings.FILE_STORAGE_DIR).as_posix(),
+        filename=paths.to_db_filename(filename),
         mime_type=mime_type,
         size=len(response.content),
         sha256=create_content_hash(f"{image_url}{published_date}"),

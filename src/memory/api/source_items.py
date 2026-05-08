@@ -5,7 +5,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
-from memory.common.access_control import get_user_project_roles, user_can_access
+from memory.common.access_control import (
+    get_user_project_roles,
+    has_admin_scope,
+    user_can_access,
+)
 from memory.common.celery_app import REPROCESS_MEETING, REINGEST_ITEM
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, SourceItem, JobType
@@ -43,7 +47,7 @@ def reingest_item(
         raise HTTPException(status_code=404, detail="Source item not found")
 
     # Check user has access to this item
-    project_roles = get_user_project_roles(db, user)
+    project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
     if not user_can_access(user, item, project_roles):
         raise HTTPException(status_code=404, detail="Source item not found")
 
@@ -95,7 +99,7 @@ def get_source_item(
         raise HTTPException(status_code=404, detail="Source item not found")
 
     # Check user has access to this item
-    project_roles = get_user_project_roles(db, user)
+    project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
     if not user_can_access(user, item, project_roles):
         raise HTTPException(status_code=404, detail="Source item not found")
 

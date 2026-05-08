@@ -509,14 +509,12 @@ def test_sync_webpage_with_tags(mock_parse, mock_article, db_session, qdrant):
 
 @patch("memory.workers.tasks.blogs.parse_webpage")
 def test_sync_webpage_parse_error(mock_parse, db_session):
-    """Test webpage sync when parsing fails."""
+    """Test webpage sync when parsing fails — Celery wrapper re-raises so
+    the worker can retry."""
     mock_parse.side_effect = Exception("Parse error")
 
-    # The safe_task_execution decorator should catch this
-    result = blogs.sync_webpage("https://example.com/error")
-
-    assert result["status"] == "error"
-    assert "Parse error" in result["error"]
+    with pytest.raises(Exception, match="Parse error"):
+        blogs.sync_webpage("https://example.com/error")
 
 
 @pytest.mark.parametrize(

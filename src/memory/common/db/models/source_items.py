@@ -1223,16 +1223,30 @@ class Note(SourceItem):
 
     def save_to_file(self) -> None:
         if not self.filename:
-            self.filename = f"{self.subject}.md"
-        # Defense in depth: validate the resolved path stays inside the
-        # configured notes directory. Without this a Note row whose
-        # `filename` was set by an upstream caller that skipped
-        # validation (for example a misconfigured worker, a future
-        # caller, or a celery-broker injection) would let
-        # `path.write_text` clobber arbitrary files on the worker host.
+            # Derive the notes-folder prefix from settings rather than
+            # hardcoding "notes/" — NOTES_STORAGE_DIR is env-overridable.
+            notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
+            # `clean_filename` strips everything to alphanumerics+underscore,
+            # so an empty subject (or one made of only special chars) collapses
+            # to the empty string — without this fallback we'd produce a
+            # useless ``"notes/.md"`` filename. ``"untitled"`` is reachable
+            # only when sync_note created a Note with no filename and an
+            # empty subject, which shouldn't happen in normal flow.
+            safe_subject = clean_filename(self.subject or "") or "untitled"
+            self.filename = f"{notes_prefix}/{safe_subject}.md"
+        # Note.filename is FILE_STORAGE_DIR-relative (matches every other
+        # SourceItem subtype). Defense in depth: resolve the path and
+        # require it to land inside NOTES_STORAGE_DIR — preventing path
+        # traversal via `..` segments or filenames that omit the `notes/`
+        # prefix from clobbering arbitrary files on the worker host.
         path = paths.validate_path_within_directory(
-            settings.NOTES_STORAGE_DIR, str(self.filename)
+            settings.FILE_STORAGE_DIR, str(self.filename)
         )
+        notes_root = settings.NOTES_STORAGE_DIR.resolve()
+        if not path.is_relative_to(notes_root):
+            raise ValueError(
+                f"Note filename must resolve under {notes_root}: {self.filename!r}"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.content or "")
 
@@ -1305,7 +1319,17 @@ class Report(SourceItem):
     def save_to_file(self, content: str | bytes | None = None) -> None:
         if not self.filename:
             return
-        path = settings.REPORT_STORAGE_DIR / self.filename
+        # Report.filename is FILE_STORAGE_DIR-relative (matches every other
+        # SourceItem subtype). Defense in depth: require it to land inside
+        # REPORT_STORAGE_DIR before writing.
+        path = paths.validate_path_within_directory(
+            settings.FILE_STORAGE_DIR, str(self.filename)
+        )
+        reports_root = settings.REPORT_STORAGE_DIR.resolve()
+        if not path.is_relative_to(reports_root):
+            raise ValueError(
+                f"Report filename must resolve under {reports_root}: {self.filename!r}"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         if content is not None:
             if isinstance(content, str):
@@ -1319,7 +1343,7 @@ class Report(SourceItem):
         if self.report_format == "pdf":
             if not self.filename:
                 return []
-            file_path = settings.REPORT_STORAGE_DIR / self.filename
+            file_path = settings.FILE_STORAGE_DIR / self.filename
             if not file_path.exists():
                 return []
             return extract.doc_to_images(file_path)

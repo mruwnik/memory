@@ -158,6 +158,11 @@ def test_cleanup_old_metrics_deletes_old_records(db_session):
     """Test that cleanup deletes records older than retention period."""
     from memory.common.db.models import MetricEvent
 
+    # Background metrics writer thread may have inserted unrelated events from
+    # earlier tests in the same session. Start from a clean slate.
+    db_session.query(MetricEvent).delete()
+    db_session.commit()
+
     now = datetime.now(timezone.utc)
     old_time = now - timedelta(days=40)
     recent_time = now - timedelta(days=10)
@@ -204,6 +209,11 @@ def test_cleanup_old_metrics_deletes_old_records(db_session):
 def test_cleanup_old_metrics_no_old_records(db_session):
     """Test cleanup when there are no old records."""
     from memory.common.db.models import MetricEvent
+
+    # Background metrics writer thread may have inserted unrelated events from
+    # earlier tests in the same session. Start from a clean slate.
+    db_session.query(MetricEvent).delete()
+    db_session.commit()
 
     now = datetime.now(timezone.utc)
     recent_time = now - timedelta(days=10)
@@ -313,7 +323,7 @@ def test_cleanup_old_metrics_batch_deletion(db_session):
 
 def test_refresh_metric_summaries_success(db_session):
     """Test successful refresh of materialized view."""
-    with patch("memory.common.db.connection.make_session") as mock_session:
+    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
         mock_sess = MagicMock()
         mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
         mock_session.return_value.__exit__ = Mock(return_value=False)
@@ -327,7 +337,7 @@ def test_refresh_metric_summaries_success(db_session):
 
 def test_refresh_metric_summaries_fallback_on_concurrent_failure(db_session):
     """Test fallback to non-concurrent refresh when concurrent fails."""
-    with patch("memory.common.db.connection.make_session") as mock_session:
+    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
         mock_sess = MagicMock()
         mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
         mock_session.return_value.__exit__ = Mock(return_value=False)
@@ -347,7 +357,7 @@ def test_refresh_metric_summaries_fallback_on_concurrent_failure(db_session):
 
 def test_refresh_metric_summaries_complete_failure(db_session):
     """Test handling when both refresh methods fail."""
-    with patch("memory.common.db.connection.make_session") as mock_session:
+    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
         mock_sess = MagicMock()
         mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
         mock_session.return_value.__exit__ = Mock(return_value=False)

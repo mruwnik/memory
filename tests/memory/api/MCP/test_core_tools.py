@@ -804,6 +804,46 @@ def test_fetch_file_unicode_decode_error(mock_settings, mock_paths, mock_extract
     mock_path.read_text.assert_called_with(errors="replace")
 
 
+def test_fetch_file_round_trip_for_note(db_session, admin_user, admin_session):
+    """Regression: Note files must be fetchable via the same FILE_STORAGE_DIR-
+    relative path that listing returns.
+
+    Earlier, ``Note.filename`` was stored relative to NOTES_STORAGE_DIR
+    (no ``notes/`` prefix) while every other SourceItem stored it relative to
+    FILE_STORAGE_DIR. The ownership check in ``fetch_file`` looked up by the
+    FILE_STORAGE_DIR-relative path, so Note rows never matched and the fetch
+    failed even though the file was on disk. This test pins the unified
+    convention end-to-end.
+    """
+    from memory.common import settings
+    from memory.common.db.models import Note
+
+    note_path = settings.NOTES_STORAGE_DIR / "regression.md"
+    note_path.write_text("hello from a note")
+
+    db_filename = note_path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+    assert db_filename == "notes/regression.md"
+
+    note = Note(
+        modality="text",
+        mime_type="text/markdown",
+        subject="regression",
+        content="hello from a note",
+        filename=db_filename,
+        sha256=db_filename.encode() + b"\x00content",
+        size=len("hello from a note"),
+        creator_id=admin_user.id,
+    )
+    db_session.add(note)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = fetch_file.fn(filename=f"/{db_filename}")
+
+    assert result["content"][0]["data"] == "hello from a note"
+    assert result["content"][0]["mime_type"] == "text/markdown"
+
+
 @pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")

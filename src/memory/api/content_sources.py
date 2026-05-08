@@ -13,7 +13,7 @@ from memory.common.access_control import get_user_project_roles, has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
 from memory.common.db.models.source_items import Photo
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_LESSWRONG, SYNC_PHOTO, SYNC_REPORT
 from memory.common.celery_app import app as celery_app
 from memory.common.jobs import dispatch_job
@@ -343,17 +343,33 @@ async def upload_report(
     content_hash = hashlib.sha256(content).hexdigest()[:12]
     safe_filename = f"{content_hash}_{Path(file.filename).name}"
     file_path = settings.REPORT_STORAGE_DIR / safe_filename
+    # Report.filename is FILE_STORAGE_DIR-relative (matches every other
+    # SourceItem subtype).
+    db_filename = paths.to_db_filename(file_path)
+    # Build the prefix directly rather than feeding a synthetic
+    # non-existent path through to_db_filename — clearer for the reader and
+    # doesn't lean on Path.resolve() lex-normalization for non-existent
+    # paths. content_hash is hex-only so safe to use in a LIKE prefix.
+    db_filename_prefix = (
+        paths.to_db_filename(settings.REPORT_STORAGE_DIR) + f"/{content_hash}_"
+    )
 
     # Check for existing report with same content hash (prefix match) to catch
     # duplicate content regardless of original filename
+    # autoescape=True for defense-in-depth and consistency with notes.py:145.
+    # `content_hash` is hex-only so no LIKE metacharacter concern today, but
+    # if the prefix construction ever changes to include user-supplied bytes
+    # this prevents `%`/`_` from broadening the match.
     existing = (
         db.query(Report)
-        .filter(Report.filename.startswith(f"{content_hash}_"))
+        .filter(Report.filename.startswith(db_filename_prefix, autoescape=True))
         .first()
     )
     if not existing:
         # Also check exact filename match for update-in-place
-        existing = db.query(Report).filter(Report.filename == safe_filename).one_or_none()
+        existing = (
+            db.query(Report).filter(Report.filename == db_filename).one_or_none()
+        )
     if existing:
         project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
         if not user_can_access(user, existing, project_roles):

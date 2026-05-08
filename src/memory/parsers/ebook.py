@@ -3,8 +3,8 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 from pathlib import Path
 
-import fitz
-from memory.common import settings  # PyMuPDF
+import fitz  # PyMuPDF
+from memory.common import paths
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class Ebook:
     title: str
     author: str
     file_path: Path
-    relative_path: Path
+    relative_path: str
     metadata: dict[str, Any] = field(default_factory=dict)
     sections: list[Section] = field(default_factory=list)
     full_content: str = ""
@@ -188,7 +188,7 @@ def parse_ebook(file_path: str | Path) -> Ebook:
             sections=sections,
             full_content=full_content,
             file_path=path,
-            relative_path=path.relative_to(settings.FILE_STORAGE_DIR),
+            relative_path=paths.to_db_filename(path),
             file_type=path.suffix.lower()[1:],
             n_pages=doc.page_count,
         )

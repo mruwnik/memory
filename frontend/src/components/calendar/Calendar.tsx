@@ -723,12 +723,6 @@ const Calendar = () => {
                     </div>
                   )}
 
-                  {selectedAttendee.person.notes && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">Notes</div>
-                      <div className="text-sm text-slate-700 whitespace-pre-wrap">{selectedAttendee.person.notes}</div>
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="text-center py-4">

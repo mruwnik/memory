@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as md
 from PIL import Image as PILImage
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.downloads import stream_download_to_path
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
@@ -278,7 +278,7 @@ def process_images(
                 continue
 
             path = pathlib.Path(image.filename)  # type: ignore
-            img_tag["src"] = str(path.relative_to(settings.FILE_STORAGE_DIR.resolve()))
+            img_tag["src"] = paths.to_db_filename(path)
             images[img_tag["src"]] = image
         except Exception as e:
             logger.warning(f"Failed to process image {src}: {e}")

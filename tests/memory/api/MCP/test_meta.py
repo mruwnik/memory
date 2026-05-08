@@ -760,6 +760,24 @@ def test_get_schema_returns_empty_without_as_payload():
     assert result == {}
 
 
+def test_get_schema_resolves_forwardref_annotations():
+    """Real SourceItem subclasses live in modules with `from __future__ import
+    annotations`, so their TypedDict payload fields show up as ForwardRef
+    strings rather than resolved Annotated[...] objects. get_schema must
+    resolve them via get_type_hints (not raw __annotations__)."""
+    from memory.common.db.models.source_items import MailMessage
+
+    schema = get_schema(cast(Any, MailMessage))
+
+    # Both inherited (SourceItemPayload) and subclass-specific fields land.
+    assert "subject" in schema
+    assert schema["subject"]["type"] == "str"
+    assert schema["subject"]["description"] == "Email subject line"
+    assert "source_id" in schema  # inherited from base payload
+    # No field should silently drop because of an unresolved ForwardRef.
+    assert all(v.get("description") for v in schema.values())
+
+
 # ====== Polymarket search tests ======
 
 

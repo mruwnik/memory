@@ -330,7 +330,8 @@ async def test_list_all_includes_projects_when_requested(
 @pytest.mark.parametrize(
     "use_admin,team_slug",
     [
-        pytest.param(False, "team-alpha", id="regular_user_can_add_to_member_team"),
+        # regular_user is `lead` of team-beta — leads can add members.
+        pytest.param(False, "team-beta", id="regular_user_lead_can_add_to_team"),
         pytest.param(True, "team-gamma", id="admin_can_add_to_any_team"),
     ],
 )
@@ -725,7 +726,7 @@ async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
         )
 
     assert result["success"] is True
-    assert result["team"]["discord_guild_id"] == 123456789
+    assert result["team"]["discord_guild_id"] == "123456789"
     assert result["team"]["auto_sync_discord"] is True
 
 
@@ -758,7 +759,7 @@ async def test_upsert_with_discord_role_creates_role(db_session, admin_session, 
 
     assert result["success"] is True
     assert result["discord_sync"].get("role_created") is True
-    assert result["team"]["discord_role_id"] == 999888777
+    assert result["team"]["discord_role_id"] == "999888777"
 
     # Verify the value is actually persisted in the database
     db_session.expire_all()  # Force reload from DB
@@ -790,7 +791,7 @@ async def test_upsert_with_existing_discord_role(db_session, admin_session, disc
 
     assert result["success"] is True
     assert result["discord_sync"].get("role_created") is not True
-    assert result["team"]["discord_role_id"] == 555666777
+    assert result["team"]["discord_role_id"] == "555666777"
 
 
 @pytest.mark.asyncio
@@ -1420,7 +1421,7 @@ async def test_ensure_discord_role_syncs_members(db_session, admin_session, disc
         patch("memory.common.discord.add_role_member", return_value={"success": True}),
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert sync_info.get("members_added", 0) >= 1
@@ -1441,7 +1442,7 @@ async def test_ensure_discord_role_handles_failure(db_session, admin_session, di
         patch("memory.common.discord.list_role_members", side_effect=Exception("API Error")),
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert any("Discord membership sync failed" in w for w in warnings)
@@ -1461,7 +1462,7 @@ async def test_ensure_discord_role_no_sync_when_disabled(db_session, admin_sessi
         patch("memory.common.discord.list_role_members") as mock_list,
     ):
         sync_info, warnings = await ensure_discord_role(
-            db_session, team.id, guild=123, discord_role=456, auto_sync_discord=False
+            db_session, team.id, guild="123", discord_role="456", auto_sync_discord=False
         )
 
     # Should not call list_role_members since sync is disabled
@@ -2119,7 +2120,7 @@ async def test_ensure_discord_role_requeries_team_after_await(db_session, admin_
     ):
         # Should not raise DetachedInstanceError - uses team_id to re-query
         sync_info, warnings = await ensure_discord_role(
-            db_session, team_id, guild=123, discord_role=456, auto_sync_discord=True
+            db_session, team_id, guild="123", discord_role="456", auto_sync_discord=True
         )
 
     assert not any("not found" in w for w in warnings)
@@ -2153,11 +2154,13 @@ async def test_ensure_github_team_requeries_team_after_await(db_session, admin_s
     assert not any("not found" in w for w in warnings)
 
 
-def test_nested_make_session_shares_underlying_session(db_session):
-    """Verify that nested make_session() calls share the same scoped session.
+def test_nested_make_session_does_not_break_outer(db_session):
+    """Verify that opening an inner make_session() context doesn't invalidate
+    objects loaded by the outer session.
 
-    Since make_session() uses scoped_session (thread-local), nested calls
-    return the same underlying session. Objects remain valid across nesting.
+    make_session() creates an independent session per call (it does not use
+    scoped_session). What we care about is that objects loaded in the outer
+    session remain usable while the inner context is open and after it exits.
     """
     team = Team(name="Nested Session Test", slug="nested-session-test")
     db_session.add(team)
@@ -2170,14 +2173,12 @@ def test_nested_make_session_shares_underlying_session(db_session):
         assert team_obj.slug == "nested-session-test"
 
         with make_session() as inner_session:
-            # Same underlying session
-            assert inner_session is outer_session
             inner_team = inner_session.query(Team).filter(Team.id == team_id).first()
             assert inner_team is not None
 
-        # Objects remain valid after inner context exits
+        # Outer object remains valid after inner context exits.
         assert team_obj.slug == "nested-session-test"
-        _ = team_obj.members  # No DetachedInstanceError
+        _ = team_obj.members  # No DetachedInstanceError on outer-loaded object
 
 
 @pytest.mark.asyncio
