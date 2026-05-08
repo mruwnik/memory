@@ -67,6 +67,20 @@ WHITELIST = {
     # (query string for pull, Bearer header for push) inside the endpoints
     # themselves — must bypass OAuth or curl can't reach them.
     "/claude/transfer/",
+    # Slack push-events webhook. Slack POSTs ``event_callback`` payloads
+    # here and authenticates via x-slack-signature (HMAC-SHA256 over the
+    # body using the per-app signing secret) — it cannot present a
+    # session cookie or Bearer token. The endpoint enforces its own
+    # crypto auth (slack.py:slack_events). Without this carve-out the
+    # AuthenticationMiddleware 401s every Slack POST before the HMAC
+    # check fires, leaving the Slack integration silently broken.
+    # Trailing slash means the prefix match covers both
+    # ``/slack/events/{slack_app_id}`` and any future query-string
+    # variants the Slack API surface introduces. Sibling Slack admin
+    # endpoints (``/slack/workspaces/...``, ``/slack/apps/...``, etc.)
+    # are deliberately NOT under this prefix, so this does not weaken
+    # auth on the operator-facing Slack APIs.
+    "/slack/events/",
 }
 
 

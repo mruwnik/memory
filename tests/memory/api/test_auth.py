@@ -43,6 +43,12 @@ from memory.common import settings
         "/polls/respond/abc-123",
         "/claude/transfer/pull",
         "/claude/transfer/push",
+        # Slack push-events webhook authenticates via x-slack-signature
+        # (HMAC over body), not session cookies. Without this carve-out
+        # the AuthenticationMiddleware 401s every Slack POST before the
+        # in-endpoint HMAC check fires.
+        "/slack/events/5",
+        "/slack/events/123?wizard_nonce=abc",
         # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
         # at root by the MCP SDK. DCR clients have no credentials at
         # registration time by definition, so the middleware bypass is
@@ -94,6 +100,16 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/admin/statics/js/app.js",
         "/admin",
         "/admin/users",
+        # Defense pin against the natural-but-wrong operator workaround
+        # for the events-webhook 401 (broaden ``/slack/events/`` to
+        # ``/slack/`` and accidentally expose every authenticated Slack
+        # admin route). These sibling routes MUST stay auth'd.
+        "/slack/workspaces",
+        "/slack/workspaces/abc",
+        "/slack/apps",
+        "/slack/apps/123",
+        "/slack/channels/456",
+        "/slack/eventslog",  # prefix-overrun against /slack/events
         "",
     ],
 )
