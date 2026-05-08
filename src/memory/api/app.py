@@ -59,6 +59,15 @@ from memory.api.MCP.base import mcp
 logger = logging.getLogger(__name__)
 
 
+# Refuse to boot when DISABLE_AUTH is set in a production-shaped
+# environment (non-loopback SERVER_URL, S3 backups enabled, or a
+# non-loopback OAuth redirect allowlist). A single env-var toggle that
+# silently turns the entire API into an anonymous read/write surface is
+# an unacceptable footgun; this raises before the FastAPI app is even
+# constructed so a misconfigured deploy crash-loops rather than serving.
+settings.validate_disable_auth_safety()
+
+
 # Rate limiter setup
 limiter = Limiter(
     key_func=rate_limit_key,

@@ -318,6 +318,76 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
 )
 
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
+# Paired confirmation flag for DISABLE_AUTH. The single-flag toggle is an
+# anti-pattern for kill-switches of this magnitude (a stray env-var leak
+# from .env.dev into prod silently turns the entire knowledge base into an
+# anonymous read/write API). When DISABLE_AUTH=true and any "this looks
+# like prod" signal is set, startup refuses unless this confirmation
+# flag is also set to the literal "yes-i-am-sure" value.
+DISABLE_AUTH_CONFIRM = os.getenv("I_KNOW_THIS_DISABLES_AUTH", "")
+
+
+def _is_loopback_url(url: str) -> bool:
+    """Return True if ``url`` clearly points at the local machine.
+
+    We deliberately accept only the exact loopback hostnames; anything
+    else (including IPv6 link-local, .local mDNS, private RFC1918, etc.)
+    is treated as non-loopback so the safety check fails closed.
+    """
+    if not url:
+        return True
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def validate_disable_auth_safety() -> None:
+    """Refuse to start when DISABLE_AUTH=true and prod-like signals are set.
+
+    Called eagerly at FastAPI app startup so a misconfigured deployment
+    crash-loops at boot rather than serving every endpoint anonymously.
+    Operators who knowingly want anonymous access in a non-loopback
+    environment must set ``I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure``.
+    """
+    if not DISABLE_AUTH:
+        return
+
+    prod_signals: list[str] = []
+    if not _is_loopback_url(SERVER_URL):
+        prod_signals.append(f"SERVER_URL={SERVER_URL!r} is not loopback")
+    if S3_BACKUP_ENABLED:
+        prod_signals.append("S3_BACKUP_ENABLED=true")
+    non_loopback_redirects = [
+        p for p in OAUTH_REDIRECT_URI_ALLOWLIST if p != "*" and not _is_loopback_url(p)
+    ]
+    if non_loopback_redirects:
+        prod_signals.append(
+            f"OAUTH_REDIRECT_URI_ALLOWLIST contains non-loopback entries: {non_loopback_redirects}"
+        )
+    if "*" in OAUTH_REDIRECT_URI_ALLOWLIST:
+        prod_signals.append("OAUTH_REDIRECT_URI_ALLOWLIST contains wildcard '*'")
+
+    if not prod_signals:
+        return
+
+    if DISABLE_AUTH_CONFIRM == "yes-i-am-sure":
+        logger.warning(
+            "DISABLE_AUTH=true with production signals %s, but "
+            "I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure is set. Proceeding.",
+            prod_signals,
+        )
+        return
+
+    raise RuntimeError(
+        "DISABLE_AUTH=true is set alongside production signals: "
+        + "; ".join(prod_signals)
+        + ". Refusing to start to avoid serving the API anonymously. "
+        "If this is genuinely a development environment, switch "
+        "SERVER_URL to localhost / disable S3 backup / restrict the "
+        "OAuth redirect allowlist to loopback. To override anyway, "
+        "set I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure."
+    )
 STATIC_DIR = pathlib.Path(
     os.getenv(
         "STATIC_DIR",
