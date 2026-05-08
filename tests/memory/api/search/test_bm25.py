@@ -13,6 +13,13 @@ from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import AccessFilter
 
+# Superadmin/no-filter SearchFilters. ``search_bm25`` and
+# ``search_bm25_chunks`` now require an explicit ``access_filter`` key
+# (None means superadmin) to close the documented three-layer access
+# invariant. Tests that don't exercise access control pass this
+# constant so the call shape is explicit.
+SUPERADMIN_FILTERS: SearchFilters = {"access_filter": None}
+
 
 class TestBuildTsquery:
     """Tests for build_tsquery function."""
@@ -93,11 +100,13 @@ class TestSearchBm25:
     """Tests for search_bm25 async function."""
 
     async def test_empty_query_returns_empty(self):
-        result = await bm25.search_bm25("", {"text"})
+        result = await bm25.search_bm25("", {"text"}, filters=SUPERADMIN_FILTERS)
         assert result == {}
 
     async def test_stopwords_only_returns_empty(self):
-        result = await bm25.search_bm25("the and or", {"text"})
+        result = await bm25.search_bm25(
+            "the and or", {"text"}, filters=SUPERADMIN_FILTERS
+        )
         assert result == {}
 
     @patch("memory.api.search.bm25.make_session")
@@ -120,7 +129,9 @@ class TestSearchBm25:
             mock_item2,
         ]
 
-        result = await bm25.search_bm25("test query", {"text"}, limit=10)
+        result = await bm25.search_bm25(
+            "test query", {"text"}, limit=10, filters=SUPERADMIN_FILTERS
+        )
 
         # Should normalize scores to 0-1 range
         # max=0.8, min=0.4, range=0.4
@@ -147,7 +158,7 @@ class TestSearchBm25:
             mock_item2,
         ]
 
-        result = await bm25.search_bm25("test", {"text"})
+        result = await bm25.search_bm25("test", {"text"}, filters=SUPERADMIN_FILTERS)
 
         assert result == {"chunk1": 0.5, "chunk2": 0.5}
 
@@ -159,7 +170,9 @@ class TestSearchBm25:
             []
         )
 
-        result = await bm25.search_bm25("nonexistent term", {"text"})
+        result = await bm25.search_bm25(
+            "nonexistent term", {"text"}, filters=SUPERADMIN_FILTERS
+        )
         assert result == {}
 
     @patch("memory.api.search.bm25.make_session")
@@ -174,7 +187,7 @@ class TestSearchBm25:
             []
         )
 
-        filters = SearchFilters(source_ids=[1, 2, 3])
+        filters: SearchFilters = {"source_ids": [1, 2, 3], "access_filter": None}
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         # Verify filter was called with source_ids
@@ -192,7 +205,10 @@ class TestSearchBm25:
             []
         )
 
-        filters = SearchFilters(observation_types=["preference", "fact"])
+        filters: SearchFilters = {
+            "observation_types": ["preference", "fact"],
+            "access_filter": None,
+        }
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         assert mock_query.filter.called
@@ -206,7 +222,9 @@ class TestSearchBm25:
         mock_limit = mock_query.filter.return_value.order_by.return_value.limit
         mock_limit.return_value.all.return_value = []
 
-        await bm25.search_bm25("test", {"text"}, limit=20)
+        await bm25.search_bm25(
+            "test", {"text"}, limit=20, filters=SUPERADMIN_FILTERS
+        )
 
         # Verify limit was called with 20
         mock_limit.assert_called_once_with(20)
@@ -230,7 +248,7 @@ class TestSearchBm25:
             mock_item2,
         ]
 
-        result = await bm25.search_bm25("test", {"text"})
+        result = await bm25.search_bm25("test", {"text"}, filters=SUPERADMIN_FILTERS)
 
         # Only chunk1 should be in results
         assert "chunk1" in result
@@ -246,7 +264,9 @@ class TestSearchBm25:
             []
         )
 
-        await bm25.search_bm25("test", {"email", "blog", "note"})
+        await bm25.search_bm25(
+            "test", {"email", "blog", "note"}, filters=SUPERADMIN_FILTERS
+        )
 
         # Verify filter was called (modalities passed to filter)
         assert mock_query.filter.called
@@ -257,7 +277,9 @@ class TestSearchBm25Chunks:
     """Tests for search_bm25_chunks async function."""
 
     async def test_empty_data_returns_empty(self):
-        result = await bm25.search_bm25_chunks([], {"text"})
+        result = await bm25.search_bm25_chunks(
+            [], {"text"}, filters=SUPERADMIN_FILTERS
+        )
         assert result == {}
 
     async def test_data_chunks_with_no_strings_returns_empty(self):
@@ -267,7 +289,9 @@ class TestSearchBm25Chunks:
             extract.DataChunk(data=cast(Any, [123, 456])),
             extract.DataChunk(data=cast(Any, [{"key": "value"}])),
         ]
-        result = await bm25.search_bm25_chunks(chunks, {"text"})
+        result = await bm25.search_bm25_chunks(
+            chunks, {"text"}, filters=SUPERADMIN_FILTERS
+        )
         assert result == {}
 
     @patch("memory.api.search.bm25.search_bm25")
@@ -275,7 +299,9 @@ class TestSearchBm25Chunks:
         mock_search_bm25.return_value = {"chunk1": 0.8, "chunk2": 0.4}
 
         chunks = [extract.DataChunk(data=["test query"])]
-        result = await bm25.search_bm25_chunks(chunks, {"text"}, limit=10)
+        result = await bm25.search_bm25_chunks(
+            chunks, {"text"}, limit=10, filters=SUPERADMIN_FILTERS
+        )
 
         assert result == {"chunk1": 0.8, "chunk2": 0.4}
         mock_search_bm25.assert_called_once()
@@ -294,7 +320,9 @@ class TestSearchBm25Chunks:
             extract.DataChunk(data=["first query"]),
             extract.DataChunk(data=["second query"]),
         ]
-        result = await bm25.search_bm25_chunks(chunks, {"text"})
+        result = await bm25.search_bm25_chunks(
+            chunks, {"text"}, filters=SUPERADMIN_FILTERS
+        )
 
         # Should take max score for each chunk
         assert result == {"chunk1": 0.8, "chunk2": 0.9, "chunk3": 0.5}
@@ -310,7 +338,9 @@ class TestSearchBm25Chunks:
         mock_search_bm25.side_effect = slow_search
 
         chunks = [extract.DataChunk(data=["test"])]
-        result = await bm25.search_bm25_chunks(chunks, {"text"}, timeout=0.1)
+        result = await bm25.search_bm25_chunks(
+            chunks, {"text"}, timeout=0.1, filters=SUPERADMIN_FILTERS
+        )
 
         # Should return empty dict on timeout
         assert result == {}
@@ -327,7 +357,9 @@ class TestSearchBm25Chunks:
             extract.DataChunk(data=["first"]),
             extract.DataChunk(data=["second"]),
         ]
-        result = await bm25.search_bm25_chunks(chunks, {"text"})
+        result = await bm25.search_bm25_chunks(
+            chunks, {"text"}, filters=SUPERADMIN_FILTERS
+        )
 
         # Should still return results from successful query
         assert result == {"chunk1": 0.8}
@@ -341,7 +373,7 @@ class TestSearchBm25Chunks:
         chunks = [
             extract.DataChunk(data=cast(Any, ["text content", 123, {"key": "value"}, "more text"]))
         ]
-        await bm25.search_bm25_chunks(chunks, {"text"})
+        await bm25.search_bm25_chunks(chunks, {"text"}, filters=SUPERADMIN_FILTERS)
 
         # Should extract only string content
         mock_search_bm25.assert_called_once()
@@ -356,7 +388,7 @@ class TestSearchBm25Chunks:
         chunks = [
             extract.DataChunk(data=["  lots   of    whitespace  "])
         ]
-        await bm25.search_bm25_chunks(chunks, {"text"})
+        await bm25.search_bm25_chunks(chunks, {"text"}, filters=SUPERADMIN_FILTERS)
 
         call_args = mock_search_bm25.call_args
         query = call_args[0][0]
@@ -369,7 +401,7 @@ class TestSearchBm25Chunks:
     async def test_filters_passed_through(self, mock_search_bm25):
         mock_search_bm25.return_value = {}
 
-        filters = SearchFilters(source_ids=[1, 2, 3])
+        filters: SearchFilters = {"source_ids": [1, 2, 3], "access_filter": None}
         chunks = [extract.DataChunk(data=["test"])]
         await bm25.search_bm25_chunks(chunks, {"text"}, filters=filters)
 
@@ -383,7 +415,9 @@ class TestSearchBm25Chunks:
         mock_search_bm25.return_value = {}
 
         chunks = [extract.DataChunk(data=["test"])]
-        await bm25.search_bm25_chunks(chunks, {"text"}, limit=50)
+        await bm25.search_bm25_chunks(
+            chunks, {"text"}, limit=50, filters=SUPERADMIN_FILTERS
+        )
 
         call_args = mock_search_bm25.call_args
         # Function signature is: search_bm25(query, modalities, limit, filters)
@@ -395,7 +429,7 @@ class TestSearchBm25Chunks:
 
         chunks = [extract.DataChunk(data=["test"])]
         modalities = {"email", "blog", "note"}
-        await bm25.search_bm25_chunks(chunks, modalities)
+        await bm25.search_bm25_chunks(chunks, modalities, filters=SUPERADMIN_FILTERS)
 
         call_args = mock_search_bm25.call_args
         assert call_args[0][1] == modalities
@@ -432,7 +466,7 @@ class TestSearchBm25PersonFilter:
         mock_join = mock_after_initial.join.return_value
         mock_join.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
 
-        filters = SearchFilters(person_id=42)
+        filters: SearchFilters = {"person_id": 42, "access_filter": None}
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         # Verify join was called (person_id requires source join)
@@ -451,7 +485,7 @@ class TestSearchBm25PersonFilter:
         mock_person_filter = mock_join.filter.return_value
         mock_person_filter.order_by.return_value.limit.return_value.all.return_value = []
 
-        filters = SearchFilters(person_id=42)
+        filters: SearchFilters = {"person_id": 42, "access_filter": None}
         await bm25.search_bm25("test", {"text"}, filters=filters)
 
         # The person_id filter adds a filter call after the join
@@ -847,3 +881,46 @@ def test_apply_access_filter_contributor_cannot_see_higher_sensitivity(
             assert item.id not in returned_ids, "Contributor saw internal item!"
         if item.sensitivity == "confidential":
             assert item.id not in returned_ids, "Contributor saw confidential item!"
+
+
+# --- search_bm25 fail-closed on missing access_filter ---
+# Pinned regression: same three-layer invariant as search_chunks. Pre-fix
+# search_bm25 silently skipped the filter when access_filter was missing
+# from filters; now it raises like search_sources does.
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_raises_on_none_filters():
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await bm25.search_bm25("query", {"text"})
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_raises_on_missing_access_filter_key():
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await bm25.search_bm25(
+            "query",
+            {"text"},
+            filters={"person_id": 5},  # type: ignore[typeddict-item]
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_chunks_raises_on_missing_access_filter():
+    """Outer entry-point search_bm25_chunks also fail-closes."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await bm25.search_bm25_chunks(
+            [extract.DataChunk(data=["q"])],
+            {"text"},
+            filters={"min_size": 100},  # type: ignore[typeddict-item]
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_explicit_none_access_filter_does_not_raise():
+    """``access_filter=None`` is the explicit superadmin opt-in — must not raise."""
+    # Build_tsquery returns "" for empty input → no DB call → returns {}.
+    result = await bm25.search_bm25(
+        "", {"text"}, filters={"access_filter": None}
+    )
+    assert result == {}

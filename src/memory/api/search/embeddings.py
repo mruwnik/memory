@@ -326,6 +326,32 @@ def merge_filters(
     return filters
 
 
+def require_access_filter(filters: "SearchFilters | None", caller: str) -> "SearchFilters":
+    """Fail-closed gate on the documented three-layer access invariant.
+
+    The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+    filters are applied at three layers — Qdrant payload, BM25 SQL, and
+    final source merge. Pre-fix only the third layer raised on missing
+    ``access_filter``; the first two silently fell through to "no filter"
+    when callers forgot to thread the key. This helper makes the same
+    fail-closed semantics uniform across all three.
+
+    Pass ``filters={"access_filter": None}`` for the explicit superadmin
+    case (admin builds the filter as ``None`` deliberately). A *missing*
+    key is treated as a programming error — defense-in-depth that's only
+    effective when callers remember to opt in is a hint, not a defense.
+    """
+    if filters is None or "access_filter" not in filters:
+        raise ValueError(
+            f"{caller} requires `filters` with an `access_filter` key. "
+            "Pass `access_filter=None` for explicit superadmin/no-filter "
+            "semantics. The check matches the documented three-layer "
+            "access-control invariant — see search_sources for the "
+            "matching final-merge fail-closed."
+        )
+    return filters
+
+
 async def search_chunks(
     data: list[extract.DataChunk],
     modalities: set[str] | None = None,
@@ -342,19 +368,25 @@ async def search_chunks(
     - modalities: List of modalities to search in (e.g., "text", "photo", "doc")
     - limit: Maximum number of results
     - min_score: Minimum score to include in the search results
-    - filters: Filters to apply to the search results
+    - filters: Filters to apply to the search results — MUST contain an
+      ``access_filter`` key. Pass ``access_filter=None`` for explicit
+      superadmin / no-filter semantics.
     - multimodal: Whether to search in multimodal collections
 
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
+
+    Raises:
+        ValueError: ``filters`` is None, or ``access_filter`` is not a key
+            in ``filters``. Closes the documented three-layer access-control
+            invariant for the Qdrant layer (search_sources / final-merge
+            already enforces this; this is the same fail-closed at the
+            vector-search layer so a future caller that forgets
+            ``access_filter`` cannot silently widen results).
     """
-    # ``None`` sentinels: shared mutable defaults would be a cross-request
-    # leak waiting to happen if anyone in this call chain ever mutates
-    # ``filters`` (e.g. ``filters.setdefault('access_filter', X)``).
+    filters = require_access_filter(filters, "search_chunks")
     if modalities is None:
         modalities = set()
-    if filters is None:
-        filters = {}
     search_filters: list[dict[str, Any]] = []
     for key, val in filters.items():
         if key in ("access_filter", "person_id"):
@@ -438,13 +470,15 @@ async def search_chunks_embeddings(
     """
     Search chunks using embeddings across text and multimodal collections.
 
+    ``filters`` MUST carry an ``access_filter`` key (use ``None`` for
+    explicit superadmin) — see :func:`require_access_filter`.
+
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    filters = require_access_filter(filters, "search_chunks_embeddings")
     if modalities is None:
         modalities = set()
-    if filters is None:
-        filters = SearchFilters()
     # Note: Multimodal embeddings typically produce higher similarity scores,
     # so we use a higher threshold (0.4) to maintain selectivity.
     # Text embeddings produce lower scores, so we use 0.25.

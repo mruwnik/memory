@@ -12,7 +12,9 @@ from memory.api.search.embeddings import (
     build_access_qdrant_filter,
     NO_ACCESS,
     NoAccess,
+    require_access_filter,
     search_chunks,
+    search_chunks_embeddings,
 )
 from memory.common.access_control import AccessFilter, AccessCondition
 from memory.common.extract import DataChunk
@@ -520,7 +522,11 @@ async def test_search_chunks_passes_person_filter_to_query():
         mock_query.return_value = {}
 
         data = [DataChunk(data=["test query"])]
-        await search_chunks(data, modalities={"text"}, filters={"person_id": 42})
+        await search_chunks(
+            data,
+            modalities={"text"},
+            filters={"person_id": 42, "access_filter": None},
+        )
 
         # Verify query_chunks was called
         mock_query.assert_called_once()
@@ -660,3 +666,65 @@ async def test_search_chunks_superadmin_no_access_filter():
                 )
             ]
             assert access_conditions == []
+
+
+# --- require_access_filter — three-layer fail-closed regression ---
+#
+# The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+# filters are applied at three layers — Qdrant payload, BM25 SQL, and
+# final source merge. Pre-fix only the third layer raised on missing
+# ``access_filter``; the first two silently fell through to "no filter".
+# These tests pin the new uniform fail-closed behaviour at the chunk
+# layer so a future caller cannot regress to the old fail-open shape.
+
+
+def test_require_access_filter_raises_on_none():
+    with pytest.raises(ValueError, match="requires `filters`"):
+        require_access_filter(None, "test")
+
+
+def test_require_access_filter_raises_on_missing_key():
+    """Missing ``access_filter`` key (NOT ``access_filter=None``)."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        require_access_filter({"person_id": 5}, "test")  # type: ignore[arg-type]
+
+
+def test_require_access_filter_accepts_explicit_none():
+    """``access_filter=None`` is the explicit superadmin opt-in."""
+    out = require_access_filter({"access_filter": None}, "test")
+    assert out == {"access_filter": None}
+
+
+def test_require_access_filter_accepts_real_filter():
+    af = AccessFilter(conditions=[])
+    out = require_access_filter({"access_filter": af}, "test")
+    assert out.get("access_filter") is af
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_raises_on_none_filters():
+    """Top-level search_chunks must fail-closed on None filters."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks([DataChunk(data=["q"])], modalities={"text"})
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_raises_on_missing_access_filter_key():
+    """Filters dict without access_filter key must fail-closed."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks(
+            [DataChunk(data=["q"])],
+            modalities={"text"},
+            filters={"person_id": 5},  # type: ignore[typeddict-item]
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_embeddings_raises_on_missing_access_filter():
+    """Outer entry-point search_chunks_embeddings also fail-closes."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks_embeddings(
+            [DataChunk(data=["q"])],
+            modalities={"text"},
+            filters={"min_size": 100},  # type: ignore[typeddict-item]
+        )

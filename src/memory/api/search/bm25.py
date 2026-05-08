@@ -11,6 +11,7 @@ import re
 
 from sqlalchemy import func, text, or_, exists, select
 
+from memory.api.search.embeddings import require_access_filter
 from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import AccessFilter, apply_access_filter_to_query
@@ -86,11 +87,18 @@ async def search_bm25(
 
     Uses ts_rank for relevance scoring, normalized to 0-1 range.
 
+    ``filters`` MUST carry an ``access_filter`` key (use ``None`` for
+    explicit superadmin) — see :func:`require_access_filter`.
+
     Returns:
     - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
+
+    Raises:
+        ValueError: ``filters`` is None, or ``access_filter`` missing.
+            Closes the documented three-layer access-control invariant
+            for the BM25 layer.
     """
-    if filters is None:
-        filters = SearchFilters()
+    filters = require_access_filter(filters, "search_bm25")
     tsquery = build_tsquery(query)
     if not tsquery:
         return {}
@@ -220,13 +228,15 @@ async def search_bm25_chunks(
     Runs separate searches for each data chunk and merges results,
     similar to how embedding search handles multiple query variants.
 
+    ``filters`` MUST carry an ``access_filter`` key (use ``None`` for
+    explicit superadmin) — see :func:`require_access_filter`.
+
     Returns:
     - Dictionary mapping chunk IDs to their normalized scores (0-1 range)
     """
+    filters = require_access_filter(filters, "search_bm25_chunks")
     if modalities is None:
         modalities = set()
-    if filters is None:
-        filters = SearchFilters()
     # Extract query strings from each data chunk
     queries = [
         " ".join(c for c in chunk.data if isinstance(c, str))
