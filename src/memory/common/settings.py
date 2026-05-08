@@ -317,6 +317,24 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
 
+# Per-request size caps for the authenticated content-upload endpoints
+# (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three
+# previously called ``await file.read()`` with no upper bound, which
+# meant any authenticated user could buffer multi-GB uploads in API
+# RAM (OOM kill the API container) or fill ``FILE_STORAGE_DIR`` (which
+# Postgres + Qdrant + every other service shares). Defaults match what
+# real users actually upload: 100 MiB ebooks, 50 MiB photos, 25 MiB
+# reports. Raise via env var if a deployment needs larger artifacts.
+MAX_BOOK_UPLOAD_BYTES = int(
+    os.getenv("MAX_BOOK_UPLOAD_BYTES", 100 * 1024 * 1024)
+)
+MAX_PHOTO_UPLOAD_BYTES = int(
+    os.getenv("MAX_PHOTO_UPLOAD_BYTES", 50 * 1024 * 1024)
+)
+MAX_REPORT_UPLOAD_BYTES = int(
+    os.getenv("MAX_REPORT_UPLOAD_BYTES", 25 * 1024 * 1024)
+)
+
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 # Paired confirmation flag for DISABLE_AUTH. The single-flag toggle is an
 # anti-pattern for kill-switches of this magnitude (a stray env-var leak
@@ -486,9 +504,81 @@ SECRETS_ENCRYPTION_SALT = os.getenv(
 MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
 
 # HMAC secret for short-lived signed URLs used by the cloud-claude session
-# file transfer endpoints. Falls back to SECRETS_ENCRYPTION_KEY in dev so
-# operators don't need to configure two secrets to get started.
-TRANSFER_TOKEN_SECRET = secret_env("TRANSFER_TOKEN_SECRET") or SECRETS_ENCRYPTION_KEY
+# file transfer endpoints.
+#
+# Two operator-facing modes:
+#
+# 1. ``TRANSFER_TOKEN_SECRET`` env var explicitly set → used as-is.
+#    Operators who want independently-rotatable secrets configure this
+#    directly. Rotation only invalidates in-flight transfer URLs (~60s)
+#    instead of forcing a full secrets-encryption-key migration.
+#
+# 2. ``TRANSFER_TOKEN_SECRET`` empty AND ``SECRETS_ENCRYPTION_KEY`` set →
+#    *derive* a domain-separated key from ``SECRETS_ENCRYPTION_KEY`` via
+#    HKDF-SHA256 (RFC 5869). The derived key is mathematically distinct
+#    from the input key (HKDF is a one-way pseudo-random function with a
+#    domain-separating ``info`` string), so HMAC-SHA256 tags computed on
+#    transfer URLs do NOT leak any information about the at-rest AES-GCM
+#    key that protects user secrets in the DB.
+#
+#    This gives operators the "single secret to configure" UX the previous
+#    bare-``or`` fallback intended, without the crypto-isolation cost of
+#    sharing key material across two distinct primitives:
+#
+#    | Use                      | Algorithm                | Boundary |
+#    |--------------------------|--------------------------|----------|
+#    | ``SECRETS_ENCRYPTION_KEY`` (raw)     | AES-GCM (Fernet) for at-rest secrets    | DB |
+#    | ``TRANSFER_TOKEN_SECRET`` (HKDF-derived) | HMAC-SHA256 of presigned URL | URL |
+#
+#    Rotating ``SECRETS_ENCRYPTION_KEY`` still rotates the derived
+#    transfer secret implicitly — that's expected; the input key changing
+#    means every output key changes. But a leak of one no longer trivially
+#    discloses the other.
+#
+# 3. Both empty → ``TRANSFER_TOKEN_SECRET`` stays None and the transfer
+#    code path raises a clear error at first mint/verify
+#    (``transfer_tokens._require_secret``). Operators who never use cloud-
+#    claude transfers don't need to configure either secret.
+#
+# Domain-separating ``info`` includes ``v1`` so that rotating the
+# derivation scheme (e.g. switching to a different hash) cleanly
+# invalidates all existing tokens by bumping the version tag.
+_TRANSFER_TOKEN_SECRET_HKDF_INFO = b"memory:transfer-token-secret:v1"
+
+
+def _derive_transfer_token_secret(master_key: str) -> str:
+    """HKDF-SHA256-derive a 32-byte (256-bit) HMAC key from ``master_key``.
+
+    Returns hex (the existing ``transfer_tokens._sign`` calls
+    ``secret.encode("utf-8")`` so any printable string works; hex keeps
+    the value greppable in process listings if it ever leaks). The
+    derivation is deterministic — same input → same output — which is
+    required so all API instances in a deployment compute the same
+    transfer secret without coordination.
+
+    Imports happen at module load (``settings.py`` is imported eagerly
+    by the API), so any cryptography-library bug surfaces at startup
+    rather than first-token mint.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    derived_bytes = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=SECRETS_ENCRYPTION_SALT,
+        info=_TRANSFER_TOKEN_SECRET_HKDF_INFO,
+    ).derive(master_key.encode("utf-8"))
+    return derived_bytes.hex()
+
+
+_explicit_transfer_secret = secret_env("TRANSFER_TOKEN_SECRET")
+if _explicit_transfer_secret:
+    TRANSFER_TOKEN_SECRET: str | None = _explicit_transfer_secret
+elif SECRETS_ENCRYPTION_KEY:
+    TRANSFER_TOKEN_SECRET = _derive_transfer_token_secret(SECRETS_ENCRYPTION_KEY)
+else:
+    TRANSFER_TOKEN_SECRET = None
 
 # Default lifetime (seconds) for cloud-claude file transfer URLs.
 TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))
