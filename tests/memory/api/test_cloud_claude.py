@@ -2,6 +2,7 @@
 
 import asyncio
 import pathlib
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from memory.api.cloud_claude import (
     is_valid_session_id,
     make_session_id,
     require_session_access,
+    require_session_access_websocket,
     spawn_session,
     user_owns_session,
     validate_differ_subpath,
@@ -367,6 +369,123 @@ def test_require_session_access_rejects_other_users_session():
     with pytest.raises(HTTPException) as exc_info:
         require_session_access(user, f"u9999-x-{_SAMPLE_HEX32}")
     assert exc_info.value.status_code == 404
+
+
+# --- require_session_access_websocket: WebSocket close-code uniformity ----
+#
+# The WS analog used to be open-coded at three sites with three slightly
+# different close codes / messages / failure orderings. Centralisation
+# pins the "single 4004 + uniform reason" property so a contributor
+# editing one site can't drift the others.
+
+
+class _FakeWebSocket:
+    """Minimal WebSocket double for testing close-frame uniformity.
+
+    Records the (code, reason) pair from ``await close(...)`` so tests
+    can assert the central helper always closes with the same uniform
+    Session-not-found framing.
+    """
+
+    def __init__(self) -> None:
+        self.closed: tuple[int, str] | None = None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.closed = (code, reason)
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_user_none():
+    """Token didn't authenticate to a user → close 4004 with the
+    canonical Session-not-found reason. Must NOT use a distinct code
+    that would let a caller distinguish "valid token, wrong session"
+    from "no/expired token". Token-only failures keep their 4001 close
+    in the calling code (handled before this helper)."""
+    ws = _FakeWebSocket()
+    granted = await require_session_access_websocket(
+        cast(Any, ws), None, f"u42-x-{_SAMPLE_HEX32}"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_invalid_session_format():
+    """Malformed session id → uniform 4004. The previous open-coded
+    sites used ``"Invalid session ID format"`` here, which leaked
+    "this id failed regex" vs. "this id is unknown to you" — the
+    centralised helper collapses both into the same reason."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, "this-is-not-a-session-id"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_other_users_session():
+    """Well-formed session belonging to a different user → uniform 4004."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, f"u9999-x-{_SAMPLE_HEX32}"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_returns_true_on_success():
+    """Owner + well-formed session id → no close, returns True."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, f"u42-e1-{_SAMPLE_HEX32}"
+    )
+    assert granted is True
+    assert ws.closed is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_id,session_id",
+    [
+        (None, f"u42-x-{_SAMPLE_HEX32}"),                       # no user
+        (42, "malformed"),                                       # bad format
+        (42, f"u9999-x-{_SAMPLE_HEX32}"),                       # other user
+        (42, f"u42-x-{_SAMPLE_HEX32}foo"),                      # adjacent-char smuggling
+        (42, f"u42-x-abcdef"),                                  # short hex prefix
+    ],
+)
+async def test_require_session_access_websocket_uniform_reason_across_failure_modes(
+    user_id, session_id
+):
+    """REGRESSION GUARD: every failure mode the helper handles MUST
+    surface the same (code, reason) pair, so an attacker can't binary-
+    search session existence by toggling one input at a time. The
+    previous open-coded sites used DIFFERENT messages per failure
+    branch — that's the leak this helper centralises away.
+    """
+    ws = _FakeWebSocket()
+    if user_id is None:
+        user = None
+    else:
+        user = MagicMock()
+        user.id = user_id
+
+    granted = await require_session_access_websocket(cast(Any, ws), user, session_id)
+    assert granted is False
+    # Pin the exact close frame: code AND reason. A future contributor
+    # editing one of those is a regression visible immediately.
+    assert ws.closed == (4004, "Session not found")
 
 
 @pytest.mark.parametrize(

@@ -435,6 +435,57 @@ def require_session_access(user: User, session_id: str) -> None:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+# WebSocket-specific session-access close code. Distinct from the HTTP
+# 404 because WebSockets don't have status codes — they have close
+# frames. 4004 is in the application-defined range (4000-4999) and the
+# message stays uniform across format-failure and ownership-failure so
+# the client can't distinguish "this session ID is invalid syntax" from
+# "this session exists but isn't yours" — same info-disclosure rule as
+# the HTTP path.
+_WEBSOCKET_SESSION_NOT_FOUND_CODE = 4004
+_WEBSOCKET_SESSION_NOT_FOUND_REASON = "Session not found"
+
+
+async def require_session_access_websocket(
+    websocket: WebSocket, user: User | None, session_id: str
+) -> bool:
+    """WebSocket analog of ``require_session_access``.
+
+    Closes ``websocket`` with a uniform 4004 ``Session not found`` frame
+    and returns ``False`` if any of these fails:
+      * ``session_id`` doesn't match ``_SESSION_ID_RE`` (path-traversal
+        defense-in-depth — the id flows into orchestrator URL paths)
+      * ``user`` is ``None`` (token didn't authenticate to a user)
+      * ``user_owns_session(user, session_id)`` is False
+
+    Returns ``True`` if the caller should proceed (the session is
+    well-formed, owned by ``user``, and the websocket has NOT been
+    closed). The caller is then responsible for ``await
+    websocket.accept()`` and the rest of the handshake.
+
+    Why this exists: three open-coded copies of the same checks drifted
+    in ``proxy_differ`` (HTTP), ``proxy_differ_ws``, and the terminal
+    WebSocket — each with slightly different close codes / messages /
+    failure ordering. The HTTP variant additionally returned distinct
+    400/403 status codes pre-collapse, which leaked "session exists vs.
+    syntactically invalid" to unauthenticated callers. Centralising
+    here pins the "single 4004 + uniform reason" property for every WS
+    route, so a future contributor can't accidentally split the failure
+    modes apart by editing one site.
+    """
+    if (
+        user is None
+        or not _SESSION_ID_RE.match(session_id)
+        or not user_owns_session(user, session_id)
+    ):
+        await websocket.close(
+            code=_WEBSOCKET_SESSION_NOT_FOUND_CODE,
+            reason=_WEBSOCKET_SESSION_NOT_FOUND_REASON,
+        )
+        return False
+    return True
+
+
 class SpawnRequest(BaseModel):
     """Request to spawn a new Claude Code session.
 
@@ -1410,10 +1461,10 @@ async def proxy_differ(
     Injects a <base href> tag into HTML responses so the differ SPA
     resolves relative URLs through this proxy.
     """
-    if not is_valid_session_id(session_id):
-        raise HTTPException(status_code=404, detail="Invalid session ID format")
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # Centralised: format check + ownership + uniform 404 reason so we
+    # don't leak "session exists but isn't yours" vs. "session ID is
+    # syntactically invalid" to unauthorised callers.
+    require_session_access(user, session_id)
 
     # Extract the differ subpath from raw_path (bytes) to preserve
     # percent-encoding — scope["path"] decodes %2F to /, which breaks
@@ -1518,16 +1569,14 @@ async def proxy_differ_ws(
     Relays frames bidirectionally between the client and the differ server
     through the orchestrator's WebSocket proxy.
     """
-    if not is_valid_session_id(session_id):
-        await websocket.close(code=4004, reason="Invalid session ID format")
-        return
-
-    # Authenticate
+    # Authenticate first, then route through the centralised helper so
+    # format-failure / no-user / wrong-owner all surface as the same
+    # 4004 close frame ("Session not found"). Distinguishing them would
+    # leak existence to unauthenticated callers.
     with make_session() as db:
         user = get_user_from_token(token, db) if token else None
-        if not user or not user_owns_session(user, session_id):
-            await websocket.close(code=4004, reason="Session not found")
-            return
+    if not await require_session_access_websocket(websocket, user, session_id):
+        return
 
     # Extract subpath from raw_path to preserve percent-encoding (see proxy_differ)
     # Must happen BEFORE accept() so we can close with an error code on bad input.
@@ -1624,19 +1673,22 @@ async def stream_session_logs(
     Client -> Server messages (JSON):
     - {"type": "input", "keys": "..."}: Send keystrokes to tmux
     """
-    if not is_valid_session_id(session_id):
-        await websocket.close(code=4004, reason="Invalid session ID format")
-        return
-
-    # Authenticate and authorize
+    # Authenticate first, then route through the centralised helper.
+    #
+    # Note the deliberate distinction here: an *invalid token* still uses
+    # a separate 4001 close code (clients need to distinguish "your
+    # token is expired, get a new one" from "the session you asked for
+    # doesn't exist") — but everything else (bad session-id format,
+    # token-without-user, ownership mismatch) collapses to a uniform
+    # 4004 ``Session not found`` so we don't leak existence to callers
+    # who hold a valid token but for the wrong session.
     with make_session() as db:
         user = get_user_from_token(token, db)
-        if not user:
-            await websocket.close(code=4001, reason="Invalid or expired token")
-            return
-        if not user_owns_session(user, session_id):
-            await websocket.close(code=4004, reason="Session not found")
-            return
+    if user is None:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return
+    if not await require_session_access_websocket(websocket, user, session_id):
+        return
 
     await websocket.accept()
     client = get_orchestrator_client()
