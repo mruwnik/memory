@@ -1,7 +1,5 @@
 """S3 backup tasks for memory files."""
 
-import base64
-import hashlib
 import logging
 import os
 import subprocess
@@ -17,6 +15,7 @@ from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
+from memory.common.db.models.secrets import derive_encryption_key
 from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
@@ -59,14 +58,63 @@ def backup_lock(lock_name: str = "backup_all"):
         redis_client.eval(release_script, 1, lock_key, lock_value)
 
 
+# Domain-separating salt for the small-file Fernet backup KDF.
+#
+# Pinned as a module-level constant so backup decryption is stable across
+# code restarts and so a fresh-cloned repo at the same version can decrypt
+# its own backups. Distinct from ``SECRETS_ENCRYPTION_SALT`` so a leaked
+# backup ciphertext cannot be brute-forced in tandem with a leaked
+# at-rest secrets ciphertext — even if an operator (foolishly) reuses the
+# same passphrase for ``BACKUP_ENCRYPTION_KEY`` and ``SECRETS_ENCRYPTION_KEY``
+# the derived Fernet keys end up different because the KDF inputs
+# (passphrase, salt) differ.
+#
+# The ``v2`` suffix marks the post-PBKDF2 KDF era. Bumping the version
+# string invalidates all existing backups (operators must keep the
+# previous code version around to decrypt v1 archives — see commit
+# message for migration notes).
+_BACKUP_KEY_SALT = b"memory-backup-encryption-salt-v2"
+
+
 def get_cipher() -> Fernet:
-    """Create Fernet cipher from password in settings."""
+    """Create Fernet cipher from ``BACKUP_ENCRYPTION_KEY`` via PBKDF2.
+
+    Routes through ``derive_encryption_key`` (the same PBKDF2-HMAC-SHA256
+    + 480k-iterations primitive the rest of the secrets infrastructure
+    uses, OWASP-recommended). Replaces the previous bare-SHA-256
+    derivation which:
+
+    1. Had no work factor — a leaked backup ciphertext + operator-chosen
+       passphrase was brute-forceable at ~10^9 attempts/sec on a single
+       GPU. PBKDF2-480000 slows that by a factor of 480k, raising the
+       cost of an offline attack to several CPU-decades for a 60-bit
+       passphrase.
+
+    2. Had no salt — two deployments with the same
+       ``BACKUP_ENCRYPTION_KEY`` produced identical Fernet keys, so a
+       dev-environment backup leak directly decrypted prod backups
+       encrypted with the same passphrase. The pinned ``_BACKUP_KEY_SALT``
+       is also constant within a deployment, but the salt is *distinct
+       from* ``SECRETS_ENCRYPTION_SALT`` so cross-primitive key derivation
+       is not coupled.
+
+    3. Was inconsistent with the codebase: ``encrypt_file_streaming``
+       uses ``openssl enc -aes-256-cbc -pbkdf2 -salt`` for files >100MB,
+       and ``derive_encryption_key`` (PBKDF2-480000) for at-rest user
+       secrets. Small backups were the *only* path using a weaker KDF,
+       which is exactly inverted from the threat model — small files are
+       higher secret-density per byte than large media.
+
+    Format break: old backups encrypted under the bare-SHA-256 KDF
+    cannot be decrypted by ``get_cipher()`` after this change. Operators
+    restoring v1 archives must use the previous code revision (the
+    on-disk ciphertext format is identical, only the key derivation
+    changed). New backups use the v2 KDF; future bumps would update
+    ``_BACKUP_KEY_SALT``'s ``v2`` suffix.
+    """
     if not settings.BACKUP_ENCRYPTION_KEY:
         raise ValueError("BACKUP_ENCRYPTION_KEY not set in environment")
-
-    # Derive key from password using SHA256
-    key_bytes = hashlib.sha256(settings.BACKUP_ENCRYPTION_KEY.encode()).digest()
-    key = base64.urlsafe_b64encode(key_bytes)
+    key = derive_encryption_key(settings.BACKUP_ENCRYPTION_KEY, _BACKUP_KEY_SALT)
     return Fernet(key)
 
 
@@ -233,7 +281,13 @@ def backup_encrypted_directory(path: Path) -> dict:
                 if os.path.exists(enc_path):
                     os.unlink(enc_path)
         else:
-            # Small files: use Fernet (keeps backward compatibility)
+            # Small files (<MAX_FERNET_SIZE): use Fernet with the v2 KDF
+            # (PBKDF2-HMAC-SHA256 + 480k iterations + pinned salt — see
+            # ``get_cipher`` docstring). This was previously a bare-SHA-256
+            # KDF; the ciphertext format is identical so the change is
+            # invisible to S3, but pre-v2 archives can no longer be
+            # decrypted by this code (see the get_cipher() docstring for
+            # operator migration notes).
             cipher = get_cipher()
             tarball_bytes = tar_path.read_bytes()
             encrypted_bytes = cipher.encrypt(tarball_bytes)
