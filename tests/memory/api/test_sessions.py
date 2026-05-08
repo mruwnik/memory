@@ -636,11 +636,11 @@ def test_iter_transcript_events_does_not_load_whole_file(tmp_path):
 
     We can't directly assert "didn't load the whole file" via memory
     instrumentation in a test, but we CAN assert: when we ask for
-    events 5–10 with end=10, the generator stops reading at line 10
-    and never touches lines beyond that. We test by making the late
-    portion of the file invalid JSON; with the bug, the generator
-    would have read those lines and emitted a warning. With the fix,
-    it short-circuits before reaching them.
+    events 5–10 with end=11 (exclusive), the generator stops reading
+    before line 11 and never touches lines beyond that. We test by
+    making the late portion of the file invalid JSON; with the bug,
+    the generator would have read those lines and emitted a warning.
+    With the fix, it short-circuits before reaching them.
     """
     from memory.api.sessions import iter_transcript_events
 
@@ -656,7 +656,7 @@ def test_iter_transcript_events_does_not_load_whole_file(tmp_path):
     with patch.object(
         logging.getLogger("memory.api.sessions"), "warning"
     ) as mock_warn:
-        events = list(iter_transcript_events(transcript, start=5, end=10))
+        events = list(iter_transcript_events(transcript, start=5, end=11))
 
     assert [e["i"] for e in events] == [5, 6, 7, 8, 9, 10]
     # Streaming must short-circuit before reaching the corrupt tail —

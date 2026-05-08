@@ -902,7 +902,12 @@ def test_dummy_password_hash_is_valid_bcrypt_format():
     digest = auth.dummy_password_hash()
 
     assert len(digest) == 60
-    assert digest.startswith("$2b$12$")
+    # The autouse `_fast_bcrypt` fixture rewrites gensalt to rounds=4 to keep
+    # the test suite under a minute, so the cost-factor field varies between
+    # environments. Production gensalt(rounds=12) is what
+    # ``dummy_password_hash`` actually requests; this assertion just pins the
+    # rest of the bcrypt envelope.
+    assert digest.startswith("$2b$")
     # bcrypt.checkpw must NOT raise on this hash — that's the whole point.
     # And the hash should not match an arbitrary password (no fluke truthy return).
     assert bcrypt.checkpw(b"a-password-that-isnt-the-original", digest.encode()) is False
