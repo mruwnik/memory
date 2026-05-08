@@ -534,6 +534,76 @@ async def test_verify_token_handles_tz_aware_expires_at(db_session):
     assert result is not None
 
 
+# --- Symmetric fail-closed for orphan APIKey rows (audit follow-up d8a9a590) ---
+#
+# The session-path branch of ``lookup_principal`` already returns None when
+# ``user_session.user is None``. Today's FK constraints make api_key.user
+# orphans unreachable, but a future cascade race or a detached-row bug
+# shouldn't have license to escalate from "no user" into a 500. The two
+# tests below pin the symmetric fail-closed: an APIKey whose ``.user`` is
+# None must produce ``lookup_principal -> None`` AND must NOT have its
+# ``handle_api_key_use`` side effect run (which would bump last_used_at /
+# delete a one-time row for a key the caller can't actually use).
+
+
+def _orphan_api_key_stub():
+    """Stand in for an APIKey whose row is FK-detached from its user.
+
+    Real schema FK constraints rule out producing this with a row write,
+    so we shape the surface lookup_principal touches: ``is_valid()`` ->
+    True, ``user`` -> None, no other attributes accessed.
+    """
+    record = MagicMock(spec=APIKey)
+    record.is_valid.return_value = True
+    record.user = None
+    return record
+
+
+def test_lookup_principal_returns_none_for_orphan_api_key(monkeypatch):
+    """An APIKey with no attached User must NOT mint a TokenLookup.
+
+    Symmetric with the existing ``user_session.user is None`` guard above
+    it — the principal model relies on ``TokenLookup.user`` being a real
+    User (callers do ``principal.user.id`` / ``principal.user.scopes``).
+    A future cascade-delete race must fail closed at the lookup, not 500
+    in the caller.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    monkeypatch.setattr(
+        op, "lookup_api_key", lambda token, session: _orphan_api_key_stub()
+    )
+    fake_session = MagicMock()
+    fake_session.get.return_value = None  # no UserSession match → API key path
+
+    assert op.lookup_principal("orphan-token", fake_session) is None
+
+
+def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
+    """Discriminator: the ``user is None`` guard MUST come BEFORE
+    ``handle_api_key_use`` so a detached row doesn't get its
+    ``last_used_at`` bumped (or, for one-time keys, deleted) on behalf
+    of a caller who can't actually be authenticated. If a future
+    refactor reorders the guards, this test pins the regression.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    orphan = _orphan_api_key_stub()
+    monkeypatch.setattr(op, "lookup_api_key", lambda token, session: orphan)
+
+    handle_calls = []
+
+    def fake_handle(record, session):
+        handle_calls.append(record)
+
+    monkeypatch.setattr(op, "handle_api_key_use", fake_handle)
+    fake_session = MagicMock()
+    fake_session.get.return_value = None
+
+    assert op.lookup_principal("orphan-token", fake_session) is None
+    assert handle_calls == []
+
+
 # --- One-time API key tests ---
 
 

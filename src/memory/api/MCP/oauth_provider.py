@@ -280,6 +280,11 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
       naive-vs-aware comparison bug noted in audit 7affa983)
     * UserSession with no attached User (fail-closed)
     * APIKey not in valid state per ``is_valid``
+    * APIKey with no attached User (fail-closed; symmetric with the
+      session-path guard above. Schema-level FK constraints make this
+      shape unreachable today, but pinning it here keeps a stale-FK or
+      cascade-delete race from turning into a 500 — and lets downstream
+      ``principal.user.id`` be a non-Optional access without comment.)
     """
     user_session = session.get(UserSession, token)
     if user_session is not None:
@@ -291,6 +296,11 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
 
     api_key_record = lookup_api_key(token, session)
     if api_key_record is not None and api_key_record.is_valid():
+        if api_key_record.user is None:
+            # Match the session-path fail-closed above. Today's FK
+            # constraints rule this out, but a future cascade race or
+            # detached-row bug shouldn't escalate to 500.
+            return None
         # Side effect: bumps last_used_at; for one-time keys, atomically
         # deletes the row. Doing it here means both callers run it exactly
         # once, never twice, never zero times — the duplication that
