@@ -455,6 +455,85 @@ async def test_load_access_token_empty_api_key_scopes_does_not_inherit_user_admi
     assert result.scopes == ["read"]
 
 
+# --- lookup_principal: anti-drift extraction (audit 2bb3e9c6) ---
+#
+# verify_token and load_access_token used to maintain two parallel
+# implementations of the same lookup logic. PR #76 already proved that
+# duplication drifts in security-impacting ways. The extraction collapses
+# both methods onto a single shared lookup helper; these tests pin the
+# invariants the extraction exists to enforce.
+
+
+@pytest.mark.asyncio
+async def test_verify_and_load_share_lookup_principal(monkeypatch):
+    """Both methods must route token lookup through ``lookup_principal``.
+
+    Hermetic anti-drift pin: when ``lookup_principal`` returns None, both
+    methods must return None too — neither may have a side path that
+    bypasses the shared helper. Patching the helper to always return None
+    and asserting both methods comply is the structural test that the
+    extraction in audit-2bb3e9c6 is honored.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    calls: list[str] = []
+
+    def fake_lookup(token, session):
+        calls.append(token)
+        return None
+
+    monkeypatch.setattr(op, "lookup_principal", fake_lookup)
+    provider = SimpleOAuthProvider()
+    assert await provider.verify_token("token-A") is None
+    assert await provider.load_access_token("token-B") is None
+    assert calls == ["token-A", "token-B"]
+
+
+@pytest.mark.asyncio
+async def test_verify_and_load_agree_on_expired_session(db_session):
+    """A session whose expires_at is in the past is rejected by both
+    methods. Previously each method had its own copy of the
+    ``user_session.expires_at < now`` check — this test pins that the
+    extraction kept them in lockstep."""
+    user = create_test_user(db_session)
+    expired = UserSession(
+        user_id=user.id,
+        expires_at=datetime.now() - timedelta(hours=1),  # naive UTC, in the past
+    )
+    db_session.add(expired)
+    db_session.commit()
+    token = str(expired.id)
+
+    provider = SimpleOAuthProvider()
+    assert await provider.verify_token(token) is None
+    assert await provider.load_access_token(token) is None
+
+
+@pytest.mark.asyncio
+async def test_verify_token_handles_tz_aware_expires_at(db_session):
+    """Audit 7affa983 — naive vs aware datetime mismatch could crash both
+    methods under non-UTC pool configs. The shared lookup uses
+    ``is_expired``, which converts naive→aware safely. A future-aware
+    ``expires_at`` must compare correctly (i.e. the session must NOT be
+    expired)."""
+    from datetime import timezone
+
+    user = create_test_user(db_session)
+    aware_future = datetime.now(timezone.utc) + timedelta(hours=1)
+    user_session = UserSession(
+        user_id=user.id,
+        expires_at=aware_future,  # tz-aware
+    )
+    db_session.add(user_session)
+    db_session.commit()
+    token = str(user_session.id)
+
+    provider = SimpleOAuthProvider()
+    # Must not raise TypeError on aware-vs-naive comparison.
+    result = await provider.verify_token(token)
+    assert result is not None
+
+
 # --- One-time API key tests ---
 
 
