@@ -7,11 +7,13 @@ from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
@@ -239,6 +241,7 @@ def get_schema(klass: type[SourceItem]) -> dict[str, SchemaArg]:
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
 async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
     """Get the metadata schema for each collection used in the knowledge base.
 
@@ -268,6 +271,7 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
 
 
 @meta_mcp.tool()
+@visible_when()  # genuinely public utility — no PII, no side effects
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
     logger.info("get_current_time tool called")
@@ -275,17 +279,33 @@ async def get_current_time() -> dict:
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
 async def get_user(generate_one_time_key: bool = False) -> dict:
     """Get information about the authenticated user.
 
     Args:
         generate_one_time_key: If True, generates a one-time API key for client operations.
-                               The key will be deleted after first use.
+                               The key will be deleted after first use. Requires the
+                               admin scope (``*``) — the minted key carries the user's
+                               full system scopes, so we deliberately restrict who can
+                               trigger that escalation path.
     """
     with make_session() as session:
         result = _get_current_user(session)
 
         if generate_one_time_key and result.get("authenticated"):
+            user_scopes = set((result.get("user") or {}).get("scopes") or [])
+            access_token = get_access_token()
+            granted_scopes = set(access_token.scopes or []) if access_token else set()
+            # Only callers carrying admin (either on the user or on
+            # the OAuth grant) may mint a one-time key. Without this
+            # gate, a read-only OAuth client can call get_user(...,
+            # generate_one_time_key=True) and walk away with a key
+            # bearing user.scopes — confused-deputy escalation.
+            if SCOPE_ADMIN not in user_scopes and SCOPE_ADMIN not in granted_scopes:
+                raise PermissionError(
+                    "generate_one_time_key requires the admin scope (*)"
+                )
             if user_session := _get_user_session_from_token(session):
                 result["one_time_key"] = _create_one_time_key(session, user_session)
 
@@ -387,6 +407,7 @@ def create_notification(
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_WRITE))
 async def notify_user(
     subject: str,
     message: str,

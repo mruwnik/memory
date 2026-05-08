@@ -506,10 +506,17 @@ async def test_one_time_key_pins_intersection_for_narrow_token(
 
 
 @pytest.mark.asyncio
-async def test_one_time_key_intersects_when_token_is_narrower_than_user(
+async def test_one_time_key_denied_for_non_admin_user(
     db_session, regular_user
 ):
-    """Same hypothetical-narrow-token pin for non-admin users."""
+    """Non-admin users cannot generate one-time keys via get_user.
+
+    The minted key carries the user's full system scopes, so we
+    deliberately gate the operation on SCOPE_ADMIN. This closes the
+    confused-deputy escalation path documented in the audit (a
+    read-scoped MCP client would otherwise upgrade itself to a key
+    bearing user.scopes).
+    """
     from datetime import datetime, timedelta
     from memory.common.db.models import APIKey, UserSession
 
@@ -523,6 +530,39 @@ async def test_one_time_key_intersects_when_token_is_narrower_than_user(
 
     granted = ["read", "write", "teams", "claudeai"]
     with _mcp_auth_context_with_scopes(sess.id, granted):
+        with pytest.raises(PermissionError, match="admin"):
+            await get_user.fn(generate_one_time_key=True)
+
+    # No key should have been written.
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
+    )
+    assert stored is None
+
+
+@pytest.mark.asyncio
+async def test_one_time_key_admin_grant_via_oauth(
+    db_session, regular_user
+):
+    """Admin scope on the OAuth grant alone is enough to mint the key.
+
+    This makes the gate consistent with the rest of the codebase: an
+    OAuth client that holds admin can still escalate, the same way a
+    user with admin scopes can. Non-admin paths are uniformly denied.
+    """
+    from datetime import datetime, timedelta
+    from memory.common.db.models import APIKey, UserSession
+
+    sess = UserSession(
+        id="regular-session-token-admin-grant",
+        user_id=regular_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(sess)
+    db_session.commit()
+
+    granted = ["*", "read", "write"]
+    with _mcp_auth_context_with_scopes(sess.id, granted):
         result = await get_user.fn(generate_one_time_key=True)
 
     assert result.get("one_time_key") is not None
@@ -530,9 +570,6 @@ async def test_one_time_key_intersects_when_token_is_narrower_than_user(
         db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
     )
     assert stored is not None
-    # user.scopes = {"teams"}, granted has "teams" so intersection = {"teams"}.
-    # User without "claudeai" shouldn't get it even though the grant lists it.
-    assert set(stored.scopes) == {"teams"}
 
 
 # ====== get_forecasts tests ======

@@ -1,9 +1,12 @@
 """
 Tool visibility control system for MCP.
 
-Tools can register visibility checkers that determine whether a tool is visible
-and callable for a given user. This provides flexible, per-tool access control
-beyond simple scope-based filtering.
+Tools register visibility checkers (via the @visible_when decorator) that
+decide whether the tool is visible and callable for a given user. The
+middleware *fails closed*: a tool with no decorator is invisible to
+everyone. To expose a tool with no scope check, decorate it with the
+empty form ``@visible_when()`` — that registers an "always public"
+checker explicitly, so every public tool is grep-able.
 
 Usage:
     from memory.api.MCP.visibility import visible_when, require_scopes
@@ -29,6 +32,12 @@ Usage:
     @mcp.tool()
     @visible_when(custom_checker)
     async def restricted_tool(...):
+        ...
+
+    # Genuinely public utility — explicit opt-out of any scope check
+    @mcp.tool()
+    @visible_when()
+    async def public_tool(...):
         ...
 """
 
@@ -205,7 +214,16 @@ def visible_when(*checkers: VisibilityCheckerFunc):
 
     def decorator(func):
         if not checkers:
-            # No checkers = unrestricted, don't register anything
+            # No checkers = explicitly public. Register an always-True
+            # checker so the middleware (which fails closed on missing
+            # registrations) treats this as deliberately exposed.
+            async def always_public(
+                user_info: dict, session: DBSession | None
+            ) -> bool:
+                return True
+
+            always_public.__name__ = "always_public"
+            register_visibility(func.__name__, always_public)
             return func
 
         async def combined(user_info: dict, session: DBSession | None) -> bool:

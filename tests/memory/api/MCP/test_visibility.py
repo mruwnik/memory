@@ -133,12 +133,24 @@ def test_visible_when_preserves_function():
     assert my_func.__name__ == "my_func"
 
 
-def test_visible_when_no_checkers_does_not_register():
+@pytest.mark.asyncio
+async def test_visible_when_no_checkers_registers_always_true(mock_session):
+    """Empty @visible_when() now opts the tool in as explicitly public.
+
+    Previously it registered nothing, but the middleware then defaulted to
+    "visible to everyone" which made scope enforcement opt-in. The fix
+    flips the default to fail-closed; @visible_when() (no args) is the
+    explicit "this tool is genuinely public" marker — it registers an
+    always-True checker so the middleware can find a positive result.
+    """
     @visible_when()
     def unrestricted_tool():
         pass
 
-    assert get_visibility_checker("unrestricted_tool") is None
+    checker = get_visibility_checker("unrestricted_tool")
+    assert checker is not None
+    assert await checker({}, mock_session) is True
+    assert await checker({"scopes": []}, mock_session) is True
 
 
 @pytest.mark.asyncio
@@ -267,7 +279,12 @@ def test_get_base_tool_name(tool_name, prefixes, expected):
 
 @pytest.mark.asyncio
 async def test_on_list_tools_filters_by_visibility(middleware, make_tool):
-    """on_list_tools filters out tools user can't access."""
+    """on_list_tools filters out tools user can't access.
+
+    Tools with no checker are now FILTERED OUT (fail-closed default).
+    Tools that should be public must register an always-True checker
+    via @visible_when() — exercised here as ``public_tool``.
+    """
     # Register checker that only allows "allowed_tool"
     async def allow_only_allowed(user_info, session):
         return True
@@ -275,13 +292,18 @@ async def test_on_list_tools_filters_by_visibility(middleware, make_tool):
     async def deny_all(user_info, session):
         return False
 
+    async def always_true(user_info, session):
+        return True
+
     register_visibility("allowed_tool", allow_only_allowed)
     register_visibility("denied_tool", deny_all)
+    register_visibility("public_tool", always_true)  # explicit public
 
     tools = [
         make_tool("allowed_tool"),
         make_tool("denied_tool"),
-        make_tool("public_tool"),  # No checker = public
+        make_tool("public_tool"),
+        make_tool("undeclared_tool"),  # no checker - fail-closed
     ]
 
     call_next = AsyncMock(return_value=tools)
@@ -290,11 +312,13 @@ async def test_on_list_tools_filters_by_visibility(middleware, make_tool):
     with patch("memory.api.MCP.visibility_middleware.make_session"):
         result = await middleware.on_list_tools(context, call_next)
 
-    assert len(result) == 2
     tool_names = [t.name for t in result]
     assert "allowed_tool" in tool_names
     assert "public_tool" in tool_names
     assert "denied_tool" not in tool_names
+    # Fail-closed: a tool with no @visible_when decorator is invisible.
+    assert "undeclared_tool" not in tool_names
+    assert len(result) == 2
 
 
 @pytest.mark.asyncio
@@ -329,7 +353,11 @@ async def test_on_list_tools_checker_error_denies_access(middleware, make_tool):
     async def failing_checker(user_info, session):
         raise RuntimeError("Database connection failed")
 
+    async def always_true(user_info, session):
+        return True
+
     register_visibility("error_tool", failing_checker)
+    register_visibility("public_tool", always_true)  # explicit public
 
     tools = [make_tool("error_tool"), make_tool("public_tool")]
     call_next = AsyncMock(return_value=tools)
@@ -347,8 +375,37 @@ async def test_on_list_tools_checker_error_denies_access(middleware, make_tool):
 
 
 @pytest.mark.asyncio
-async def test_on_call_tool_allows_public_tools(middleware):
-    """Tools without visibility checker are allowed."""
+async def test_on_call_tool_denies_undeclared_tools(middleware):
+    """Tools with no @visible_when registration are denied at call time.
+
+    This is the fail-closed flip from the previous "no checker = public"
+    behaviour. A tool that wants to be public must register an explicit
+    always-True checker via @visible_when() — see the explicit-public
+    test below.
+    """
+    context = MagicMock()
+    context.message = MagicMock()
+    context.message.name = "undeclared_tool"
+
+    call_next = AsyncMock()
+
+    result = await middleware.on_call_tool(context, call_next)
+
+    # Should NOT have called the underlying tool implementation.
+    call_next.assert_not_awaited()
+    # Result should be a denial-shaped ToolResult.
+    text = result.content[0].text  # type: ignore[union-attr]
+    assert "Access denied" in text or "no visibility policy" in text
+
+
+@pytest.mark.asyncio
+async def test_on_call_tool_allows_explicit_public_tools(middleware):
+    """Tools registered with an always-True checker are callable by anyone."""
+    async def always_true(user_info, session):
+        return True
+
+    register_visibility("public_tool", always_true)
+
     context = MagicMock()
     context.message = MagicMock()
     context.message.name = "public_tool"
@@ -358,7 +415,8 @@ async def test_on_call_tool_allows_public_tools(middleware):
     )
     call_next = AsyncMock(return_value=expected_result)
 
-    result = await middleware.on_call_tool(context, call_next)
+    with patch("memory.api.MCP.visibility_middleware.make_session"):
+        result = await middleware.on_call_tool(context, call_next)
 
     assert result == expected_result
     call_next.assert_awaited_once()

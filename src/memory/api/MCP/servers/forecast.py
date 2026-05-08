@@ -37,6 +37,7 @@ from memory.common.markets import (
     get_cached_search,
     set_cached_search,
 )
+from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.scopes import SCOPE_FORECAST, SCOPE_FORECAST_WRITE, has_scope
 
 # Short name to stay under 20 char limit for full server name
@@ -67,6 +68,7 @@ def _get_user_session_from_token(session) -> "UserSession | None":
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def get_forecasts(
     term: str,
     min_volume: int = 1000,
@@ -101,6 +103,7 @@ async def get_forecasts(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST_WRITE))
 async def clear_cache() -> dict:
     """Clear all cached forecast data.
 
@@ -120,6 +123,7 @@ async def clear_cache() -> dict:
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def history(
     market_id: str,
     source: MarketSource,
@@ -231,6 +235,7 @@ async def history(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def get_market_depth(
     market_id: str,
     source: MarketSource = "kalshi",
@@ -334,6 +339,7 @@ async def get_market_depth(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def compare_forecasts(
     term: str,
     min_volume: int = 1000,
@@ -364,6 +370,7 @@ async def compare_forecasts(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def resolved(
     term: str | None = None,
     since: str | None = None,
@@ -415,6 +422,7 @@ async def resolved(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST_WRITE))
 async def watch_market(
     market_id: str,
     source: MarketSource,
@@ -500,6 +508,7 @@ async def watch_market(
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST))
 async def get_watchlist() -> list[dict]:
     """Get all markets you are watching with current prices and changes.
 
@@ -592,6 +601,7 @@ async def get_watchlist() -> list[dict]:
 
 
 @forecast_mcp.tool()
+@visible_when(require_scopes(SCOPE_FORECAST_WRITE))
 async def unwatch_market(
     market_id: str,
     source: MarketSource,
