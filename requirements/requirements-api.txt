@@ -5,7 +5,15 @@ fastapi>=0.115.12
 # reverse proxy painful — see README "Running behind a reverse proxy".
 # [standard] includes websockets support.
 uvicorn[standard]>=0.34,<1.0
-python-jose==3.3.0
+# python-jose was pinned at 3.3.0 (last release 2021, unmaintained) but
+# never imported anywhere in src/ or tests/. CVE-2024-33663 (algorithm
+# confusion) and CVE-2024-33664 (JWE decompression bomb) made it a
+# zero-value supply-chain liability. Removed; pyjwt — used by
+# memory.common.github.core for GitHub App JWT minting — is pulled in
+# transitively by ``redis`` (which celery[redis] requires).
+# If a future contributor needs JOSE primitives, prefer ``pyjwt`` (well-
+# maintained) or ``joserfc`` (drop-in replacement, actively maintained)
+# rather than re-pinning python-jose.
 python-multipart==0.0.9
 mcp==1.10.0
 fastmcp>=2.10.0
