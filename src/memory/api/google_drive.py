@@ -14,6 +14,10 @@ from pydantic import BaseModel
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
+from memory.common.data_source_access import (
+    enqueue_access_control_propagation,
+    mark_access_control_changed_if_needed,
+)
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import (
@@ -709,6 +713,7 @@ def update_folder(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
+    snap_pid, snap_sens = folder.project_id, folder.sensitivity
     if updates.folder_name is not None:
         folder.folder_name = updates.folder_name
     if updates.recursive is not None:
@@ -730,8 +735,17 @@ def update_folder(
     if updates.sensitivity is not None:
         folder.sensitivity = updates.sensitivity
 
+    access_changed = mark_access_control_changed_if_needed(
+        folder,
+        snapshot_project_id=snap_pid,
+        snapshot_sensitivity=snap_sens,
+    )
+
     db.commit()
     db.refresh(folder)
+
+    if access_changed:
+        enqueue_access_control_propagation("google_folder", folder)
 
     return FolderResponse(
         id=cast(int, folder.id),

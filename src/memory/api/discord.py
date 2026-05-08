@@ -16,6 +16,10 @@ from memory.api.auth import (
 )
 from memory.common import discord as discord_client
 from memory.common.access_control import has_admin_scope
+from memory.common.data_source_access import (
+    enqueue_access_control_propagation,
+    mark_access_control_changed_if_needed,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import DiscordMessage, Person, User, discord_bot_users
 from memory.common.db.models.discord import (
@@ -488,6 +492,7 @@ def update_server(
     if not user_can_manage_server(user, db, server):
         raise HTTPException(status_code=404, detail="Server not found")
 
+    snap_pid, snap_sens = server.project_id, server.sensitivity
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
     if updates.project_id is not None:
@@ -496,8 +501,17 @@ def update_server(
     if updates.sensitivity is not None:
         server.sensitivity = updates.sensitivity
 
+    access_changed = mark_access_control_changed_if_needed(
+        server,
+        snapshot_project_id=snap_pid,
+        snapshot_sensitivity=snap_sens,
+    )
+
     db.commit()
     db.refresh(server)
+
+    if access_changed:
+        enqueue_access_control_propagation("discord_server", server)
 
     return server_to_response(server)
 
@@ -527,6 +541,7 @@ def update_channel(
         raise HTTPException(status_code=404, detail="Channel not found")
 
     # Allow setting to None (inherit) - check if key is present, not if value is None
+    snap_pid, snap_sens = channel.project_id, channel.sensitivity
     channel.collect_messages = updates.collect_messages
     if updates.project_id is not None:
         assert_project_membership(db, user, updates.project_id)
@@ -534,8 +549,17 @@ def update_channel(
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity
 
+    access_changed = mark_access_control_changed_if_needed(
+        channel,
+        snapshot_project_id=snap_pid,
+        snapshot_sensitivity=snap_sens,
+    )
+
     db.commit()
     db.refresh(channel)
+
+    if access_changed:
+        enqueue_access_control_propagation("discord_channel", channel)
 
     return channel_to_response(channel)
 
