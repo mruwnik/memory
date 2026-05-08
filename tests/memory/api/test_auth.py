@@ -119,25 +119,30 @@ def test_is_whitelisted_path_blocks_prefix_overrun(path):
 #   3. invalid source segments (only ``e\d+``, ``s\d+``, or ``x``)
 
 
+# The hex suffix is now ``secrets.token_hex(16)`` = 32 hex chars (128 bits).
+_HEX32 = "abcdef0123456789abcdef0123456789"  # exact length 32, hex-only
+_HEX32_UPPER = _HEX32.upper()
+
+
 @pytest.mark.parametrize(
     "path",
     [
         # Bare session-id with no subpath
-        "/claude/u1-e2-abcdef012345",
-        "/claude/u1-s2-abcdef012345",
-        "/claude/u1-x-abcdef012345",
+        f"/claude/u1-e2-{_HEX32}",
+        f"/claude/u1-s2-{_HEX32}",
+        f"/claude/u1-x-{_HEX32}",
         # Multi-digit user_id and source numbers
-        "/claude/u12345-e98765-abcdef012345",
-        "/claude/u12345-s98765-abcdef012345",
+        f"/claude/u12345-e98765-{_HEX32}",
+        f"/claude/u12345-s98765-{_HEX32}",
         # Subpath under a valid session id (websocket endpoints)
-        "/claude/u1-e2-abcdef012345/ws",
-        "/claude/u1-x-abcdef012345/files/foo.txt",
-        "/claude/u123-s456-abcdef012345/diff/preview",
+        f"/claude/u1-e2-{_HEX32}/ws",
+        f"/claude/u1-x-{_HEX32}/files/foo.txt",
+        f"/claude/u123-s456-{_HEX32}/diff/preview",
         # Uppercase hex (regex is IGNORECASE)
-        "/claude/u1-e2-ABCDEF012345",
+        f"/claude/u1-e2-{_HEX32_UPPER}",
         # Longer hex tail (token rotations may extend; floor is the
         # generator length, ceiling is unbounded)
-        "/claude/u1-e2-abcdef012345abcdef012345",
+        f"/claude/u1-e2-{_HEX32}{_HEX32}",
     ],
 )
 def test_claude_session_pattern_matches_valid_paths(path):
@@ -150,29 +155,28 @@ def test_claude_session_pattern_matches_valid_paths(path):
         # ── Adjacent-character smuggling. Bypass would let an attacker
         # land on a future route mounted at e.g. ``/claude/u1-e2-XXXXfoo``
         # without auth.
-        "/claude/u1-e2-abcdef012345foo",
-        "/claude/u1-e2-abcdef012345-shell",
-        "/claude/u1-e2-abcdef012345admin",
-        "/claude/u1-e2-abcdef012345.json",
-        # ── Hex floor enforcement. Single-hex prefixes shrink the
-        # search space dramatically; the regex must reject anything
-        # below the actual ``token_hex(6)`` generator length (12).
+        f"/claude/u1-e2-{_HEX32}foo",
+        f"/claude/u1-e2-{_HEX32}-shell",
+        f"/claude/u1-e2-{_HEX32}admin",
+        f"/claude/u1-e2-{_HEX32}.json",
+        # ── Hex floor enforcement. Short prefixes shrink the search
+        # space dramatically; the regex must reject anything below the
+        # actual ``token_hex(16)`` generator length (32).
         "/claude/u1-e2-a",
         "/claude/u1-e2-abc",
-        "/claude/u1-e2-abcdef",       # 6 hex < 12
-        "/claude/u1-e2-abcdef01",     # 8 hex < 12
-        "/claude/u1-e2-abcdef0123",   # 10 hex < 12
-        "/claude/u1-e2-abcdef01234",  # 11 hex < 12 (one shy of floor)
+        "/claude/u1-e2-abcdef",                            # 6 hex < 32
+        "/claude/u1-e2-abcdef0123456789",                  # 16 hex < 32
+        "/claude/u1-e2-abcdef0123456789abcdef0123456",    # 31 hex < 32 (one shy)
         # ── Invalid source segments. The auth.py regex used to accept
         # any ``[a-z]\d*`` source; tighten to match cloud_claude's
         # canonical ``(e\d+|s\d+|x)`` source format only.
-        "/claude/u1-q5-abcdef012345",   # 'q' is not e/s/x
-        "/claude/u1-foo-abcdef012345",
-        "/claude/u1-ee-abcdef012345",   # source must be single letter
+        f"/claude/u1-q5-{_HEX32}",   # 'q' is not e/s/x
+        f"/claude/u1-foo-{_HEX32}",
+        f"/claude/u1-ee-{_HEX32}",   # source must be single letter
         # ── Wrong path prefix. Adjacent characters before /claude/
         # must not match either.
-        "/claude-debug/u1-e2-abcdef012345",
-        "/claudex/u1-e2-abcdef012345",
+        f"/claude-debug/u1-e2-{_HEX32}",
+        f"/claudex/u1-e2-{_HEX32}",
         # ── Empty / malformed
         "",
         "/",
@@ -180,30 +184,30 @@ def test_claude_session_pattern_matches_valid_paths(path):
         "/claude/u1",
         "/claude/u1-e2-",  # no hex tail
         # ── Non-claude paths
-        "/users/u1-e2-abcdef012345",
-        "/api/claude/u1-e2-abcdef012345",
+        f"/users/u1-e2-{_HEX32}",
+        f"/api/claude/u1-e2-{_HEX32}",
     ],
 )
 def test_claude_session_pattern_rejects_invalid_paths(path):
     assert auth._CLAUDE_SESSION_PATTERN.match(path) is None, path
 
 
-def test_claude_session_pattern_hex_floor_matches_token_hex_6():
+def test_claude_session_pattern_hex_floor_matches_token_hex_16():
     """REGRESSION GUARD: the hex-length floor in the regex must match
-    the actual session-id generator's hex length (``secrets.token_hex(6)``
-    yields 12 hex chars). If the generator changes (e.g. ``token_hex(8)``),
-    this regex's ``{12,}`` floor must change in lockstep with
-    ``cloud_claude._SESSION_ID_RE`` — both regexes encode the same
-    invariant.
+    the actual session-id generator's hex length (``secrets.token_hex(16)``
+    yields 32 hex chars = 128 bits). If the generator changes
+    (e.g. ``token_hex(8)``), this regex's ``{32,}`` floor must change
+    in lockstep with ``cloud_claude._SESSION_ID_RE`` — both regexes
+    encode the same invariant.
     """
     import secrets
 
-    # Verify the generator parameter still produces exactly 12 hex chars,
+    # Verify the generator parameter still produces exactly 32 hex chars,
     # so the floor in our regex remains tight.
-    assert len(secrets.token_hex(6)) == 12
+    assert len(secrets.token_hex(16)) == 32
 
     # And the floor passes when the generator's exact output is used.
-    real_session_path = f"/claude/u1-e2-{secrets.token_hex(6)}"
+    real_session_path = f"/claude/u1-e2-{secrets.token_hex(16)}"
     assert auth._CLAUDE_SESSION_PATTERN.match(real_session_path) is not None
 
 

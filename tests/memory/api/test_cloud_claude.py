@@ -37,9 +37,11 @@ def test_make_session_id_includes_user_id():
     # With no environment_id or snapshot_id, source is 'x'
     session_id = make_session_id(42)
     assert session_id.startswith("u42-x-")
-    # Should have random hex after the source indicator
+    # Should have 16-byte (32 hex char) random tail = 128 bits of entropy
     random_part = session_id.split("-")[2]
-    assert len(random_part) == 12  # 6 bytes = 12 hex chars
+    assert len(random_part) == 32  # 16 bytes = 32 hex chars
+    # And it must actually be lowercase hex (token_hex contract).
+    assert all(c in "0123456789abcdef" for c in random_part)
 
     # With environment_id
     session_id = make_session_id(42, environment_id=5)
@@ -338,12 +340,17 @@ def test_require_session_access_rejects_malformed(session_id):
     assert exc_info.value.status_code == 404
 
 
+# 32-char hex tails matching the new ``token_hex(16)`` floor.
+_SAMPLE_HEX32 = "abcdef0123456789abcdef0123456789"
+_SAMPLE_HEX32_UPPER = _SAMPLE_HEX32.upper()
+
+
 @pytest.mark.parametrize(
     "session_id",
     [
-        "u42-x-abc123",
-        "u42-e1-deadbeef",
-        "u42-s99-CAFE0123",
+        f"u42-x-{_SAMPLE_HEX32}",
+        f"u42-e1-{_SAMPLE_HEX32}",
+        f"u42-s99-{_SAMPLE_HEX32_UPPER}",
     ],
 )
 def test_require_session_access_allows_owned_well_formed(session_id):
@@ -357,19 +364,24 @@ def test_require_session_access_rejects_other_users_session():
     user = MagicMock()
     user.id = 42
     with pytest.raises(HTTPException) as exc_info:
-        require_session_access(user, "u9999-x-abc123")
+        require_session_access(user, f"u9999-x-{_SAMPLE_HEX32}")
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.parametrize(
     "session_id,expected",
     [
-        ("u1-x-abc", True),
-        ("u123-e456-deadbeef", True),
-        ("u123-s456-DEADBEEF", True),
-        ("u123-abc", False),  # missing source
-        ("u123-y-abc", False),  # invalid source
-        ("u-x-abc", False),  # missing user id
+        (f"u1-x-{_SAMPLE_HEX32}", True),
+        (f"u123-e456-{_SAMPLE_HEX32}", True),
+        (f"u123-s456-{_SAMPLE_HEX32_UPPER}", True),
+        # Hex floor: anything below 32 chars is rejected (was 12 before
+        # the entropy bump).
+        ("u1-x-abc", False),
+        ("u123-e456-deadbeef", False),  # 8 hex < 32
+        # Well-formed but malformed structure
+        (f"u123-{_SAMPLE_HEX32}", False),  # missing source
+        (f"u123-y-{_SAMPLE_HEX32}", False),  # invalid source
+        (f"u-x-{_SAMPLE_HEX32}", False),  # missing user id
         ("u123-x-../etc/hosts", False),
         ("u123-x-abc.log", False),
         ("", False),

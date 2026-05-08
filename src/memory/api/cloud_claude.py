@@ -209,6 +209,15 @@ def make_session_id(
 
     Format: u{user_id}-{source}-{random_hex}
     Where source is e{env_id} for environments or s{snap_id} for snapshots.
+
+    The random suffix is 16 bytes / 32 hex chars (128 bits). The previous
+    6-byte (48-bit) suffix was below the modern bar for unguessable
+    session tokens — the suffix doubles as a Docker container hostname
+    and as a key in orchestrator URLs, so a sufficiently determined
+    attacker enumerating active container suffixes was a credible
+    threat. 128 bits matches the standard ``secrets.token_hex(16)``
+    recommendation. The matching regexes in ``auth.py`` and below
+    enforce a floor of 32 hex chars in lockstep.
     """
     if environment_id is not None:
         source = f"e{environment_id}"
@@ -216,7 +225,7 @@ def make_session_id(
         source = f"s{snapshot_id}"
     else:
         source = "x"  # Unknown source (shouldn't happen)
-    return f"u{user_id}-{source}-{secrets.token_hex(6)}"
+    return f"u{user_id}-{source}-{secrets.token_hex(16)}"
 
 
 def get_user_id_from_session(session_id: str) -> int | None:
@@ -349,7 +358,7 @@ async def map_orchestrator_errors(
 
 # Strict session-id regex used by both is_valid_session_id and the
 # require_session_access defense-in-depth check below.
-_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
+_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]{32,}$")
 
 
 def is_valid_session_id(session_id: str) -> bool:
@@ -1065,10 +1074,17 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
     that the token's user actually owns. Raises HTTPException on failure.
 
     Re-validates ``session_id`` and ``path`` defensively. Mint-time validation
-    already enforces these, but if ``TRANSFER_TOKEN_SECRET`` ever leaks (it
-    falls back to ``SECRETS_ENCRYPTION_KEY`` in dev), or a future code path
-    skips the mint helpers, this is the only line of defense before the
-    orchestrator URL is constructed.
+    already enforces these, but if ``TRANSFER_TOKEN_SECRET`` ever leaks
+    (or a future code path skips the mint helpers), this is the only
+    line of defense before the orchestrator URL is constructed.
+
+    Note: the previous comment claimed ``TRANSFER_TOKEN_SECRET`` "falls
+    back to ``SECRETS_ENCRYPTION_KEY`` in dev" — that fallback was the
+    raw key, which exposed the at-rest AES-GCM secret to HMAC-tag-based
+    side channels. ``settings.py`` now derives the transfer secret from
+    ``SECRETS_ENCRYPTION_KEY`` via HKDF-SHA256 with a domain-separating
+    ``info`` string, so leaking the transfer secret no longer compromises
+    the at-rest encryption key (and vice versa).
     """
     try:
         payload = verify_token(token)
