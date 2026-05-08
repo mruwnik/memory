@@ -16,7 +16,7 @@ from typing import Any, cast
 import requests
 from sqlalchemy import exc as sqlalchemy_exc
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
     EDIT_DISCORD_MESSAGE,
@@ -78,7 +78,7 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
                         f.write(chunk)
                     else:
                         # Loop completed without break - download successful
-                        relative_path = local_path.relative_to(settings.FILE_STORAGE_DIR)
+                        relative_path = paths.to_db_filename(local_path)
                         saved_paths.append(str(relative_path))
 
         except Exception as e:

@@ -12,7 +12,7 @@ from memory.workers.tasks import ebook
 def mock_ebook():
     """Mock ebook data for testing."""
     return Ebook(
-        relative_path=Path("test/book.epub"),
+        relative_path="test/book.epub",
         title="Test Book",
         author="Test Author",
         metadata={"language": "en", "creator": "Test Publisher"},

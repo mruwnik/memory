@@ -468,7 +468,7 @@ def fetch_file(filename: str) -> dict:
     # Ownership check: look up the SourceItem that owns this file and verify access.
     # Without this, any SCOPE_READ user could read any file in FILE_STORAGE_DIR.
     try:
-        relative = path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+        relative = paths.to_db_filename(path)
     except ValueError:
         raise FileNotFoundError(f"File not found: {filename}")
 

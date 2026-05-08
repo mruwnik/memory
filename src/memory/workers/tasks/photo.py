@@ -9,7 +9,7 @@ from typing import TypedDict
 from PIL import Image
 from PIL.ExifTags import TAGS
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.celery_app import SYNC_PHOTO, REPROCESS_PHOTO, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Photo
@@ -210,12 +210,12 @@ def create_photo_from_file(
     }
     mime_type = mime_types.get(suffix, "image/jpeg")
 
-    # Compute relative path for storage
-    try:
-        relative_path = path.relative_to(settings.FILE_STORAGE_DIR).as_posix()
-    except ValueError:
-        # File is outside FILE_STORAGE_DIR, use just the filename
-        relative_path = path.name
+    # Compute relative path for storage. Photo.filename must be
+    # FILE_STORAGE_DIR-relative to match the unified SourceItem convention —
+    # otherwise core_fetch_file / serve_file can never look the row up.
+    # Refuse to ingest photos from outside FILE_STORAGE_DIR rather than
+    # silently producing a non-conformant filename.
+    relative_path = paths.to_db_filename(path)
 
     return Photo(
         filename=relative_path,

@@ -56,7 +56,7 @@ from memory.api.tmux_session import (
     screen_capture_loop,
     send_ws_json,
 )
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, ScheduledTask, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
@@ -386,7 +386,7 @@ async def spawn_session(
             raise HTTPException(status_code=500, detail="Snapshot file not found")
 
         # Orchestrator runs on host, needs host path (not container path)
-        relative_path = snapshot_path.relative_to(settings.FILE_STORAGE_DIR)
+        relative_path = paths.to_db_filename(snapshot_path)
         host_snapshot_path = str(settings.HOST_STORAGE_DIR / relative_path)
 
     else:

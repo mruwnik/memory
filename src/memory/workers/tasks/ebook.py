@@ -5,6 +5,7 @@ from typing import Any, Iterable, TypedDict, cast
 
 import memory.common.settings as settings
 from memory.common import jobs as job_utils
+from memory.common import paths
 from memory.common.celery_app import REPROCESS_BOOK, SYNC_BOOK, app
 from memory.common.content_processing import (
     check_content_exists,
@@ -46,7 +47,7 @@ def create_book_from_ebook(ebook, tags: Iterable[str] = []) -> Book:
         publisher=ebook.metadata.get("creator"),
         language=ebook.metadata.get("language"),
         total_pages=ebook.n_pages,
-        file_path=ebook.file_path.relative_to(settings.FILE_STORAGE_DIR).as_posix(),
+        file_path=paths.to_db_filename(ebook.file_path),
         book_metadata=ebook.metadata,
         tags=tags,
     )
@@ -328,9 +329,9 @@ def sync_book(
             session.commit()
 
         # Check for existing book (idempotency)
-        logger.info(f"Checking for existing book: {ebook.relative_path.as_posix()}")
+        logger.info(f"Checking for existing book: {ebook.relative_path}")
         existing_item = check_content_exists(
-            session, Book, file_path=ebook.relative_path.as_posix()
+            session, Book, file_path=ebook.relative_path
         )
         if existing_item:
             existing_book = cast(Book, existing_item)

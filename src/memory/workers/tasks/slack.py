@@ -23,7 +23,7 @@ import httpx
 import redis
 from sqlalchemy.exc import IntegrityError
 
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
@@ -177,7 +177,7 @@ def download_slack_file(
             local_path.write_bytes(response.content)
 
             # Return relative path
-            return str(local_path.relative_to(settings.FILE_STORAGE_DIR))
+            return paths.to_db_filename(local_path)
 
     except httpx.HTTPStatusError as e:
         logger.error(

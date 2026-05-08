@@ -173,17 +173,21 @@ def sync_note(
         filename = filename.lstrip("/")
         if not filename.endswith(".md"):
             filename = f"{filename}.md"
-        # Defense in depth: the MCP `notes.upsert` tool already validates
-        # this, but `sync_notes` and `track_git_changes` re-fan-out into
-        # this task with paths pulled from the filesystem / git remote
-        # (which we don't trust). A filename like ``../../etc/cron.d/poc``
-        # would otherwise resolve outside NOTES_STORAGE_DIR when
-        # `Note.save_to_file()` writes the content. Reject early so we
-        # never persist a Note row pointing outside the storage dir.
+        # Note.filename is FILE_STORAGE_DIR-relative (matches every other
+        # SourceItem subtype). Defense in depth: the MCP `notes.upsert` tool
+        # already validates this, but `sync_notes` and `track_git_changes`
+        # re-fan-out into this task with paths pulled from the filesystem /
+        # git remote (which we don't trust). Reject anything that resolves
+        # outside the notes tree before we persist a Note row pointing
+        # somewhere it shouldn't.
         try:
-            paths.validate_path_within_directory(
-                settings.NOTES_STORAGE_DIR, filename
+            resolved = paths.validate_path_within_directory(
+                settings.FILE_STORAGE_DIR, filename
             )
+            if not resolved.is_relative_to(settings.NOTES_STORAGE_DIR.resolve()):
+                raise ValueError(
+                    f"Note filename must be inside notes/: {filename!r}"
+                )
         except ValueError as exc:
             logger.error(
                 "Refusing to sync note with unsafe filename %r: %s",
@@ -260,20 +264,21 @@ def sync_notes(folder: str):
 
     with make_session() as session:
         for filename in all_files:
-            relative_path = filename.relative_to(path).as_posix()
-
-            # Skip profile files (handled separately)
-            if relative_path.startswith(f"{settings.PROFILES_FOLDER}/"):
+            # Skip profile files (handled separately). Profile detection uses
+            # the path relative to the notes folder being scanned.
+            relative_to_notes = filename.relative_to(path).as_posix()
+            if relative_to_notes.startswith(f"{settings.PROFILES_FOLDER}/"):
                 continue
 
-            if not check_content_exists(
-                session, Note, filename=filename.as_posix()
-            ):
+            # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/foo.md").
+            db_filename = paths.to_db_filename(filename)
+
+            if not check_content_exists(session, Note, filename=db_filename):
                 new_notes += 1
                 sync_note.delay(  # type: ignore[attr-defined]
                     subject=filename.stem,
                     content=filename.read_text(),
-                    filename=relative_path,
+                    filename=db_filename,
                 )
 
     return {
@@ -350,14 +355,18 @@ def track_git_changes():
             logger.warning(f"File not found: {filename}")
             continue
 
-        # Skip profile files (handled separately)
+        # Skip profile files (handled separately). `filename` here is
+        # relative to the notes git repo root.
         if filename.startswith(f"{settings.PROFILES_FOLDER}/"):
             continue
+
+        # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/foo.md").
+        db_filename = paths.to_db_filename(file)
 
         sync_note.delay(  # type: ignore[attr-defined]
             subject=file.stem,
             content=file.read_text(),
-            filename=filename,
+            filename=db_filename,
             save_to_file=False,
         )
 

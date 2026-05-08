@@ -38,16 +38,15 @@ def mock_make_session(db_session):
                 yield db_session
 
 
-def test_sync_report_html_content(mock_make_session, tmp_path):
+def test_sync_report_html_content(mock_make_session):
     """Test sync_report with inline HTML content (MCP path)."""
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        result = reports.sync_report(
-            file_path=str(tmp_path / "test_report.html"),
-            title="Test Report",
-            content="<h1>Hello</h1><p>World</p>",
-            report_format="html",
-            tags=["test"],
-        )
+    result = reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "test_report.html"),
+        title="Test Report",
+        content="<h1>Hello</h1><p>World</p>",
+        report_format="html",
+        tags=["test"],
+    )
 
     mock_make_session.commit()
 
@@ -60,38 +59,36 @@ def test_sync_report_html_content(mock_make_session, tmp_path):
     assert result["status"] == "processed"
 
 
-def test_sync_report_file_upload(mock_make_session, tmp_path):
+def test_sync_report_file_upload(mock_make_session):
     """Test sync_report with a pre-existing file on disk (upload path)."""
-    report_file = tmp_path / "uploaded.html"
+    report_file = settings.REPORT_STORAGE_DIR / "uploaded.html"
     report_file.write_text("<h1>Uploaded</h1>")
 
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        result = reports.sync_report(
-            file_path=str(report_file),
-            title="Uploaded Report",
-            report_format="html",
-        )
+    result = reports.sync_report(
+        file_path=str(report_file),
+        title="Uploaded Report",
+        report_format="html",
+    )
 
     mock_make_session.commit()
 
     report = mock_make_session.query(Report).filter_by(report_title="Uploaded Report").first()
     assert report is not None
-    assert report.filename == "uploaded.html"
+    assert report.filename == "reports/uploaded.html"
     assert isinstance(result, dict)
     assert result["status"] == "processed"
 
 
-def test_sync_report_pdf(mock_make_session, tmp_path):
+def test_sync_report_pdf(mock_make_session):
     """Test sync_report with PDF format."""
-    pdf_file = tmp_path / "report.pdf"
+    pdf_file = settings.REPORT_STORAGE_DIR / "report.pdf"
     pdf_file.write_bytes(b"fake pdf content")
 
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        reports.sync_report(
-            file_path=str(pdf_file),
-            title="PDF Report",
-            report_format="pdf",
-        )
+    reports.sync_report(
+        file_path=str(pdf_file),
+        title="PDF Report",
+        report_format="pdf",
+    )
 
     mock_make_session.commit()
 
@@ -101,25 +98,24 @@ def test_sync_report_pdf(mock_make_session, tmp_path):
     assert report.mime_type == "application/pdf"
 
 
-def test_sync_report_dedup(mock_make_session, tmp_path):
+def test_sync_report_dedup(mock_make_session):
     """Test that duplicate content returns already_exists."""
     html_content = "<h1>Same Content</h1>"
 
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        result1 = reports.sync_report(
-            file_path=str(tmp_path / "first.html"),
-            title="First",
-            content=html_content,
-            report_format="html",
-        )
-        mock_make_session.commit()
+    result1 = reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "first.html"),
+        title="First",
+        content=html_content,
+        report_format="html",
+    )
+    mock_make_session.commit()
 
-        result2 = reports.sync_report(
-            file_path=str(tmp_path / "second.html"),
-            title="Second",
-            content=html_content,
-            report_format="html",
-        )
+    result2 = reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "second.html"),
+        title="Second",
+        content=html_content,
+        report_format="html",
+    )
 
     assert isinstance(result1, dict)
     assert isinstance(result2, dict)
@@ -127,40 +123,42 @@ def test_sync_report_dedup(mock_make_session, tmp_path):
     assert result2["status"] == "already_exists"
 
 
-def test_sync_report_update_in_place(mock_make_session, tmp_path):
+def test_sync_report_update_in_place(mock_make_session):
     """Test that a report with same filename gets updated."""
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        reports.sync_report(
-            file_path=str(tmp_path / "update_me.html"),
-            title="Version 1",
-            content="<h1>V1</h1>",
-            report_format="html",
-        )
-        mock_make_session.commit()
+    reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "update_me.html"),
+        title="Version 1",
+        content="<h1>V1</h1>",
+        report_format="html",
+    )
+    mock_make_session.commit()
 
-        reports.sync_report(
-            file_path=str(tmp_path / "update_me.html"),
-            title="Version 2",
-            content="<h1>V2</h1>",
-            report_format="html",
-        )
-        mock_make_session.commit()
+    reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "update_me.html"),
+        title="Version 2",
+        content="<h1>V2</h1>",
+        report_format="html",
+    )
+    mock_make_session.commit()
 
-    all_reports = mock_make_session.query(Report).filter_by(filename="update_me.html").all()
+    all_reports = (
+        mock_make_session.query(Report)
+        .filter_by(filename="reports/update_me.html")
+        .all()
+    )
     assert len(all_reports) == 1
     assert all_reports[0].report_title == "Version 2"
 
 
-def test_sync_report_sets_creator(mock_make_session, admin_user, tmp_path):
+def test_sync_report_sets_creator(mock_make_session, admin_user):
     """Test that creator_id is set when provided."""
-    with patch.object(settings, "REPORT_STORAGE_DIR", tmp_path):
-        reports.sync_report(
-            file_path=str(tmp_path / "owned.html"),
-            title="Owned Report",
-            content="<p>content</p>",
-            report_format="html",
-            creator_id=admin_user.id,
-        )
+    reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "owned.html"),
+        title="Owned Report",
+        content="<p>content</p>",
+        report_format="html",
+        creator_id=admin_user.id,
+    )
     mock_make_session.commit()
 
     report = mock_make_session.query(Report).filter_by(report_title="Owned Report").first()

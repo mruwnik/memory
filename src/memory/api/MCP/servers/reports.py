@@ -75,10 +75,21 @@ async def upsert(
     elif not filename.endswith(".html"):
         filename = f"{filename}.html"
 
+    # Validate filename to prevent path traversal outside REPORT_STORAGE_DIR,
+    # then convert to FILE_STORAGE_DIR-relative form for DB storage (matches
+    # every other SourceItem subtype).
+    try:
+        db_filename = paths.to_db_filename(filename, base_dir=settings.REPORT_STORAGE_DIR)
+    except ValueError as e:
+        return {"error": f"Invalid filename: {e}"}
+    file_path = settings.FILE_STORAGE_DIR / db_filename
+
     # Access check and metadata update for existing reports
     existing_report_id: int | None = None
     with make_session() as session:
-        existing = session.query(Report).filter(Report.filename == filename).one_or_none()
+        existing = (
+            session.query(Report).filter(Report.filename == db_filename).one_or_none()
+        )
         if existing:
             project_roles = get_project_roles_by_user_id(user_id)
             if not user_can_access(user, existing, project_roles):
@@ -95,13 +106,6 @@ async def upsert(
             if tags is not None:
                 existing.tags = tags
             session.commit()
-
-    # Validate filename to prevent path traversal outside REPORT_STORAGE_DIR.
-    # Matches the same pattern used by notes.py.
-    try:
-        file_path = paths.validate_path_within_directory(settings.REPORT_STORAGE_DIR, filename)
-    except ValueError as e:
-        return {"error": f"Invalid filename: {e}"}
 
     # Dispatch to worker for content processing
     task = celery_app.send_task(
@@ -159,7 +163,8 @@ async def delete(report_id: int) -> dict:
             logger.error("Error clearing chunks for report %d: %s", report_id, e)
 
         if report.filename:
-            file_path = settings.REPORT_STORAGE_DIR / report.filename
+            # Report.filename is FILE_STORAGE_DIR-relative.
+            file_path = settings.FILE_STORAGE_DIR / report.filename
             if file_path.exists():
                 try:
                     file_path.unlink()

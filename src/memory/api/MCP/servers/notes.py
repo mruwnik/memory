@@ -52,12 +52,8 @@ async def upsert(
     tags = tags or []
     logger.info("MCP: upserting note: %s", subject)
     if filename:
-        # Validate the path is within the notes directory to prevent path traversal
         try:
-            validated_path = paths.validate_path_within_directory(
-                settings.NOTES_STORAGE_DIR, filename
-            )
-            filename = validated_path.relative_to(settings.NOTES_STORAGE_DIR).as_posix()
+            filename = paths.to_db_filename(filename, base_dir=settings.NOTES_STORAGE_DIR)
         except ValueError as e:
             raise ValueError(f"Invalid filename: {e}")
 
@@ -110,9 +106,17 @@ async def note_files(path: str = "/"):
     except ValueError as e:
         raise ValueError(f"Invalid path: {e}")
 
-    # Normalise to a prefix string we can use for DB filtering.
-    # Strip leading "/" so it matches Note.filename (stored without leading slash).
-    path_prefix = path.lstrip("/")
+    # Note.filename is FILE_STORAGE_DIR-relative and always under
+    # NOTES_STORAGE_DIR. Derive the prefix from settings so we don't bake in
+    # the literal "notes/" — NOTES_STORAGE_DIR is env-overridable.
+    notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
+    path_prefix = path.lstrip("/").rstrip("/")
+    # Trailing slash is required: without it, path="proj" would match
+    # notes/projects.md as well as notes/projects/*. We only want
+    # directory-prefix matches.
+    db_prefix = (
+        f"{notes_prefix}/{path_prefix}/" if path_prefix else f"{notes_prefix}/"
+    )
 
     user = get_mcp_current_user()
     if user is None:
@@ -132,16 +136,15 @@ async def note_files(path: str = "/"):
         )
         query = apply_access_filter_to_query(query, access_filter)
 
-        # Apply directory prefix filter when a sub-path was requested.
+        # Restrict to filenames inside the requested notes subtree.
         # autoescape=True is required: without it, SQLAlchemy's startswith()
         # passes % and _ through unescaped (it just appends "%" to the pattern),
         # which would let path="%/secret" enumerate beyond the requested
         # subtree.
-        if path_prefix:
-            query = query.filter(
-                Note.filename.startswith(path_prefix, autoescape=True)
-            )
+        query = query.filter(
+            Note.filename.startswith(db_prefix, autoescape=True)
+        )
 
         rows = query.all()
 
-    return [f"/notes/{row.filename}" for row in rows]
+    return [f"/{row.filename}" for row in rows]

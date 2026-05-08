@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memory.common import settings
 from memory.workers.tasks import photo
 
 
@@ -379,11 +380,10 @@ def test_validate_and_parse_photo_raises_when_not_found(mock_path_class):
 @patch("memory.workers.tasks.photo.get_gps_coordinates")
 @patch("memory.workers.tasks.photo.get_camera_info")
 @patch("memory.workers.tasks.photo.parse_exif_datetime")
-@patch("memory.workers.tasks.photo.settings")
+@patch.object(settings, "FILE_STORAGE_DIR", Path("/storage"))
 def test_create_photo_from_file_with_all_exif(
-    mock_settings, mock_parse_dt, mock_camera, mock_gps
+    mock_parse_dt, mock_camera, mock_gps
 ):
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_parse_dt.return_value = datetime(2023, 1, 15, 14, 30, 45)
     mock_camera.return_value = "Canon EOS 5D"
     mock_gps.return_value = (40.7589, -73.9851)
@@ -420,9 +420,8 @@ def test_create_photo_from_file_with_all_exif(
         (".unknown", "image/jpeg"),  # Default
     ],
 )
-@patch("memory.workers.tasks.photo.settings")
-def test_create_photo_from_file_mime_types(mock_settings, extension, expected_mime):
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
+@patch.object(settings, "FILE_STORAGE_DIR", Path("/storage"))
+def test_create_photo_from_file_mime_types(extension, expected_mime):
     path = Path(f"/storage/image{extension}")
     content = b"data"
 
@@ -431,23 +430,24 @@ def test_create_photo_from_file_mime_types(mock_settings, extension, expected_mi
     assert result.mime_type == expected_mime
 
 
-@patch("memory.workers.tasks.photo.settings")
-def test_create_photo_from_file_outside_storage_dir(mock_settings):
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
+def test_create_photo_from_file_outside_storage_dir():
+    # Photos outside FILE_STORAGE_DIR violate the unified
+    # FILE_STORAGE_DIR-relative filename convention (would never be matched
+    # by core_fetch_file / serve_file), so refuse to ingest them.
     path = Path("/other/location/photo.jpg")
     content = b"data"
 
-    result = photo.create_photo_from_file(path, content, {}, [])
-
-    # Should use just the filename
-    assert result.filename == "photo.jpg"
+    with pytest.raises(ValueError):
+        photo.create_photo_from_file(path, content, {}, [])
 
 
-@patch("memory.workers.tasks.photo.settings")
-def test_create_photo_from_file_computes_sha256(mock_settings):
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
-    path = Path("/storage/photo.jpg")
+def test_create_photo_from_file_computes_sha256():
+    # Use the autouse mock_file_storage'd FILE_STORAGE_DIR so the path is
+    # FILE_STORAGE_DIR-relative — the unified convention for SourceItem.
+    path = settings.FILE_STORAGE_DIR / "photos" / "photo.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
     content = b"test content"
+    path.write_bytes(content)
 
     result = photo.create_photo_from_file(path, content, {}, [])
 
