@@ -9,6 +9,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from memory.api.cloud_claude import (
+    GIT_REPO_URL_MAX_LEN,
+    GIT_REPO_URL_SCHEMES,
+    ScheduleRequest,
     SpawnRequest,
     get_user_id_from_session,
     is_valid_session_id,
@@ -17,6 +20,7 @@ from memory.api.cloud_claude import (
     spawn_session,
     user_owns_session,
     validate_differ_subpath,
+    validate_git_repo_url,
 )
 from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
@@ -99,6 +103,185 @@ def test_spawn_request_accepts_only_environment_id(id_value):
     req = SpawnRequest(environment_id=id_value)
     assert req.environment_id == id_value
     assert req.snapshot_id is None
+
+
+# ====== validate_git_repo_url: git-flag-injection guard ======
+#
+# ``repo_url`` flows from SpawnRequest through to ``GIT_REPO_URL`` env in
+# the spawned container, where the entrypoint feeds it to ``git clone``.
+# Pre-validation must reject every shape git interprets as a flag,
+# remote-helper command, or non-allowlisted scheme — both at /spawn time
+# and (transitively, via Pydantic's nested model validation) at /schedule
+# time, which would otherwise stash a malicious repo_url in
+# ``ScheduledTask.data`` and replay it past the boundary.
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # https/ssh/git URL forms
+        "https://github.com/owner/repo.git",
+        "https://github.com/owner/repo",
+        "https://gitlab.example.com:8443/group/proj.git",
+        "ssh://git@github.com/owner/repo.git",
+        "ssh://user@gitea.local:2222/proj/repo.git",
+        "git://example.com/repo",
+        # scp-like SSH form (git's native abbreviated SSH syntax)
+        "git@github.com:owner/repo.git",
+        "user_name@host.example.com:path/to/repo.git",
+        "alice@gitlab.example.com:group/sub/proj.git",
+        # Mixed-case scheme (urlparse normalizes)
+        "HTTPS://github.com/owner/repo.git",
+    ],
+)
+def test_validate_git_repo_url_accepts_valid_forms(url):
+    """The validator passes well-shaped git URLs (https/ssh/git +
+    scp-like ``user@host:path``)."""
+    assert validate_git_repo_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url,reason",
+    [
+        # ── Flag injection (CVE-2017-1000117 / CVE-2018-17456 shape).
+        # Git itself rejects these in current versions, but reproducing
+        # the check at the API boundary blocks the same shape from being
+        # stored via /schedule and replayed later.
+        ("--upload-pack=$(id)", "leading hyphen"),
+        ("-u attack", "leading hyphen"),
+        ("--config=protocol.version=2", "leading hyphen"),
+        # ── ext:: / transport-helper:: remote helpers — these run shell
+        # commands with NO clone semantics and NO PATH lookup.
+        ("ext::sh -c id; cat /flag", "non-allowlisted scheme"),
+        ("ext::https://attacker.example/x", "non-allowlisted scheme"),
+        ("transport-helper::sh -c whoami", "non-allowlisted scheme"),
+        # ── http:// (non-TLS) — leaks credentials, not in allowlist
+        ("http://github.com/owner/repo.git", "non-allowlisted scheme"),
+        # ── file:// — local-disk read primitive
+        ("file:///etc/passwd", "non-allowlisted scheme"),
+        ("file:///root/.ssh/id_rsa", "non-allowlisted scheme"),
+        # ── Other random schemes
+        ("ftp://attacker.example/repo", "non-allowlisted scheme"),
+        ("ldap://internal.example/", "non-allowlisted scheme"),
+        # ── Control-character smuggling (CR/LF/NUL — would otherwise
+        # ride through the env var into the entrypoint script)
+        ("https://github.com/owner/repo\nrm -rf /", "control char"),
+        ("https://github.com/owner/repo\rrm -rf /", "control char"),
+        ("https://github.com/owner/repo\x00.git", "control char"),
+        # ── Empty / missing-host
+        ("", "empty"),
+        ("https://", "no hostname"),
+        ("https:///path", "no hostname"),
+        # ── Unrecognised shape (no scheme + not scp-like)
+        ("just a string", "unrecognised shape"),
+        ("/etc/passwd", "unrecognised shape"),
+        ("./local/path", "unrecognised shape"),
+        # ── scp-like form with leading hyphen (caught by leading-`-` rule
+        # before scp regex even runs)
+        ("-foo@host:bar", "leading hyphen"),
+        # ── scp-like with embedded whitespace (regex disallows)
+        ("git@github.com:owner/repo with space", "unrecognised shape"),
+    ],
+)
+def test_validate_git_repo_url_rejects_unsafe_shapes(url, reason):
+    """Each rejection case represents a distinct attacker-influenced
+    smuggling shape that the validator MUST refuse."""
+    with pytest.raises(ValueError):
+        validate_git_repo_url(url)
+
+
+def test_validate_git_repo_url_rejects_overlong_input():
+    """Per-request length cap prevents a billion-character payload from
+    ever reaching urlparse / git invocation."""
+    huge = "https://example.com/" + ("a" * (GIT_REPO_URL_MAX_LEN + 100))
+    with pytest.raises(ValueError, match="too long"):
+        validate_git_repo_url(huge)
+
+
+def test_git_repo_url_schemes_allowlist_does_not_include_dangerous_ones():
+    """Belt-and-suspenders: the constant itself must NOT contain any of
+    the historically-dangerous git URL schemes. A future contributor
+    "adding http for convenience" would be visible to a grep on this
+    constant."""
+    forbidden = {"http", "ftp", "file", "ext", "transport-helper", "ldap"}
+    assert not (GIT_REPO_URL_SCHEMES & forbidden)
+
+
+# --- Pydantic field_validator wiring on SpawnRequest -----------------------
+
+
+def test_spawn_request_repo_url_none_passes():
+    """``repo_url=None`` is the no-clone path and must not error."""
+    req = SpawnRequest(snapshot_id=1, repo_url=None)
+    assert req.repo_url is None
+
+
+def test_spawn_request_repo_url_valid_passes():
+    """A well-shaped HTTPS URL flows through unchanged."""
+    req = SpawnRequest(snapshot_id=1, repo_url="https://github.com/owner/repo.git")
+    assert req.repo_url == "https://github.com/owner/repo.git"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "--upload-pack=$(id)",
+        "ext::sh -c id",
+        "http://example.com/repo",
+        "file:///etc/passwd",
+        "https://github.com/owner/repo\nrm -rf /",
+    ],
+)
+def test_spawn_request_rejects_unsafe_repo_url(url):
+    """The Pydantic field_validator wires validate_git_repo_url onto the
+    repo_url field, so /spawn returns 422 (Pydantic) instead of letting
+    the value flow to ``$GIT_REPO_URL``."""
+    with pytest.raises(ValidationError):
+        SpawnRequest(snapshot_id=1, repo_url=url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "--upload-pack=$(id)",
+        "ext::sh -c id",
+        "http://example.com/repo",
+        "file:///etc/passwd",
+    ],
+)
+def test_schedule_request_inherits_repo_url_validation(url):
+    """REGRESSION GUARD: ``ScheduleRequest`` wraps ``SpawnRequest``, so
+    Pydantic's nested-model validation must run our repo_url validator
+    on the schedule path too. Without this, a stored scheduled task
+    could persist a malicious ``--upload-pack=...`` / ``ext::sh -c …``
+    value that fires later inside the container.
+
+    Construction goes through dict → SpawnRequest (the realistic JSON
+    body shape that ``POST /schedule`` receives), which exercises
+    Pydantic's normal validation chain on the nested model. Note that
+    ``SpawnRequest.model_construct`` bypasses validators by design and
+    is NOT a substitute for HTTP-shape construction here — the test
+    represents the actual API entry point.
+    """
+    with pytest.raises(ValidationError):
+        ScheduleRequest(
+            cron_expression="0 9 * * *",
+            spawn_config={"snapshot_id": 1, "repo_url": url},  # type: ignore[arg-type]
+        )
+
+
+def test_schedule_request_accepts_valid_repo_url():
+    """Sanity check the inverse: a valid URL flows through the nested
+    SpawnRequest without raising."""
+    req = ScheduleRequest(
+        cron_expression="0 9 * * *",
+        spawn_config={  # type: ignore[arg-type]
+            "snapshot_id": 1,
+            "repo_url": "https://github.com/owner/repo.git",
+            "initial_prompt": "do thing",
+        },
+    )
+    assert req.spawn_config.repo_url == "https://github.com/owner/repo.git"
 
 
 def test_get_user_id_from_session_valid():
