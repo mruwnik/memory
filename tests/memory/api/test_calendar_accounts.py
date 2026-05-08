@@ -4,6 +4,9 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
+from fastapi import HTTPException
+
+from memory.api.calendar_accounts import _validate_caldav_credential
 from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 
@@ -731,3 +734,146 @@ def test_create_google_account_rejects_other_users_google_account(client, db_ses
 
     assert response.status_code == 400
     assert "not found" in response.json()["detail"]
+
+
+# ====== CRLF / NUL injection guard on CalDAV credentials ======
+#
+# Latent today (worker uses base64-encoded Basic Auth, which collapses
+# CRLF before transport), but the next code path that builds an
+# Authorization header without base64 — e.g. ``f"Basic {user}:{pw}"`` —
+# would let CRLF in caldav_username/caldav_password smuggle a second
+# HTTP header (CWE-93). Pin the rejection at the API boundary so the
+# whole class is dead regardless of how the worker downstream chooses
+# to encode.
+
+
+# Direct hermetic tests — exercise the helper without postgres / fixtures
+# so the rejection invariant is pinned even when integration tests skip.
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "alice\rinjected",
+        "alice\ninjected",
+        "alice\r\nX-Injected: bad",
+        "alice\x00null",
+        "\r",
+        "\n",
+        "\x00",
+    ],
+)
+def test_validate_caldav_credential_rejects_metachars(value):
+    """The helper must 400 on any value containing CR / LF / NUL,
+    regardless of position."""
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_caldav_credential(value, "caldav_username")
+    assert exc_info.value.status_code == 400
+    assert "caldav_username" in exc_info.value.detail
+    assert "CR" in exc_info.value.detail or "LF" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,  # field-unchanged sentinel
+        "",  # empty string
+        "alice",
+        "alice@example.com",
+        "passw0rd-with_dashes",
+        "tabs\tare\tfine",  # tab is not a header-injection metachar
+    ],
+)
+def test_validate_caldav_credential_accepts_clean_values(value):
+    """The helper must NOT reject values that don't contain CR / LF / NUL.
+
+    Includes ``None`` (the field-unchanged sentinel for PATCH), empty
+    string, and a tab — pinning that we don't over-block printable or
+    whitespace-but-not-CR/LF characters.
+    """
+    # No exception => pass.
+    _validate_caldav_credential(value, "caldav_username")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("caldav_username", "alice\rinjected"),
+        ("caldav_username", "alice\ninjected"),
+        ("caldav_username", "alice\r\nX-Injected: bad"),
+        ("caldav_username", "alice\x00null"),
+        ("caldav_password", "secret\rinjected"),
+        ("caldav_password", "secret\ninjected"),
+        ("caldav_password", "secret\r\nX-Injected: bad"),
+        ("caldav_password", "secret\x00null"),
+    ],
+)
+def test_create_caldav_account_rejects_crlf_in_credentials(
+    field, value, client, db_session, user
+):
+    """POST /calendar-accounts must reject CR / LF / NUL in caldav_username
+    or caldav_password — the metacharacters that would smuggle a second
+    HTTP header in any future non-base64 Authorization construction."""
+    payload = {
+        "name": "Smuggling Probe",
+        "calendar_type": "caldav",
+        "caldav_url": "https://cal.example.com/dav",
+        "caldav_username": "alice",
+        "caldav_password": "secret",
+    }
+    payload[field] = value
+
+    response = client.post("/calendar-accounts", json=payload)
+
+    assert response.status_code == 400
+    assert field in response.json()["detail"]
+    # No row should have been created on a 400.
+    assert (
+        db_session.query(CalendarAccount).filter_by(name="Smuggling Probe").count()
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("caldav_username", "alice\r"),
+        ("caldav_username", "alice\n"),
+        ("caldav_password", "secret\x00"),
+        ("caldav_password", "secret\r\nX-Injected: bad"),
+    ],
+)
+def test_update_caldav_account_rejects_crlf_in_credentials(
+    field, value, client, db_session, user
+):
+    """PATCH /calendar-accounts/{id} must reject CR / LF / NUL in
+    caldav_username or caldav_password — the boundary check fires
+    on update too, not just create."""
+    account = CalendarAccount(
+        user_id=user.id,
+        name="Existing CalDAV",
+        calendar_type="caldav",
+        caldav_url="https://cal.example.com/dav",
+        caldav_username="user",
+        caldav_password="pass",
+        calendar_ids=["c1"],
+        tags=[],
+        check_interval=15,
+        sync_past_days=30,
+        sync_future_days=90,
+    )
+    db_session.add(account)
+    db_session.commit()
+    db_session.refresh(account)
+
+    response = client.patch(
+        f"/calendar-accounts/{account.id}",
+        json={field: value},
+    )
+
+    assert response.status_code == 400
+    assert field in response.json()["detail"]
+    # Original credentials must be untouched on a 400.
+    db_session.refresh(account)
+    assert account.caldav_username == "user"
+    assert account.caldav_password == "pass"

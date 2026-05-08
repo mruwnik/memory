@@ -66,6 +66,35 @@ def _validate_caldav_url(url: str | None) -> None:
         )
 
 
+# Header-injection metacharacters: an attacker who can stash one of these
+# in caldav_username / caldav_password could — under any future Basic Auth
+# code path that constructs ``Authorization: Basic ...`` without
+# base64-encoding (e.g. ``f"Basic {user}:{pw}"``) — smuggle a second HTTP
+# header. Today's worker uses base64-encoded Basic Auth so this is latent,
+# but pinning it at the API boundary kills the class instead of relying
+# on every future caller to remember the encoding requirement.
+_CALDAV_CRED_FORBIDDEN_CHARS = frozenset({"\r", "\n", "\x00"})
+
+
+def _validate_caldav_credential(value: str | None, field_name: str) -> None:
+    """Reject CR / LF / NUL in CalDAV username/password fields.
+
+    Caller passes ``None`` to mean "field unchanged"; we no-op (the
+    existing row was validated at write time).
+    """
+    if value is None:
+        return
+    bad = _CALDAV_CRED_FORBIDDEN_CHARS.intersection(value)
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid {field_name}: CR / LF / NUL characters are "
+                "forbidden (HTTP header smuggling guard)"
+            ),
+        )
+
+
 class CalendarAccountCreate(BaseModel):
     name: str
     calendar_type: Literal["caldav", "google"]
@@ -201,6 +230,8 @@ def create_account(
         # later sends Basic Auth (the user's caldav_password) to the
         # attacker (CWE-918, CWE-522).
         _validate_caldav_url(data.caldav_url)
+        _validate_caldav_credential(data.caldav_username, "caldav_username")
+        _validate_caldav_credential(data.caldav_password, "caldav_password")
     elif data.calendar_type == "google":
         if not data.google_account_id:
             raise HTTPException(
@@ -266,8 +297,10 @@ def update_account(
         _validate_caldav_url(updates.caldav_url)
         account.caldav_url = updates.caldav_url
     if updates.caldav_username is not None:
+        _validate_caldav_credential(updates.caldav_username, "caldav_username")
         account.caldav_username = updates.caldav_username
     if updates.caldav_password is not None:
+        _validate_caldav_credential(updates.caldav_password, "caldav_password")
         account.caldav_password = updates.caldav_password
     if updates.google_account_id is not None:
         # Verify the Google account exists AND belongs to the caller (or admin)
