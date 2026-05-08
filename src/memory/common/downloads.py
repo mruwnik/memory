@@ -162,6 +162,15 @@ def safe_get(
     that pass per-host bearer tokens against an attacker who controls
     the ``Location`` of a public 302 hop.
 
+    DNS-rebinding TOCTOU residual risk: ``validate_public_url`` does its
+    own ``getaddrinfo`` and then ``requests.get`` does another at dial
+    time. An attacker who controls authoritative DNS for a public
+    domain can return a public IP for the first lookup and a private
+    IP for the second. The single-resolve attacker is closed; the
+    DNS-rebinding attacker is not. See ``memory.common.ssrf`` module
+    docstring + follow-up task ``5a471003`` for the proper fix (pin
+    the validated IP across validate→fetch via a custom HTTPAdapter).
+
     Raises:
         UnsafeURLError: initial or any redirect target failed SSRF policy,
             or redirect loop / hop-count cap hit.

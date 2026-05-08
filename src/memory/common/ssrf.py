@@ -11,6 +11,27 @@ User-controlled URLs reaching server-side HTTP requests are SSRF sinks
 ``validate_public_url`` resolves the hostname and rejects anything in
 private / loopback / link-local / multicast / reserved ranges. Re-resolve
 at fetch time when feasible to defeat DNS rebinding.
+
+# Known limitation: DNS-rebinding TOCTOU
+
+This module closes the **single-resolve** SSRF attacker — anyone whose
+authoritative DNS returns a single private IP for a malicious URL gets
+caught here at validation time. It does **not** close the
+**DNS-rebinding** attacker who controls authoritative DNS for a public
+domain and can flip the A record between two lookups (TTL=0): the
+validation lookup sees ``8.8.8.8``, the subsequent fetch lookup sees
+``169.254.169.254``.
+
+This is a structural property of any "validate then fetch" guard that
+doesn't pin the resolved IP across both calls. The proper fix is a
+custom transport that dials the validated IP directly while keeping
+the original hostname in the Host header (for TLS SNI / virtual
+hosts) — see follow-up task ``5a471003`` on the kanban. We treat that
+as out of scope here because exploitation requires running an
+authoritative DNS server for a public domain (non-trivial threshold).
+Until then, callers should at minimum re-call ``validate_public_url``
+immediately before each network operation to keep the rebinding
+window narrow.
 """
 
 from __future__ import annotations
@@ -74,6 +95,15 @@ def validate_public_url(url: str) -> None:
     URL doesn't point at a private/internal host. Caller should re-call
     this immediately before the fetch (e.g. inside the worker job too)
     to limit DNS-rebinding windows.
+
+    DNS-rebinding TOCTOU caveat: this function does an independent
+    ``getaddrinfo`` from the one ``requests``/``aiohttp`` will perform
+    when actually dialing the URL. An attacker who controls
+    authoritative DNS for a public domain can return a public IP here
+    and a private IP at fetch time. We accept that residual risk
+    (exploitation requires running auth DNS for a public domain). See
+    the module docstring + follow-up task ``5a471003`` for the proper
+    fix (pin the validated IP across validate→fetch).
     """
     parsed = urlparse(url)
     if parsed.scheme.lower() not in ALLOWED_SCHEMES:
@@ -118,6 +148,9 @@ def validate_public_hostname(hostname: str) -> None:
 
     Caller should re-validate immediately before connecting (DNS
     rebinding window).
+
+    Same DNS-rebinding TOCTOU caveat as :func:`validate_public_url`
+    applies — see the module docstring + follow-up task ``5a471003``.
     """
     if not hostname or not isinstance(hostname, str):
         raise UnsafeURLError("hostname must be a non-empty string")
