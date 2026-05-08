@@ -57,6 +57,11 @@ def can_access_journal_target(
     and list_all share one source of truth.
 
     Returns True for admins (they bypass everywhere).
+
+    ``user`` may be a :class:`UserProxy` (just id + scopes) or a full
+    :class:`User`. Membership-based gates (project, team) need the User's
+    ``person`` relationship; if a UserProxy is passed in, we hydrate it
+    from ``session`` for those branches.
     """
     if has_admin_scope(user):
         return True
@@ -65,12 +70,26 @@ def can_access_journal_target(
         return user_can_access(user, target, project_roles)
 
     if target_type == "project":
-        # The target IS the project — gate on team membership in it.
-        return user_can_access_project(session, user, target.id)  # type: ignore[arg-type]
+        # Use project_roles when available — it was fetched via
+        # ``get_project_roles_by_user_id`` which queries the same User →
+        # Person → team_members → project_teams chain that
+        # ``user_can_access_project`` would re-execute. Avoids a second
+        # round-trip and works without ``user.person`` being available
+        # (UserProxy lacks the ORM relationship).
+        if project_roles is not None:
+            return target.id in project_roles
+        full_user = session.get(User, user.id)
+        if full_user is None:
+            return False
+        return user_can_access_project(session, full_user, target.id)
 
     if target_type == "team":
-        # Gate on team membership.
-        return user_can_access_team(session, user, target.id)  # type: ignore[arg-type]
+        # Gate on team membership — needs ``user.person`` so we hydrate to
+        # the full User if a UserProxy was passed in.
+        full_user = user if isinstance(user, User) else session.get(User, user.id)
+        if full_user is None:
+            return False
+        return user_can_access_team(session, full_user, target.id)
 
     if target_type == "poll":
         # Polls have no project_id (per the model), so default to the most

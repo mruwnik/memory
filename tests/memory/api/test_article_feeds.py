@@ -296,7 +296,7 @@ def test_delete_feed_not_found(client, db_session, user):
 # ====== POST /article-feeds/{feed_id}/sync tests ======
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.article_feeds.celery_app")
 def test_trigger_sync_success(mock_app, client, db_session, user):
     """Trigger sync sends Celery task."""
     feed = ArticleFeed(
@@ -323,7 +323,7 @@ def test_trigger_sync_success(mock_app, client, db_session, user):
     assert call_args[1]["args"] == [feed.id]
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.article_feeds.celery_app")
 def test_trigger_sync_not_found(mock_app, client, db_session, user):
     """Trigger sync returns 404 when feed doesn't exist."""
     response = client.post("/article-feeds/999999/sync")
@@ -335,7 +335,7 @@ def test_trigger_sync_not_found(mock_app, client, db_session, user):
 # ====== POST /article-feeds/discover tests ======
 
 
-@patch("memory.parsers.feeds.get_feed_parser")
+@patch("memory.api.article_feeds.get_feed_parser")
 def test_discover_feed_success(mock_get_parser, client, db_session, user):
     """Discover feed returns metadata from parser."""
     mock_parser = MagicMock()
@@ -356,7 +356,7 @@ def test_discover_feed_success(mock_get_parser, client, db_session, user):
     mock_get_parser.assert_called_once_with("https://example.com/blog")
 
 
-@patch("memory.parsers.feeds.get_feed_parser")
+@patch("memory.api.article_feeds.get_feed_parser")
 def test_discover_feed_no_parser_found(mock_get_parser, client, db_session, user):
     """Discover feed returns 400 when parser cannot be found."""
     mock_get_parser.return_value = None
@@ -369,7 +369,7 @@ def test_discover_feed_no_parser_found(mock_get_parser, client, db_session, user
     assert "Could not parse" in response.json()["detail"]
 
 
-@patch("memory.parsers.feeds.get_feed_parser")
+@patch("memory.api.article_feeds.get_feed_parser")
 def test_discover_feed_invalid_url(mock_get_parser, client, db_session, user):
     """Discover feed with invalid URL fails validation."""
     response = client.post(
@@ -464,7 +464,7 @@ def test_create_feed_rejects_ssrf_url(mock_validate, client, db_session, user):
     assert db_session.query(ArticleFeed).count() == 0
 
 
-@patch("memory.parsers.feeds.get_feed_parser")
+@patch("memory.api.article_feeds.get_feed_parser")
 @patch("memory.api.article_feeds.validate_public_url")
 def test_discover_feed_rejects_ssrf_url(
     mock_validate, mock_get_parser, client, db_session, user
@@ -482,7 +482,7 @@ def test_discover_feed_rejects_ssrf_url(
     mock_get_parser.assert_not_called()
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.article_feeds.celery_app")
 @patch("memory.api.article_feeds.validate_public_url")
 def test_trigger_sync_rejects_ssrf_url(
     mock_validate, mock_app, client, db_session, user
@@ -684,7 +684,7 @@ def test_create_feed_attributes_to_caller(client, db_session, user):
     assert feed.user_id == user.id
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.article_feeds.celery_app")
 def test_trigger_sync_404_for_other_users_feed(
     mock_app, regular_client, db_session, user
 ):

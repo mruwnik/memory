@@ -116,8 +116,15 @@ def test_create_meeting_transcript_too_large(client: TestClient, user):
     assert "exceeds maximum size" in response.json()["detail"]
 
 
-def test_create_meeting_excludes_transcript_from_params(client: TestClient, user):
-    """Test that transcript is excluded from stored job params."""
+def test_create_meeting_does_not_exclude_transcript_from_params(client: TestClient, user):
+    """Transcript MUST be persisted in job params so retries work.
+
+    ``retry_failed_job`` rebuilds ``task_kwargs`` from ``PendingJob.params``
+    alone, and ``process_meeting.transcript`` has no default — dropping it
+    from params would make retries crash with TypeError. The 500 KB
+    transcript size cap on the route bounds storage cost. See
+    ``api/meetings.py``.
+    """
     with patch("memory.api.meetings.dispatch_job") as mock_dispatch:
         mock_job = type("MockJob", (), {"id": 102, "status": "pending"})()
         mock_dispatch.return_value = type("DispatchResult", (), {
@@ -136,9 +143,12 @@ def test_create_meeting_excludes_transcript_from_params(client: TestClient, user
 
     assert response.status_code == 200
 
-    # Check exclude_from_params was passed
     call_kwargs = mock_dispatch.call_args.kwargs
-    assert "transcript" in call_kwargs["exclude_from_params"]
+    # transcript must be in task_kwargs so the worker receives it.
+    assert call_kwargs["task_kwargs"]["transcript"] == "This is a very long transcript..."
+    # And it must NOT be excluded — params are needed for retry.
+    excluded = call_kwargs.get("exclude_from_params") or []
+    assert "transcript" not in excluded
 
 
 def test_create_meeting_passes_user_id(client: TestClient, user):

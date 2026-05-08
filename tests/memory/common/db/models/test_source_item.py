@@ -710,15 +710,25 @@ def test_handle_duplicate_sha256_records_expunged_in_session_info(db_session: Se
 
 def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: Session):
     """Successive flushes with no SourceItems should not surface a stale
-    ``expunged_dupes`` list from a previous flush."""
+    ``expunged_dupes`` list from a previous flush.
+
+    Note: SQLAlchemy short-circuits ``flush()`` when nothing is pending and
+    does NOT fire ``before_flush`` in that case. To exercise the listener's
+    reset path we must include at least one non-SourceItem pending change
+    on the second flush.
+    """
+    from memory.common.db.models.sources import Person
+
     # Flush 1: produce an expunge so session.info has a non-empty list
     db_session.add(SourceItem(sha256=b"x", content="a", modality="text"))
     db_session.add(SourceItem(sha256=b"x", content="b", modality="text"))
-    db_session.commit()
+    db_session.flush()
     assert db_session.info.get("expunged_dupes")  # non-empty
 
-    # Flush 2: no new SourceItems — list must be reset
-    db_session.commit()
+    # Flush 2: no new SourceItems but at least one other pending change
+    # so SQLAlchemy actually invokes before_flush — list must be reset.
+    db_session.add(Person(identifier="some-person", display_name="Some Person"))
+    db_session.flush()
     assert db_session.info.get("expunged_dupes") == []
 
 

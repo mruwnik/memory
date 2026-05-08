@@ -11,6 +11,7 @@ from memory.api.MCP.base import SUBSERVER_PREFIXES
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.claude import claude_mcp
 from memory.api.MCP.servers.core import core_mcp
+from memory.api.MCP.servers.deadlines import deadlines_mcp
 from memory.api.MCP.servers.discord import discord_mcp
 from memory.api.MCP.servers.email import email_mcp
 from memory.api.MCP.servers.forecast import forecast_mcp
@@ -33,6 +34,7 @@ SUBSERVERS = {
     "books": books_mcp,
     "claude": claude_mcp,
     "core": core_mcp,
+    "deadlines": deadlines_mcp,
     "discord": discord_mcp,
     "email": email_mcp,
     "forecast": forecast_mcp,

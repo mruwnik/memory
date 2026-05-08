@@ -244,7 +244,15 @@ def revoke_refresh_token_family(
     )
 
     # Delete every paired access-token UserSession so the access tokens
-    # they minted die immediately too.
+    # they minted die immediately too. Detach the FK from refresh tokens
+    # first — the constraint has no ondelete behaviour, so a direct
+    # delete trips the FK on the very tokens we just revoked.
+    if paired_session_ids:
+        db.execute(
+            update(OAuthRefreshToken)
+            .where(OAuthRefreshToken.access_token_session_id.in_(paired_session_ids))
+            .values(access_token_session_id=None)
+        )
     for sid in paired_session_ids:
         sess = db.get(UserSession, sid)
         if sess is not None:
@@ -980,6 +988,16 @@ class SimpleOAuthProvider(OAuthProvider):
             if paired_session_id is not None:
                 old_session = session.get(UserSession, paired_session_id)
                 if old_session is not None:
+                    # Detach any refresh tokens that reference this session
+                    # (NOT NULL ondelete missing on the FK, so deleting the
+                    # session would otherwise blow up on a constraint
+                    # violation from the very token we're rotating).
+                    session.query(OAuthRefreshToken).filter(
+                        OAuthRefreshToken.access_token_session_id == paired_session_id
+                    ).update(
+                        {OAuthRefreshToken.access_token_session_id: None},
+                        synchronize_session=False,
+                    )
                     session.delete(old_session)
 
             return make_token(session, db_refresh_token, scopes)

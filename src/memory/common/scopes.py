@@ -21,6 +21,9 @@ from typing import Literal, TypedDict
 # Sensitivity levels for content access control
 SensitivityLevelLiteral = Literal["public", "basic", "internal", "confidential"]
 
+# Priority levels for tasks and deadlines.
+TaskPriorityLiteral = Literal["low", "medium", "high", "urgent"]
+
 
 class ScopeInfo(TypedDict):
     """Metadata about a scope for UI display."""

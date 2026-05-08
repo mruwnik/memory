@@ -355,6 +355,12 @@ class AccessControlMixin:
     `apply_access_filter_to_query` in `memory.common.access_control`. The three
     columns are the contract between models and the AC filter; per-table
     indexes and the sensitivity CHECK constraint stay with each table.
+
+    Caveat: do NOT declare ``Index``, ``UniqueConstraint``, or
+    ``CheckConstraint`` on this mixin without ``declared_attr`` — SQLAlchemy
+    would share the same constraint object across every subclass and reject
+    the metadata at bind time. Per-table indexes and checks live in each
+    subclass's ``__table_args__``.
     """
 
     project_id: Mapped[int | None] = mapped_column(

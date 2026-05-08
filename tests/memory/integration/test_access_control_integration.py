@@ -750,7 +750,7 @@ def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
     """Test that empty access filter (no project access, no public bypass) matches nothing."""
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
-    from memory.api.search.embeddings import build_access_qdrant_filter
+    from memory.api.search.embeddings import NO_ACCESS, build_access_qdrant_filter
 
     # Create a note
     note = Note(
@@ -764,20 +764,11 @@ def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
     access_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(access_filter)
 
-    # Should return impossible condition
-    assert len(qdrant_conditions) == 1
-    assert qdrant_conditions[0]["key"] == "project_id"
-    assert qdrant_conditions[0]["match"]["value"] == -1
-
-    # Search with this filter should find nothing
-    results = qdrant.scroll(
-        collection_name="text",
-        scroll_filter={"must": qdrant_conditions},
-        with_payload=True,
-        limit=100,
-    )[0]
-
-    assert len(results) == 0
+    # The deep-audit contract: an empty-everything filter returns the
+    # ``NO_ACCESS`` sentinel (an empty tuple), and callers MUST short-
+    # circuit on it instead of falling through to "no filter applied".
+    assert qdrant_conditions is NO_ACCESS
+    assert len(qdrant_conditions) == 0
 
 
 # ============================================================================
@@ -1366,7 +1357,7 @@ def test_adversarial_empty_access_filter_no_public_blocks_everything(
     """
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
-    from memory.api.search.embeddings import build_access_qdrant_filter
+    from memory.api.search.embeddings import NO_ACCESS, build_access_qdrant_filter
 
     # Create a basic note
     basic_note = Note(
@@ -1382,20 +1373,11 @@ def test_adversarial_empty_access_filter_no_public_blocks_everything(
     empty_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(empty_filter)
 
-    # Should return impossible condition
-    assert len(qdrant_conditions) == 1
-    assert qdrant_conditions[0]["key"] == "project_id"
-    assert qdrant_conditions[0]["match"]["value"] == -1
-
-    results = qdrant.scroll(
-        collection_name="text",
-        scroll_filter={"must": qdrant_conditions},
-        with_payload=True,
-        limit=100,
-    )[0]
-
-    # Should find NOTHING
-    assert len(results) == 0, "Empty filter returned results!"
+    # Post-audit: an empty-everything filter returns the ``NO_ACCESS``
+    # sentinel; callers must short-circuit on it. Returning a
+    # `project_id == -1` impossible condition was the *previous* design
+    # and didn't compose well with non-Qdrant code paths.
+    assert qdrant_conditions is NO_ACCESS
 
 
 def test_adversarial_invalid_role_grants_no_access(db_session):

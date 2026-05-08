@@ -6,13 +6,15 @@ import logging
 
 from fastmcp import FastMCP
 
-from memory.api.MCP.access import get_mcp_current_user
+from memory.api.MCP.access import (
+    get_mcp_current_user,
+    get_project_roles_by_user_id,
+)
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
 from memory.common.access_control import (
     apply_access_filter_to_query,
     build_access_filter,
-    get_user_project_roles,
 )
 from memory.common.celery_app import SYNC_NOTE
 from memory.common.celery_app import app as celery_app
@@ -131,7 +133,7 @@ async def note_files(path: str = "/"):
         # this stays in lock-step with search.
         access_filter = build_access_filter(
             user,
-            get_user_project_roles(session, user),  # type: ignore[arg-type]
+            get_project_roles_by_user_id(user.id, session),
             include_public=False,
         )
         query = apply_access_filter_to_query(query, access_filter)

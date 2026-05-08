@@ -944,7 +944,36 @@ async def test_fetch_accepts_number_as_string():
 # =============================================================================
 
 
-def test_fetch_issue_blocks_user_without_project_access(db_session, sample_issues):
+@pytest.fixture
+def issue_access_users(db_session):
+    """Two real ``HumanUser`` rows for IDOR-blocking tests.
+
+    Returns ``(owner, caller)``. The FK ``source_item.creator_id ->
+    users.id`` means we can't use synthetic 1/999 ids; both must exist
+    as real rows.
+    """
+    from memory.common.db.models import HumanUser
+
+    owner = HumanUser(
+        name="Issue Owner",
+        email="issue-owner@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["github"],
+    )
+    caller = HumanUser(
+        name="Issue Caller",
+        email="issue-caller@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["github"],
+    )
+    db_session.add_all([owner, caller])
+    db_session.commit()
+    return owner, caller
+
+
+def test_fetch_issue_blocks_user_without_project_access(
+    db_session, sample_issues, issue_access_users
+):
     """A non-admin without project access must not fetch an issue tied to that project.
 
     Pre-fix, fetch_issue was scoped by (repo_path, number) only, so any
@@ -953,15 +982,16 @@ def test_fetch_issue_blocks_user_without_project_access(db_session, sample_issue
     """
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
-    # Pin sample issue to a project the caller has no role in, with a
+    owner, caller = issue_access_users
+    # Pin sample issue to project_id=None (NULL → superadmin-only) with a
     # different creator so creator-bypass doesn't fire.
     issue = sample_issues[0]
-    issue.project_id = 12345
-    issue.creator_id = 1
+    issue.project_id = None
+    issue.creator_id = owner.id
     issue.sensitivity = "confidential"
     db_session.commit()
 
-    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+    non_admin = type("U", (), {"id": caller.id, "scopes": ["github"]})()
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
@@ -974,16 +1004,19 @@ def test_fetch_issue_blocks_user_without_project_access(db_session, sample_issue
                 fetch_issue(repo="owner/repo1", number=1, user=non_admin)
 
 
-def test_fetch_issue_allows_creator_without_project_access(db_session, sample_issues):
+def test_fetch_issue_allows_creator_without_project_access(
+    db_session, sample_issues, issue_access_users
+):
     """Creator-override still works even without explicit project membership."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
+    _owner, caller = issue_access_users
     issue = sample_issues[0]
     issue.project_id = None
-    issue.creator_id = 999  # caller IS the creator
+    issue.creator_id = caller.id  # caller IS the creator
     db_session.commit()
 
-    non_admin = type("U", (), {"id": 999, "scopes": ["github"]})()
+    non_admin = type("U", (), {"id": caller.id, "scopes": ["github"]})()
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session
@@ -997,17 +1030,20 @@ def test_fetch_issue_allows_creator_without_project_access(db_session, sample_is
     assert result["number"] == 1
 
 
-def test_fetch_issue_admin_bypasses_filter(db_session, sample_issues):
+def test_fetch_issue_admin_bypasses_filter(
+    db_session, sample_issues, issue_access_users
+):
     """Admin scope sees the issue regardless of project."""
     from memory.api.MCP.servers.github_helpers import fetch_issue
 
+    owner, caller = issue_access_users
     issue = sample_issues[0]
-    issue.project_id = 12345
-    issue.creator_id = 1
+    issue.project_id = None
+    issue.creator_id = owner.id
     issue.sensitivity = "confidential"
     db_session.commit()
 
-    admin = type("U", (), {"id": 999, "scopes": ["*"]})()
+    admin = type("U", (), {"id": caller.id, "scopes": ["*"]})()
 
     with patch("memory.api.MCP.servers.github_helpers.make_session") as mock_session:
         mock_session.return_value.__enter__ = lambda s: db_session

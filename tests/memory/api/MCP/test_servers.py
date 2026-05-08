@@ -22,6 +22,7 @@ def test_all_servers_in_enum():
         "books",
         "claude",
         "core",
+        "deadlines",
         "discord",
         "email",
         "forecast",

@@ -200,31 +200,46 @@ def normalize_sensitivity(sensitivity: SensitivityLevel | str) -> str:
     return str(sensitivity)
 
 
-def apply_access_filter_to_query(query, access_filter: "AccessFilter | None"):
-    """Apply an ``AccessFilter`` to a SQLAlchemy query joined against ``SourceItem``.
+def apply_access_filter_to_query(
+    query,
+    access_filter: "AccessFilter | None",
+    model: type | None = None,
+):
+    """Apply an ``AccessFilter`` to a SQLAlchemy query against an
+    ``AccessControlMixin``-bearing model.
 
     Single source of truth used by every code path that needs to filter a
     query by the caller's access rights — BM25, MCP core search, project-
-    aware listings (issues, milestones, notes), etc.
+    aware listings (issues, milestones, notes), Deadlines, etc.
 
     Access is granted if ANY of these conditions is true:
 
     1. User has admin scope (superadmin) — ``access_filter is None``.
     2. Creator override: ``creator_id`` matches the caller.
-    3. Person override: caller's person is attached via ``source_item_people``.
+    3. Person override: caller's person is attached via ``source_item_people``
+       (SourceItem only — other models have no person M:N).
     4. Public bypass: ``sensitivity == "public"`` AND ``include_public``.
     5. Project access: ``project_id`` matches AND ``sensitivity`` is in the
        caller's allowed sensitivities for that project role.
 
     NULL semantics:
 
-    - ``SourceItem.sensitivity`` is NOT NULL (default ``"basic"``).
-    - ``SourceItem.project_id`` is nullable; NULL means "superadmin only"
-      by project invariant.  Such rows naturally fall out of the project
-      conditions for non-admins because ``NULL == X`` is NULL, but can
-      still surface via creator/person/public bypass.
+    - ``sensitivity`` is NOT NULL on AccessControlMixin (default ``"basic"``).
+    - ``project_id`` is nullable; NULL means "superadmin only" by project
+      invariant. Such rows naturally fall out of the project conditions for
+      non-admins because ``NULL == X`` is NULL, but can still surface via
+      creator/person/public bypass.
 
-    Caller is responsible for ensuring ``SourceItem`` is reachable in the
+    Args:
+        query: The SQLAlchemy query to filter.
+        access_filter: Built by ``build_access_filter()``; ``None`` for admins
+            (no filtering applied).
+        model: The model class to filter on. Defaults to ``SourceItem`` for
+            backward compatibility. Pass any model with the access-control
+            columns (``project_id`` / ``sensitivity`` / ``creator_id``) — e.g.
+            ``Deadline``.
+
+    Caller is responsible for ensuring the target model is reachable in the
     query (typically via subclass polymorphism or an explicit join).
     """
     from sqlalchemy import false as sql_false
@@ -236,12 +251,16 @@ def apply_access_filter_to_query(query, access_filter: "AccessFilter | None"):
     if access_filter is None:
         return query
 
+    if model is None:
+        model = SourceItem
+
     conditions = []
 
     if access_filter.creator_id is not None:
-        conditions.append(SourceItem.creator_id == access_filter.creator_id)
+        conditions.append(model.creator_id == access_filter.creator_id)
 
-    if access_filter.person_id is not None:
+    # Person override is SourceItem-only — other AC models have no people M:N.
+    if access_filter.person_id is not None and model is SourceItem:
         person_override = exists(
             select(source_item_people.c.source_item_id)
             .where(source_item_people.c.source_item_id == SourceItem.id)
@@ -250,11 +269,11 @@ def apply_access_filter_to_query(query, access_filter: "AccessFilter | None"):
         conditions.append(person_override)
 
     if access_filter.include_public:
-        conditions.append(SourceItem.sensitivity == "public")
+        conditions.append(model.sensitivity == "public")
 
     for condition in access_filter.conditions:
-        project_condition = (SourceItem.project_id == condition.project_id) & (
-            SourceItem.sensitivity.in_(list(condition.sensitivities))
+        project_condition = (model.project_id == condition.project_id) & (
+            model.sensitivity.in_(list(condition.sensitivities))
         )
         conditions.append(project_condition)
 

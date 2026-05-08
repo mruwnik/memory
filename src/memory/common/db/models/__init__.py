@@ -167,6 +167,11 @@ from memory.common.db.models.journal import (
     user_can_access_journal_entry,
     build_journal_access_filter,
 )
+from memory.common.db.models.deadlines import (
+    Deadline,
+    DeadlinePayload,
+    deadline_attachments,
+)
 
 Payload = (
     SourceItemPayload
@@ -184,6 +189,7 @@ Payload = (
     | TaskPayload
     | CalendarEventPayload
     | ReportPayload
+    | DeadlinePayload
 )
 
 __all__ = [
@@ -334,4 +340,8 @@ __all__ = [
     "JournalEntry",
     "user_can_access_journal_entry",
     "build_journal_access_filter",
+    # Deadlines
+    "Deadline",
+    "DeadlinePayload",
+    "deadline_attachments",
 ]

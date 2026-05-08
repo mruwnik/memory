@@ -198,3 +198,72 @@ async def test_note_files_lists_markdown_files(
     assert any("note2.md" in f for f in result)
     assert any("nested.md" in f for f in result)
     assert not any("not_a_note.txt" in f for f in result)
+
+
+@pytest.mark.asyncio
+async def test_note_files_visible_via_team_project_access(
+    mock_settings, db_session, regular_user, user_session
+):
+    """A non-admin who's a member of a Team assigned to a Project should see
+    notes in that project via team-project membership.
+
+    Regression guard for the round-1 BLOCKING bug — `note_files` previously
+    called `get_user_project_roles(session, user)` with a UserProxy that
+    has no `.person`, crashing the query. The fix routes via
+    `get_project_roles_by_user_id(user.id, session)`, mirroring deadlines.
+    """
+    from memory.api.MCP.servers.notes import note_files
+    from memory.common.db.models import Person, Team
+    from memory.common.db.models.source_items import Note
+    from memory.common.db.models.sources import (
+        Project,
+        project_teams,
+        team_members,
+    )
+    from tests.conftest import mcp_auth_context
+
+    person = Person(identifier="notes_person", display_name="Notes Person")
+    db_session.add(person)
+    db_session.flush()
+
+    regular_user.person = person
+    db_session.flush()
+
+    project = Project(title="Notes Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+
+    team = Team(name="Notes Team", slug="notes-team", is_active=True)
+    db_session.add(team)
+    db_session.flush()
+
+    db_session.execute(
+        team_members.insert().values(
+            team_id=team.id, person_id=person.id, role="member"
+        )
+    )
+    db_session.execute(
+        project_teams.insert().values(project_id=project.id, team_id=team.id)
+    )
+
+    note = Note(
+        sha256=b"team-visible-note\x00",
+        content="content",
+        modality="text",
+        mime_type="text/markdown",
+        size=7,
+        filename="notes/team_visible.md",
+        creator_id=None,  # Not the regular_user — visibility comes via team
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    db_session.add(note)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await note_files.fn(path="/")
+
+    # The team-visible note must be in the listing — which it can only be if
+    # the team-project AC path was reached without the UserProxy.person
+    # crash. (Notes have include_public=False so this isn't a public bypass.)
+    assert any("team_visible.md" in f for f in result)

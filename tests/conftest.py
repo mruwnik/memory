@@ -125,6 +125,13 @@ class MockRedis:
         self._data[key] = current
         return current
 
+    def llen(self, key: str) -> int:
+        """List length — return 0 for any key (queues are empty in mock)."""
+        v = self._data.get(key, [])
+        if isinstance(v, list):
+            return len(v)
+        return 0
+
     def pipeline(self, *args, **kwargs):
         # Simple no-op pipeline that just executes commands directly.
         return _MockRedisPipeline(self)
@@ -193,7 +200,11 @@ class MockRedis:
         return 0
 
     @classmethod
-    def from_url(cls, url: str):
+    def from_url(cls, url: str, *args, **kwargs):
+        # Real ``redis.Redis.from_url`` accepts socket timeouts and other
+        # connection kwargs. Swallow them silently — they're irrelevant
+        # to the in-memory mock and rejecting them blows up callers
+        # (notably ``rate_limit.get_redis``) with TypeError.
         return cls()
 
     @classmethod

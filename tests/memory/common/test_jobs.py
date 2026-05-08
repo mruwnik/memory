@@ -376,7 +376,14 @@ def test_dispatch_job_creates_job_and_dispatches_task(db_session):
 
 
 def test_dispatch_job_excludes_fields_from_params(db_session):
-    """Test dispatch_job excludes specified fields from stored params."""
+    """Test dispatch_job excludes specified fields from stored params.
+
+    Excludes ``meeting_date`` (an *optional* kwarg on ``process_meeting``)
+    because the dispatcher fail-fasts on excluding *required* kwargs to
+    keep ``retry_failed_job`` working — see ``dispatch_job`` for the
+    rationale. The test verifies the exclusion mechanism itself, which
+    is identical regardless of which kwarg is dropped.
+    """
     with patch.object(
         job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "celery-456"})()
     ):
@@ -384,13 +391,18 @@ def test_dispatch_job_excludes_fields_from_params(db_session):
             session=db_session,
             job_type=JobType.MEETING,
             task_name="memory.workers.tasks.meetings.process_meeting",
-            task_kwargs={"title": "Meeting", "transcript": "Very long content..."},
-            exclude_from_params=["transcript"],
+            task_kwargs={
+                "title": "Meeting",
+                "transcript": "Very long content...",
+                "meeting_date": "2024-01-15",
+            },
+            exclude_from_params=["meeting_date"],
         )
 
-    # transcript should NOT be in params
-    assert "transcript" not in result.job.params
+    # meeting_date should NOT be in params
+    assert "meeting_date" not in result.job.params
     assert result.job.params["title"] == "Meeting"
+    assert result.job.params["transcript"] == "Very long content..."
     assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
 
 

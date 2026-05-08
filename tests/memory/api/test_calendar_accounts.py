@@ -451,7 +451,7 @@ def test_delete_account_not_found(client, db_session, user):
 # ====== POST /calendar-accounts/{account_id}/sync tests ======
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.calendar_accounts.celery_app")
 def test_trigger_sync_success(mock_app, client, db_session, user):
     """Trigger sync sends Celery task."""
     account = CalendarAccount(
@@ -485,7 +485,7 @@ def test_trigger_sync_success(mock_app, client, db_session, user):
     assert call_args[1]["kwargs"] == {"force_full": False}
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.calendar_accounts.celery_app")
 def test_trigger_sync_with_force_full(mock_app, client, db_session, user):
     """Trigger sync with force_full parameter."""
     account = CalendarAccount(
@@ -514,7 +514,7 @@ def test_trigger_sync_with_force_full(mock_app, client, db_session, user):
     assert call_args[1]["kwargs"] == {"force_full": True}
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.calendar_accounts.celery_app")
 def test_trigger_sync_not_found(mock_app, client, db_session, user):
     """Trigger sync returns 404 when account doesn't exist."""
     response = client.post("/calendar-accounts/999999/sync")
@@ -678,7 +678,7 @@ def test_delete_account_not_owned_returns_404_for_non_admin(regular_client, user
     assert db_session.query(CalendarAccount).filter_by(id=other_account.id).first() is not None
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.calendar_accounts.celery_app")
 def test_trigger_sync_not_owned_returns_404_for_non_admin(
     mock_app, regular_client, user, db_session
 ):

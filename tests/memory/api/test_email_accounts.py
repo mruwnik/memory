@@ -592,7 +592,7 @@ def test_delete_account_not_found(client, user, db_session):
 # Test trigger_sync
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.email_accounts.celery_app")
 def test_trigger_sync_success(mock_app, client, user, db_session):
     """Triggering sync should queue Celery task."""
     mock_task = MagicMock()
@@ -625,7 +625,7 @@ def test_trigger_sync_success(mock_app, client, user, db_session):
     assert call_args[1]["args"] == [account.id]
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.email_accounts.celery_app")
 def test_trigger_sync_with_since_date(mock_app, client, user, db_session):
     """Triggering sync with since_date should pass it to task."""
     mock_task = MagicMock()
@@ -654,7 +654,7 @@ def test_trigger_sync_with_since_date(mock_app, client, user, db_session):
     assert call_args["kwargs"]["since_date"] == since
 
 
-@patch("memory.common.celery_app.app")
+@patch("memory.api.email_accounts.celery_app")
 def test_trigger_sync_not_owned(mock_app, regular_client, user, db_session):
     """Triggering sync on account owned by different user should return 404."""
     other_user = HumanUser(
@@ -687,7 +687,7 @@ def test_trigger_sync_not_owned(mock_app, regular_client, user, db_session):
 # Test test_connection
 
 
-@patch("memory.workers.email.imap_connection")
+@patch("memory.api.email_accounts.imap_connection")
 def test_connection_success(mock_imap, client, user, db_session):
     """Testing connection with valid credentials should succeed."""
     # Mock the IMAP connection context manager and list() method
@@ -724,7 +724,7 @@ def test_connection_success(mock_imap, client, user, db_session):
     assert call_arg.id == account.id
 
 
-@patch("memory.workers.email.imap_connection")
+@patch("memory.api.email_accounts.imap_connection")
 def test_connection_failure(mock_imap, client, user, db_session):
     """Testing connection with invalid credentials should return error."""
     mock_imap.return_value.__enter__.side_effect = Exception("Authentication failed")
