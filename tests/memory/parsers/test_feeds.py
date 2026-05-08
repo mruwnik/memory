@@ -220,9 +220,15 @@ def test_feed_parser_parse_feed_with_invalid_items():
     ]
 
 
+@patch("memory.parsers.feeds.fetch_html")
 @patch("memory.parsers.feeds.feedparser.parse")
 @pytest.mark.parametrize("since_date", [None, datetime(2023, 1, 1)])
-def test_rss_atom_parser_fetch_items(mock_parse, since_date):
+def test_rss_atom_parser_fetch_items(mock_parse, mock_fetch_html, since_date):
+    """Without ``content`` set, fetch_items pre-fetches via fetch_html (which
+    is SSRF-validated) and never lets feedparser dispatch its own urllib
+    request — that's the regression guard for the SSRF-bypass-via-feedparser
+    attack vector."""
+    mock_fetch_html.return_value = "<rss>fetched body</rss>"
     mock_feed = MagicMock()
     mock_feed.entries = ["entry1", "entry2"]
     mock_parse.return_value = mock_feed
@@ -230,13 +236,38 @@ def test_rss_atom_parser_fetch_items(mock_parse, since_date):
     parser = RSSAtomParser(url="https://example.com/feed.xml", since=since_date)
     items = parser.fetch_items()
 
+    # SSRF-validated fetch must happen exactly once.
+    mock_fetch_html.assert_called_once_with("https://example.com/feed.xml")
+    # feedparser must receive the IN-MEMORY bytes, not the URL.
     if since_date:
         mock_parse.assert_called_once_with(
-            "https://example.com/feed.xml", modified=since_date
+            "<rss>fetched body</rss>", modified=since_date
         )
     else:
-        mock_parse.assert_called_once_with("https://example.com/feed.xml")
+        mock_parse.assert_called_once_with("<rss>fetched body</rss>")
     assert items == ["entry1", "entry2"]
+
+
+@patch("memory.parsers.feeds.fetch_html")
+@patch("memory.parsers.feeds.feedparser.parse")
+def test_rss_atom_parser_fetch_items_does_not_bypass_ssrf_with_url(
+    mock_parse, mock_fetch_html,
+):
+    """Regression: feedparser.parse must NEVER be called with a raw URL —
+    that path inside feedparser bypasses our SSRF gate.
+    """
+    mock_fetch_html.return_value = "<rss/>"
+    mock_feed = MagicMock()
+    mock_feed.entries = []
+    mock_parse.return_value = mock_feed
+
+    parser = RSSAtomParser(url="https://attacker.example/feed.xml")
+    parser.fetch_items()
+
+    # The URL passed to feedparser MUST be the pre-fetched body, not the URL.
+    call_arg = mock_parse.call_args[0][0]
+    assert call_arg == "<rss/>"
+    assert "://" not in call_arg, "feedparser called with URL — SSRF bypass"
 
 
 @patch("memory.parsers.feeds.feedparser.parse")
