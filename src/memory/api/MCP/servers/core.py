@@ -366,6 +366,24 @@ async def observe(
             "status": "rejected",
         }
 
+    # Resolve caller for ownership tagging. Without ``creator_id`` the
+    # row defaults to NULL project_id + "basic" sensitivity, which the
+    # access-control layer treats as superadmin-only — so a non-admin
+    # user calling observe() then search_observations() would see zero
+    # of their own writes (silent data loss), while every admin in the
+    # deployment would see every observation across users.
+    user = get_mcp_current_user()
+    creator_id = user.id if user else None
+    if creator_id is None:
+        # observe() requires SCOPE_OBSERVE_WRITE which gates on an
+        # authenticated principal; reaching this branch means the
+        # auth context drift between visibility and tool execution
+        # leaked through. Refuse rather than mint an unowned row.
+        return {
+            "error": "observe requires an authenticated user",
+            "status": "rejected",
+        }
+
     logger.info(f"MCP: Observing {len(observations)} observation(s)")
     tasks = [
         (
@@ -382,6 +400,7 @@ async def observe(
                     "tags": obs.tags,
                     "session_id": session_id,
                     "agent_model": agent_model,
+                    "creator_id": creator_id,
                 },
             ),
         )

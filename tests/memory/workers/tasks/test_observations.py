@@ -545,3 +545,99 @@ class TestSyncObservation:
         created_observation = mock_process.call_args[0][0]
         assert created_observation.content == long_content
         assert created_observation.size == 10000
+
+
+# --- creator_id / project_id / sensitivity propagation ---------------------
+# Regression tests for audit finding 56ad2afa: AgentObservation rows were
+# created without an ownership stamp, so a non-admin user calling observe()
+# could not read back their own writes (NULL project_id is admin-only) and
+# every admin in a multi-user deployment saw every observation across users.
+
+
+@patch("memory.workers.tasks.observations.process_content_item")
+@patch("memory.workers.tasks.observations.check_content_exists")
+@patch("memory.workers.tasks.observations.make_session")
+@patch("memory.workers.tasks.observations.create_content_hash")
+def test_sync_observation_attaches_creator_id(
+    mock_hash, mock_session, mock_check, mock_process
+):
+    """When the MCP layer passes creator_id, the row is stamped with it."""
+    mock_hash.return_value = "h"
+    mock_db = MagicMock()
+    mock_session.return_value.__enter__.return_value = mock_db
+    mock_check.return_value = None
+    mock_process.return_value = {"status": "created"}
+
+    observations.sync_observation(
+        subject="user",
+        content="prefers dark mode",
+        observation_type="preference",
+        creator_id=42,
+    )
+
+    created = mock_process.call_args[0][0]
+    assert created.creator_id == 42
+    # Defaults for the un-passed scope fields:
+    assert created.project_id is None
+    assert created.sensitivity == "basic"
+
+
+@patch("memory.workers.tasks.observations.process_content_item")
+@patch("memory.workers.tasks.observations.check_content_exists")
+@patch("memory.workers.tasks.observations.make_session")
+@patch("memory.workers.tasks.observations.create_content_hash")
+def test_sync_observation_propagates_explicit_scope(
+    mock_hash, mock_session, mock_check, mock_process
+):
+    """Explicit project_id + sensitivity from the caller flow through to
+    the AgentObservation row. Future observe() variants that accept an
+    explicit project scope inherit this behaviour for free."""
+    mock_hash.return_value = "h"
+    mock_db = MagicMock()
+    mock_session.return_value.__enter__.return_value = mock_db
+    mock_check.return_value = None
+    mock_process.return_value = {"status": "created"}
+
+    observations.sync_observation(
+        subject="acme:planning",
+        content="user is anxious about Q3",
+        observation_type="belief",
+        creator_id=42,
+        project_id=7,
+        sensitivity="confidential",
+    )
+
+    created = mock_process.call_args[0][0]
+    assert created.creator_id == 42
+    assert created.project_id == 7
+    assert created.sensitivity == "confidential"
+
+
+@patch("memory.workers.tasks.observations.process_content_item")
+@patch("memory.workers.tasks.observations.check_content_exists")
+@patch("memory.workers.tasks.observations.make_session")
+@patch("memory.workers.tasks.observations.create_content_hash")
+def test_sync_observation_creator_id_defaults_none_for_legacy_callers(
+    mock_hash, mock_session, mock_check, mock_process
+):
+    """Older direct callers that don't pass creator_id still work — the
+    resulting row is admin-only (NULL creator_id + NULL project_id)
+    which is the pre-fix behaviour. The MCP observe() tool always
+    supplies creator_id now, so the only callers that hit this branch
+    are intentional admin-only insertions."""
+    mock_hash.return_value = "h"
+    mock_db = MagicMock()
+    mock_session.return_value.__enter__.return_value = mock_db
+    mock_check.return_value = None
+    mock_process.return_value = {"status": "created"}
+
+    observations.sync_observation(
+        subject="anon",
+        content="legacy caller",
+        observation_type="fact",
+    )
+
+    created = mock_process.call_args[0][0]
+    assert created.creator_id is None
+    assert created.project_id is None
+    assert created.sensitivity == "basic"
