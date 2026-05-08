@@ -6,7 +6,7 @@ from typing import TypeVar, cast
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -17,6 +17,7 @@ from memory.common.db.models import (
     BotUser,
     MCPServer,
     HumanUser,
+    OAuthRefreshToken,
     User,
     UserSession,
 )
@@ -655,10 +656,38 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
 
 @router.api_route("/logout", methods=["GET", "POST"])
 def logout(request: Request, db: DBSession = Depends(get_session)):
-    """Logout and clear session"""
-    session = get_user_session(request, db)
-    if session:
-        db.delete(session)
+    """Logout and clear session.
+
+    Deleting the ``UserSession`` row alone is not enough: any
+    ``OAuthRefreshToken`` minted alongside this session via
+    ``make_token_from_data`` is keyed on
+    ``access_token_session_id == session.id`` and can be replayed by
+    anyone who already exfiltrated the refresh token (browser leak,
+    malicious extension, stolen device). Without revoking those, "logout"
+    silently leaves the OAuth refresh-token family alive and there is no
+    user-facing way to kill it.
+
+    Fix: in the same transaction as the session delete, mark every
+    refresh token paired with this exact session ``revoked=True``. We
+    intentionally do NOT call ``revoke_refresh_token_family`` (which
+    would nuke every refresh token for the (user, client) pair) because
+    that tears down sessions on the user's *other* devices too — not
+    what a single-device logout should do.
+    """
+    user_session = get_user_session(request, db)
+    if user_session:
+        # Revoke every active refresh token paired with this access-token
+        # session. Use a bulk UPDATE so the operation is one statement
+        # regardless of how many refresh-token rotations have happened.
+        db.execute(
+            update(OAuthRefreshToken)
+            .where(
+                OAuthRefreshToken.access_token_session_id == user_session.id,
+                OAuthRefreshToken.revoked == False,  # noqa: E712
+            )
+            .values(revoked=True)
+        )
+        db.delete(user_session)
         db.commit()
     return {"message": "Logged out successfully"}
 

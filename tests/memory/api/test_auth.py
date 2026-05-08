@@ -322,6 +322,38 @@ def test_logout_handles_missing_session(_mock_get_user_session):
     assert result == {"message": "Logged out successfully"}
     db.delete.assert_not_called()
     db.commit.assert_not_called()
+    # No session → no refresh-token revocation either.
+    db.execute.assert_not_called()
+
+
+@patch("memory.api.auth.get_user_session")
+def test_logout_revokes_paired_refresh_tokens(mock_get_user_session):
+    """Regression for audit-1775774f: deleting the UserSession alone is
+    insufficient — any OAuthRefreshToken paired with it via
+    ``access_token_session_id`` survives and can mint fresh access tokens
+    after "logout". The fix issues a bulk UPDATE that flips every active
+    paired refresh token to revoked=True in the same transaction.
+    """
+    from sqlalchemy import update as sa_update
+
+    from memory.common.db.models import OAuthRefreshToken
+
+    db = MagicMock()
+    session = MagicMock()
+    session.id = "session-uuid-123"
+    mock_get_user_session.return_value = session
+    request = SimpleNamespace()
+
+    auth.logout(cast(Any, request), db)
+
+    # Exactly one bulk UPDATE issued before the session delete.
+    assert db.execute.call_count == 1
+    # The statement must be an UPDATE on OAuthRefreshToken.
+    stmt = db.execute.call_args[0][0]
+    assert isinstance(stmt, type(sa_update(OAuthRefreshToken).values(revoked=True)))
+    # The session delete + commit still happen.
+    db.delete.assert_called_once_with(session)
+    db.commit.assert_called_once()
 
 
 def _mock_oauth_make_session():
