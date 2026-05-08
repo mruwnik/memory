@@ -4,7 +4,6 @@ from unittest.mock import Mock, patch
 
 from memory.common.db.models import Comic
 from memory.workers.tasks import comic
-import requests
 
 
 @pytest.fixture

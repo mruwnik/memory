@@ -462,7 +462,7 @@ async def test_require_session_access_websocket_returns_true_on_success():
         (42, "malformed"),                                       # bad format
         (42, f"u9999-x-{_SAMPLE_HEX32}"),                       # other user
         (42, f"u42-x-{_SAMPLE_HEX32}foo"),                      # adjacent-char smuggling
-        (42, f"u42-x-abcdef"),                                  # short hex prefix
+        (42, "u42-x-abcdef"),                                   # short hex prefix
     ],
 )
 async def test_require_session_access_websocket_uniform_reason_across_failure_modes(
