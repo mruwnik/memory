@@ -101,6 +101,112 @@ def test_is_whitelisted_path_blocks_prefix_overrun(path):
     assert is_whitelisted_path(path) is False
 
 
+# --- _CLAUDE_SESSION_PATTERN: middleware auth-bypass regex ------------------
+#
+# This regex is consulted in ``AuthenticationMiddleware.dispatch`` alongside
+# ``is_whitelisted_path``. A path that matches it bypasses session/Bearer
+# authentication so that WebSocket routes mounted under ``/claude/{session_id}``
+# can authenticate via ``?token=`` query param (HTTP headers don't survive
+# the WS upgrade for browser clients). Any future route that lands under
+# this prefix and forgets ``Depends(get_current_user)`` would inherit
+# unauthenticated access — so the regex MUST anchor on a path-segment
+# boundary and reject:
+#
+#   1. paths whose adjacent characters extend past the session-id (no
+#      ``/claude/u1-e2-abcdef012345foo`` smuggling)
+#   2. session-ids with too-short hex suffixes (``token_hex(6)`` is 12
+#      chars; matching ``[a-fA-F0-9]+`` would let a single hex char pass)
+#   3. invalid source segments (only ``e\d+``, ``s\d+``, or ``x``)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Bare session-id with no subpath
+        "/claude/u1-e2-abcdef012345",
+        "/claude/u1-s2-abcdef012345",
+        "/claude/u1-x-abcdef012345",
+        # Multi-digit user_id and source numbers
+        "/claude/u12345-e98765-abcdef012345",
+        "/claude/u12345-s98765-abcdef012345",
+        # Subpath under a valid session id (websocket endpoints)
+        "/claude/u1-e2-abcdef012345/ws",
+        "/claude/u1-x-abcdef012345/files/foo.txt",
+        "/claude/u123-s456-abcdef012345/diff/preview",
+        # Uppercase hex (regex is IGNORECASE)
+        "/claude/u1-e2-ABCDEF012345",
+        # Longer hex tail (token rotations may extend; floor is the
+        # generator length, ceiling is unbounded)
+        "/claude/u1-e2-abcdef012345abcdef012345",
+    ],
+)
+def test_claude_session_pattern_matches_valid_paths(path):
+    assert auth._CLAUDE_SESSION_PATTERN.match(path) is not None, path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # ── Adjacent-character smuggling. Bypass would let an attacker
+        # land on a future route mounted at e.g. ``/claude/u1-e2-XXXXfoo``
+        # without auth.
+        "/claude/u1-e2-abcdef012345foo",
+        "/claude/u1-e2-abcdef012345-shell",
+        "/claude/u1-e2-abcdef012345admin",
+        "/claude/u1-e2-abcdef012345.json",
+        # ── Hex floor enforcement. Single-hex prefixes shrink the
+        # search space dramatically; the regex must reject anything
+        # below the actual ``token_hex(6)`` generator length (12).
+        "/claude/u1-e2-a",
+        "/claude/u1-e2-abc",
+        "/claude/u1-e2-abcdef",       # 6 hex < 12
+        "/claude/u1-e2-abcdef01",     # 8 hex < 12
+        "/claude/u1-e2-abcdef0123",   # 10 hex < 12
+        "/claude/u1-e2-abcdef01234",  # 11 hex < 12 (one shy of floor)
+        # ── Invalid source segments. The auth.py regex used to accept
+        # any ``[a-z]\d*`` source; tighten to match cloud_claude's
+        # canonical ``(e\d+|s\d+|x)`` source format only.
+        "/claude/u1-q5-abcdef012345",   # 'q' is not e/s/x
+        "/claude/u1-foo-abcdef012345",
+        "/claude/u1-ee-abcdef012345",   # source must be single letter
+        # ── Wrong path prefix. Adjacent characters before /claude/
+        # must not match either.
+        "/claude-debug/u1-e2-abcdef012345",
+        "/claudex/u1-e2-abcdef012345",
+        # ── Empty / malformed
+        "",
+        "/",
+        "/claude/",
+        "/claude/u1",
+        "/claude/u1-e2-",  # no hex tail
+        # ── Non-claude paths
+        "/users/u1-e2-abcdef012345",
+        "/api/claude/u1-e2-abcdef012345",
+    ],
+)
+def test_claude_session_pattern_rejects_invalid_paths(path):
+    assert auth._CLAUDE_SESSION_PATTERN.match(path) is None, path
+
+
+def test_claude_session_pattern_hex_floor_matches_token_hex_6():
+    """REGRESSION GUARD: the hex-length floor in the regex must match
+    the actual session-id generator's hex length (``secrets.token_hex(6)``
+    yields 12 hex chars). If the generator changes (e.g. ``token_hex(8)``),
+    this regex's ``{12,}`` floor must change in lockstep with
+    ``cloud_claude._SESSION_ID_RE`` — both regexes encode the same
+    invariant.
+    """
+    import secrets
+
+    # Verify the generator parameter still produces exactly 12 hex chars,
+    # so the floor in our regex remains tight.
+    assert len(secrets.token_hex(6)) == 12
+
+    # And the floor passes when the generator's exact output is used.
+    real_session_path = f"/claude/u1-e2-{secrets.token_hex(6)}"
+    assert auth._CLAUDE_SESSION_PATTERN.match(real_session_path) is not None
+
+
 # --- AuthenticationMiddleware end-to-end ------------------------------------
 #
 # is_whitelisted_path() is just a helper. The bug we're guarding against is
