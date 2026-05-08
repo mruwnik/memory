@@ -38,7 +38,6 @@ from memory.common import settings
         "/oauth/login",
         "/oauth/callback/google",
         "/.well-known/openid-configuration",
-        "/admin/statics/css/main.css",
         "/google-drive/callback",
         "/polls/respond",
         "/polls/respond/abc-123",
@@ -87,6 +86,14 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/google-drive/config",  # admin-gated; must NOT be whitelisted
         "/polls",  # the public list endpoint is /polls/respond, /polls itself is auth'd
         "/claude/u1-x-deadbeef/logs",  # gated by route-level user check
+        # Regression: ``/admin/statics/*`` was previously whitelisted for a
+        # SQLAdmin app that never shipped, pre-granting unauthenticated
+        # access to anything mounted under that prefix. Pin that nothing
+        # under /admin/* is whitelisted by default.
+        "/admin/statics/css/main.css",
+        "/admin/statics/js/app.js",
+        "/admin",
+        "/admin/users",
         "",
     ],
 )
