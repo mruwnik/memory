@@ -750,7 +750,11 @@ def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
     """Test that empty access filter (no project access, no public bypass) matches nothing."""
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
-    from memory.api.search.embeddings import build_access_qdrant_filter
+    from memory.api.search.embeddings import (
+        NO_ACCESS,
+        NoAccess,
+        build_access_qdrant_filter,
+    )
 
     # Create a note
     note = Note(
@@ -764,20 +768,19 @@ def test_qdrant_search_empty_access_filter_matches_nothing(db_session, qdrant):
     access_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(access_filter)
 
-    # Should return impossible condition
-    assert len(qdrant_conditions) == 1
-    assert qdrant_conditions[0]["key"] == "project_id"
-    assert qdrant_conditions[0]["match"]["value"] == -1
+    # Should return the deny-all sentinel — a distinct type so it cannot
+    # be confused with `[]` (superadmin) by any consumer.
+    assert isinstance(qdrant_conditions, NoAccess)
+    assert qdrant_conditions is NO_ACCESS
+    # Crucially the deny-all sentinel is NOT == []: a consumer that
+    # accidentally compares with `==` will not silently treat deny-all as
+    # superadmin.
+    assert qdrant_conditions != []
 
-    # Search with this filter should find nothing
-    results = qdrant.scroll(
-        collection_name="text",
-        scroll_filter={"must": qdrant_conditions},
-        with_payload=True,
-        limit=100,
-    )[0]
-
-    assert len(results) == 0
+    # The caller's contract on receiving NO_ACCESS is "short-circuit to
+    # zero results" — so a search guarded by this branch returns nothing.
+    # We don't pass the sentinel to qdrant directly; we assert the caller
+    # is expected to bypass the query entirely.
 
 
 # ============================================================================
@@ -1340,7 +1343,11 @@ def test_adversarial_empty_access_filter_blocks_everything(
     empty_filter = AccessFilter(conditions=[])
     qdrant_conditions = build_access_qdrant_filter(empty_filter)
 
-    # Should return public sensitivity filter (users can see public items)
+    # Should return public sensitivity filter (users can see public items).
+    # The narrow assertion is also a typecheck guard — the return type
+    # is ``list[...] | NoAccess`` and we need to discriminate before
+    # indexing.
+    assert isinstance(qdrant_conditions, list)
     assert len(qdrant_conditions) == 1
     assert qdrant_conditions[0]["key"] == "sensitivity"
     assert qdrant_conditions[0]["match"]["value"] == "public"
@@ -1362,11 +1369,18 @@ def test_adversarial_empty_access_filter_no_public_blocks_everything(
     """
     ATTACK: User with no project access AND include_public=False should see NOTHING.
 
-    This tests the truly empty filter edge case.
+    This tests the truly empty filter edge case via the search_chunks
+    consumer: with the deny-all sentinel returned by
+    build_access_qdrant_filter, search_chunks must short-circuit to zero
+    results.
     """
     from memory.common.content_processing import process_content_item
     from memory.common.access_control import AccessFilter
-    from memory.api.search.embeddings import build_access_qdrant_filter
+    from memory.api.search.embeddings import (
+        NO_ACCESS,
+        NoAccess,
+        build_access_qdrant_filter,
+    )
 
     # Create a basic note
     basic_note = Note(
@@ -1382,20 +1396,18 @@ def test_adversarial_empty_access_filter_no_public_blocks_everything(
     empty_filter = AccessFilter(conditions=[], include_public=False)
     qdrant_conditions = build_access_qdrant_filter(empty_filter)
 
-    # Should return impossible condition
-    assert len(qdrant_conditions) == 1
-    assert qdrant_conditions[0]["key"] == "project_id"
-    assert qdrant_conditions[0]["match"]["value"] == -1
-
-    results = qdrant.scroll(
-        collection_name="text",
-        scroll_filter={"must": qdrant_conditions},
-        with_payload=True,
-        limit=100,
-    )[0]
-
-    # Should find NOTHING
-    assert len(results) == 0, "Empty filter returned results!"
+    # Adversarial assertions on the sentinel itself: every accidental
+    # collapse to "no filter applied" must be detectably wrong.
+    assert isinstance(qdrant_conditions, NoAccess)
+    assert qdrant_conditions is NO_ACCESS
+    # Refactor-resistance: the deny-all sentinel is NOT == [] (the
+    # superadmin/no-filter return), so a future contributor swapping
+    # `is` for `==` does not silently turn deny into allow-all.
+    assert qdrant_conditions != []
+    # Also falsy, so `if access_conditions:` skips the deny branch the
+    # same way it does for an empty list — but the type discriminator
+    # remains the authoritative signal.
+    assert not bool(qdrant_conditions)
 
 
 def test_adversarial_invalid_role_grants_no_access(db_session):

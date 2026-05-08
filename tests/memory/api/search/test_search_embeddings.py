@@ -2,12 +2,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import copy
+import pickle
+
 from memory.api.search.embeddings import (
     merge_range_filter,
     merge_filters,
     build_person_filter,
     build_access_qdrant_filter,
     NO_ACCESS,
+    NoAccess,
     search_chunks,
 )
 from memory.common.access_control import AccessFilter, AccessCondition
@@ -285,11 +289,118 @@ def test_build_access_qdrant_filter_no_access_is_distinct_from_superadmin():
         AccessFilter(conditions=[], include_public=False)
     )
 
-    # Both are empty list values, but they must NOT share identity:
-    # `is` is the only check the consumer uses to disambiguate.
+    # The deny-all sentinel is a typed singleton instance, distinguishable
+    # from the empty-list superadmin return at multiple levels.
     assert superadmin_result == []
     assert no_access_result is NO_ACCESS
+    assert isinstance(no_access_result, NoAccess)
     assert superadmin_result is not NO_ACCESS
+    assert not isinstance(superadmin_result, NoAccess)
+
+
+# ---------------------------------------------------------------------------
+# Discriminator tests for the NoAccess sentinel.
+#
+# These tests assert each of the regression vectors that broke the previous
+# empty-tuple sentinel design is now blocked. Each test corresponds to a
+# specific natural-looking refactor that would silently turn "deny" into
+# "allow all" if the sentinel were just an empty container.
+# ---------------------------------------------------------------------------
+
+
+def test_no_access_sentinel_not_equal_to_empty_list():
+    """REGRESSION GUARD: a static analyzer / contributor swapping
+    ``access_conditions is NO_ACCESS`` for ``access_conditions == NO_ACCESS``
+    must NOT silently match `[]` (the superadmin/no-filter return).
+    """
+    # The deny-all sentinel must NOT compare equal to ``[]``: otherwise an
+    # ``access_conditions == []`` comparison anywhere in the consumer chain
+    # would short-circuit superadmin queries instead.
+    assert NO_ACCESS != []
+    assert [] != NO_ACCESS
+    assert NO_ACCESS != ()
+    assert () != NO_ACCESS
+    assert NO_ACCESS != {}
+
+
+def test_no_access_sentinel_equal_to_itself():
+    """The sentinel compares equal to itself (self-equality is the
+    standard contract). Two NoAccess instances are also equal because
+    NoAccess is a singleton."""
+    assert NO_ACCESS == NO_ACCESS
+    assert NO_ACCESS == NoAccess()  # singleton: NoAccess() returns NO_ACCESS
+    assert NoAccess() is NO_ACCESS
+
+
+def test_no_access_sentinel_falsy():
+    """The sentinel is falsy so ``if access_conditions:`` continues to
+    skip the deny branch the same way it did with the empty-tuple
+    sentinel. The ``isinstance`` check (or ``is NO_ACCESS``) is the
+    authoritative discriminator — falsiness is a compatibility property,
+    not a security signal."""
+    assert not bool(NO_ACCESS)
+    assert not NO_ACCESS
+
+
+def test_no_access_sentinel_survives_copy():
+    """REGRESSION GUARD: copying the sentinel must preserve singleton
+    identity. The previous ``()`` sentinel produced a different empty
+    tuple under ``copy.copy``, breaking ``is``-identity at any cache /
+    IPC boundary that did a defensive copy."""
+    assert copy.copy(NO_ACCESS) is NO_ACCESS
+    assert copy.deepcopy(NO_ACCESS) is NO_ACCESS
+
+
+def test_no_access_sentinel_survives_pickle():
+    """REGRESSION GUARD: pickling the sentinel must rehydrate to the
+    canonical singleton. This matters for any future caching / queueing
+    layer that pickles search filters."""
+    rehydrated = pickle.loads(pickle.dumps(NO_ACCESS))
+    assert rehydrated is NO_ACCESS
+    assert isinstance(rehydrated, NoAccess)
+
+
+def test_no_access_sentinel_singleton_construction():
+    """REGRESSION GUARD: independently constructing ``NoAccess()`` returns
+    the cached singleton. This means a future contributor writing
+    ``return NoAccess()`` instead of ``return NO_ACCESS`` doesn't silently
+    create a second instance that fails the ``is NO_ACCESS`` check."""
+    a = NoAccess()
+    b = NoAccess()
+    assert a is b
+    assert a is NO_ACCESS
+
+
+def test_no_access_sentinel_isinstance_canonical():
+    """The canonical detection method is ``isinstance(x, NoAccess)`` — it
+    works regardless of singleton-ness and is what the consumer uses."""
+    assert isinstance(NO_ACCESS, NoAccess)
+    assert not isinstance([], NoAccess)
+    assert not isinstance((), NoAccess)
+    assert not isinstance({}, NoAccess)
+    assert not isinstance(None, NoAccess)
+    assert not isinstance([{"key": "x"}], NoAccess)
+
+
+def test_no_access_sentinel_not_iterable_as_conditions():
+    """If a consumer accidentally tries to iterate ``access_conditions``
+    as if it were a list of Qdrant 'should' clauses, the deny-all
+    sentinel must produce a clear error (not silently iterate as empty,
+    which would yield "no filter applied")."""
+    # The sentinel is intentionally NOT iterable: any code path that
+    # forgets the ``isinstance`` discriminator and tries to splat
+    # access_conditions into a Qdrant filter will raise a TypeError
+    # rather than silently produce an unfiltered query.
+    import pytest as _pytest
+
+    with _pytest.raises(TypeError):
+        list(NO_ACCESS)  # type: ignore[call-overload]
+
+
+def test_no_access_sentinel_repr_is_descriptive():
+    """The repr is the canonical name so debugging output ("got
+    NO_ACCESS instead of a list") is unambiguous."""
+    assert repr(NO_ACCESS) == "NO_ACCESS"
 
 
 def test_build_access_qdrant_filter_no_access_with_public():
@@ -297,7 +408,9 @@ def test_build_access_qdrant_filter_no_access_with_public():
     access_filter = AccessFilter(conditions=[], include_public=True)
     result = build_access_qdrant_filter(access_filter)
 
-    # Should allow public items only
+    # Should allow public items only — narrow the union return type
+    # before indexing.
+    assert isinstance(result, list)
     assert len(result) == 1
     assert result[0]["key"] == "sensitivity"
     assert result[0]["match"]["value"] == "public"
@@ -312,6 +425,7 @@ def test_build_access_qdrant_filter_single_project():
     access_filter = AccessFilter(conditions=[condition], include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
+    assert isinstance(result, list)
     assert len(result) == 1
     # Should have must conditions for project_id and sensitivity
     assert "must" in result[0]
@@ -337,6 +451,7 @@ def test_build_access_qdrant_filter_single_project_with_public():
     result = build_access_qdrant_filter(access_filter)
 
     # Should have 2 conditions: public bypass + project access
+    assert isinstance(result, list)
     assert len(result) == 2
 
     # Find public bypass condition
@@ -365,6 +480,7 @@ def test_build_access_qdrant_filter_multiple_projects():
     result = build_access_qdrant_filter(access_filter)
 
     # Should have two "should" conditions (one per project)
+    assert isinstance(result, list)
     assert len(result) == 2
 
     # Find conditions by project_id
