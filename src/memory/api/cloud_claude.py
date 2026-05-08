@@ -63,7 +63,10 @@ from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, ScheduledTask, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.api.claude_environments import mark_environment_used
-from memory.common.db.models.secrets import extract as extract_secret
+from memory.common.db.models.secrets import (
+    extract as extract_secret,
+    find_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -820,6 +823,39 @@ async def spawn_session(
     )
 
 
+def validate_scheduled_secret_refs(
+    db: DBSession, user_id: int, spawn_config: "SpawnRequest"
+) -> None:
+    """Reject scheduled-session requests whose token fields don't resolve
+    to a stored Secret row.
+
+    Unlike the spawn-time path (which uses ``extract_secret``'s silent
+    literal-fallback by design), scheduled-session token values are
+    persisted in ``ScheduledTask.data``. Accepting literals here means a
+    typo ("gihub-token") gets stored verbatim and shipped to the
+    container later as a literal — turning a misspelled secret name into
+    a plaintext credential leak in the DB.
+
+    The error message intentionally does NOT echo ``token_value``. The
+    field accepts either a secret-name OR a literal token at runtime; if
+    a future contributor relaxes that contract, an unintended echo would
+    become a credential-reflection vector via 4xx response bodies.
+    """
+    for token_field in ("github_token", "github_token_write"):
+        token_value = getattr(spawn_config, token_field, None)
+        if token_value and find_secret(db, user_id, token_value) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Secret reference for '{token_field}' not found. "
+                    "Scheduled sessions require a stored-secret name "
+                    "(create one via /secrets); literal tokens are not "
+                    "accepted because they would be persisted in "
+                    "plaintext in the schedule's data column."
+                ),
+            )
+
+
 @router.post("/schedule")
 async def schedule_session(
     request: ScheduleRequest,
@@ -880,17 +916,8 @@ async def schedule_session(
             detail="Scheduled sessions require an initial_prompt",
         )
 
-    # Validate that referenced secrets can be resolved (early feedback)
-    for token_field in ("github_token", "github_token_write"):
-        token_value = getattr(request.spawn_config, token_field, None)
-        if token_value:
-            try:
-                extract_secret(db, user.id, token_value)
-            except (KeyError, ValueError) as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Secret '{token_value}' not found for {token_field}",
-                ) from e
+    # Validate token fields against stored secrets (raises 400 on miss).
+    validate_scheduled_secret_refs(db, user.id, request.spawn_config)
 
     prompt = request.spawn_config.initial_prompt
     topic = prompt[:100]

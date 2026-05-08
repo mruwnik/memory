@@ -21,6 +21,7 @@ from memory.api.cloud_claude import (
     user_owns_session,
     validate_differ_subpath,
     validate_git_repo_url,
+    validate_scheduled_secret_refs,
 )
 from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
@@ -1052,3 +1053,92 @@ def test_spawn_session_swallows_cleanup_failure(tmp_path):
     assert exc_info.value.status_code == 503
     assert "primary failure" in exc_info.value.detail
     assert client.delete_volume.await_count == 1
+
+
+# --- validate_scheduled_secret_refs (audit-f10d10a1) -----------------------
+#
+# The schedule_session validation block previously called extract_secret,
+# whose contract is "fall back to literal" — i.e. it never raised on an
+# unknown name, so the try/except wrapping it was dead code. A misspelled
+# secret name was silently accepted and persisted as a literal token in
+# ScheduledTask.data. The fix routes through find_secret directly.
+
+
+def _make_spawn_config(**fields):
+    """Build a SpawnRequest-shaped object with just the fields under test.
+
+    SpawnRequest is heavy (validators + cross-field rules), and this helper
+    only needs the github_token / github_token_write attributes the
+    validator reads via getattr.
+    """
+    config = MagicMock(spec=["github_token", "github_token_write"])
+    config.github_token = fields.get("github_token")
+    config.github_token_write = fields.get("github_token_write")
+    return config
+
+
+def test_validate_scheduled_secret_refs_rejects_unknown_secret_name():
+    db = MagicMock()
+    spawn_config = _make_spawn_config(github_token="my-token-typo")
+    with patch(
+        "memory.api.cloud_claude.find_secret", return_value=None
+    ) as fake_find:
+        with pytest.raises(HTTPException) as exc_info:
+            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    assert exc_info.value.status_code == 400
+    detail = exc_info.value.detail
+    # Error must NOT echo the supplied value (credential-reflection trap).
+    assert "my-token-typo" not in detail
+    # Error must name the field, so the operator can find the typo.
+    assert "github_token" in detail
+    fake_find.assert_called_once_with(db, 42, "my-token-typo")
+
+
+def test_validate_scheduled_secret_refs_rejects_for_each_token_field():
+    """Both github_token and github_token_write get the same validation."""
+    db = MagicMock()
+    spawn_config = _make_spawn_config(
+        github_token="ok-name", github_token_write="bad-write-typo"
+    )
+
+    def fake_find_secret(_db, _uid, name):
+        # ok-name resolves; bad-write-typo doesn't.
+        return MagicMock() if name == "ok-name" else None
+
+    with patch(
+        "memory.api.cloud_claude.find_secret", side_effect=fake_find_secret
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    assert exc_info.value.status_code == 400
+    assert "github_token_write" in exc_info.value.detail
+    assert "bad-write-typo" not in exc_info.value.detail
+
+
+def test_validate_scheduled_secret_refs_passes_when_all_resolve():
+    db = MagicMock()
+    spawn_config = _make_spawn_config(
+        github_token="prod-pat", github_token_write="prod-pat-write"
+    )
+
+    fake_secret = MagicMock()
+    with patch(
+        "memory.api.cloud_claude.find_secret", return_value=fake_secret
+    ) as fake_find:
+        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    # Both fields validated.
+    assert fake_find.call_count == 2
+
+
+def test_validate_scheduled_secret_refs_skips_unset_fields():
+    """None / empty token fields don't query the DB at all."""
+    db = MagicMock()
+    spawn_config = _make_spawn_config()  # both None
+    with patch(
+        "memory.api.cloud_claude.find_secret"
+    ) as fake_find:
+        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+    fake_find.assert_not_called()
