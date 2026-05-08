@@ -2,8 +2,9 @@ import logging
 from typing import TypedDict, NotRequired, cast
 
 from bs4 import BeautifulSoup, Tag
-import requests
 import json
+
+from memory.common.downloads import safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,10 @@ def extract_smbc(url: str) -> ComicInfo:
     Returns:
         ComicInfo with title, image_url, published_date, and comic_url
     """
-    response = requests.get(url, timeout=30)
+    # ``safe_get`` validates the URL against SSRF policy and revalidates
+    # each redirect target — the comic URL may be attacker-influenced if
+    # the upstream RSS feed is poisoned.
+    response = safe_get(url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -76,7 +80,10 @@ def extract_xkcd(url: str) -> ComicInfo:
     Returns:
         ComicInfo with title, image_url, and comic_url
     """
-    response = requests.get(url, timeout=30)
+    # ``safe_get`` validates the URL against SSRF policy and revalidates
+    # each redirect target — the comic URL may be attacker-influenced if
+    # the upstream RSS feed is poisoned.
+    response = safe_get(url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 

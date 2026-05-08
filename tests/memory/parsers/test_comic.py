@@ -89,7 +89,7 @@ def test_extract_smbc(to_remove, overrides):
         "published_date": "2025-05-04T12:11:21-04:00",
         "url": "https://www.smbc-comics.com/comic/time-6",
     }
-    with patch("requests.get") as mock_get:
+    with patch("memory.parsers.comics.safe_get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.text = MOCK_SMBC_HTML.replace(to_remove, "")
         assert extract_smbc("https://www.smbc-comics.com/") == expected | overrides
@@ -187,7 +187,7 @@ def test_extract_xkcd(to_remove, overrides):
         "url": "https://xkcd.com/3084/",
     }
 
-    with patch("requests.get") as mock_get:
+    with patch("memory.parsers.comics.safe_get") as mock_get:
         mock_get.return_value.status_code = 200
         modified_html = MOCK_XKCD_HTML
         for item in to_remove.split("\n"):

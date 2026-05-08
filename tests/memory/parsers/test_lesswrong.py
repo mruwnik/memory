@@ -77,8 +77,9 @@ def test_make_graphql_query(after, af, limit, min_karma, expected_contains):
         assert field in query
 
 
+@patch("memory.parsers.lesswrong.validate_public_url")
 @patch("memory.parsers.lesswrong.requests.post")
-def test_fetch_posts_from_api_success(mock_post):
+def test_fetch_posts_from_api_success(mock_post, mock_validate):
     mock_response = Mock()
     mock_response.json.return_value = {
         "data": {
@@ -98,6 +99,8 @@ def test_fetch_posts_from_api_success(mock_post):
 
     result = fetch_posts_from_api(url, query)
 
+    # SSRF gate must run BEFORE the POST.
+    mock_validate.assert_called_once_with(url)
     mock_post.assert_called_once_with(
         url,
         headers={
@@ -105,6 +108,7 @@ def test_fetch_posts_from_api_success(mock_post):
         },
         json={"query": query},
         timeout=30,
+        allow_redirects=False,
     )
 
     assert result == {
@@ -116,14 +120,27 @@ def test_fetch_posts_from_api_success(mock_post):
     }
 
 
+@patch("memory.parsers.lesswrong.validate_public_url")
 @patch("memory.parsers.lesswrong.requests.post")
-def test_fetch_posts_from_api_http_error(mock_post):
+def test_fetch_posts_from_api_http_error(mock_post, mock_validate):
     mock_response = Mock()
     mock_response.raise_for_status.side_effect = Exception("HTTP Error")
     mock_post.return_value = mock_response
 
     with pytest.raises(Exception, match="HTTP Error"):
         fetch_posts_from_api("https://example.com", "query")
+    mock_validate.assert_called_once_with("https://example.com")
+
+
+@patch("memory.parsers.lesswrong.requests.post")
+def test_fetch_posts_from_api_blocks_unsafe_url(mock_post):
+    """Regression: SSRF gate runs before the POST, blocking internal targets.
+
+    If validate_public_url raises, the POST must NOT be issued.
+    """
+    with pytest.raises(Exception):
+        fetch_posts_from_api("http://169.254.169.254/latest/meta-data/", "query")
+    mock_post.assert_not_called()
 
 
 @pytest.mark.parametrize(

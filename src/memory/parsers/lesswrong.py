@@ -6,6 +6,7 @@ from typing import Any, Generator, TypedDict, NotRequired
 from bs4 import BeautifulSoup
 from PIL import Image as PILImage
 from memory.common import settings
+from memory.common.ssrf import validate_public_url
 import requests
 from markdownify import markdownify
 
@@ -86,7 +87,15 @@ def make_graphql_query(
 
 
 def fetch_posts_from_api(url: str, query: str) -> dict[str, Any]:
-    """Fetch posts from LessWrong GraphQL API."""
+    """Fetch posts from LessWrong GraphQL API.
+
+    URL is validated against SSRF policy and POST redirects are not
+    followed (avoids redirect-bypass to internal services).
+    """
+    # Validate the URL pre-flight. ``url`` is settings-controlled today
+    # but if a future code path lets users supply an alternate endpoint,
+    # the gate is already in place.
+    validate_public_url(url)
     response = requests.post(
         url,
         headers={
@@ -94,6 +103,7 @@ def fetch_posts_from_api(url: str, query: str) -> dict[str, Any]:
         },
         json={"query": query},
         timeout=30,
+        allow_redirects=False,
     )
     response.raise_for_status()
     return response.json()["data"]["posts"]
