@@ -31,7 +31,7 @@ before issuing the next hop. ``stream_download_*`` use it transparently.
 import logging
 import pathlib
 from typing import Any, Mapping
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 
@@ -113,6 +113,53 @@ def _is_cross_host_redirect(old_url: str, new_url: str) -> bool:
     )
 
 
+def canonicalize_url_for_loop_detection(url: str) -> str:
+    """Return a canonical form of ``url`` for redirect-loop equality checks.
+
+    Two URLs that the wire-level dial would treat as the same target should
+    compare equal here, even if the textual forms differ. This closes
+    classes of "redirect chain that escapes the visited-set membership
+    check but is functionally a loop":
+
+    * **Scheme / host case** — ``HTTPS://Host.Example/x`` and
+      ``https://host.example/x`` both end up at the same host. Lowercased.
+    * **Fragments** — ``#anchor`` is never sent on the wire, so two URLs
+      that differ only in fragment dial the same target. Stripped.
+    * **Query-parameter ordering** — ``?a=1&b=2`` and ``?b=2&a=1`` are
+      semantically equivalent on most servers and the standard library's
+      own ``parse_qsl``/``urlencode`` round-trip. Sorted by ``(key, value)``
+      so equivalent orderings collapse.
+
+    NOT collapsed:
+    * Trailing-slash differences — ``/foo`` vs ``/foo/`` route to
+      different resources on a strict server. Treating them as equal
+      would create false-positive loop detections. The
+      ``DEFAULT_MAX_REDIRECTS`` cap is the real defence; loop detection
+      is a courtesy that kicks in earlier when the chain genuinely loops.
+    * Percent-encoding — ``%2f`` vs ``/`` is intentionally significant on
+      some servers; we don't second-guess.
+
+    The function is exported so tests can pin the canonicalization
+    invariants directly.
+    """
+    parsed = urlparse(url)
+    # Sort (key, value) pairs so the order doesn't matter; keep_blank_values
+    # so ``?x=`` round-trips faithfully.
+    sorted_query = urlencode(
+        sorted(parse_qsl(parsed.query, keep_blank_values=True))
+    )
+    return urlunparse(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path,
+            parsed.params,
+            sorted_query,
+            "",  # drop fragment
+        )
+    )
+
+
 def _strip_sensitive_headers(
     headers: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -185,7 +232,11 @@ def safe_get(
     kwargs["allow_redirects"] = False
 
     current_url = url
-    visited: set[str] = {url}
+    # ``visited`` stores canonicalized forms (case-folded scheme+host,
+    # fragment dropped, query params sorted) so a redirect chain that
+    # only flips case or reorders ``?a=1&b=2`` to ``?b=2&a=1`` is still
+    # caught as a loop. See :func:`canonicalize_url_for_loop_detection`.
+    visited: set[str] = {canonicalize_url_for_loop_detection(url)}
 
     for _ in range(max_redirects + 1):
         response = requests.get(current_url, **kwargs)
@@ -202,9 +253,10 @@ def safe_get(
         response.close()
 
         next_url = urljoin(current_url, location)
-        if next_url in visited:
+        next_canonical = canonicalize_url_for_loop_detection(next_url)
+        if next_canonical in visited:
             raise UnsafeURLError(f"Redirect loop detected at {next_url}")
-        visited.add(next_url)
+        visited.add(next_canonical)
 
         # Always validate redirect targets — that is the entire purpose.
         # The attacker controls the Location header even when the initial

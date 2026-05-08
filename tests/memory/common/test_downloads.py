@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from memory.common.downloads import (
+    canonicalize_url_for_loop_detection,
     safe_get,
     stream_download_to_bytes,
     stream_download_to_path,
@@ -526,5 +527,137 @@ def test_safe_get_strip_persists_across_chained_redirects():
     # Second and third hops both lack the header — strip must persist.
     assert "Authorization" not in (captured[1] or {})
     assert "Authorization" not in (captured[2] or {})
+
+
+# --- canonicalize_url_for_loop_detection ---------------------------------
+#
+# Pin the canonicalization invariants directly. The redirect loop check
+# uses these to catch chains that escape naive set-membership equality
+# (case differences, fragment-only diffs, query-param ordering).
+
+
+@pytest.mark.parametrize(
+    "url_a,url_b",
+    [
+        # Scheme + host case — case-insensitive equality
+        ("HTTPS://Host.Example/x", "https://host.example/x"),
+        ("Http://Example.com/", "http://example.com/"),
+        # Mixed case in just one component
+        ("https://EXAMPLE.com/x", "https://example.com/x"),
+        ("HTTPS://example.com/x", "https://example.com/x"),
+        # Fragment is never sent on the wire — same target
+        ("https://example.com/x#anchor", "https://example.com/x"),
+        ("https://example.com/x#a", "https://example.com/x#b"),
+        # Query parameter ordering — same effective query
+        ("https://example.com/?a=1&b=2", "https://example.com/?b=2&a=1"),
+        ("https://example.com/?b=2&a=1&c=3", "https://example.com/?a=1&b=2&c=3"),
+        # All three together
+        (
+            "HTTPS://Example.com/p?b=2&a=1#anchor",
+            "https://example.com/p?a=1&b=2",
+        ),
+    ],
+)
+def test_canonicalize_url_for_loop_detection_collapses_equivalent_forms(
+    url_a, url_b
+):
+    """Two URLs that dial the same wire-level target must canonicalize
+    to the same string. This is the structural invariant the redirect-
+    loop check relies on."""
+    assert canonicalize_url_for_loop_detection(
+        url_a
+    ) == canonicalize_url_for_loop_detection(url_b)
+
+
+@pytest.mark.parametrize(
+    "url_a,url_b",
+    [
+        # Trailing slash IS significant — different resources on a strict
+        # server. Must NOT collapse (would create false-positive loops).
+        ("https://example.com/foo", "https://example.com/foo/"),
+        # Different paths
+        ("https://example.com/a", "https://example.com/b"),
+        # Different hosts
+        ("https://a.example.com/", "https://b.example.com/"),
+        # Different schemes (http vs https — same host, different
+        # security contexts)
+        ("http://example.com/x", "https://example.com/x"),
+        # Different query parameter values
+        ("https://example.com/?a=1", "https://example.com/?a=2"),
+        # Different ports
+        ("https://example.com:443/", "https://example.com:8443/"),
+        # Percent-encoded vs literal — intentionally NOT collapsed
+        # (some servers route differently)
+        ("https://example.com/a%2Fb", "https://example.com/a/b"),
+    ],
+)
+def test_canonicalize_url_for_loop_detection_keeps_distinct_targets_distinct(
+    url_a, url_b
+):
+    """Forms that dial different wire-level targets must remain distinct.
+
+    Over-collapsing would create false-positive loop detections that
+    refuse legitimate redirect chains.
+    """
+    assert canonicalize_url_for_loop_detection(
+        url_a
+    ) != canonicalize_url_for_loop_detection(url_b)
+
+
+def test_canonicalize_url_for_loop_detection_preserves_blank_query_value():
+    """``?x=`` (empty value) should round-trip — that's a syntactically
+    valid empty parameter that some servers care about. Pinning this so
+    a future ``parse_qsl(...)`` simplification doesn't drop the key."""
+    canonical = canonicalize_url_for_loop_detection(
+        "https://example.com/?x=&y=2"
+    )
+    assert "x=" in canonical
+    assert "y=2" in canonical
+
+
+# --- safe_get loop detection on canonicalization-equivalent URLs --------
+
+
+def test_safe_get_detects_loop_across_case_differences():
+    """A 302 chain that flips host case must still be detected as a loop.
+
+    Without canonicalization, ``http://a.example/`` and
+    ``http://A.Example/`` are textually distinct and the visited-set
+    check would let the chain run to ``max_redirects``. With
+    canonicalization, the loop fires immediately.
+    """
+    # Two hops that round-trip via case flip on the same host.
+    hop1 = _FakeChunkResponse([], status_code=302, location="http://A.Example/")
+    hop2 = _FakeChunkResponse([], status_code=302, location="http://a.example/")
+    with patch(
+        "memory.common.downloads.requests.get", side_effect=[hop1, hop2]
+    ):
+        with pytest.raises(UnsafeURLError, match="loop"):
+            safe_get("http://a.example/")
+
+
+def test_safe_get_detects_loop_across_fragment_differences():
+    """``#a`` vs ``#b`` are dialled identically; loop check must fire."""
+    hop1 = _FakeChunkResponse(
+        [], status_code=302, location="http://start.example/#frag"
+    )
+    with patch(
+        "memory.common.downloads.requests.get", return_value=hop1
+    ):
+        with pytest.raises(UnsafeURLError, match="loop"):
+            safe_get("http://start.example/")
+
+
+def test_safe_get_detects_loop_across_query_param_reorder():
+    """``?a=1&b=2`` and ``?b=2&a=1`` dial the same target; loop check
+    must fire even when the redirect Location reorders the params."""
+    hop = _FakeChunkResponse(
+        [], status_code=302, location="http://start.example/?b=2&a=1"
+    )
+    with patch(
+        "memory.common.downloads.requests.get", return_value=hop
+    ):
+        with pytest.raises(UnsafeURLError, match="loop"):
+            safe_get("http://start.example/?a=1&b=2")
 
 
