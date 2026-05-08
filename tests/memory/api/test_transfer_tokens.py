@@ -316,9 +316,9 @@ def _mint_with_raw_payload(raw_data: dict) -> str:
 
     payload_json = _json.dumps(raw_data, separators=(",", ":"), sort_keys=True)
     seg = base64.urlsafe_b64encode(payload_json.encode()).rstrip(b"=").decode()
-    sig = hmac.new(
-        settings.TRANSFER_TOKEN_SECRET.encode(), seg.encode(), sha256
-    ).digest()
+    secret = settings.TRANSFER_TOKEN_SECRET
+    assert secret is not None, "autouse patch_secret fixture must set TRANSFER_TOKEN_SECRET"
+    sig = hmac.new(secret.encode(), seg.encode(), sha256).digest()
     sig_seg = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
     return f"{VERSION}.{seg}.{sig_seg}"
 
