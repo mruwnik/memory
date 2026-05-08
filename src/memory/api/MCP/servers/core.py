@@ -71,7 +71,24 @@ def get_current_user_access_filter() -> AccessFilter | None:
 
     Returns:
         AccessFilter with user's project access conditions,
-        or None if user is superadmin (no filtering needed).
+        or None if the principal is effectively superadmin.
+
+    Scope source: the *access token's* scopes, which are the resolved
+    set already produced by ``SimpleOAuthProvider.verify_token`` /
+    ``load_access_token``:
+
+      - For UserSession tokens: ``user.scopes ∪ {read, write}`` —
+        admin users keep their ``*``, so admin-via-session still
+        bypasses the filter.
+      - For APIKey tokens: ``api_key.scopes`` if the override is set,
+        else ``user.scopes``. An admin who mints a ``[\"read\"]``-scoped
+        integration key therefore gets a non-None AccessFilter for
+        that key — the ``APIKey.scopes`` override is no longer
+        decorative on the data layer.
+
+    Previously this read ``user.scopes`` directly from the DB, which
+    silently ignored ``APIKey.scopes`` and let a leaked least-privilege
+    integration key inherit the underlying admin's full data access.
     """
     access_token = get_access_token()
     if access_token is None:
@@ -79,29 +96,22 @@ def get_current_user_access_filter() -> AccessFilter | None:
         logger.warning("get_current_user_access_filter: no access token")
         return AccessFilter(conditions=[])
 
-    # Build user dict from token - we need id and USER's scopes (not API key scopes)
-    # for access control. API key scopes control which tools are available,
-    # but USER scopes determine admin status and data access.
+    token_scopes = list(access_token.scopes or [])
+
     with make_session() as session:
         # Try as session token first
         user_session = session.get(UserSession, access_token.token)
         if user_session and user_session.user:
-            user = user_session.user
-            user_dict = {
-                "id": user.id,
-                "scopes": list(user.scopes) if user.scopes else [],
-            }
-            return build_user_access_filter_from_dict(user_dict)
+            return build_user_access_filter_from_dict(
+                {"id": user_session.user.id, "scopes": token_scopes}
+            )
 
         # Try as API key
         api_key_record = lookup_api_key(access_token.token, session)
         if api_key_record and api_key_record.user:
-            user = api_key_record.user
-            user_dict = {
-                "id": user.id,
-                "scopes": list(user.scopes) if user.scopes else [],
-            }
-            return build_user_access_filter_from_dict(user_dict)
+            return build_user_access_filter_from_dict(
+                {"id": api_key_record.user.id, "scopes": token_scopes}
+            )
 
     # Couldn't identify user - return empty filter (no access)
     logger.warning("get_current_user_access_filter: couldn't identify user from token")
