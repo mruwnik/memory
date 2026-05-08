@@ -46,7 +46,7 @@ def mock_note_data():
     return {
         "subject": "Test Note Subject",
         "content": "This is test note content with enough text to be processed and embedded.",
-        "filename": "test_note.md",
+        "filename": "notes/test_note.md",
         "note_type": "observation",
         "confidences": {"observation_accuracy": 0.8},
         "tags": ["test", "note"],
@@ -148,7 +148,8 @@ def test_sync_note_minimal_data(mock_minimal_note, mock_make_session, qdrant):
     assert note.note_type is None
     assert note.confidence_dict == {}
     assert note.tags == []  # Default empty list
-    assert note.filename is not None and "Minimal Note.md" in note.filename
+    # clean_filename sanitizes spaces / unsafe chars to underscores.
+    assert note.filename is not None and "Minimal_Note.md" in note.filename
 
     # Updated to match actual return format
     assert result == {
@@ -198,7 +199,7 @@ def test_sync_note_already_exists(mock_note_data, mock_make_session):
         mime_type="text/markdown",
         size=len(text.encode("utf-8")),
         embed_status="RAW",
-        filename="existing_note.md",
+        filename="notes/existing_note.md",
     )
     mock_make_session.add(existing_note)
     mock_make_session.commit()
@@ -235,7 +236,7 @@ def test_sync_note_edit(mock_note_data, mock_make_session):
         mime_type="text/markdown",
         size=len(text.encode("utf-8")),
         embed_status="RAW",
-        filename="test_note.md",
+        filename="notes/test_note.md",
     )
     existing_note.update_confidences(
         {"observation_accuracy": 0.2, "predictive_value": 0.3}
@@ -371,6 +372,10 @@ def test_sync_notes_with_existing_notes(
     """Test sync when some notes already exist."""
     # Create one existing note in the database
     existing_file = markdown_files_in_storage[0]  # note1.md
+    # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/note1.md").
+    existing_filename = existing_file.resolve().relative_to(
+        settings.FILE_STORAGE_DIR.resolve()
+    ).as_posix()
     existing_note = Note(
         subject="note1",
         content="Content of note 1",
@@ -379,7 +384,7 @@ def test_sync_notes_with_existing_notes(
         tags=["existing"],
         mime_type="text/markdown",
         size=100,
-        filename=str(existing_file),
+        filename=existing_filename,
         embed_status="RAW",
     )
     mock_make_session.add(existing_note)
@@ -844,16 +849,19 @@ def test_track_git_changes_empty_diff(
 @patch("memory.workers.tasks.notes.sync_note")
 @patch("memory.workers.tasks.notes.git_command")
 @patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
 def test_track_git_changes_whitespace_in_filenames(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+    mock_check_git, mock_git_command, mock_sync_note
 ):
     """Test track_git_changes handles whitespace in filenames correctly."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR so paths are
+    # real and FILE_STORAGE_DIR-relative — to_db_filename now requires
+    # absolute paths inside FILE_STORAGE_DIR.
+    notes_dir = settings.NOTES_STORAGE_DIR
+    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
+    file1 = notes_dir / "file1.md"
+    file2 = notes_dir / "file2.md"
+    file1.write_text("Content 1")
+    file2.write_text("Content 2")
 
     # Mock git commands
     mock_check_git.side_effect = [
@@ -871,21 +879,7 @@ def test_track_git_changes_whitespace_in_filenames(
         ),  # diff with whitespace
     ]
 
-    # Mock file reading
-    mock_file1 = Mock()
-    mock_file1.stem = "file1"
-    mock_file1.read_text.return_value = "Content 1"
-    mock_file1.as_posix.return_value = "file1.md"
-
-    mock_file2 = Mock()
-    mock_file2.stem = "file2"
-    mock_file2.read_text.return_value = "Content 2"
-    mock_file2.as_posix.return_value = "file2.md"
-
-    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
-        mock_path.side_effect = [mock_file1, mock_file2]
-
-        result = notes.track_git_changes()
+    result = notes.track_git_changes()
 
     assert result == {
         "status": "success",
@@ -901,16 +895,15 @@ def test_track_git_changes_whitespace_in_filenames(
 @patch("memory.workers.tasks.notes.sync_note")
 @patch("memory.workers.tasks.notes.git_command")
 @patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
 def test_track_git_changes_feature_branch(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
+    mock_check_git, mock_git_command, mock_sync_note
 ):
     """Test track_git_changes works with feature branches."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR.
+    notes_dir = settings.NOTES_STORAGE_DIR
+    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
+    feature_file = notes_dir / "feature_file.md"
+    feature_file.write_text("Feature content")
 
     # Mock git commands for feature branch
     mock_check_git.side_effect = [
@@ -925,16 +918,7 @@ def test_track_git_changes_feature_branch(
         Mock(returncode=0, stdout="feature_file.md\n"),  # diff command
     ]
 
-    # Mock file reading
-    mock_file = Mock()
-    mock_file.stem = "feature_file"
-    mock_file.read_text.return_value = "Feature content"
-    mock_file.as_posix.return_value = "feature_file.md"
-
-    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
-        mock_path.return_value = mock_file
-
-        result = notes.track_git_changes()
+    result = notes.track_git_changes()
 
     assert result == {
         "status": "success",
@@ -945,27 +929,24 @@ def test_track_git_changes_feature_branch(
 
     # Verify correct branch was used in git commands
     mock_git_command.assert_any_call(
-        mock_repo_root, "pull", "origin", "feature/notes-sync"
+        notes_dir, "pull", "origin", "feature/notes-sync"
     )
     mock_check_git.assert_any_call(
-        mock_repo_root, "rev-parse", "origin/feature/notes-sync"
+        notes_dir, "rev-parse", "origin/feature/notes-sync"
     )
 
 
 @patch("memory.workers.tasks.notes.sync_note")
 @patch("memory.workers.tasks.notes.git_command")
 @patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
 @patch("memory.workers.tasks.notes.logger")
 def test_track_git_changes_logging(
-    mock_logger, mock_settings, mock_check_git, mock_git_command, mock_sync_note
+    mock_logger, mock_check_git, mock_git_command, mock_sync_note
 ):
     """Test track_git_changes logs appropriately."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
+    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR.
+    notes_dir = settings.NOTES_STORAGE_DIR
+    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
 
     # Test no changes scenario
     mock_check_git.side_effect = [
@@ -994,15 +975,10 @@ def test_track_git_changes_logging(
         Mock(),  # pull command
         Mock(returncode=0, stdout="test.md\n"),  # diff command
     ]
+    test_file = notes_dir / "test.md"
+    test_file.write_text("Test content")
 
-    mock_file = Mock()
-    mock_file.stem = "test"
-    mock_file.read_text.return_value = "Test content"
-    mock_file.as_posix.return_value = "test.md"
-
-    with patch("memory.workers.tasks.notes.pathlib.Path") as mock_path:
-        mock_path.return_value = mock_file
-        notes.track_git_changes()
+    notes.track_git_changes()
 
     # Verify logging for changes scenario
     mock_logger.info.assert_any_call("Tracking git changes")
@@ -1154,8 +1130,10 @@ def test_sync_notes_skips_all_profiles(mock_sync_note, mock_make_session, tmp_pa
     [
         "../../etc/cron.d/poc",
         "../escape.md",
-        "subdir/../../escape.md",
+        "notes/../escape.md",
         "/../../etc/passwd",  # leading slash is stripped, then escapes
+        "escape.md",  # FILE_STORAGE_DIR-relative but outside notes/
+        "emails/escape.md",  # inside FILE_STORAGE_DIR but not under notes/
     ],
 )
 def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path):
@@ -1167,7 +1145,10 @@ def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path):
     notes_dir = tmp_path / "notes"
     notes_dir.mkdir(exist_ok=True)
 
-    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "NOTES_STORAGE_DIR", notes_dir),
+    ):
         # No mock_make_session here on purpose — the validation must
         # raise before we ever try to open a DB session.
         with pytest.raises(ValueError):
@@ -1194,10 +1175,13 @@ def test_note_save_to_file_rejects_traversal_filename(tmp_path):
         mime_type="text/markdown",
         subject="poc",
         content="malicious",
-        filename="../should-not-exist.md",  # escapes notes_dir
+        filename="notes/../should-not-exist.md",  # escapes notes_dir
     )
 
-    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "NOTES_STORAGE_DIR", notes_dir),
+    ):
         with pytest.raises(ValueError):
             note.save_to_file()
 
@@ -1218,10 +1202,46 @@ def test_note_save_to_file_accepts_valid_relative_path(tmp_path):
         mime_type="text/markdown",
         subject="ok",
         content="hello",
-        filename="subdir/ok.md",
+        filename="notes/subdir/ok.md",
     )
 
-    with patch.object(settings, "NOTES_STORAGE_DIR", notes_dir):
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "NOTES_STORAGE_DIR", notes_dir),
+    ):
         note.save_to_file()
 
     assert (notes_dir / "subdir" / "ok.md").read_text() == "hello"
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "",  # empty string — clean_filename returns ""
+        "!!!",  # all non-alphanumeric — clean_filename strips to ""
+        "***---",
+    ],
+)
+def test_note_save_to_file_empty_subject_uses_untitled_fallback(subject, tmp_path):
+    """Empty/all-special subject must not produce ``notes/.md``."""
+    from memory.common import settings
+
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(exist_ok=True)
+
+    note = Note(
+        modality="text",
+        mime_type="text/markdown",
+        subject=subject,
+        content="content",
+        filename=None,  # triggers the fallback branch
+    )
+
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "NOTES_STORAGE_DIR", notes_dir),
+    ):
+        note.save_to_file()
+
+    assert note.filename == "notes/untitled.md"
+    assert (notes_dir / "untitled.md").read_text() == "content"

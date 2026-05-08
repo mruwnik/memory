@@ -353,9 +353,11 @@ async def serve_report(
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Per-report access control - require a DB record for every served file
+    # Per-report access control - require a DB record for every served file.
+    # Report.filename is FILE_STORAGE_DIR-relative (matches every other
+    # SourceItem subtype), so resolve against FILE_STORAGE_DIR.
     try:
-        filename = file_path.relative_to(settings.REPORT_STORAGE_DIR.resolve()).as_posix()
+        filename = paths.to_db_filename(file_path)
     except ValueError:
         raise HTTPException(status_code=404, detail="Report not found")
     report = db.query(Report).filter(Report.filename == filename).one_or_none()
@@ -431,7 +433,7 @@ async def serve_file(
 
     # Resolve the relative path used as SourceItem.filename in the DB.
     try:
-        relative = file_path.relative_to(settings.FILE_STORAGE_DIR.resolve()).as_posix()
+        relative = paths.to_db_filename(file_path)
     except ValueError:
         raise HTTPException(status_code=404, detail="File not found")
 

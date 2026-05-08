@@ -114,14 +114,11 @@ def test_upload_report_admin_can_set_allow_scripts(
     """Admin (default test client has scopes=['*']) may upload with allow_scripts=true."""
     html = b"<html><body><script>console.log(1)</script></body></html>"
 
-    with patch("memory.api.content_sources.settings") as mock_settings:
-        mock_settings.REPORT_STORAGE_DIR = tmp_path
-
-        response = client.post(
-            "/reports/upload",
-            files={"file": ("evil.html", BytesIO(html), "text/html")},
-            data={"allow_scripts": "true"},
-        )
+    response = client.post(
+        "/reports/upload",
+        files={"file": ("evil.html", BytesIO(html), "text/html")},
+        data={"allow_scripts": "true"},
+    )
 
     assert response.status_code == 200
     call_kwargs = mock_dispatch_job.call_args.kwargs
@@ -134,14 +131,11 @@ def test_upload_report_non_admin_rejected_with_allow_scripts(
     """Non-admin uploading allow_scripts=true must get 403, not silent acceptance."""
     html = b"<html><body><script>fetch('/users/me/api-keys')</script></body></html>"
 
-    with patch("memory.api.content_sources.settings") as mock_settings:
-        mock_settings.REPORT_STORAGE_DIR = tmp_path
-
-        response = regular_client.post(
-            "/reports/upload",
-            files={"file": ("evil.html", BytesIO(html), "text/html")},
-            data={"allow_scripts": "true"},
-        )
+    response = regular_client.post(
+        "/reports/upload",
+        files={"file": ("evil.html", BytesIO(html), "text/html")},
+        data={"allow_scripts": "true"},
+    )
 
     assert response.status_code == 403
     assert "admin" in response.json()["detail"].lower()
@@ -155,13 +149,10 @@ def test_upload_report_non_admin_default_allow_scripts_false(
     """Non-admin upload without allow_scripts works and persists allow_scripts=False."""
     html = b"<html><body><h1>plain</h1></body></html>"
 
-    with patch("memory.api.content_sources.settings") as mock_settings:
-        mock_settings.REPORT_STORAGE_DIR = tmp_path
-
-        response = regular_client.post(
-            "/reports/upload",
-            files={"file": ("plain.html", BytesIO(html), "text/html")},
-        )
+    response = regular_client.post(
+        "/reports/upload",
+        files={"file": ("plain.html", BytesIO(html), "text/html")},
+    )
 
     assert response.status_code == 200
     call_kwargs = mock_dispatch_job.call_args.kwargs
@@ -174,14 +165,11 @@ def test_upload_report_non_admin_allowed_connect_urls_dropped(
     """Non-admin's allowed_connect_urls is dropped (defense in depth)."""
     html = b"<html><body>x</body></html>"
 
-    with patch("memory.api.content_sources.settings") as mock_settings:
-        mock_settings.REPORT_STORAGE_DIR = tmp_path
-
-        response = regular_client.post(
-            "/reports/upload",
-            files={"file": ("plain.html", BytesIO(html), "text/html")},
-            data={"allowed_connect_urls": "https://attacker.example.com,https://evil.test"},
-        )
+    response = regular_client.post(
+        "/reports/upload",
+        files={"file": ("plain.html", BytesIO(html), "text/html")},
+        data={"allowed_connect_urls": "https://attacker.example.com,https://evil.test"},
+    )
 
     assert response.status_code == 200
     call_kwargs = mock_dispatch_job.call_args.kwargs
@@ -195,17 +183,14 @@ def test_upload_report_admin_can_set_allowed_connect_urls(
     """Admin may pass allowed_connect_urls — needed for legitimate interactive reports."""
     html = b"<html><body>x</body></html>"
 
-    with patch("memory.api.content_sources.settings") as mock_settings:
-        mock_settings.REPORT_STORAGE_DIR = tmp_path
-
-        response = client.post(
-            "/reports/upload",
-            files={"file": ("plain.html", BytesIO(html), "text/html")},
-            data={
-                "allow_scripts": "true",
-                "allowed_connect_urls": "https://api.example.com",
-            },
-        )
+    response = client.post(
+        "/reports/upload",
+        files={"file": ("plain.html", BytesIO(html), "text/html")},
+        data={
+            "allow_scripts": "true",
+            "allowed_connect_urls": "https://api.example.com",
+        },
+    )
 
     assert response.status_code == 200
     call_kwargs = mock_dispatch_job.call_args.kwargs
