@@ -169,8 +169,8 @@ def _strip_sensitive_headers(
     :data:`_SENSITIVE_REDIRECT_HEADERS`. Returns ``None`` unchanged so
     callers can keep the ``headers=None`` no-op shape.
     """
-    if not headers:
-        return headers if headers is None else dict(headers)
+    if headers is None:
+        return None
     return {
         k: v
         for k, v in headers.items()
