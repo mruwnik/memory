@@ -173,11 +173,10 @@ def validate_git_repo_url(url: str) -> str:
         raise ValueError(
             f"repo_url is too long ({len(url)} chars; max {GIT_REPO_URL_MAX_LEN})"
         )
-    for ch in GIT_REPO_URL_FORBIDDEN_CHARS:
-        if ch in url:
-            raise ValueError(
-                "repo_url must not contain NUL or CR/LF (control-character smuggling)"
-            )
+    if any(ch in url for ch in GIT_REPO_URL_FORBIDDEN_CHARS):
+        raise ValueError(
+            "repo_url must not contain NUL or CR/LF (control-character smuggling)"
+        )
     if url.startswith("-"):
         # Defense against ``git clone <flag>`` interpretation. Git's own
         # safety net catches this in newer versions, but reproducing the
