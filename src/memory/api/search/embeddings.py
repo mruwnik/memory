@@ -19,91 +19,50 @@ logger = logging.getLogger(__name__)
 
 
 class NoAccess:
-    """Sentinel singleton type returned by ``build_access_qdrant_filter``
-    when the caller has no access to anything.
+    """Sentinel type for the deny-all return of ``build_access_qdrant_filter``.
 
-    Why a distinct *type* (and not just an empty tuple/list)?
+    The deny-all return must be unambiguously distinguishable from the
+    "superadmin / no filter needed" return (an empty ``list``). A
+    type-distinct sentinel (rather than an empty container) prevents the
+    natural refactors that would silently turn deny into allow-all:
 
-    The deny-all return value must be unambiguously distinguishable from
-    the "superadmin / no filter needed" return value (``[]``). The previous
-    implementation used ``()`` (an empty tuple) and required consumers to
-    detect it via ``is NO_ACCESS`` — a defense that any of these natural
-    refactors silently destroys, turning a deny into an allow-all:
+    1. ``access_conditions == []`` short-circuiting before a deny-check —
+       a ``NoAccess`` instance is not equal to ``[]``.
+    2. Reordering ``if access_conditions:`` before the deny-check so an
+       empty deny would fall through as "no filter applied" — ``NoAccess``
+       remains falsy (compat) but ``isinstance(x, NoAccess)`` still
+       discriminates regardless of falsiness.
+    3. Normalising return values to a single type — ``list[...] | NoAccess``
+       in the signature catches at type-check time.
 
-    1. Replacing ``is NO_ACCESS`` with ``== NO_ACCESS`` (equal because both
-       are empty-and-falsy; ruff/pylint actively encourage this swap for
-       non-singleton containers).
-    2. Reordering "if access_conditions:" before the deny-check so the
-       empty deny falls through as "no filter applied".
-    3. Normalizing return values: replacing ``return NO_ACCESS`` with
-       ``return []`` to make the function return one type.
-    4. Pickling/copying across a boundary: ``copy.copy(())`` yields a
-       *different* empty tuple, breaking ``is``-identity.
-    5. Type-annotating the helper as ``list[dict] | None`` and forgetting
-       a call site.
+    Identity / pickle round-tripping is **not** load-bearing: the only
+    production consumer uses ``isinstance(x, NoAccess)``. We therefore
+    keep the class minimal — no ``__new__``/``__eq__``/``__hash__``/
+    ``__reduce__`` machinery — and rely on type-distinctness rather than
+    instance-distinctness. ``__slots__ = ()`` keeps it cheap and prevents
+    accidental attribute attachment.
 
-    Distinct-type approach:
-
-    - ``isinstance(x, NoAccess)`` is the canonical check; it cannot be
-      typo'd into a less-strict comparison.
-    - ``x is NO_ACCESS`` continues to work because ``NO_ACCESS`` is a
-      singleton (``__new__`` enforces single-instance).
-    - ``x == NO_ACCESS`` only matches another ``NoAccess`` (no collision
-      with ``[]`` / ``()`` / falsy values), so the static-analyzer-suggested
-      swap from ``is`` to ``==`` is safe instead of catastrophic.
-    - ``copy.copy(NO_ACCESS) is NO_ACCESS`` is True because ``__new__``
-      returns the cached instance.
-    - Type checkers (mypy, pyright) can statically distinguish the
-      deny-all branch via ``list[...] | NoAccess`` return-type unions.
-
-    The type is exported (not name-mangled) so external consumers can
-    construct ``isinstance`` checks; the singleton ``NO_ACCESS`` remains
-    the canonical instance and ``__new__`` ensures any other construction
-    aliases back to it.
+    The module-level :data:`NO_ACCESS` is the canonical instance returned
+    from :func:`build_access_qdrant_filter`. Constructing additional
+    ``NoAccess()`` instances is fine — they all pass ``isinstance(x,
+    NoAccess)`` — but production code returns the module singleton.
     """
 
     __slots__ = ()
-    _instance: "NoAccess | None" = None
-
-    def __new__(cls) -> "NoAccess":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
 
     def __repr__(self) -> str:
         return "NO_ACCESS"
 
     def __bool__(self) -> bool:
         # Falsy so existing ``if access_conditions:`` checks behave like
-        # they did with the empty-tuple sentinel — the deny-all branch is
-        # treated as "no positive conditions". The ``isinstance`` check
-        # remains the authoritative discriminator.
+        # they did with the empty-tuple sentinel. ``isinstance`` is the
+        # authoritative discriminator; falsiness is compatibility only.
         return False
 
-    def __eq__(self, other: object) -> bool:
-        # Only equal to itself (the singleton). Crucially NOT equal to
-        # ``[]`` / ``()`` / other empty containers, so an accidental
-        # ``access_conditions == []`` short-circuit won't match the
-        # deny-all sentinel and silently grant superadmin semantics.
-        return isinstance(other, NoAccess)
 
-    def __hash__(self) -> int:
-        return hash(NoAccess)
-
-    def __reduce__(self) -> tuple[Any, ...]:
-        # Preserve singleton identity through pickle/copy: pickling and
-        # unpickling round-trips to the exact same object instance.
-        return (_get_no_access_singleton, ())
-
-
-def _get_no_access_singleton() -> "NoAccess":
-    """Module-level callable used by ``NoAccess.__reduce__`` so pickled
-    instances rehydrate to the canonical singleton."""
-    return NO_ACCESS
-
-
-# Singleton instance. The ``Final`` annotation prevents accidental
-# rebinding from elsewhere in the codebase.
+# Canonical instance returned from ``build_access_qdrant_filter``. The
+# ``Final`` annotation flags accidental rebinding from elsewhere in the
+# codebase to the type checker.
 NO_ACCESS: Final[NoAccess] = NoAccess()
 
 
@@ -123,12 +82,11 @@ def build_access_qdrant_filter(
 
     - ``[]`` (fresh empty list): superadmin / no filtering needed. Caller
       must apply no access filter to the Qdrant query.
-    - ``NO_ACCESS`` (singleton instance of :class:`NoAccess`): user has no
-      access at all. Caller must short-circuit and return zero results.
-      Detect with ``isinstance(x, NoAccess)`` (canonical) or
-      ``x is NO_ACCESS`` (singleton-safe). ``x == NO_ACCESS`` is also
-      correct — :class:`NoAccess` deliberately does NOT compare equal to
-      empty containers.
+    - :data:`NO_ACCESS` (the canonical :class:`NoAccess` instance): user
+      has no access at all. Caller must short-circuit and return zero
+      results. Detect with ``isinstance(x, NoAccess)`` — the canonical
+      check; type-distinct from ``list``/``tuple``/empty containers so
+      no accidental ``== []`` short-circuit can mask the deny.
     - non-empty list: ``should`` conditions to include in the Qdrant
       filter.
 
@@ -167,11 +125,11 @@ def build_access_qdrant_filter(
         should_conditions.append(project_condition)
 
     if not should_conditions:
-        # No access conditions at all - return the distinct NO_ACCESS
-        # sentinel. Consumers MUST detect this via `is NO_ACCESS` and
-        # short-circuit; otherwise the empty list would silently fall
-        # through as "no filter applied" — i.e. the user would see
-        # everything.
+        # No access conditions at all - return the type-distinct NO_ACCESS
+        # sentinel. Consumers MUST detect this via ``isinstance(x,
+        # NoAccess)`` and short-circuit; otherwise the empty list would
+        # silently fall through as "no filter applied" — i.e. the user
+        # would see everything.
         return NO_ACCESS
 
     return should_conditions
@@ -419,12 +377,11 @@ async def search_chunks(
     # Wrap in a nested Filter inside must for consistent structure
     access_filter = filters.get("access_filter")
     access_conditions = build_access_qdrant_filter(access_filter)
-    # Detect "no access" via the type-distinct ``NoAccess`` sentinel.
-    # The deny-all sentinel is a typed singleton (not an empty container)
-    # so it cannot be confused with ``[]`` (superadmin / no filter needed)
-    # by any of the natural-looking refactors that broke the previous
-    # empty-tuple sentinel. ``isinstance`` is the canonical discriminator;
-    # ``access_conditions is NO_ACCESS`` would also be correct.
+    # Detect "no access" via the type-distinct ``NoAccess`` sentinel. The
+    # deny-all return is a separate type from ``list[...]`` so it cannot
+    # be confused with ``[]`` (superadmin / no filter needed) by any of
+    # the natural-looking refactors that broke the previous empty-tuple
+    # sentinel. ``isinstance`` is the canonical discriminator.
     if isinstance(access_conditions, NoAccess):
         return {}
     if access_conditions:

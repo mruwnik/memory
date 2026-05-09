@@ -326,12 +326,14 @@ def test_no_access_sentinel_not_equal_to_empty_list():
 
 
 def test_no_access_sentinel_equal_to_itself():
-    """The sentinel compares equal to itself (self-equality is the
-    standard contract). Two NoAccess instances are also equal because
-    NoAccess is a singleton."""
+    """The sentinel compares equal to itself (default object equality
+    on the same instance). The module-level ``NO_ACCESS`` is the
+    canonical instance returned from production code; constructing
+    additional ``NoAccess()`` instances is fine but they're separate
+    objects — type-distinctness, not instance-distinctness, is the
+    load-bearing property."""
     assert NO_ACCESS == NO_ACCESS
-    assert NO_ACCESS == NoAccess()  # singleton: NoAccess() returns NO_ACCESS
-    assert NoAccess() is NO_ACCESS
+    assert NO_ACCESS is NO_ACCESS
 
 
 def test_no_access_sentinel_falsy():
@@ -344,33 +346,23 @@ def test_no_access_sentinel_falsy():
     assert not NO_ACCESS
 
 
-def test_no_access_sentinel_survives_copy():
-    """REGRESSION GUARD: copying the sentinel must preserve singleton
-    identity. The previous ``()`` sentinel produced a different empty
-    tuple under ``copy.copy``, breaking ``is``-identity at any cache /
-    IPC boundary that did a defensive copy."""
-    assert copy.copy(NO_ACCESS) is NO_ACCESS
-    assert copy.deepcopy(NO_ACCESS) is NO_ACCESS
+def test_no_access_sentinel_survives_copy_as_isinstance():
+    """REGRESSION GUARD: ``copy.copy``/``deepcopy`` of NO_ACCESS may
+    produce a different instance (we no longer enforce singleton via
+    ``__reduce__``), but the copy must still ``isinstance(_, NoAccess)``.
+    The canonical check is type-distinctness, not identity."""
+    assert isinstance(copy.copy(NO_ACCESS), NoAccess)
+    assert isinstance(copy.deepcopy(NO_ACCESS), NoAccess)
 
 
-def test_no_access_sentinel_survives_pickle():
-    """REGRESSION GUARD: pickling the sentinel must rehydrate to the
-    canonical singleton. This matters for any future caching / queueing
-    layer that pickles search filters."""
+def test_no_access_sentinel_survives_pickle_as_isinstance():
+    """REGRESSION GUARD: pickling round-trips to a NoAccess instance
+    (different object, same type). If a future caller depends on the
+    rehydrated value being literally ``NO_ACCESS`` (identity) — and
+    such a caller does not exist today — restore ``__reduce__`` and
+    pin identity here too."""
     rehydrated = pickle.loads(pickle.dumps(NO_ACCESS))
-    assert rehydrated is NO_ACCESS
     assert isinstance(rehydrated, NoAccess)
-
-
-def test_no_access_sentinel_singleton_construction():
-    """REGRESSION GUARD: independently constructing ``NoAccess()`` returns
-    the cached singleton. This means a future contributor writing
-    ``return NoAccess()`` instead of ``return NO_ACCESS`` doesn't silently
-    create a second instance that fails the ``is NO_ACCESS`` check."""
-    a = NoAccess()
-    b = NoAccess()
-    assert a is b
-    assert a is NO_ACCESS
 
 
 def test_no_access_sentinel_isinstance_canonical():
