@@ -88,6 +88,42 @@ def resolve_hostname(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IP
     return out
 
 
+def _ensure_endpoint_public(host: str, *, label: str) -> None:
+    """Raise ``UnsafeURLError`` unless ``host`` is an IP-literal or
+    resolves only to public IPs.
+
+    Shared body of :func:`validate_public_url` and
+    :func:`validate_public_hostname`; the only difference between the
+    two callers used to be the prefix on the IP-literal error
+    (``URL targets...`` vs ``hostname targets...``), which is now
+    parametrised via the ``label`` kwarg. Centralising means a fix to
+    the resolve-loop or the safe-IP policy lands once for both surfaces
+    instead of needing to be mirrored.
+
+    The hostname-resolves-to-mix and could-not-resolve messages were
+    already identical between the two callers and are reused as-is.
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+
+    if ip is not None:
+        if not is_safe_ip(ip):
+            raise UnsafeURLError(f"{label} targets non-public IP: {ip}")
+        return
+
+    addrs = resolve_hostname(host)
+    if not addrs:
+        raise UnsafeURLError(f"Could not resolve hostname: {host}")
+
+    for addr in addrs:
+        if not is_safe_ip(addr):
+            raise UnsafeURLError(
+                f"Hostname {host} resolves to non-public IP: {addr}"
+            )
+
+
 def validate_public_url(url: str) -> None:
     """Raise ``UnsafeURLError`` if ``url`` is not safe to fetch server-side.
 
@@ -113,28 +149,7 @@ def validate_public_url(url: str) -> None:
     if not hostname:
         raise UnsafeURLError("URL has no hostname")
 
-    # Direct IP literal — no DNS lookup.
-    try:
-        ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        ip = None
-
-    if ip is not None:
-        if not is_safe_ip(ip):
-            raise UnsafeURLError(
-                f"URL targets non-public IP: {ip}"
-            )
-        return
-
-    addrs = resolve_hostname(hostname)
-    if not addrs:
-        raise UnsafeURLError(f"Could not resolve hostname: {hostname}")
-
-    for addr in addrs:
-        if not is_safe_ip(addr):
-            raise UnsafeURLError(
-                f"Hostname {hostname} resolves to non-public IP: {addr}"
-            )
+    _ensure_endpoint_public(hostname, label="URL")
 
 
 def validate_public_hostname(hostname: str) -> None:
@@ -158,23 +173,4 @@ def validate_public_hostname(hostname: str) -> None:
     if not hostname:
         raise UnsafeURLError("hostname must not be blank")
 
-    # Direct IP literal — no DNS lookup.
-    try:
-        ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        ip = None
-
-    if ip is not None:
-        if not is_safe_ip(ip):
-            raise UnsafeURLError(f"hostname targets non-public IP: {ip}")
-        return
-
-    addrs = resolve_hostname(hostname)
-    if not addrs:
-        raise UnsafeURLError(f"Could not resolve hostname: {hostname}")
-
-    for addr in addrs:
-        if not is_safe_ip(addr):
-            raise UnsafeURLError(
-                f"Hostname {hostname} resolves to non-public IP: {addr}"
-            )
+    _ensure_endpoint_public(hostname, label="hostname")
