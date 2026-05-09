@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -527,6 +528,116 @@ def test_safe_get_strip_persists_across_chained_redirects():
     # Second and third hops both lack the header — strip must persist.
     assert "Authorization" not in (captured[1] or {})
     assert "Authorization" not in (captured[2] or {})
+
+
+# --- _follow_redirect direct unit tests ---------------------------------
+# safe_get's redirect loop is now a thin dispatcher around _follow_redirect.
+# These tests exercise the helper directly, without HTTP mocking, so the
+# four branches (no Location → terminal; loop-detect; SSRF reject;
+# cross-host header strip) are pinned without spinning up requests.
+
+
+def _as_response(fake: _FakeChunkResponse) -> requests.Response:
+    """Cast a duck-typed fake to ``requests.Response`` for the type-checker.
+
+    ``_follow_redirect`` only uses ``.headers.get`` and ``.close()`` — both
+    satisfied by the fake — but its annotation is the precise type. We
+    keep the annotation precise (so production callers get type help) and
+    cast at the test boundary.
+    """
+    return cast(requests.Response, fake)
+
+
+def test_follow_redirect_returns_none_for_terminal_response():
+    """A 3xx response without a Location header is terminal."""
+    from memory.common.downloads import _follow_redirect
+
+    response = _FakeChunkResponse([], status_code=302)  # no location
+    visited: set[str] = set()
+    kwargs: dict = {}
+
+    assert (
+        _follow_redirect(_as_response(response), "http://api.example/", visited, kwargs)
+        is None
+    )
+    # No mutation on terminal response.
+    assert visited == set()
+    assert kwargs == {}
+
+
+def test_follow_redirect_strips_headers_on_cross_host_hop():
+    """Cross-host hop mutates kwargs['headers'] to strip Authorization."""
+    from memory.common.downloads import _follow_redirect
+
+    response = _FakeChunkResponse(
+        [], status_code=302, location="http://attacker.example/2"
+    )
+    kwargs: dict = {"headers": {"Authorization": "Bearer s3cret", "Accept": "*/*"}}
+    visited: set[str] = set()
+
+    next_url = _follow_redirect(
+        _as_response(response), "http://api.example/me", visited, kwargs
+    )
+    assert next_url == "http://attacker.example/2"
+    # Authorization stripped on the cross-host hop; Accept survives.
+    assert "Authorization" not in kwargs["headers"]
+    assert kwargs["headers"] == {"Accept": "*/*"}
+
+
+def test_follow_redirect_keeps_headers_on_same_host_hop():
+    """Same-host hop leaves kwargs['headers'] untouched (no copy churn)."""
+    from memory.common.downloads import _follow_redirect
+
+    response = _FakeChunkResponse(
+        [], status_code=302, location="http://api.example/v2/me"
+    )
+    original = {"Authorization": "Bearer s3cret"}
+    kwargs: dict = {"headers": original}
+    visited: set[str] = set()
+
+    next_url = _follow_redirect(
+        _as_response(response), "http://api.example/me", visited, kwargs
+    )
+    assert next_url == "http://api.example/v2/me"
+    # Same dict object: helper didn't replace it on a same-host hop.
+    assert kwargs["headers"] is original
+    assert kwargs["headers"] == {"Authorization": "Bearer s3cret"}
+
+
+def test_follow_redirect_raises_on_loop():
+    """A redirect target whose canonical form is already in ``visited``
+    raises UnsafeURLError — the loop-detect path."""
+    from memory.common.downloads import (
+        _follow_redirect,
+        canonicalize_url_for_loop_detection,
+    )
+
+    response = _FakeChunkResponse(
+        [], status_code=302, location="http://api.example/start"
+    )
+    visited = {canonicalize_url_for_loop_detection("http://api.example/start")}
+    kwargs: dict = {}
+
+    with pytest.raises(UnsafeURLError, match="loop"):
+        _follow_redirect(
+            _as_response(response), "http://api.example/middle", visited, kwargs
+        )
+
+
+def test_follow_redirect_raises_on_unsafe_target():
+    """SSRF rejection on the redirect target propagates as UnsafeURLError."""
+    from memory.common.downloads import _follow_redirect
+
+    response = _FakeChunkResponse(
+        [], status_code=302, location="http://169.254.169.254/latest/"
+    )
+    kwargs: dict = {}
+    with patch(
+        "memory.common.downloads.validate_public_url",
+        side_effect=UnsafeURLError("non-public IP"),
+    ):
+        with pytest.raises(UnsafeURLError):
+            _follow_redirect(_as_response(response), "http://api.example/", set(), kwargs)
 
 
 # --- canonicalize_url_for_loop_detection ---------------------------------

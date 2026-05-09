@@ -178,6 +178,61 @@ def _strip_sensitive_headers(
     }
 
 
+def _follow_redirect(
+    response: requests.Response,
+    current_url: str,
+    visited: set[str],
+    kwargs: dict[str, Any],
+) -> str | None:
+    """Process one redirect hop. Returns the next URL or ``None`` if the
+    response is terminal (no ``Location`` header).
+
+    Side effect: if the next-hop URL is cross-host (different scheme,
+    hostname, or port), ``kwargs['headers']`` is overwritten with a
+    sensitive-headers-stripped copy. We mutate ``kwargs`` rather than
+    threading headers in and out separately because ``safe_get``
+    already owns the dict and the alternative ("return both, caller
+    writes back") would just relocate the same write.
+
+    Raises:
+        UnsafeURLError: redirect loop (canonicalised), or redirect
+            target failed :func:`validate_public_url`.
+    """
+    location = response.headers.get("Location")
+    if not location:
+        return None
+
+    # Drain/close the redirect response before issuing the next request
+    # so the connection can be returned to the pool.
+    response.close()
+
+    next_url = urljoin(current_url, location)
+    next_canonical = canonicalize_url_for_loop_detection(next_url)
+    if next_canonical in visited:
+        raise UnsafeURLError(f"Redirect loop detected at {next_url}")
+    visited.add(next_canonical)
+
+    # Always validate redirect targets — that is the entire purpose.
+    # The attacker controls the Location header even when the initial
+    # URL was clean.
+    validate_public_url(next_url)
+
+    # Drop credential-shaped headers before the cross-host next-hop.
+    # We do this AFTER URL validation so a same-host 302 (the common
+    # case) keeps every header untouched.
+    if _is_cross_host_redirect(current_url, next_url):
+        stripped = _strip_sensitive_headers(kwargs.get("headers"))
+        if stripped != kwargs.get("headers"):
+            logger.info(
+                "Stripping sensitive headers on cross-host redirect: %s -> %s",
+                current_url,
+                next_url,
+            )
+            kwargs["headers"] = stripped
+
+    return next_url
+
+
 def safe_get(
     url: str,
     *,
@@ -244,38 +299,10 @@ def safe_get(
         if not follow_redirects or response.status_code not in _REDIRECT_STATUS_CODES:
             return response
 
-        location = response.headers.get("Location")
-        if not location:
+        next_url = _follow_redirect(response, current_url, visited, kwargs)
+        if next_url is None:
+            # 3xx without Location — unusual but not a redirect to follow.
             return response
-
-        # Drain/close the redirect response before issuing the next request
-        # so the connection can be returned to the pool.
-        response.close()
-
-        next_url = urljoin(current_url, location)
-        next_canonical = canonicalize_url_for_loop_detection(next_url)
-        if next_canonical in visited:
-            raise UnsafeURLError(f"Redirect loop detected at {next_url}")
-        visited.add(next_canonical)
-
-        # Always validate redirect targets — that is the entire purpose.
-        # The attacker controls the Location header even when the initial
-        # URL was clean.
-        validate_public_url(next_url)
-
-        # Drop credential-shaped headers before the cross-host next-hop.
-        # We do this AFTER URL validation so a same-host 302 (the common
-        # case) keeps every header untouched.
-        if _is_cross_host_redirect(current_url, next_url):
-            stripped = _strip_sensitive_headers(kwargs.get("headers"))
-            if stripped != kwargs.get("headers"):
-                logger.info(
-                    "Stripping sensitive headers on cross-host redirect: %s -> %s",
-                    current_url,
-                    next_url,
-                )
-                kwargs["headers"] = stripped
-
         current_url = next_url
 
     raise UnsafeURLError(
