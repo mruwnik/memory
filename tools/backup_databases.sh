@@ -40,16 +40,22 @@ cleanup_old_backups() {
     local pattern=$2  # e.g., "postgres-" or "qdrant-"
     
     log "Checking for old ${pattern} backups to clean up..."
-    
-    # List all backups matching pattern, sorted by date (oldest first)
+
+    # List the bucket separately so an S3/credentials failure is loud rather
+    # than silently masquerading as "no backups to clean up".
+    local listing
+    if ! listing=$(aws s3 ls "s3://${BUCKET}/${prefix}/" --region "${REGION}"); then
+        error "Could not list s3://${BUCKET}/${prefix}/ — skipping ${pattern} cleanup"
+        return 1
+    fi
+
+    # Backups matching pattern, sorted by date (oldest first)
     local backups
-    backups=$(aws s3 ls "s3://${BUCKET}/${prefix}/" --region "${REGION}" | \
-              grep "${pattern}" | \
-              awk '{print $4}' | \
-              sort)
-    
-    local count=$(echo "$backups" | wc -l)
-    
+    backups=$(echo "$listing" | grep "${pattern}" | awk '{print $4}' | sort || true)
+
+    local count=0
+    [ -n "$backups" ] && count=$(echo "$backups" | wc -l)
+
     if [ "$count" -le "$MAX_BACKUPS" ]; then
         log "Found ${count} ${pattern} backups (max: ${MAX_BACKUPS}), no cleanup needed"
         return 0
@@ -80,7 +86,8 @@ backup_postgres() {
        aws s3 cp - "${output_path}" --region "${REGION}"; then
         log "Postgres backup completed: ${output_path}"
         unset PGPASSWORD
-        cleanup_old_backups "${PREFIX}" "postgres-"
+        # A cleanup failure is logged but must not fail the (successful) backup.
+        cleanup_old_backups "${PREFIX}" "postgres-" || true
         return 0
     else
         error "Postgres backup failed"
@@ -134,7 +141,8 @@ backup_qdrant() {
             error "Failed to delete Qdrant snapshot: ${snapshot_name}"
         fi
         
-        cleanup_old_backups "${PREFIX}" "qdrant-"
+        # A cleanup failure is logged but must not fail the (successful) backup.
+        cleanup_old_backups "${PREFIX}" "qdrant-" || true
         return 0
     else
         error "Qdrant backup failed"

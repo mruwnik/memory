@@ -115,7 +115,6 @@ TASK_MAPPINGS = {
 QUEUE_MAPPINGS = {
     "email": "email",
     "ebook": "ebooks",
-    "photo": "photo_embed",
 }
 
 
@@ -380,10 +379,17 @@ def maintenance_reingest_all_empty_source_items(ctx):
 
 @maintenance.command("reingest-chunk")
 @click.option("--chunk-id", required=True, help="Chunk ID to reingest")
+@click.option(
+    "--collection",
+    required=True,
+    help="Qdrant collection the chunk belongs to (e.g. mail, blog, book)",
+)
 @click.pass_context
-def maintenance_reingest_chunk(ctx, chunk_id):
+def maintenance_reingest_chunk(ctx, chunk_id, collection):
     """Reingest a specific chunk."""
-    execute_task(ctx, "maintenance", "reingest_chunk", chunk_id=chunk_id)
+    execute_task(
+        ctx, "maintenance", "reingest_chunk", chunk_id=chunk_id, collection=collection
+    )
 
 
 @cli.group()  # type: ignore[attr-defined]
@@ -446,7 +452,7 @@ def blogs_add_article_feed(ctx, url, title, description, tags, active, check_int
         url=url,
         title=title,
         description=description,
-        tags=tags.split(","),
+        tags=[t.strip() for t in tags.split(",") if t.strip()],
         active=active,
         check_interval=check_interval,
     )

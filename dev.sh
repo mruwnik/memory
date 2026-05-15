@@ -17,7 +17,8 @@ docker volume create memory_file_storage
 docker run --rm -v memory_file_storage:/data busybox chown -R 1000:1000 /data
 
 POSTGRES_PASSWORD=543218ZrHw8Pxbs3YXzaVHq8YKVHwCj6Pz8RQkl8
-echo $POSTGRES_PASSWORD > secrets/postgres_password.txt
+mkdir -p secrets
+echo "$POSTGRES_PASSWORD" > secrets/postgres_password.txt
 
 # Host-side dev needs the data services published on localhost. They are
 # NOT exposed by docker-compose.yaml — create a docker-compose.override.yml
@@ -43,12 +44,12 @@ fi
 # started here — run `docker compose up -d` after this script when you want
 # the full stack, or run the API/workers locally against these services.
 echo -e "${GREEN}Starting docker containers...${NC}"
-docker-compose up -d postgres redis qdrant
+docker compose up -d postgres redis qdrant
 
 # Wait for PostgreSQL to be ready
 echo -e "${YELLOW}Waiting for PostgreSQL to be ready...${NC}"
 for i in {1..30}; do
-    if docker-compose exec postgres pg_isready -U kb > /dev/null 2>&1; then
+    if docker compose exec -T postgres pg_isready -U kb > /dev/null 2>&1; then
         echo -e "${GREEN}PostgreSQL is ready!${NC}"
         break
     fi
