@@ -31,7 +31,7 @@ The repo ships with an interactive installer that handles secrets, prompts for A
 - Docker + Docker Compose (Compose v2 / `docker compose ...` syntax)
 - Python 3.12+ (for the helper CLIs in `tools/`)
 - API keys for [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/settings/keys), and [Voyage AI](https://dash.voyageai.com/api-keys)
-  - All three are required: OpenAI for fallback embeddings, Anthropic for query analysis / reranking / summarization, Voyage for primary embeddings.
+  - All three are required. **Voyage** does all embeddings (`voyage-3-large` for text, `voyage-multimodal-3` for mixed) and reranking (`rerank-2-lite`). **Anthropic** does query analysis, HyDE expansion, and summarization. **OpenAI** is used by various LLM-backed features (notes processing, observation extraction, etc.).
 
 ### 1. Run the installer
 
@@ -66,12 +66,14 @@ curl http://localhost:8000/health
 
 ### 3. Create a user
 
+The simplest path is to run `add_user.py` inside the API container, which already has all dependencies and DB credentials wired up:
+
 ```bash
-pip install -e ".[all]"
-python tools/add_user.py --email you@example.com --password 'yourpass' --name 'Your Name'
+docker compose exec api python tools/add_user.py \
+  --email you@example.com --password 'yourpass' --name 'Your Name'
 ```
 
-The `[all]` extra pulls in everything the in-repo scripts and tests need; `[api]` / `[workers]` / `[dev]` are also available if you only need a subset.
+If you'd rather run it on the host (e.g. as part of a script), `pip install -e ".[all]"` first — but note that the host CLI needs to reach Postgres, which is **not** exposed by default. See [Local development](#local-development-without-docker-for-the-app) for how to publish the data-service ports. The other extras defined in `setup.py` are `api`, `common`, `dev`, `ingesters`, `workers`, and `all` (a superset).
 
 ### 4. Use it
 
@@ -127,10 +129,22 @@ The `docker-compose.yaml` passes both variables through to the container with sa
 
 ## Local development (without Docker for the app)
 
-If you want to run the API or workers on the host while keeping infrastructure in Docker:
+If you want to run the API or workers on the host while keeping infrastructure in Docker, you first need to publish the data-service ports — `docker-compose.yaml` keeps them on the internal `kbnet` network by default. Create a `docker-compose.override.yml` (gitignored) like:
+
+```yaml
+services:
+  postgres:
+    ports: ["15432:5432"]
+  redis:
+    ports: ["16379:6379"]
+  qdrant:
+    ports: ["6333:6333"]
+```
+
+Then:
 
 ```bash
-# Bring up only postgres, redis, qdrant (exposed on localhost)
+# Bring up only postgres, redis, qdrant
 ./dev.sh
 
 # Install Python deps in a virtualenv
@@ -143,8 +157,8 @@ alembic -c db/migrations/alembic.ini upgrade head
 # Run the API with auto-reload
 RELOAD=true python -m memory.api.app
 
-# In another terminal, run a worker
-celery -A memory.common.celery_app worker -Q memory-email,memory-blogs,memory-generic
+# In another terminal, run a worker (queue names from docker-compose.yaml)
+celery -A memory.common.celery_app worker -Q memory-email,memory-blogs,memory-notes
 ```
 
 `dev.sh` only starts the data services and writes a `.env` pointing at `localhost`. To go back to the all-in-Docker setup, run `docker compose up -d` afterwards — that brings up the API, workers, and migration runner.
@@ -162,7 +176,7 @@ python tools/run_celery_task.py notes setup-git-notes \
   --name 'commit author'
 ```
 
-This requires SSH keys in `secrets/` — `tools/install.sh` can generate them (option in the SSH section), or see `secrets/README.md` to create them by hand. Add the public key to your git provider before the first push.
+This requires SSH keys in `secrets/` — `tools/install.sh` can generate them (option in the SSH section). To create them by hand: generate an ed25519 keypair into `secrets/ssh_private_key` / `secrets/ssh_public_key` and populate `secrets/ssh_known_hosts` (e.g. `ssh-keyscan github.com`). Add the public key to your git provider before the first push.
 
 ### Discord integration
 
@@ -180,7 +194,7 @@ That returns an invite URL for adding the bot to your server.
 python tools/run_celery_task.py <queue> <task-name> [args]
 ```
 
-Queues live in `src/memory/common/celery_app.py` (`task_routes`); typical ones are `email`, `blogs`, `comics`, `ebook`, `notes`, `generic`.
+Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full set is enumerated in `docker-compose.yaml` (the worker's `QUEUES` env var). At time of writing: `backup, blogs, calendar, comic, custom, discord, ebooks, email, forums, github, google, maintenance, meetings, notes, people, photos, reports, scheduler, slack, verification`.
 
 ## MCP client library for HTML reports
 
@@ -230,14 +244,21 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `SERVER_URL`                      | `http://localhost:8000` | Public origin; used for OAuth redirects, CORS, cookies      |
 | `DB_HOST`, `DB_PORT`              | `postgres` / `5432`  | PostgreSQL — set to `localhost` / `15432` for host-side dev   |
 | `REDIS_HOST`, `REDIS_PORT`        | `redis` / `6379`     | Celery broker + cache                                          |
-| `QDRANT_HOST`, `QDRANT_URL`       | `qdrant` / `6333`    | Vector store                                                   |
-| `OPENAI_API_KEY`                  | required             | Fallback embeddings, some LLM features                         |
-| `ANTHROPIC_API_KEY`               | required             | Query analysis, reranking, summarization                       |
-| `VOYAGE_API_KEY`                  | required             | Primary embedding provider                                     |
+| `QDRANT_HOST`, `QDRANT_PORT`      | `qdrant` / `6333`    | Vector store (workers also accept `QDRANT_URL` for the full URL)|
+| `OPENAI_API_KEY`                  | required             | Misc LLM features (notes, observation extraction, …)          |
+| `ANTHROPIC_API_KEY`               | required             | Query analysis, HyDE expansion, summarization                  |
+| `VOYAGE_API_KEY`                  | required             | All embeddings + reranking                                     |
+| `TEXT_EMBEDDING_MODEL`            | `voyage-3-large`     | Voyage text embedding model (1024d)                            |
+| `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
+| `RERANK_MODEL`                    | `rerank-2-lite`      | Voyage reranker used after candidate retrieval                 |
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |
-| `ENABLE_BM25_SEARCH`              | `true`               | Enable Postgres BM25 alongside vector search                   |
+| `ENABLE_BM25_SEARCH`              | `true`               | Postgres BM25 alongside vector search                          |
+| `ENABLE_HYDE_EXPANSION`           | `true`               | Hypothetical Document Embeddings query expansion               |
+| `ENABLE_QUERY_ANALYSIS`           | `true`               | LLM intent extraction from queries                             |
+| `ENABLE_RERANKING`                | `true`               | Voyage reranking of fused results                              |
+| `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 
 See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` for how variables map into containers.

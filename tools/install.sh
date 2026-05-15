@@ -173,10 +173,10 @@ info "The following API keys are needed for core functionality."
 info "You can get them from the respective provider dashboards."
 echo ""
 
-# OpenAI - for embeddings fallback and some LLM features
+# OpenAI - misc LLM-backed features
 prompt_if_missing "OPENAI_API_KEY" \
     "OpenAI API Key (https://platform.openai.com/api-keys)
-    Used for: embeddings fallback, some LLM features" \
+    Used for: misc LLM-backed features (notes, observation extraction)" \
     "true"
 
 # Also write to secrets file for Docker
@@ -197,10 +197,10 @@ if [ -n "$anthropic_key" ]; then
     write_secret "anthropic_key.txt" "$anthropic_key"
 fi
 
-# Voyage AI - primary embedding provider
+# Voyage AI - embeddings + reranking
 prompt_if_missing "VOYAGE_API_KEY" \
     "Voyage AI API Key (https://dash.voyageai.com/api-keys)
-    Used for: primary embeddings (recommended for best search quality)" \
+    Used for: all embeddings (voyage-3-large / voyage-multimodal-3) and reranking" \
     "true"
 
 # ─────────────────────────────────────────────────────────────────────
@@ -350,6 +350,7 @@ echo ""
 info "Next steps:"
 echo "  1. Review configuration: $ENV_FILE"
 echo "  2. Start services: docker compose up -d"
-echo "  3. Create a user: python tools/add_user.py --email you@example.com --password yourpass --name 'Your Name'"
+echo "  3. Create a user: docker compose exec api python tools/add_user.py \\"
+echo "       --email you@example.com --password yourpass --name 'Your Name'"
 echo "  4. Access the app: http://localhost:8000"
 echo ""

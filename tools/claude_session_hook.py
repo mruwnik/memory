@@ -29,7 +29,6 @@ import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 API_URL = os.environ.get("MEMORY_API_URL", "")
@@ -143,11 +142,16 @@ def upload_current_turn(session_id, cwd, transcript_path):
     current_turn = find_current_turn(events)
     normalized = [normalize_event(e) for e in current_turn]
 
-    # Send as batch
+    # Send as batch. This is fire-and-forget telemetry: a network timeout,
+    # connection error, or malformed response must never break the session.
     try:
         send_batch(session_id, cwd, normalized)
-    except (HTTPError, URLError):
-        pass
+    except Exception as exc:
+        # Non-fatal, but log to stderr so a send_batch bug (TypeError from a
+        # refactor, AttributeError, etc.) is diagnosable rather than silently
+        # eaten. KeyboardInterrupt/SystemExit derive from BaseException and
+        # still propagate, so the session can always be interrupted.
+        print(f"claude_session_hook: telemetry send failed: {exc}", file=sys.stderr)
 
 
 def main():

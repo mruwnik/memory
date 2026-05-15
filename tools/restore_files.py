@@ -37,20 +37,21 @@ def list_backups(bucket: str, prefix: str, region: str) -> list[str]:
     """List available encrypted file backups in S3."""
     s3 = boto3.client("s3", region_name=region)
 
+    backups = []
     try:
-        response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith(".tar.gz.enc"):
+                    continue
+                name = key.split("/")[-1]
+                size_mb = obj["Size"] / (1024 * 1024)
+                modified = obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S")
+                backups.append(f"{name:40} {size_mb:8.2f} MB  {modified}")
     except Exception as e:
         print(f"Error listing S3 bucket: {e}", file=sys.stderr)
         return []
-
-    backups = []
-    for obj in response.get("Contents", []):
-        key = obj["Key"]
-        if key.endswith(".tar.gz.enc"):
-            name = key.split("/")[-1]
-            size_mb = obj["Size"] / (1024 * 1024)
-            modified = obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S")
-            backups.append(f"{name:40} {size_mb:8.2f} MB  {modified}")
 
     return backups
 
@@ -90,7 +91,7 @@ def decrypt_and_extract(encrypted_data: bytes, password: str, output_dir: Path) 
         output_dir.mkdir(parents=True, exist_ok=True)
         tar_buffer = io.BytesIO(decrypted)
         with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
-            tar.extractall(output_dir)
+            tar.extractall(output_dir, filter="data")
         print("Extraction complete")
         return True
     except Exception as e:

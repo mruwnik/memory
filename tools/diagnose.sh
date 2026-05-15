@@ -46,15 +46,22 @@ remote() {
     ssh "$REMOTE_HOST" "$@"
 }
 
+# Single-quote a value so it survives re-parsing by the remote shell
+# (handles spaces and embedded single quotes). Use for any user-supplied
+# value interpolated into a remote() command string.
+qt() {
+    printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
 docker_logs() {
     local service="${1:-}"
     local lines="${2:-100}"
     if [ -n "$service" ]; then
         echo -e "${GREEN}Logs for $service (last $lines lines):${NC}"
-        remote "cd $REMOTE_DIR && docker compose logs --tail=$lines $service"
+        remote "cd $REMOTE_DIR && docker compose logs --tail=$(qt "$lines") $(qt "$service")"
     else
         echo -e "${GREEN}All logs (last $lines lines):${NC}"
-        remote "cd $REMOTE_DIR && docker compose logs --tail=$lines"
+        remote "cd $REMOTE_DIR && docker compose logs --tail=$(qt "$lines")"
     fi
 }
 
@@ -82,7 +89,7 @@ list_dir() {
     local path="${1:-.}"
     # Ensure path is within project directory for safety
     echo -e "${GREEN}Contents of $path:${NC}"
-    remote "cd $REMOTE_DIR && ls -la $path"
+    remote "cd $REMOTE_DIR && ls -la $(qt "$path")"
 }
 
 cat_file() {
@@ -92,7 +99,7 @@ cat_file() {
         exit 1
     fi
     echo -e "${GREEN}Contents of $file:${NC}"
-    remote "cd $REMOTE_DIR && cat $file"
+    remote "cd $REMOTE_DIR && cat $(qt "$file")"
 }
 
 tail_file() {
@@ -103,7 +110,7 @@ tail_file() {
         exit 1
     fi
     echo -e "${GREEN}Last $lines lines of $file:${NC}"
-    remote "cd $REMOTE_DIR && tail -n $lines $file"
+    remote "cd $REMOTE_DIR && tail -n $(qt "$lines") $(qt "$file")"
 }
 
 grep_files() {
@@ -114,7 +121,7 @@ grep_files() {
         exit 1
     fi
     echo -e "${GREEN}Searching for '$pattern' in $path:${NC}"
-    remote "cd $REMOTE_DIR && grep -r --color=always '$pattern' $path || true"
+    remote "cd $REMOTE_DIR && grep -r --color=always -- $(qt "$pattern") $(qt "$path") || true"
 }
 
 db_query() {
@@ -123,13 +130,15 @@ db_query() {
         echo -e "${RED}Error: No query specified${NC}"
         exit 1
     fi
-    # Only allow SELECT queries for safety
-    if ! echo "$query" | grep -qi "^select"; then
-        echo -e "${RED}Error: Only SELECT queries are allowed${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}Running query:${NC}"
-    remote "cd $REMOTE_DIR && docker compose exec -T postgres psql -U kb -d kb -c \"$query\""
+    # Enforce read-only at the Postgres level via PGOPTIONS: every transaction
+    # in this session is read-only, so plain DML/DDL (even one smuggled past a
+    # naive "starts with SELECT" check via `;`) fails with a clear error.
+    # Caveat: default_transaction_read_only does NOT block SELECTs that invoke
+    # volatile functions with side effects (e.g. pg_terminate_backend, lo_export,
+    # SECURITY DEFINER functions that write). This is an acceptable residual for
+    # a diagnostics tool run by trusted operators, not a hard sandbox.
+    echo -e "${GREEN}Running query (read-only session):${NC}"
+    remote "cd $REMOTE_DIR && docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U kb -d kb -c $(qt "$query")"
 }
 
 http_get() {
@@ -144,7 +153,7 @@ http_get() {
         path="/$path"
     fi
     echo -e "${GREEN}GET http://localhost:${port}${path}${NC}"
-    remote "curl -s -w '\n\nHTTP Status: %{http_code}\n' 'http://localhost:${port}${path}'"
+    remote "curl -s -w '\n\nHTTP Status: %{http_code}\n' $(qt "http://localhost:${port}${path}")"
 }
 
 system_status() {
