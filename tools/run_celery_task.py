@@ -2,9 +2,9 @@
 """
 Script to run Celery tasks on the Docker Compose setup from your local machine.
 
-This script connects to the RabbitMQ broker running in Docker and sends tasks
-to the workers. It requires the same dependencies as the workers to import
-the task definitions.
+This script connects to the Celery broker (Redis) running in Docker and sends
+tasks to the workers. It requires the same dependencies as the workers to
+import the task definitions.
 
 Usage:
     python run_celery_task.py --help
@@ -162,7 +162,8 @@ def cli(ctx, wait, timeout):
     except Exception as e:
         click.echo(f"Error connecting to Celery broker: {e}")
         click.echo(
-            "Make sure Docker Compose is running and RabbitMQ is accessible on localhost:15673"
+            "Make sure Docker Compose is running and the Redis broker is reachable "
+            "(REDIS_HOST/REDIS_PORT in .env)"
         )
         sys.exit(1)
 
