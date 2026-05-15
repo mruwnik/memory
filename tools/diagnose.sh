@@ -131,8 +131,12 @@ db_query() {
         exit 1
     fi
     # Enforce read-only at the Postgres level via PGOPTIONS: every transaction
-    # in this session is read-only, so any write (even one smuggled past a
+    # in this session is read-only, so plain DML/DDL (even one smuggled past a
     # naive "starts with SELECT" check via `;`) fails with a clear error.
+    # Caveat: default_transaction_read_only does NOT block SELECTs that invoke
+    # volatile functions with side effects (e.g. pg_terminate_backend, lo_export,
+    # SECURITY DEFINER functions that write). This is an acceptable residual for
+    # a diagnostics tool run by trusted operators, not a hard sandbox.
     echo -e "${GREEN}Running query (read-only session):${NC}"
     remote "cd $REMOTE_DIR && docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U kb -d kb -c $(qt "$query")"
 }

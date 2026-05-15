@@ -37,6 +37,7 @@ ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 
 DB_PORT=15432
+REDIS_PORT=16379
 EOL
 fi
 
@@ -61,7 +62,7 @@ echo -e "${GREEN}Development environment is ready!${NC}"
 echo -e "${YELLOW}Apply DB migrations before first use:${NC}"
 echo -e "${YELLOW}  alembic -c db/migrations/alembic.ini upgrade head${NC}"
 echo -e "${YELLOW}PostgreSQL: localhost:15432  (user=kb, db=kb, password in secrets/postgres_password.txt)${NC}"
-echo -e "${YELLOW}Redis:      localhost:6379${NC}"
+echo -e "${YELLOW}Redis:      localhost:16379${NC}"
 echo -e "${YELLOW}Qdrant:     localhost:6333${NC}"
 echo ""
 echo -e "${GREEN}To bring up the API and workers as well, run:${NC}"

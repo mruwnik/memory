@@ -146,8 +146,12 @@ def upload_current_turn(session_id, cwd, transcript_path):
     # connection error, or malformed response must never break the session.
     try:
         send_batch(session_id, cwd, normalized)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Non-fatal, but log to stderr so a send_batch bug (TypeError from a
+        # refactor, AttributeError, etc.) is diagnosable rather than silently
+        # eaten. KeyboardInterrupt/SystemExit derive from BaseException and
+        # still propagate, so the session can always be interrupted.
+        print(f"claude_session_hook: telemetry send failed: {exc}", file=sys.stderr)
 
 
 def main():
