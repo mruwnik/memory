@@ -26,13 +26,22 @@ Backfill:
   ``Comic`` / ``BookSection`` / ``ForumPost`` default to ``'public'``), so a
   ``WHERE sensitivity <> 'basic'`` predicate would mis-classify inherited
   class defaults as explicit. Rather than guess, every *existing* row is
-  flagged ``sensitivity_inherited = false`` -- i.e. its current stored
-  sensitivity is frozen, exactly preserving today's behaviour with zero
-  access-control widening. Only rows ingested *after* this migration get
-  ``true`` (via the column default) and participate in sensitivity
-  inheritance. The project_id fix -- the actual reported bug -- is unaffected.
+  frozen at ``sensitivity_inherited = false`` -- its current stored
+  sensitivity preserved exactly, zero access-control widening. This is done
+  by adding the column with a constant ``false`` default (a metadata-only
+  operation on PostgreSQL 11+, so no full-table rewrite) and then flipping
+  the default to ``true`` for future inserts.
 
-No row-by-row resolution is performed here; inherited rows are reconciled
+  Consequence -- intentional, signed off in the PR: only rows ingested
+  *after* this migration carry ``sensitivity_inherited = true`` and
+  participate in inheritance, so a public-default subclass ingested later
+  can resolve to ``'public'`` while an otherwise-identical pre-migration row
+  stays frozen at ``'basic'``. The divergence affects only *new* content
+  (where ``'public'`` is the intended class default) and never silently
+  widens *existing* content; it self-heals as content is re-ingested.
+
+The project_id fix -- the actual reported bug -- is unaffected. No
+row-by-row resolution is performed here; inherited rows are reconciled
 lazily by the maintenance task (eventual consistency).
 
 Revision ID: 20260515_ac_inherited_flags
@@ -57,19 +66,14 @@ TABLES: tuple[str, ...] = ("source_item", "deadlines")
 
 def upgrade() -> None:
     for table in TABLES:
+        # project_id: add defaulted true, then mark existing non-NULL
+        # project_ids explicit. The UPDATE is bounded by `project_id IS NOT
+        # NULL` — and most inherited-only content currently sits at NULL, so
+        # this touches only the smaller, explicitly-classified subset.
         op.add_column(
             table,
             sa.Column(
                 "project_id_inherited",
-                sa.Boolean(),
-                nullable=False,
-                server_default=sa.text("true"),
-            ),
-        )
-        op.add_column(
-            table,
-            sa.Column(
-                "sensitivity_inherited",
                 sa.Boolean(),
                 nullable=False,
                 server_default=sa.text("true"),
@@ -81,10 +85,25 @@ def upgrade() -> None:
             f"UPDATE {table} SET project_id_inherited = false "
             "WHERE project_id IS NOT NULL"
         )
-        # Sensitivity: explicit vs inherited is not SQL-distinguishable (see
-        # module docstring). Freeze every existing row's sensitivity as-is
-        # rather than risk re-resolving it to a wider value.
-        op.execute(f"UPDATE {table} SET sensitivity_inherited = false")
+
+        # sensitivity: every existing row must end up frozen
+        # (sensitivity_inherited = false); only rows ingested *after* this
+        # migration participate in inheritance. Add the column with a
+        # `false` default — on PostgreSQL 11+ that is a metadata-only
+        # operation, so existing rows are frozen WITHOUT a full-table
+        # rewrite — then flip the default to `true` for future inserts.
+        op.add_column(
+            table,
+            sa.Column(
+                "sensitivity_inherited",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+        )
+        op.alter_column(
+            table, "sensitivity_inherited", server_default=sa.text("true")
+        )
 
 
 def downgrade() -> None:
