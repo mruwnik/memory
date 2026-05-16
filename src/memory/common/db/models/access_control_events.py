@@ -14,7 +14,7 @@ path can forget to trigger reconciliation.
 
 A failed dispatch is swallowed (logged, not raised): the commit has already
 happened, an API request must not fail because the broker is briefly
-unreachable, and ``reconcile_all_access_control`` (the periodic beat task) is
+unreachable, and ``reconcile_access_control`` (the periodic beat task) is
 the backstop that re-dispatches anything missed.
 """
 
@@ -150,7 +150,7 @@ def dispatch_ac_reconciliation(session):
             )
         except Exception:
             # Commit already succeeded — never fail the caller over a
-            # dispatch hiccup. reconcile_all_access_control re-dispatches.
+            # dispatch hiccup. reconcile_access_control re-dispatches.
             logger.exception(
                 "Failed to dispatch access-control reconciliation for %s %s",
                 source_type,
