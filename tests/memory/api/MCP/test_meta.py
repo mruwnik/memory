@@ -1278,7 +1278,7 @@ def test_filter_kalshi_market_includes_liquidity_score():
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.forecast._check_forecast_scope", return_value=True)
-async def test_history_kalshi(mock_scope):
+async def test_history_kalshi(mock_scope, mock_aiohttp_session):
     """history fetches Kalshi candlesticks."""
 
     _history_cache.clear()
@@ -1290,7 +1290,21 @@ async def test_history_kalshi(mock_scope):
             {"timestamp": "2025-01-02T00:00:00Z", "probability": 0.60, "volume": 2000},
         ]
 
-    with patch("memory.api.MCP.servers.forecast.get_kalshi_history", mock_kalshi_history):
+    # history() for kalshi also makes a second, direct aiohttp call to fetch
+    # the market title — mock that too so the test never hits the network.
+    mock_session_cm, mock_response = mock_aiohttp_session
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value={"market": {"title": "Test Market"}})
+
+    with (
+        patch(
+            "memory.api.MCP.servers.forecast.get_kalshi_history", mock_kalshi_history
+        ),
+        patch(
+            "memory.api.MCP.servers.forecast.aiohttp.ClientSession",
+            return_value=mock_session_cm,
+        ),
+    ):
         result = await history.fn(market_id="TEST", source="kalshi", period="7d")
 
     assert result["market_id"] == "TEST"
