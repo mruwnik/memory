@@ -12,6 +12,16 @@ from memory.api.MCP.servers.deadlines import (
     list_upcoming,
     upsert,
 )
+from memory.common.content_processing import create_content_hash
+from memory.common.db import connection as db_connection
+from memory.common.db.models import Deadline, Person, SourceItem, Team
+from memory.common.db.models.sources import Project, project_teams, team_members
+from tests.conftest import mcp_auth_context
+
+
+def get_fn(tool):
+    """Extract underlying function from FunctionTool if wrapped."""
+    return getattr(tool, "fn", tool)
 
 
 # Thin shims so the tests can keep their previously-validated call shapes.
@@ -19,11 +29,11 @@ from memory.api.MCP.servers.deadlines import (
 #   - create(...)            == upsert(deadline_id=None, ...)
 #   - update(deadline_id, ...) == upsert(deadline_id=<id>, ...)
 async def _create(**kwargs):
-    return await getattr(upsert, "fn", upsert)(**kwargs)
+    return await get_fn(upsert)(**kwargs)
 
 
 async def _update(deadline_id, **kwargs):
-    return await getattr(upsert, "fn", upsert)(deadline_id=deadline_id, **kwargs)
+    return await get_fn(upsert)(deadline_id=deadline_id, **kwargs)
 
 
 # Wrap the shims in objects with `.fn` so the existing `get_fn(...)` callsites
@@ -36,16 +46,6 @@ class _Shim:
 
 create = _Shim(_create)
 update = _Shim(_update)
-from memory.common.content_processing import create_content_hash
-from memory.common.db import connection as db_connection
-from memory.common.db.models import Deadline, Person, SourceItem, Team
-from memory.common.db.models.sources import Project, project_teams, team_members
-from tests.conftest import mcp_auth_context
-
-
-def get_fn(tool):
-    """Extract underlying function from FunctionTool if wrapped."""
-    return getattr(tool, "fn", tool)
 
 
 @pytest.fixture(autouse=True)
