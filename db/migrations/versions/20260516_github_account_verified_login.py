@@ -7,7 +7,7 @@ claimed identity. ``verified_login`` holds the login GitHub itself
 reports for the stored credentials, so consumers have a field they can
 trust for identity decisions. It is NULL until verification succeeds.
 
-Revision ID: 20260516_github_account_verified_login
+Revision ID: 20260516_gh_verified_login
 Revises: 20260516_source_updated_at_index
 Create Date: 2026-05-16
 """
@@ -18,7 +18,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260516_github_account_verified_login"
+revision: str = "20260516_gh_verified_login"
 down_revision: Union[str, None] = "20260516_source_updated_at_index"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
