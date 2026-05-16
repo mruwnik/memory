@@ -38,25 +38,25 @@ from memory.common.db.models.sources import (
 
 logger = logging.getLogger(__name__)
 
-# source_type string -> data-source model. The string keys are the contract
-# with update_source_access_control / get_items_for_source. Each model's
-# primary key (``id``) is exactly the value those consumers expect as
-# ``source_id``.
+# source_type string -> data-source model. Each model declares its own
+# source_type via the ``data_source_type`` ClassVar, so the string lives in
+# exactly one place (on the model); this registry is derived from it. The
+# string is the contract with update_source_access_control /
+# get_items_for_source, and each model's primary key (``id``) is exactly the
+# value those consumers expect as ``source_id``.
 ACCESS_CONTROLLED_SOURCE_MODELS: dict[str, type] = {
-    "email_account": EmailAccount,
-    "slack_channel": SlackChannel,
-    "slack_workspace": SlackWorkspace,
-    "discord_channel": DiscordChannel,
-    "discord_server": DiscordServer,
-    "calendar_account": CalendarAccount,
-    "google_folder": GoogleFolder,
-    "article_feed": ArticleFeed,
-    "transcript_account": TranscriptAccount,
-}
-
-_SOURCE_TYPE_BY_MODEL: dict[type, str] = {
-    model: source_type
-    for source_type, model in ACCESS_CONTROLLED_SOURCE_MODELS.items()
+    model.data_source_type: model
+    for model in (
+        EmailAccount,
+        SlackChannel,
+        SlackWorkspace,
+        DiscordChannel,
+        DiscordServer,
+        CalendarAccount,
+        GoogleFolder,
+        ArticleFeed,
+        TranscriptAccount,
+    )
 }
 
 # Fields whose change means belonging content must be re-resolved.
@@ -96,7 +96,9 @@ def bump_config_version_on_ac_change(session, flush_context, instances):
     """
     pending = session.info.setdefault(PENDING_DISPATCH_KEY, [])
     for obj in session.dirty:
-        source_type = _SOURCE_TYPE_BY_MODEL.get(type(obj))
+        # Data sources self-identify via the data_source_type ClassVar;
+        # anything else in the flush is not access-control-relevant.
+        source_type = getattr(type(obj), "data_source_type", None)
         if source_type is None:
             continue
 

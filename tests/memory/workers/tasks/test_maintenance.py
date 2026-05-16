@@ -1,6 +1,6 @@
 # FIXME: Most of this was vibe-coded
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, call
 from typing import cast
 
@@ -27,7 +27,7 @@ from memory.workers.tasks.maintenance import (
     update_metadata_for_item,
     update_metadata_for_source_items,
     update_source_access_control,
-    reconcile_all_access_control,
+    reconcile_access_control,
     get_item_class,
     _payloads_equal,
 )
@@ -1347,11 +1347,7 @@ def test_update_source_access_control_crosses_batch_boundary(
     assert all(r.project_id_inherited is True for r in rows)
 
 
-def test_reconcile_all_access_control_dispatches_every_source(
-    db_session, test_user
-):
-    """The periodic backstop dispatches update_source_access_control once
-    per data source, at that source's current config_version."""
+def make_recon_accounts(db_session, test_user, n):
     accounts = [
         EmailAccount(
             name=f"Recon Account {i}",
@@ -1366,14 +1362,23 @@ def test_reconcile_all_access_control_dispatches_every_source(
             active=True,
             user_id=test_user.id,
         )
-        for i in range(3)
+        for i in range(n)
     ]
     db_session.add_all(accounts)
     db_session.commit()
+    return accounts
+
+
+def test_reconcile_access_control_full_dispatches_every_source(
+    db_session, test_user
+):
+    """With no window, the backstop dispatches update_source_access_control
+    once per data source, at that source's current config_version."""
+    accounts = make_recon_accounts(db_session, test_user, 3)
     account_ids = sorted(a.id for a in accounts)
 
     with patch.object(update_source_access_control, "delay") as mock_delay:
-        result = reconcile_all_access_control()
+        result = reconcile_access_control()
 
     assert result["status"] == "success"
     assert result["dispatched"] == 3
@@ -1385,3 +1390,33 @@ def test_reconcile_all_access_control_dispatches_every_source(
         source_type, source_id, config_version = dispatch_call.args
         assert source_type == "email_account"
         assert config_version == 1  # server_default, never bumped
+
+
+def test_reconcile_access_control_recent_window_includes_fresh_sources(
+    db_session, test_user
+):
+    """The recent-window mode still dispatches just-created sources (their
+    updated_at is within the window)."""
+    make_recon_accounts(db_session, test_user, 2)
+
+    with patch.object(update_source_access_control, "delay") as mock_delay:
+        result = reconcile_access_control(updated_within_seconds=3600)
+
+    assert result["dispatched"] == 2
+    assert mock_delay.call_count == 2
+
+
+def test_reconcile_access_control_recent_window_excludes_stale_sources(
+    db_session, test_user
+):
+    """A source whose updated_at is older than the window is skipped."""
+    accounts = make_recon_accounts(db_session, test_user, 2)
+    # Backdate one account well outside the window.
+    accounts[0].updated_at = datetime.now(timezone.utc) - timedelta(hours=5)
+    db_session.commit()
+
+    with patch.object(update_source_access_control, "delay") as mock_delay:
+        result = reconcile_access_control(updated_within_seconds=3600)
+
+    assert result["dispatched"] == 1
+    assert mock_delay.call_args.args[1] == accounts[1].id

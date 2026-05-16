@@ -29,7 +29,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_SOURCE_ACCESS_CONTROL,
-    RECONCILE_ALL_ACCESS_CONTROL,
+    RECONCILE_ACCESS_CONTROL,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
@@ -38,6 +38,15 @@ from memory.common.db.models import (
     CodingProject,
     Session,
     SourceItem,
+)
+from memory.common.db.models.source_items import (
+    BlogPost,
+    CalendarEvent,
+    DiscordMessage,
+    GoogleDoc,
+    MailMessage,
+    Meeting,
+    SlackMessage,
 )
 from memory.common.content_processing import (
     clear_item_chunks,
@@ -695,16 +704,6 @@ def get_items_for_source(
     session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
 ):
     """Get items that belong to a data source for access control updates."""
-    from memory.common.db.models.source_items import (
-        BlogPost,
-        CalendarEvent,
-        DiscordMessage,
-        GoogleDoc,
-        MailMessage,
-        Meeting,
-        SlackMessage,
-    )
-
     if source_type == "email_account":
         return paginate_source_items(
             session, MailMessage,
@@ -808,10 +807,10 @@ def update_source_access_control(
 
     Dispatch: this task is the only caller of the resolution path. It is
     dispatched (a) on a data source's config change, by the ``after_commit``
-    listener in ``models/access_control_events.py``, and (b) for every source
-    on a schedule, by the ``reconcile_all_access_control`` beat task — the
-    backstop that catches content ingested under a source whose config never
-    changes. Ingestion still writes the raw ``self.project_id`` /
+    listener in ``models/access_control_events.py``, and (b) on a schedule by
+    the ``reconcile_access_control`` beat task — the backstop that catches
+    content ingested under a source whose config never changes. Ingestion
+    still writes the raw ``self.project_id`` /
     ``self.sensitivity``, so a freshly-ingested inherited item stays
     unresolved until one of those dispatches runs ("eventual consistency").
     """
@@ -917,31 +916,48 @@ def update_source_access_control(
     }
 
 
-@app.task(name=RECONCILE_ALL_ACCESS_CONTROL)
+@app.task(name=RECONCILE_ACCESS_CONTROL)
 @tracked_task
-def reconcile_all_access_control():
-    """Dispatch ``update_source_access_control`` for every data source.
+def reconcile_access_control(updated_within_seconds: int | None = None):
+    """Dispatch ``update_source_access_control`` for data sources.
 
     The ``before_flush`` / ``after_commit`` listeners in
     ``models/access_control_events.py`` dispatch reconciliation when a
-    source's config *changes*. This periodic beat task is the backstop for
-    the case they can't catch: content ingested under a source whose config
-    never changes again. It re-dispatches every source at its current
-    ``config_version`` so freshly-ingested inherited items still converge.
+    source's config *changes*. This periodic beat task is the backstop, run
+    in two tiers:
 
-    Each dispatch is idempotent — an item already carrying its resolved
-    values is a no-op (``apply_inherited_access_control`` skips unchanged
-    writes), and explicit overrides are never touched.
+    - ``updated_within_seconds`` set (frequent, e.g. every 30 min): only
+      sources whose row changed within that window — a cheap re-dispatch
+      that backs up the event-driven path in case a dispatch was lost.
+    - ``updated_within_seconds=None`` (daily): every source. Catches
+      inherited content ingested under a source whose own row never changes.
+
+    Each source is dispatched at its current ``config_version``. Dispatch is
+    idempotent — an item already carrying its resolved values is a no-op
+    (``apply_inherited_access_control`` skips unchanged writes), and explicit
+    overrides are never touched.
     """
+    cutoff = None
+    if updated_within_seconds is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=updated_within_seconds
+        )
+
     dispatched = 0
     with make_session() as session:
         for source_type, model in ACCESS_CONTROLLED_SOURCE_MODELS.items():
-            rows = session.query(model.id, model.config_version).all()
-            for source_id, config_version in rows:
+            query = session.query(model.id, model.config_version)
+            if cutoff is not None:
+                query = query.filter(model.updated_at >= cutoff)
+            for source_id, config_version in query.all():
                 update_source_access_control.delay(  # type: ignore
                     source_type, source_id, config_version
                 )
                 dispatched += 1
 
-    logger.info("reconcile_all_access_control dispatched %d sources", dispatched)
+    logger.info(
+        "reconcile_access_control(updated_within_seconds=%s) dispatched %d sources",
+        updated_within_seconds,
+        dispatched,
+    )
     return {"status": "success", "dispatched": dispatched}

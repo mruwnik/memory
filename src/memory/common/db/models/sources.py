@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 from sqlalchemy import (
@@ -104,6 +104,8 @@ class Book(Base):
 
 class ArticleFeed(Base):
     __tablename__ = "article_feeds"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "article_feed"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable for legacy rows that pre-date ownership tracking;
@@ -165,6 +167,8 @@ class ArticleFeed(Base):
 
 class EmailAccount(Base):
     __tablename__ = "email_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "email_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -986,6 +990,8 @@ class GoogleFolder(Base):
     """Tracked Google Drive folder configuration."""
 
     __tablename__ = "google_folders"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "google_folder"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     account_id: Mapped[int] = mapped_column(
@@ -1075,6 +1081,8 @@ class CalendarAccount(Base):
     """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
 
     __tablename__ = "calendar_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "calendar_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable only because a backfill migration cannot infer the owner
@@ -1198,6 +1206,8 @@ class TranscriptAccount(Base):
     """
 
     __tablename__ = "transcript_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "transcript_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(
