@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_type, timedelta
-from typing import Literal
+from typing import Literal, Sequence
 
 from fastmcp import FastMCP
 from sqlalchemy import case
@@ -390,7 +390,7 @@ def _update_deadline(
     project_id: int | None,
     sensitivity: str | None,
     tags: list[str] | None,
-    clear: list[str],
+    clear: Sequence[str],
 ) -> dict:
     with make_session() as session:
         deadline = session.get(Deadline, deadline_id)

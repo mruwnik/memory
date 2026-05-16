@@ -11,7 +11,7 @@ This module provides models for:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from sqlalchemy import (
     BigInteger,
@@ -103,6 +103,8 @@ class DiscordServer(Base):
     """Discord server (guild) metadata and collection settings."""
 
     __tablename__ = "discord_servers"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "discord_server"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord guild snowflake ID
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -151,6 +153,8 @@ class DiscordChannel(Base):
     """Discord channel metadata and collection settings."""
 
     __tablename__ = "discord_channels"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "discord_channel"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord channel snowflake ID
     server_id: Mapped[int | None] = mapped_column(
