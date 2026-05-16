@@ -934,8 +934,16 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
 
     - ``updated_within_seconds`` set (frequent, e.g. every 30 min): only
       items whose row changed within the window.
-    - ``updated_within_seconds=None`` (daily): every item — the full sweep,
-      which also catches a config change whose dispatch was lost.
+    - ``updated_within_seconds=None`` (daily): every item — the full sweep.
+
+    Lost-dispatch recovery window: a config change whose ``after_commit``
+    dispatch was lost (broker briefly down — the listener logs and swallows
+    the failure) does not move any *item's* ``updated_at``, so the recent
+    item-keyed tier cannot re-detect it. Such a lost dispatch is recovered
+    only by the daily full sweep — i.e. within ~24h, not ~30min. This is an
+    accepted trade for keying on items: lost dispatches are rare and logged,
+    and the failure direction (stale resolved values) is corrected, not a
+    hard breakage.
 
     Idempotent: ``apply_inherited_access_control`` skips unchanged rows, the
     Qdrant payload is rewritten only when the resolved values actually moved,
