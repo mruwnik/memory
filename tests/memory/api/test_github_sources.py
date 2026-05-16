@@ -316,7 +316,10 @@ def test_update_account_reverifies_on_credential_change(
     assert account.verified_login == "new-identity"
 
 
-def test_update_account_name_only_keeps_verified_login(client, db_session, user):
+@patch("memory.api.github_sources.GithubClient")
+def test_update_account_name_only_keeps_verified_login(
+    mock_client_class, client, db_session, user
+):
     """Updating only the display name must not touch the verified identity."""
     account = GithubAccount(
         user_id=user.id,
@@ -334,6 +337,8 @@ def test_update_account_name_only_keeps_verified_login(client, db_session, user)
     )
 
     assert response.status_code == 200
+    # A name-only update must not re-verify: no GitHub client constructed.
+    mock_client_class.assert_not_called()
     db_session.refresh(account)
     assert account.name == "Renamed"
     assert account.verified_login == "octocat"

@@ -296,7 +296,13 @@ def create_account(
         private_key=data.private_key,
     )
     db.add(account)
-    db.flush()  # populate account.id for verification logging
+    # Commit the row first, *then* verify. Identity verification makes a
+    # GitHub network call (up to ~90s worst case for App auth); keeping it
+    # outside the transaction means the DB connection and INSERT are not
+    # held open for its duration. The account row itself is intentionally
+    # decoupled from GitHub uptime (see issue #84 design notes).
+    db.commit()
+    db.refresh(account)
     # Resolve identity from the credentials themselves — never trust the
     # client-supplied ``name`` as a GitHub identity (see issue #84).
     account.verified_login = verify_account_identity(account)
@@ -348,11 +354,16 @@ def update_account(
         account.private_key = updates.private_key
         credentials_changed = True
 
-    if credentials_changed:
-        account.verified_login = verify_account_identity(account)
-
+    # Commit the field changes first so the transaction (and the row
+    # UPDATE lock) is not held open across the GitHub network call that
+    # identity verification performs. See create_account for rationale.
     db.commit()
     db.refresh(account)
+
+    if credentials_changed:
+        account.verified_login = verify_account_identity(account)
+        db.commit()
+        db.refresh(account)
 
     return account_to_response(account)
 
