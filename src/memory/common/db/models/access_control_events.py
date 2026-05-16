@@ -67,6 +67,23 @@ ACCESS_CONTROL_FIELDS = ("project_id", "sensitivity")
 PENDING_DISPATCH_KEY = "_ac_source_dispatch"
 
 
+def ac_field_value_changed(state, field: str) -> bool:
+    """Whether ``field`` was set to a genuinely different *value*.
+
+    ``History.has_changes()`` alone is not enough: SQLAlchemy decides a
+    scalar set is "unchanged" by *identity* (``new is old``), so assigning an
+    equal-but-distinct object — exactly what the source-config update
+    endpoints do, ``account.project_id = updates.project_id`` unconditionally
+    — reports a change. Comparing ``added`` vs ``deleted`` by value collapses
+    those no-ops, so a PATCH that only renames a source doesn't trigger a
+    full (idempotent but expensive) reconciliation. When the old value is
+    unknown (expired attribute) ``deleted`` is empty and this conservatively
+    reports a change.
+    """
+    history = state.attrs[field].history
+    return history.has_changes() and history.added != history.deleted
+
+
 @event.listens_for(Session, "before_flush")
 def bump_config_version_on_ac_change(session, flush_context, instances):
     """Bump ``config_version`` for data sources whose access control changed.
@@ -84,11 +101,10 @@ def bump_config_version_on_ac_change(session, flush_context, instances):
             continue
 
         state = inspect(obj)
-        changed = any(
-            state.attrs[field].history.has_changes()
+        if not any(
+            ac_field_value_changed(state, field)
             for field in ACCESS_CONTROL_FIELDS
-        )
-        if not changed:
+        ):
             continue
 
         obj.config_version = (obj.config_version or 0) + 1

@@ -97,3 +97,31 @@ def test_source_creation_does_not_dispatch(
     no_celery_dispatch.reset_mock()
     make_account(db_session, test_user)
     no_celery_dispatch.assert_not_called()
+
+
+@pytest.mark.transactional_db
+def test_noop_ac_field_assignment_does_not_dispatch(
+    db_session, test_user, no_celery_dispatch
+):
+    """Re-assigning project_id / sensitivity to their current values is a
+    no-op: no config_version bump, no dispatch. Guards against every config
+    PATCH (the endpoints assign these fields unconditionally) triggering a
+    full reconciliation."""
+    project = Project(title="No-op Project", state="open")
+    db_session.add(project)
+    db_session.commit()
+
+    account = make_account(
+        db_session, test_user, project_id=project.id, sensitivity="internal"
+    )
+    version_before = account.config_version
+    no_celery_dispatch.reset_mock()
+
+    # Equal-value re-assignment — the shape the update endpoints produce.
+    account.project_id = project.id
+    account.sensitivity = "internal"
+    account.name = "Renamed In The Same Save"
+    db_session.commit()
+
+    assert account.config_version == version_before
+    no_celery_dispatch.assert_not_called()
