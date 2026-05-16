@@ -3,7 +3,8 @@ import logging
 import pathlib
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import format_datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -48,13 +49,25 @@ def is_safe_url(url: str) -> bool:
 MAX_HTML_SIZE = 10 * 1024 * 1024  # 10 MB limit for HTML/feed downloads
 
 
-def fetch_html(url: str, as_bytes: bool = False, validate_url: bool = True) -> str | bytes:
+def fetch_html(
+    url: str,
+    as_bytes: bool = False,
+    validate_url: bool = True,
+    modified: datetime | None = None,
+) -> str | bytes:
     """Fetch HTML content from a URL.
 
     Args:
         url: The URL to fetch
         as_bytes: If True, return raw bytes instead of decoded string
         validate_url: If True, check URL against SSRF protection (default True)
+        modified: If set, send a conditional ``If-Modified-Since`` request
+            and short-circuit to empty content on a ``304 Not Modified``.
+            This is how SSRF-gated feed callers keep feedparser's
+            incremental-fetch optimisation: feedparser's own ``modified=``
+            shortcut only fires when feedparser does the fetch itself, so
+            once the fetch is routed through ``safe_get`` the conditional
+            request has to be made here instead.
 
     Raises:
         ValueError: If URL fails SSRF validation
@@ -62,6 +75,17 @@ def fetch_html(url: str, as_bytes: bool = False, validate_url: bool = True) -> s
     """
     if validate_url and not is_safe_url(url):
         raise ValueError(f"URL failed SSRF validation: {url}")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
+    }
+    if modified is not None:
+        # RFC 7231 HTTP-date. Naive datetimes are assumed UTC so that
+        # ``format_datetime(usegmt=True)`` has a well-defined offset.
+        as_utc = modified if modified.tzinfo else modified.replace(tzinfo=timezone.utc)
+        headers["If-Modified-Since"] = format_datetime(
+            as_utc.astimezone(timezone.utc), usegmt=True
+        )
 
     # ``safe_get`` follows redirects manually and re-validates each Location
     # target — without this an attacker-controlled public URL can 302 to
@@ -72,13 +96,19 @@ def fetch_html(url: str, as_bytes: bool = False, validate_url: bool = True) -> s
             url,
             validate_url=False,
             timeout=30,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0"
-            },
+            headers=headers,
             stream=True,
         )
     except UnsafeURLError as e:
         raise ValueError(f"URL failed SSRF validation during redirect: {e}") from e
+
+    # 304 Not Modified carries no body — nothing changed since ``modified``.
+    # ``raise_for_status`` would not catch this (304 is not 4xx/5xx), so
+    # short-circuit explicitly rather than iterating an empty stream.
+    if response.status_code == 304:
+        response.close()
+        return b"" if as_bytes else ""
+
     response.raise_for_status()
 
     # Check Content-Length header

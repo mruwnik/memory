@@ -412,6 +412,69 @@ def test_is_safe_url_rejects_ssrf_targets(url):
     assert is_safe_url(url) is False
 
 
+def make_fetch_response(status_code=200, body=b"<rss/>"):
+    """Build a minimal ``safe_get`` response double for fetch_html tests."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.headers = {}
+    response.iter_content.return_value = [body] if body else []
+    return response
+
+
+@patch("memory.parsers.html.is_safe_url", return_value=True)
+@patch("memory.parsers.html.safe_get")
+def test_fetch_html_sends_if_modified_since(mock_safe_get, mock_is_safe):
+    """A ``modified`` datetime is sent as an RFC 7231 If-Modified-Since header."""
+    from memory.parsers.html import fetch_html
+
+    mock_safe_get.return_value = make_fetch_response(body=b"<rss>body</rss>")
+
+    result = fetch_html(
+        "https://example.com/feed.xml", modified=datetime(2023, 1, 2, 3, 4, 5)
+    )
+
+    assert result == "<rss>body</rss>"
+    headers = mock_safe_get.call_args.kwargs["headers"]
+    assert headers["If-Modified-Since"] == "Mon, 02 Jan 2023 03:04:05 GMT"
+
+
+@patch("memory.parsers.html.is_safe_url", return_value=True)
+@patch("memory.parsers.html.safe_get")
+def test_fetch_html_no_if_modified_since_without_modified(mock_safe_get, mock_is_safe):
+    """Without ``modified`` no conditional header is sent."""
+    from memory.parsers.html import fetch_html
+
+    mock_safe_get.return_value = make_fetch_response()
+
+    fetch_html("https://example.com/feed.xml")
+
+    assert "If-Modified-Since" not in mock_safe_get.call_args.kwargs["headers"]
+
+
+@pytest.mark.parametrize("as_bytes, expected", [(False, ""), (True, b"")])
+@patch("memory.parsers.html.is_safe_url", return_value=True)
+@patch("memory.parsers.html.safe_get")
+def test_fetch_html_304_short_circuits(
+    mock_safe_get, mock_is_safe, as_bytes, expected
+):
+    """A 304 returns empty content without touching the (empty) body."""
+    from memory.parsers.html import fetch_html
+
+    response = make_fetch_response(status_code=304, body=b"")
+    mock_safe_get.return_value = response
+
+    result = fetch_html(
+        "https://example.com/feed.xml",
+        as_bytes=as_bytes,
+        modified=datetime(2023, 1, 1),
+    )
+
+    assert result == expected
+    response.raise_for_status.assert_not_called()
+    response.iter_content.assert_not_called()
+    response.close.assert_called_once()
+
+
 @patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.stream_download_to_path")
 @patch("memory.parsers.html.PILImage.open")

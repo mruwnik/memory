@@ -168,13 +168,17 @@ class RSSAtomParser(FeedParser):
         fetch it without validation. We always pre-fetch via ``fetch_html``
         (which routes through ``safe_get`` for redirect-aware validation)
         so feedparser only ever sees in-memory bytes.
+
+        Incremental sync: feedparser's own ``modified=`` shortcut only
+        fires when feedparser performs the fetch, so handing it in-memory
+        bytes would silently disable it. We instead let ``fetch_html``
+        make the conditional request — it sends ``If-Modified-Since`` from
+        ``self.since`` and returns empty content on a 304, which parses to
+        zero entries.
         """
         if not self.content:
-            self.content = cast(str, fetch_html(self.url))
-        if self.since:
-            feed = feedparser.parse(self.content, modified=self.since)
-        else:
-            feed = feedparser.parse(self.content)
+            self.content = cast(str, fetch_html(self.url, modified=self.since))
+        feed = feedparser.parse(self.content)
         return feed.entries
 
     def extract_title(self, entry: Any) -> str:

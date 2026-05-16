@@ -236,15 +236,14 @@ def test_rss_atom_parser_fetch_items(mock_parse, mock_fetch_html, since_date):
     parser = RSSAtomParser(url="https://example.com/feed.xml", since=since_date)
     items = parser.fetch_items()
 
-    # SSRF-validated fetch must happen exactly once.
-    mock_fetch_html.assert_called_once_with("https://example.com/feed.xml")
+    # SSRF-validated fetch must happen exactly once. ``since`` is threaded
+    # to fetch_html as the conditional-request date, NOT to feedparser:
+    # feedparser's own ``modified=`` only works when it does the fetch.
+    mock_fetch_html.assert_called_once_with(
+        "https://example.com/feed.xml", modified=since_date
+    )
     # feedparser must receive the IN-MEMORY bytes, not the URL.
-    if since_date:
-        mock_parse.assert_called_once_with(
-            "<rss>fetched body</rss>", modified=since_date
-        )
-    else:
-        mock_parse.assert_called_once_with("<rss>fetched body</rss>")
+    mock_parse.assert_called_once_with("<rss>fetched body</rss>")
     assert items == ["entry1", "entry2"]
 
 
