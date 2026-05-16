@@ -204,7 +204,7 @@ def validate_git_repo_url(url: str) -> str:
         return url
 
     raise ValueError(
-        "repo_url must be https://, ssh://, git://, or scp-like "
+        "repo_url must be https://, ssh://, or scp-like "
         "(user@host:path) — got an unrecognised shape"
     )
 
