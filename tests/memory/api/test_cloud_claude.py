@@ -226,8 +226,6 @@ def test_orchestrator_get_logs_rejects_path_traversal():
     "%2e/relative",
     "a//b",
     "/leading-slash",
-    "trailing/",
-    "",
     "%252e%252e/other-session",
     "%25252e%25252e/other-session",
 ])
@@ -243,6 +241,12 @@ def test_validate_differ_subpath_rejects_traversal(bad_path):
     "api/v1/status",
     "files/workspace/project/main.py",
     "diff/path%20with%20spaces",
+    # Empty subpath = differ SPA root; the iframe loads this on expand.
+    "",
+    # Trailing slash on a real subpath = HTTP "directory" semantics;
+    # unambiguous destination, so safe to forward.
+    "trailing/",
+    "diff/some-dir/",
 ])
 def test_validate_differ_subpath_allows_normal_paths(good_path):
     validate_differ_subpath(good_path)  # Should not raise

@@ -255,7 +255,8 @@ def is_valid_session_id(session_id: str) -> bool:
 
 
 class UnsafeSubpathError(Exception):
-    """Internal sentinel: differ subpath contains a traversal or empty segment."""
+    """Internal sentinel: differ subpath contains a traversal sequence or an
+    unsafe (leading/interior) empty segment."""
 
 
 def check_no_traversal(differ_path: str) -> None:
@@ -269,9 +270,13 @@ def check_no_traversal(differ_path: str) -> None:
     changing (which is the only safe way to know there's no more decoding
     a downstream proxy could apply).
 
-    Empty segments (``a//b``) are also rejected because httpx (or a
-    downstream proxy) may normalise them into a different orchestrator
-    endpoint than what the user typed.
+    Leading or interior empty segments (``/foo``, ``a//b``) are rejected
+    because httpx or a downstream proxy may normalise them into a
+    different orchestrator endpoint than what the user typed.  A single
+    trailing empty segment (``foo/``) and the entirely-empty subpath are
+    allowed: both point to an unambiguous destination (the SPA's root
+    or a "directory" URL), and the differ SPA's iframe relies on the
+    empty-subpath form to load its index.
 
     Shared between the HTTP and WebSocket differ proxies so both surfaces
     stay in lock-step on what counts as "safe to forward".
@@ -282,8 +287,14 @@ def check_no_traversal(differ_path: str) -> None:
         if decoded == prev:
             break
         prev = decoded
-    for segment in decoded.split("/"):
-        if segment in ("", ".", ".."):
+    if decoded == "":
+        return
+    segments = decoded.split("/")
+    last = len(segments) - 1
+    for i, segment in enumerate(segments):
+        if segment in (".", ".."):
+            raise UnsafeSubpathError(segment)
+        if segment == "" and i != last:
             raise UnsafeSubpathError(segment)
 
 
