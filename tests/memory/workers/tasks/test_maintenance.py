@@ -1438,3 +1438,52 @@ def test_reconcile_access_control_recent_window_excludes_old_items(
     db_session.refresh(messages[1])
     assert messages[0].project_id is None  # excluded -> still inherited NULL
     assert messages[1].project_id == project.id  # included -> resolved
+
+
+def test_reconcile_access_control_updates_qdrant_payload(
+    db_session, qdrant, test_user
+):
+    """A reconciled item's chunks get their Qdrant payload rewritten with the
+    resolved project_id / sensitivity."""
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=messages[0],
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        result = reconcile_access_control()
+
+    assert result["changed"] == 1
+    mock_set.assert_called_once()
+    _client, collection, point_id, payload = mock_set.call_args.args
+    assert collection == "mail"
+    assert point_id == chunk_id
+    assert payload == {"project_id": project.id, "sensitivity": "basic"}
+
+
+def test_reconcile_access_control_crosses_batch_boundary(
+    db_session, qdrant, test_user
+):
+    """>100 items: the keyset-paginated sweep reconciles every one across
+    the batch boundary."""
+    n = 150
+    project, account, messages = make_recon_setup(db_session, test_user, n)
+
+    result = reconcile_access_control()
+
+    assert result["reconciled"] == n
+    assert result["changed"] == n
+    rows = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.id.in_([m.id for m in messages]))
+        .all()
+    )
+    assert len(rows) == n
+    assert all(r.project_id == project.id for r in rows)

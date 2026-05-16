@@ -493,6 +493,9 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_project_idx", "project_id"),
         Index("source_sensitivity_idx", "sensitivity"),
         Index("source_creator_idx", "creator_id"),
+        # Drives the recent-tier access-control reconciliation sweep
+        # (reconcile_access_control filters on updated_at >= cutoff).
+        Index("source_updated_at_idx", "updated_at"),
     )
 
     @property

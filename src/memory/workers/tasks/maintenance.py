@@ -940,6 +940,13 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
     Idempotent: ``apply_inherited_access_control`` skips unchanged rows, the
     Qdrant payload is rewritten only when the resolved values actually moved,
     and explicit overrides are never touched.
+
+    Cost note: per item this lazy-loads the data-source chain
+    (``apply_inherited_access_control`` -> ``resolve_access_control`` ->
+    ``get_data_source``), one extra query per item. Acceptable for a
+    background task; grouping items by source would remove it if it matters.
+    Pagination is keyset (``id > last_id``), so the daily full sweep stays
+    O(N) and doesn't skip rows deleted mid-sweep.
     """
     cutoff = None
     if updated_within_seconds is not None:
@@ -951,18 +958,21 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
     reconciled = 0
     changed = 0
     batch_size = 100
+    last_id = 0
     with make_session() as session:
-        for batch_num in itertools.count():
+        while True:
             query = (
                 session.query(SourceItem)
                 .options(selectinload(SourceItem.chunks))
+                .filter(SourceItem.id > last_id)
                 .order_by(SourceItem.id)
             )
             if cutoff is not None:
                 query = query.filter(SourceItem.updated_at >= cutoff)
-            items = query.offset(batch_num * batch_size).limit(batch_size).all()
+            items = query.limit(batch_size).all()
             if not items:
                 break
+            last_id = items[-1].id
 
             for item in items:
                 before = (item.project_id, item.sensitivity)
