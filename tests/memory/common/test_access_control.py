@@ -530,15 +530,17 @@ AC_LOGGER = "memory.common.access_control"
 
 
 def test_user_can_access_admin_bypass_is_logged(caplog):
-    """Admin bypass in user_can_access emits an INFO audit line."""
+    """Admin bypass in user_can_access emits a DEBUG audit line (DEBUG, not
+    INFO: this is a per-item call inside bulk filter loops)."""
     user = MockUser(id=7, scopes=["*"])
     item = MockSourceItem(project_id=None, sensitivity="confidential", id=42)
 
-    with caplog.at_level(logging.INFO, logger=AC_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=AC_LOGGER):
         assert user_can_access(user, item) is True
 
     bypass_lines = [r for r in caplog.records if "admin access bypass" in r.message]
     assert len(bypass_lines) == 1
+    assert bypass_lines[0].levelno == logging.DEBUG
     assert "user_id=7" in bypass_lines[0].getMessage()
     assert "item_id=42" in bypass_lines[0].getMessage()
 
@@ -548,7 +550,7 @@ def test_user_can_access_non_admin_does_not_log_bypass(caplog):
     user = MockUser(id=8, scopes=[])
     item = MockSourceItem(project_id=1, sensitivity="basic")
 
-    with caplog.at_level(logging.INFO, logger=AC_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=AC_LOGGER):
         user_can_access(user, item, {1: "contributor"})
 
     assert not [r for r in caplog.records if "admin access bypass" in r.message]

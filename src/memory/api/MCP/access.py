@@ -60,6 +60,11 @@ def get_project_roles_by_user_id(
     Returns:
         Dict mapping project_id to role string
     """
+    # No user id -> no roles. Skip the pointless `WHERE id IS NULL` query
+    # (never matches a PK) and the misleading "user None not found" warning.
+    if user_id is None:
+        return {}
+
     if session is not None:
         user = session.query(User).filter(User.id == user_id).first()
         if user is None:

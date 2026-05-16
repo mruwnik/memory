@@ -766,6 +766,18 @@ def register_access_control_inheritance_tracking(cls: type) -> None:
     ``item.project_id = 5`` without separately remembering to record that
     it is an explicit override rather than an inherited value.
 
+    A ``set`` event fires for **constructor kwargs too**: ``Model(project_id=
+    x)`` marks the row explicit exactly as ``model.project_id = x`` would.
+    Two consequences worth knowing:
+
+    - Ingestion code must NOT pre-fill ``project_id`` / ``sensitivity`` as a
+      "helpful" seed — passing the kwarg disables inheritance for that row.
+      Inheriting content (mail, slack, ...) must simply omit the kwarg.
+    - Passing ``project_id=None`` *explicitly* is distinct from omitting it:
+      it yields ``(project_id=NULL, inherited=False)`` — an explicit NULL,
+      i.e. superadmin/creator-only — whereas omitting the kwarg leaves
+      ``inherited=True`` so the chain is re-resolved.
+
     ``propagate=True`` so the listener also covers joined-table-inheritance
     subclasses (``MailMessage``, ``SlackMessage``, ...). Call once per
     top-level mapped class — see the ``SourceItem`` call below and the

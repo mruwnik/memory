@@ -9,8 +9,10 @@ Key design decisions:
 - Projects with Teams assigned (team_projects junction)
 - User -> Person -> team_members -> Team -> project_teams -> Project
 - NULL project_id = superadmin only (prevents accidental exposure)
-- Superadmins (users with admin scope) bypass filters; every bypass is logged
-  at INFO level (see user_can_access / build_access_filter) for the audit trail
+- Superadmins (users with admin scope) bypass filters. build_access_filter
+  logs the bypass at INFO (once per query — the audit-trail signal);
+  user_can_access logs at DEBUG (per-item, so INFO isn't flooded by bulk
+  filter loops)
 - Defense in depth: filter at Qdrant, BM25, AND final merge
 """
 
@@ -349,9 +351,12 @@ def user_can_access(
     Returns:
         True if user can access the item, False otherwise
     """
-    # Superadmins see everything
+    # Superadmins see everything. Logged at DEBUG, not INFO: user_can_access
+    # is called per-item inside bulk filter comprehensions, so an admin
+    # listing 100 items would emit 100 lines. The once-per-query INFO line in
+    # build_access_filter is the audit-trail signal for those paths.
     if has_admin_scope(user):
-        logger.info(
+        logger.debug(
             "admin access bypass: user_id=%s action=access_item item_id=%s",
             getattr(user, "id", None),
             getattr(item, "id", None),

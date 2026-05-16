@@ -816,6 +816,16 @@ def update_source_access_control(
     Retries on transient Qdrant failures (connection errors, API errors) if no
     progress has been made yet. Once updates start succeeding, errors are logged
     but processing continues to avoid losing partial progress.
+
+    Reconciliation window: this task is the *only* caller of the resolution
+    path, and it runs only when a data source's config changes (a
+    ``config_version`` bump). There is no periodic sweep, and ingestion writes
+    the raw ``self.project_id`` / ``self.sensitivity``, not resolved values.
+    So an inherited item whose source's config never changes again is never
+    reconciled — its SQL row keeps the unresolved value indefinitely. "Eventual
+    consistency" here means "on the next config-version bump for the source",
+    which may be never. Resolving at ingest time or via a periodic sweep is a
+    deliberate follow-up (issue #80 Phase 3/4), out of scope for this change.
     """
     logger.info(
         f"Updating access control for {source_type} {source_id} (version {config_version})"
