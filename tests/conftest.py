@@ -478,6 +478,22 @@ def _transactional_db_session(db_engine):
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def no_celery_dispatch():
+    """Keep tests off a real Celery broker.
+
+    Code paths that dispatch tasks — notably the ``after_commit`` listener in
+    ``models/access_control_events.py``, which fires on every data-source
+    config change — would otherwise call ``app.send_task`` and try to reach
+    the broker host. Patch it to a Mock for every test; tests that want to
+    assert on dispatch can take this fixture and inspect the returned mock.
+    """
+    from memory.common.celery_app import app
+
+    with patch.object(app, "send_task") as mock_send_task:
+        yield mock_send_task
+
+
 @pytest.fixture(scope="session")
 def mcp_servers():
     """Pre-load MCP server modules once per test session.

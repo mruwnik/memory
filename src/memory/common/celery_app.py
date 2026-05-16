@@ -138,6 +138,7 @@ VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
+RECONCILE_ALL_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.reconcile_all_access_control"
 
 # Session tasks
 SESSIONS_ROOT = "memory.workers.tasks.sessions"
@@ -340,6 +341,12 @@ def build_beat_schedule() -> dict:
         "clean-all-collections": {
             "task": CLEAN_ALL_COLLECTIONS,
             "schedule": settings.CLEAN_COLLECTION_INTERVAL,
+        },
+        "reconcile-access-control": {
+            # Backstop: re-resolve every data source so inherited content
+            # under a source whose config never changes still converges.
+            "task": RECONCILE_ALL_ACCESS_CONTROL,
+            "schedule": crontab(hour="5", minute="30"),
         },
         "reingest-missing-chunks": {
             "task": REINGEST_MISSING_CHUNKS,

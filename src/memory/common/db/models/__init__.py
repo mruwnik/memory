@@ -172,6 +172,11 @@ from memory.common.db.models.deadlines import (
     DeadlinePayload,
     deadline_attachments,
 )
+# Importing this registers the before_flush/after_commit listeners that
+# dispatch access-control reconciliation when a data source's config changes.
+from memory.common.db.models.access_control_events import (
+    ACCESS_CONTROLLED_SOURCE_MODELS,
+)
 
 Payload = (
     SourceItemPayload
@@ -193,6 +198,7 @@ Payload = (
 )
 
 __all__ = [
+    "ACCESS_CONTROLLED_SOURCE_MODELS",
     "Base",
     "Chunk",
     "clean_filename",

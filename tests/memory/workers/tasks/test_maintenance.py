@@ -27,6 +27,7 @@ from memory.workers.tasks.maintenance import (
     update_metadata_for_item,
     update_metadata_for_source_items,
     update_source_access_control,
+    reconcile_all_access_control,
     get_item_class,
     _payloads_equal,
 )
@@ -1344,3 +1345,43 @@ def test_update_source_access_control_crosses_batch_boundary(
     # No row skipped or left stale across the batch boundary.
     assert all(r.project_id == project.id for r in rows)
     assert all(r.project_id_inherited is True for r in rows)
+
+
+def test_reconcile_all_access_control_dispatches_every_source(
+    db_session, test_user
+):
+    """The periodic backstop dispatches update_source_access_control once
+    per data source, at that source's current config_version."""
+    accounts = [
+        EmailAccount(
+            name=f"Recon Account {i}",
+            email_address=f"recon{i}@example.com",
+            imap_server="imap.example.com",
+            imap_port=993,
+            username=f"recon{i}@example.com",
+            password="pw",
+            use_ssl=True,
+            folders=["INBOX"],
+            tags=[],
+            active=True,
+            user_id=test_user.id,
+        )
+        for i in range(3)
+    ]
+    db_session.add_all(accounts)
+    db_session.commit()
+    account_ids = sorted(a.id for a in accounts)
+
+    with patch.object(update_source_access_control, "delay") as mock_delay:
+        result = reconcile_all_access_control()
+
+    assert result["status"] == "success"
+    assert result["dispatched"] == 3
+    assert mock_delay.call_count == 3
+
+    dispatched_ids = sorted(c.args[1] for c in mock_delay.call_args_list)
+    assert dispatched_ids == account_ids
+    for dispatch_call in mock_delay.call_args_list:
+        source_type, source_id, config_version = dispatch_call.args
+        assert source_type == "email_account"
+        assert config_version == 1  # server_default, never bumped
