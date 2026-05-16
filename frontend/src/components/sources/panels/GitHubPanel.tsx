@@ -129,6 +129,9 @@ export const GitHubPanel = () => {
                   <h4 className={styles.cardTitle}>{account.name}</h4>
                   <p className={styles.cardSubtitle}>
                     {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
+                    {account.verified_login
+                      ? ` · verified as ${account.verified_login}`
+                      : ' · unverified'}
                     {!account.active && ' (disabled)'}
                   </p>
                 </div>

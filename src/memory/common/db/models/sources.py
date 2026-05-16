@@ -302,7 +302,12 @@ class GithubAccount(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Self-attested display name
+
+    # Login GitHub itself reports for the stored credentials. Unlike
+    # ``name`` this is never taken from user input, so it is the only
+    # field safe to use for identity decisions. NULL until verified.
+    verified_login: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Authentication - support both PAT and GitHub App
     auth_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pat' or 'app'

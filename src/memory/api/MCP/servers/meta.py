@@ -130,8 +130,16 @@ def _get_current_user(session: DBSession) -> dict:
         .filter(GithubAccount.user_id == user_session.user.id)
         .all()
     )
+    # ``name`` is self-attested and must not be used for identity
+    # decisions; ``verified_login`` is what GitHub reports for the
+    # stored credentials and is None until verified (see issue #84).
     user_info["github_accounts"] = [
-        {"name": a.name, "auth_type": a.auth_type} for a in github_accounts
+        {
+            "name": a.name,
+            "auth_type": a.auth_type,
+            "verified_login": a.verified_login,
+        }
+        for a in github_accounts
     ]
 
     # Enrich from linked Person record (via User.person or discord_accounts)

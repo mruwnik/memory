@@ -136,6 +136,8 @@ export interface GithubRepo {
 export interface GithubAccount {
   id: number
   name: string
+  /** GitHub-verified login for the stored credentials; null if unverified. */
+  verified_login: string | null
   auth_type: 'pat' | 'app'
   has_access_token: boolean
   has_private_key: boolean

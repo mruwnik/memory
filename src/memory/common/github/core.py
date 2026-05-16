@@ -138,8 +138,8 @@ class GithubClientCore:
         self.session.headers["X-GitHub-Api-Version"] = "2022-11-28"
         self.session.headers["User-Agent"] = "memory-kb-github-sync"
 
-    def _get_installation_token(self) -> str:
-        """Get installation access token for GitHub App."""
+    def _generate_app_jwt(self) -> str:
+        """Generate a short-lived app-level JWT for GitHub App auth."""
         try:
             import jwt
         except ImportError:
@@ -147,8 +147,6 @@ class GithubClientCore:
 
         if not self.credentials.app_id or not self.credentials.private_key:
             raise ValueError("app_id and private_key required for app auth")
-        if not self.credentials.installation_id:
-            raise ValueError("installation_id required for app auth")
 
         now = int(time.time())
         payload = {
@@ -156,9 +154,14 @@ class GithubClientCore:
             "exp": now + 600,
             "iss": self.credentials.app_id,
         }
-        jwt_token = jwt.encode(
-            payload, self.credentials.private_key, algorithm="RS256"
-        )
+        return jwt.encode(payload, self.credentials.private_key, algorithm="RS256")
+
+    def _get_installation_token(self) -> str:
+        """Get installation access token for GitHub App."""
+        if not self.credentials.installation_id:
+            raise ValueError("installation_id required for app auth")
+
+        jwt_token = self._generate_app_jwt()
 
         # Retry with exponential backoff for transient errors
         max_retries = 3
@@ -205,3 +208,47 @@ class GithubClientCore:
         response = self.session.get(f"{GITHUB_API_URL}/user", timeout=30)
         response.raise_for_status()
         return response.json()
+
+    def get_app_installation(self) -> dict[str, Any]:
+        """Fetch installation metadata for App auth using an app-level JWT.
+
+        The installation token used for normal API calls cannot read
+        ``/app/installations/...``; that endpoint needs the app JWT.
+        """
+        if self.credentials.auth_type != "app":
+            raise ValueError("get_app_installation requires app auth")
+        if not self.credentials.installation_id:
+            raise ValueError("installation_id required for app auth")
+
+        jwt_token = self._generate_app_jwt()
+        response = requests.get(
+            f"{GITHUB_API_URL}/app/installations/{self.credentials.installation_id}",
+            headers={
+                "Authorization": f"Bearer {jwt_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_authenticated_login(self) -> str:
+        """Return the GitHub login that owns the configured credentials.
+
+        For PAT auth this is the token owner (``GET /user``). For App
+        auth there is no user, so it is the account the installation
+        belongs to (``GET /app/installations/{id}``). The value comes
+        straight from GitHub, so callers may treat it as a verified
+        identity rather than self-attested input.
+        """
+        if self.credentials.auth_type == "app":
+            account = self.get_app_installation().get("account") or {}
+            login = account.get("login")
+            if not login:
+                raise ValueError("GitHub installation response missing account login")
+            return login
+
+        login = self.get_authenticated_user().get("login")
+        if not login:
+            raise ValueError("GitHub /user response missing login")
+        return login

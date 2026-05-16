@@ -57,8 +57,24 @@ def test_list_accounts_empty_when_no_accounts(client, db_session, user):
 # ====== POST /github/accounts tests ======
 
 
-def test_create_account_pat_success(client, db_session, user):
+def make_github_client_mock(login: str | None = "octocat") -> Mock:
+    """Build a GithubClient mock whose credentials resolve to ``login``.
+
+    ``login=None`` simulates a verification failure (bad credentials or
+    GitHub unreachable) by raising from ``get_authenticated_login``.
+    """
+    mock_client = Mock()
+    if login is None:
+        mock_client.get_authenticated_login.side_effect = RuntimeError("bad creds")
+    else:
+        mock_client.get_authenticated_login.return_value = login
+    return mock_client
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_create_account_pat_success(mock_client_class, client, db_session, user):
     """Create GitHub account with PAT authentication succeeds."""
+    mock_client_class.return_value = make_github_client_mock("octocat")
     payload = {
         "name": "My GitHub PAT",
         "auth_type": "pat",
@@ -72,15 +88,20 @@ def test_create_account_pat_success(client, db_session, user):
     assert data["name"] == "My GitHub PAT"
     assert data["auth_type"] == "pat"
     assert data["has_access_token"] is True
+    # Identity is resolved from the credentials, not the request body.
+    assert data["verified_login"] == "octocat"
 
     # Verify account was created in database
     account = db_session.query(GithubAccount).filter_by(name="My GitHub PAT").first()
     assert account is not None
     assert account.user_id == user.id
+    assert account.verified_login == "octocat"
 
 
-def test_create_account_app_success(client, db_session, user):
+@patch("memory.api.github_sources.GithubClient")
+def test_create_account_app_success(mock_client_class, client, db_session, user):
     """Create GitHub account with App authentication succeeds."""
+    mock_client_class.return_value = make_github_client_mock("acme-org")
     payload = {
         "name": "My GitHub App",
         "auth_type": "app",
@@ -98,6 +119,45 @@ def test_create_account_app_success(client, db_session, user):
     assert data["app_id"] == 12345
     assert data["installation_id"] == 67890
     assert data["has_private_key"] is True
+    assert data["verified_login"] == "acme-org"
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_create_account_ignores_spoofed_name(mock_client_class, client, db_session, user):
+    """A client-supplied name cannot masquerade as a GitHub identity (issue #84)."""
+    mock_client_class.return_value = make_github_client_mock("real-attacker")
+    payload = {
+        "name": "trusted-maintainer",  # the spoofed identity
+        "auth_type": "pat",
+        "access_token": "ghp_attackers_own_token",
+    }
+
+    response = client.post("/github/accounts", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    # name is preserved as a display label, but verified_login reflects
+    # who GitHub says the token actually belongs to.
+    assert data["name"] == "trusted-maintainer"
+    assert data["verified_login"] == "real-attacker"
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_create_account_unverified_when_github_unreachable(
+    mock_client_class, client, db_session, user
+):
+    """Verification failures leave verified_login NULL rather than trusting input."""
+    mock_client_class.return_value = make_github_client_mock(None)
+    payload = {
+        "name": "My GitHub PAT",
+        "auth_type": "pat",
+        "access_token": "ghp_test123",
+    }
+
+    response = client.post("/github/accounts", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["verified_login"] is None
 
 
 @pytest.mark.parametrize(
@@ -205,8 +265,10 @@ def test_update_account_name(client, db_session, user):
         ("private_key", "-----BEGIN RSA PRIVATE KEY-----\nkey\n-----END RSA PRIVATE KEY-----"),
     ],
 )
-def test_update_account_fields(client, db_session, user, field, value):
+@patch("memory.api.github_sources.GithubClient")
+def test_update_account_fields(mock_client_class, client, db_session, user, field, value):
     """Update account fields succeeds."""
+    mock_client_class.return_value = make_github_client_mock("octocat")
     account = GithubAccount(
         user_id=user.id,
         name="Test Account",
@@ -226,6 +288,60 @@ def test_update_account_fields(client, db_session, user, field, value):
     # Verify in database
     db_session.refresh(account)
     assert getattr(account, field) == value
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_update_account_reverifies_on_credential_change(
+    mock_client_class, client, db_session, user
+):
+    """Changing credentials re-resolves the verified login from GitHub."""
+    mock_client_class.return_value = make_github_client_mock("new-identity")
+    account = GithubAccount(
+        user_id=user.id,
+        name="Test Account",
+        auth_type="pat",
+        access_token="old_token",
+        verified_login="old-identity",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    response = client.patch(
+        f"/github/accounts/{account.id}",
+        json={"access_token": "new_token"},
+    )
+
+    assert response.status_code == 200
+    db_session.refresh(account)
+    assert account.verified_login == "new-identity"
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_update_account_name_only_keeps_verified_login(
+    mock_client_class, client, db_session, user
+):
+    """Updating only the display name must not touch the verified identity."""
+    account = GithubAccount(
+        user_id=user.id,
+        name="Original Name",
+        auth_type="pat",
+        access_token="token123",
+        verified_login="octocat",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    response = client.patch(
+        f"/github/accounts/{account.id}",
+        json={"name": "Renamed"},
+    )
+
+    assert response.status_code == 200
+    # A name-only update must not re-verify: no GitHub client constructed.
+    mock_client_class.assert_not_called()
+    db_session.refresh(account)
+    assert account.name == "Renamed"
+    assert account.verified_login == "octocat"
 
 
 def test_update_account_not_owned(regular_client, db_session, user, other_user):
@@ -292,6 +408,59 @@ def test_delete_account_not_owned(regular_client, db_session, user, other_user):
     response = regular_client.delete(f"/github/accounts/{account.id}")
 
     assert response.status_code == 404
+
+
+# ====== POST /github/accounts/{account_id}/validate tests ======
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_validate_account_persists_verified_login(
+    mock_client_class, client, db_session, user
+):
+    """A successful validation (re)stores the GitHub-verified login."""
+    mock_client_class.return_value = make_github_client_mock("octocat")
+    account = GithubAccount(
+        user_id=user.id,
+        name="Test Account",
+        auth_type="pat",
+        access_token="token123",
+    )
+    db_session.add(account)
+    db_session.commit()
+    assert account.verified_login is None
+
+    response = client.post(f"/github/accounts/{account.id}/validate")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["user"] == "octocat"
+    db_session.refresh(account)
+    assert account.verified_login == "octocat"
+
+
+@patch("memory.api.github_sources.GithubClient")
+def test_validate_account_error_leaves_verified_login(
+    mock_client_class, client, db_session, user
+):
+    """A failed validation reports an error and does not overwrite identity."""
+    mock_client_class.return_value = make_github_client_mock(None)
+    account = GithubAccount(
+        user_id=user.id,
+        name="Test Account",
+        auth_type="pat",
+        access_token="token123",
+        verified_login="octocat",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    response = client.post(f"/github/accounts/{account.id}/validate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    db_session.refresh(account)
+    assert account.verified_login == "octocat"
 
 
 # ====== POST /github/accounts/{account_id}/repos tests ======
