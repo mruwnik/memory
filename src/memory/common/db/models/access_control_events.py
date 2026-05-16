@@ -21,7 +21,6 @@ the backstop that re-dispatches anything missed.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
@@ -93,16 +92,9 @@ def bump_config_version_on_ac_change(session, flush_context, instances):
     source has no content items yet, so there is nothing to reconcile until
     items are ingested (and the periodic sweep covers that). The bumped
     version both invalidates in-flight stale jobs and is the argument the
-    dispatched task validates against.
-
-    ``updated_at`` is also advanced here. The frequent reconciliation sweep
-    (``reconcile_access_control(updated_within_seconds=...)``) selects
-    recently-changed sources via ``updated_at >= cutoff`` — but only the
-    Slack/Discord source models carry ``onupdate=func.now()``; the
-    ``sources.py`` ones (``EmailAccount``, ``ArticleFeed``, ...) do not, so
-    their ``updated_at`` would never advance on a config change and the
-    frequent tier would silently skip them. Setting it explicitly here makes
-    the window filter reliable for all source types, no migration needed.
+    dispatched task validates against. The bump is itself a row UPDATE, so
+    every source model's ``updated_at`` (all carry ``onupdate=func.now()``)
+    advances too.
     """
     pending = session.info.setdefault(PENDING_DISPATCH_KEY, [])
     for obj in session.dirty:
@@ -120,7 +112,6 @@ def bump_config_version_on_ac_change(session, flush_context, instances):
             continue
 
         obj.config_version = (obj.config_version or 0) + 1
-        obj.updated_at = datetime.now(timezone.utc)
         pending.append((source_type, obj.id, obj.config_version))
 
 

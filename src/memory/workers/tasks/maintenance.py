@@ -919,23 +919,42 @@ def update_source_access_control(
 @app.task(name=RECONCILE_ACCESS_CONTROL)
 @tracked_task
 def reconcile_access_control(updated_within_seconds: int | None = None):
-    """Dispatch ``update_source_access_control`` for data sources.
+    """Reconcile inherited access control for source *items*.
 
-    The ``before_flush`` / ``after_commit`` listeners in
-    ``models/access_control_events.py`` dispatch reconciliation when a
-    source's config *changes*. This periodic beat task is the backstop, run
-    in two tiers:
+    Resolves each item's project_id / sensitivity onto its SQL row and Qdrant
+    payloads — the same per-item work ``update_source_access_control`` does,
+    but keyed on the items themselves rather than their data source. That is
+    what catches freshly-ingested or recently-edited content directly:
+    ``SourceItem.updated_at`` has ``onupdate``, so any insert or change lands
+    the item in the window.
+
+    The ``after_commit`` listener in ``models/access_control_events.py``
+    handles the other direction (a data source's *config* changing). This
+    task is the periodic backstop, run in two tiers:
 
     - ``updated_within_seconds`` set (frequent, e.g. every 30 min): only
-      sources whose row changed within that window — a cheap re-dispatch
-      that backs up the event-driven path in case a dispatch was lost.
-    - ``updated_within_seconds=None`` (daily): every source. Catches
-      inherited content ingested under a source whose own row never changes.
+      items whose row changed within the window.
+    - ``updated_within_seconds=None`` (daily): every item — the full sweep.
 
-    Each source is dispatched at its current ``config_version``. Dispatch is
-    idempotent — an item already carrying its resolved values is a no-op
-    (``apply_inherited_access_control`` skips unchanged writes), and explicit
-    overrides are never touched.
+    Lost-dispatch recovery window: a config change whose ``after_commit``
+    dispatch was lost (broker briefly down — the listener logs and swallows
+    the failure) does not move any *item's* ``updated_at``, so the recent
+    item-keyed tier cannot re-detect it. Such a lost dispatch is recovered
+    only by the daily full sweep — i.e. within ~24h, not ~30min. This is an
+    accepted trade for keying on items: lost dispatches are rare and logged,
+    and the failure direction (stale resolved values) is corrected, not a
+    hard breakage.
+
+    Idempotent: ``apply_inherited_access_control`` skips unchanged rows, the
+    Qdrant payload is rewritten only when the resolved values actually moved,
+    and explicit overrides are never touched.
+
+    Cost note: per item this lazy-loads the data-source chain
+    (``apply_inherited_access_control`` -> ``resolve_access_control`` ->
+    ``get_data_source``), one extra query per item. Acceptable for a
+    background task; grouping items by source would remove it if it matters.
+    Pagination is keyset (``id > last_id``), so the daily full sweep stays
+    O(N) and doesn't skip rows deleted mid-sweep.
     """
     cutoff = None
     if updated_within_seconds is not None:
@@ -943,21 +962,63 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
             seconds=updated_within_seconds
         )
 
-    dispatched = 0
+    client = qdrant.get_qdrant_client()
+    reconciled = 0
+    changed = 0
+    batch_size = 100
+    last_id = 0
     with make_session() as session:
-        for source_type, model in ACCESS_CONTROLLED_SOURCE_MODELS.items():
-            query = session.query(model.id, model.config_version)
+        while True:
+            query = (
+                session.query(SourceItem)
+                .options(selectinload(SourceItem.chunks))
+                .filter(SourceItem.id > last_id)
+                .order_by(SourceItem.id)
+            )
             if cutoff is not None:
-                query = query.filter(model.updated_at >= cutoff)
-            for source_id, config_version in query.all():
-                update_source_access_control.delay(  # type: ignore
-                    source_type, source_id, config_version
-                )
-                dispatched += 1
+                query = query.filter(SourceItem.updated_at >= cutoff)
+            items = query.limit(batch_size).all()
+            if not items:
+                break
+            last_id = items[-1].id
+
+            for item in items:
+                before = (item.project_id, item.sensitivity)
+                project_id, sensitivity = item.apply_inherited_access_control()
+                reconciled += 1
+                # Resolved values unchanged -> SQL row and Qdrant payload are
+                # already correct; skip the redundant payload rewrites.
+                if (item.project_id, item.sensitivity) == before:
+                    continue
+                changed += 1
+                for chunk in item.chunks:
+                    if not chunk.id or not chunk.collection_name:
+                        continue
+                    try:
+                        qdrant.set_payload(
+                            client,
+                            chunk.collection_name,
+                            str(chunk.id),
+                            {
+                                "project_id": project_id,
+                                "sensitivity": sensitivity,
+                            },
+                        )
+                    except Exception as e:
+                        # Best-effort: the next run (or config dispatch)
+                        # reconciles a chunk a transient error skipped.
+                        logger.error(
+                            "reconcile_access_control: failed to update chunk %s: %s",
+                            chunk.id,
+                            e,
+                        )
+
+            session.commit()
 
     logger.info(
-        "reconcile_access_control(updated_within_seconds=%s) dispatched %d sources",
+        "reconcile_access_control(updated_within_seconds=%s): %d items examined, %d changed",
         updated_within_seconds,
-        dispatched,
+        reconciled,
+        changed,
     )
-    return {"status": "success", "dispatched": dispatched}
+    return {"status": "success", "reconciled": reconciled, "changed": changed}

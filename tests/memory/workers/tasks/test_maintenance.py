@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 from PIL import Image
+from sqlalchemy import update
 
 from memory.common import qdrant as qd
 from memory.common import settings
@@ -1347,76 +1348,142 @@ def test_update_source_access_control_crosses_batch_boundary(
     assert all(r.project_id_inherited is True for r in rows)
 
 
-def make_recon_accounts(db_session, test_user, n):
-    accounts = [
-        EmailAccount(
-            name=f"Recon Account {i}",
-            email_address=f"recon{i}@example.com",
-            imap_server="imap.example.com",
-            imap_port=993,
-            username=f"recon{i}@example.com",
-            password="pw",
-            use_ssl=True,
-            folders=["INBOX"],
-            tags=[],
-            active=True,
-            user_id=test_user.id,
+def make_recon_setup(db_session, test_user, n_messages):
+    """Create a project, an EmailAccount on it, and n inherited MailMessages."""
+    project = Project(title="Reconcile Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+    account = EmailAccount(
+        name="Recon Account",
+        email_address="recon@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="recon@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=test_user.id,
+        project_id=project.id,
+    )
+    db_session.add(account)
+    db_session.flush()
+    messages = [
+        MailMessage(
+            sha256=b"recon" + str(i).zfill(27).encode(),
+            subject=f"m{i}",
+            email_account_id=account.id,
         )
-        for i in range(n)
+        for i in range(n_messages)
     ]
-    db_session.add_all(accounts)
+    db_session.add_all(messages)
     db_session.commit()
-    return accounts
+    return project, account, messages
 
 
-def test_reconcile_access_control_full_dispatches_every_source(
-    db_session, test_user
+def test_reconcile_access_control_full_resolves_all_items(
+    db_session, qdrant, test_user
 ):
-    """With no window, the backstop dispatches update_source_access_control
-    once per data source, at that source's current config_version."""
-    accounts = make_recon_accounts(db_session, test_user, 3)
-    account_ids = sorted(a.id for a in accounts)
+    """With no window, the sweep reconciles every source item — inherited
+    rows get their project_id resolved onto the SQL row."""
+    project, account, messages = make_recon_setup(db_session, test_user, 3)
+    assert all(m.project_id is None for m in messages)  # precondition
 
-    with patch.object(update_source_access_control, "delay") as mock_delay:
-        result = reconcile_access_control()
+    result = reconcile_access_control()
 
     assert result["status"] == "success"
-    assert result["dispatched"] == 3
-    assert mock_delay.call_count == 3
-
-    dispatched_ids = sorted(c.args[1] for c in mock_delay.call_args_list)
-    assert dispatched_ids == account_ids
-    for dispatch_call in mock_delay.call_args_list:
-        source_type, source_id, config_version = dispatch_call.args
-        assert source_type == "email_account"
-        assert config_version == 1  # server_default, never bumped
+    assert result["reconciled"] == 3
+    assert result["changed"] == 3
+    for message in messages:
+        db_session.refresh(message)
+        assert message.project_id == project.id
+        assert message.project_id_inherited is True
 
 
-def test_reconcile_access_control_recent_window_includes_fresh_sources(
-    db_session, test_user
+def test_reconcile_access_control_recent_window_includes_fresh_items(
+    db_session, qdrant, test_user
 ):
-    """The recent-window mode still dispatches just-created sources (their
+    """The recent-window mode reconciles just-ingested items (their
     updated_at is within the window)."""
-    make_recon_accounts(db_session, test_user, 2)
+    project, account, messages = make_recon_setup(db_session, test_user, 2)
 
-    with patch.object(update_source_access_control, "delay") as mock_delay:
-        result = reconcile_access_control(updated_within_seconds=3600)
+    result = reconcile_access_control(updated_within_seconds=3600)
 
-    assert result["dispatched"] == 2
-    assert mock_delay.call_count == 2
+    assert result["reconciled"] == 2
+    for message in messages:
+        db_session.refresh(message)
+        assert message.project_id == project.id
 
 
-def test_reconcile_access_control_recent_window_excludes_stale_sources(
-    db_session, test_user
+def test_reconcile_access_control_recent_window_excludes_old_items(
+    db_session, qdrant, test_user
 ):
-    """A source whose updated_at is older than the window is skipped."""
-    accounts = make_recon_accounts(db_session, test_user, 2)
-    # Backdate one account well outside the window.
-    accounts[0].updated_at = datetime.now(timezone.utc) - timedelta(hours=5)
+    """An item whose updated_at predates the window is skipped entirely."""
+    project, account, messages = make_recon_setup(db_session, test_user, 2)
+    # Backdate one item via a Core UPDATE. updated_at is explicit in the SET
+    # clause, so onupdate=func.now() does not override it.
+    old = datetime.now(timezone.utc) - timedelta(hours=5)
+    db_session.execute(
+        update(SourceItem)
+        .where(SourceItem.id == messages[0].id)
+        .values(updated_at=old)
+    )
     db_session.commit()
 
-    with patch.object(update_source_access_control, "delay") as mock_delay:
-        result = reconcile_access_control(updated_within_seconds=3600)
+    result = reconcile_access_control(updated_within_seconds=3600)
 
-    assert result["dispatched"] == 1
-    assert mock_delay.call_args.args[1] == accounts[1].id
+    assert result["reconciled"] == 1  # only the fresh item examined
+    db_session.refresh(messages[0])
+    db_session.refresh(messages[1])
+    assert messages[0].project_id is None  # excluded -> still inherited NULL
+    assert messages[1].project_id == project.id  # included -> resolved
+
+
+def test_reconcile_access_control_updates_qdrant_payload(
+    db_session, qdrant, test_user
+):
+    """A reconciled item's chunks get their Qdrant payload rewritten with the
+    resolved project_id / sensitivity."""
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=messages[0],
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        result = reconcile_access_control()
+
+    assert result["changed"] == 1
+    mock_set.assert_called_once()
+    _client, collection, point_id, payload = mock_set.call_args.args
+    assert collection == "mail"
+    assert point_id == chunk_id
+    assert payload == {"project_id": project.id, "sensitivity": "basic"}
+
+
+def test_reconcile_access_control_crosses_batch_boundary(
+    db_session, qdrant, test_user
+):
+    """>100 items: the keyset-paginated sweep reconciles every one across
+    the batch boundary."""
+    n = 150
+    project, account, messages = make_recon_setup(db_session, test_user, n)
+
+    result = reconcile_access_control()
+
+    assert result["reconciled"] == n
+    assert result["changed"] == n
+    rows = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.id.in_([m.id for m in messages]))
+        .all()
+    )
+    assert len(rows) == n
+    assert all(r.project_id == project.id for r in rows)
