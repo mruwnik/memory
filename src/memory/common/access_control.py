@@ -9,7 +9,8 @@ Key design decisions:
 - Projects with Teams assigned (team_projects junction)
 - User -> Person -> team_members -> Team -> project_teams -> Project
 - NULL project_id = superadmin only (prevents accidental exposure)
-- Superadmins (users with admin scope) bypass filters but access is still logged
+- Superadmins (users with admin scope) bypass filters; every bypass is logged
+  at INFO level (see user_can_access / build_access_filter) for the audit trail
 - Defense in depth: filter at Qdrant, BM25, AND final merge
 """
 
@@ -350,6 +351,11 @@ def user_can_access(
     """
     # Superadmins see everything
     if has_admin_scope(user):
+        logger.info(
+            "admin access bypass: user_id=%s action=access_item item_id=%s",
+            getattr(user, "id", None),
+            getattr(item, "id", None),
+        )
         return True
 
     # Creator always sees their own items
@@ -451,6 +457,10 @@ def build_access_filter(
     """
     # Superadmins see everything - no filter needed
     if has_admin_scope(user):
+        logger.info(
+            "admin access bypass: user_id=%s action=build_search_filter",
+            getattr(user, "id", None),
+        )
         return None
 
     # Get person ID for person override filtering

@@ -28,7 +28,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
-from memory.common.db.models.source_item import AccessControlMixin
+from memory.common.db.models.source_item import (
+    AccessControlMixin,
+    register_access_control_inheritance_tracking,
+)
 
 if TYPE_CHECKING:
     from memory.common.db.models.source_item import SourceItem
@@ -149,3 +152,8 @@ class Deadline(AccessControlMixin, Base):
 
     def __repr__(self) -> str:
         return f"<Deadline id={self.id} title={self.title!r} date={self.date}>"
+
+
+# Flip project_id_inherited / sensitivity_inherited to False on explicit
+# assignment (see register_access_control_inheritance_tracking).
+register_access_control_inheritance_tracking(Deadline)

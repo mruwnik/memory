@@ -665,14 +665,29 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
     }
 
 
+def paginate_source_items(session, model, condition, offset: int, limit: int):
+    """Fetch one offset/limit page of ``model`` rows matching ``condition``.
+
+    Ordered by primary key: offset pagination without a stable ORDER BY can
+    skip or double-process rows across batches, which matters because the
+    caller commits per batch and is designed to be resumable. Chunks are
+    eager-loaded to avoid N+1 queries in the caller.
+    """
+    return (
+        session.query(model)
+        .options(selectinload(model.chunks))
+        .filter(condition)
+        .order_by(model.id)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
 def get_items_for_source(
     session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
 ):
-    """Get items that belong to a data source for access control updates.
-
-    Items are eager-loaded with their chunks to avoid N+1 queries when
-    iterating over items and accessing item.chunks in the caller.
-    """
+    """Get items that belong to a data source for access control updates."""
     from memory.common.db.models.source_items import (
         BlogPost,
         CalendarEvent,
@@ -684,22 +699,14 @@ def get_items_for_source(
     )
 
     if source_type == "email_account":
-        return (
-            session.query(MailMessage)
-            .options(selectinload(MailMessage.chunks))
-            .filter(MailMessage.email_account_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, MailMessage,
+            MailMessage.email_account_id == source_id, offset, limit,
         )
     elif source_type == "slack_channel":
-        return (
-            session.query(SlackMessage)
-            .options(selectinload(SlackMessage.chunks))
-            .filter(SlackMessage.channel_id == str(source_id))
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, SlackMessage,
+            SlackMessage.channel_id == str(source_id), offset, limit,
         )
     elif source_type == "slack_workspace":
         # Get all messages in channels belonging to this workspace
@@ -710,22 +717,14 @@ def get_items_for_source(
         ]
         if not channel_ids:
             return []
-        return (
-            session.query(SlackMessage)
-            .options(selectinload(SlackMessage.chunks))
-            .filter(SlackMessage.channel_id.in_(channel_ids))
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, SlackMessage,
+            SlackMessage.channel_id.in_(channel_ids), offset, limit,
         )
     elif source_type == "discord_channel":
-        return (
-            session.query(DiscordMessage)
-            .options(selectinload(DiscordMessage.chunks))
-            .filter(DiscordMessage.channel_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, DiscordMessage,
+            DiscordMessage.channel_id == source_id, offset, limit,
         )
     elif source_type == "discord_server":
         # Get all messages in channels belonging to this server
@@ -736,49 +735,27 @@ def get_items_for_source(
         ]
         if not channel_ids:
             return []
-        return (
-            session.query(DiscordMessage)
-            .options(selectinload(DiscordMessage.chunks))
-            .filter(DiscordMessage.channel_id.in_(channel_ids))
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, DiscordMessage,
+            DiscordMessage.channel_id.in_(channel_ids), offset, limit,
         )
     elif source_type == "calendar_account":
-        return (
-            session.query(CalendarEvent)
-            .options(selectinload(CalendarEvent.chunks))
-            .filter(CalendarEvent.calendar_account_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, CalendarEvent,
+            CalendarEvent.calendar_account_id == source_id, offset, limit,
         )
     elif source_type == "google_folder":
-        return (
-            session.query(GoogleDoc)
-            .options(selectinload(GoogleDoc.chunks))
-            .filter(GoogleDoc.folder_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, GoogleDoc, GoogleDoc.folder_id == source_id, offset, limit,
         )
     elif source_type == "article_feed":
-        return (
-            session.query(BlogPost)
-            .options(selectinload(BlogPost.chunks))
-            .filter(BlogPost.feed_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, BlogPost, BlogPost.feed_id == source_id, offset, limit,
         )
     elif source_type == "transcript_account":
-        return (
-            session.query(Meeting)
-            .options(selectinload(Meeting.chunks))
-            .filter(Meeting.transcript_account_id == source_id)
-            .offset(offset)
-            .limit(limit)
-            .all()
+        return paginate_source_items(
+            session, Meeting,
+            Meeting.transcript_account_id == source_id, offset, limit,
         )
     else:
         raise ValueError(f"Unknown source type: {source_type}")
@@ -815,10 +792,18 @@ def get_data_source_model(source_type: str):
 def update_source_access_control(
     self, source_type: str, source_id: int | str, config_version: int
 ):
-    """Update Qdrant payloads when data source access config changes.
+    """Persist resolved access control when data source config changes.
 
-    When a data source's project_id or sensitivity changes, this task updates
-    the resolved values in Qdrant payloads for all items belonging to that source.
+    When a data source's project_id or sensitivity changes, this task
+    resolves each belonging item's inherited access control and writes the
+    result to BOTH the Qdrant payload AND the SQL row (``project_id`` /
+    ``sensitivity``). Persisting to the row is what keeps SQL/BM25 search in
+    sync with vector search — without it, inherited-only items are
+    discoverable via vector search but not via BM25 or direct row checks.
+
+    Rows with an explicit override (``project_id_inherited`` /
+    ``sensitivity_inherited`` is False) are left untouched; only inherited
+    values are (re-)resolved.
 
     Args:
         source_type: Type of data source (email_account, slack_channel, etc.)
@@ -867,10 +852,21 @@ def update_source_access_control(
                 break
 
             for item in items:
-                # Get resolved access control values
-                resolved_project_id, resolved_sensitivity = item.resolve_access_control()
+                # Resolve access control and persist inherited values onto
+                # the SQL row (no-op for explicit overrides). The returned
+                # values are what's now effective on the row — used below
+                # for the Qdrant payload so both stores stay consistent.
+                resolved_project_id, resolved_sensitivity = (
+                    item.apply_inherited_access_control()
+                )
 
-                # Update Qdrant payload for each chunk
+                # Update Qdrant payload for each chunk. Note: if a chunk's
+                # Qdrant write fails on the "log and continue" path below,
+                # the SQL row is still committed with the new values, so SQL
+                # and Qdrant can briefly disagree for that item. Access
+                # filters apply at both layers, so the stricter one wins —
+                # the divergence costs visibility, never leaks. The next run
+                # (after a config_version bump) reconciles it.
                 for chunk in item.chunks:
                     if not chunk.id:
                         continue
@@ -905,6 +901,11 @@ def update_source_access_control(
                         errors += 1
 
                 updated_items += 1
+
+            # Persist this batch's resolved project_id / sensitivity. Commit
+            # per batch so a later failure doesn't discard rows already
+            # reconciled — the task is idempotent and safe to resume.
+            session.commit()
 
     logger.info(
         f"Updated {updated_items} items ({updated_chunks} chunks, {errors} errors) for "

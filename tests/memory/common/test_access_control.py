@@ -1,5 +1,7 @@
 """Tests for access control logic."""
 
+import logging
+
 from memory.common.access_control import (
     SensitivityLevel,
     ProjectRole,
@@ -29,7 +31,13 @@ class MockUser:
 class MockSourceItem:
     """Mock source item for testing."""
 
-    def __init__(self, project_id: int | None, sensitivity: str | None):
+    def __init__(
+        self,
+        project_id: int | None,
+        sensitivity: str | None,
+        id: int | None = None,
+    ):
+        self.id = id
         self.project_id = project_id
         self.sensitivity = sensitivity
 
@@ -514,3 +522,46 @@ def test_get_accessible_source_item_returns_item_for_admin(
         db_session, admin_user, "someone/else.txt"
     )
     assert result.id == item.id
+
+
+# --- Admin bypass audit logging ---
+
+AC_LOGGER = "memory.common.access_control"
+
+
+def test_user_can_access_admin_bypass_is_logged(caplog):
+    """Admin bypass in user_can_access emits an INFO audit line."""
+    user = MockUser(id=7, scopes=["*"])
+    item = MockSourceItem(project_id=None, sensitivity="confidential", id=42)
+
+    with caplog.at_level(logging.INFO, logger=AC_LOGGER):
+        assert user_can_access(user, item) is True
+
+    bypass_lines = [r for r in caplog.records if "admin access bypass" in r.message]
+    assert len(bypass_lines) == 1
+    assert "user_id=7" in bypass_lines[0].getMessage()
+    assert "item_id=42" in bypass_lines[0].getMessage()
+
+
+def test_user_can_access_non_admin_does_not_log_bypass(caplog):
+    """A regular user grant does not emit the admin bypass line."""
+    user = MockUser(id=8, scopes=[])
+    item = MockSourceItem(project_id=1, sensitivity="basic")
+
+    with caplog.at_level(logging.INFO, logger=AC_LOGGER):
+        user_can_access(user, item, {1: "contributor"})
+
+    assert not [r for r in caplog.records if "admin access bypass" in r.message]
+
+
+def test_build_access_filter_admin_bypass_is_logged(caplog):
+    """Admin bypass in build_access_filter emits an INFO audit line."""
+    user = MockUser(id=9, scopes=["*"])
+
+    with caplog.at_level(logging.INFO, logger=AC_LOGGER):
+        assert build_access_filter(user, {}) is None
+
+    bypass_lines = [r for r in caplog.records if "admin access bypass" in r.message]
+    assert len(bypass_lines) == 1
+    assert "user_id=9" in bypass_lines[0].getMessage()
+    assert "build_search_filter" in bypass_lines[0].getMessage()
