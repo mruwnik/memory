@@ -125,3 +125,21 @@ def test_noop_ac_field_assignment_does_not_dispatch(
 
     assert account.config_version == version_before
     no_celery_dispatch.assert_not_called()
+
+
+@pytest.mark.transactional_db
+def test_ac_change_advances_updated_at(db_session, test_user, no_celery_dispatch):
+    """A config change advances updated_at even on a source model without
+    onupdate=func.now() (EmailAccount). The frequent reconciliation sweep
+    filters on updated_at, so it must move when project_id/sensitivity does."""
+    project = Project(title="Updated-At Project", state="open")
+    db_session.add(project)
+    db_session.commit()
+
+    account = make_account(db_session, test_user)
+    updated_before = account.updated_at
+
+    account.project_id = project.id
+    db_session.commit()
+
+    assert account.updated_at > updated_before
