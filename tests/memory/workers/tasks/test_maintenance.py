@@ -1337,6 +1337,9 @@ def test_update_source_access_control_crosses_batch_boundary(
     assert result["status"] == "success"
     assert result["updated_items"] == n
 
+    # update_source_access_control wrote through its own session; force the
+    # test session to re-read from DB rather than return cached instances.
+    db_session.expire_all()
     rows = (
         db_session.query(MailMessage)
         .filter(MailMessage.id.in_(message_ids))
@@ -1487,3 +1490,46 @@ def test_reconcile_access_control_crosses_batch_boundary(
     )
     assert len(rows) == n
     assert all(r.project_id == project.id for r in rows)
+
+
+def test_reconcile_access_control_writes_qdrant_for_explicit_override(
+    db_session, qdrant, test_user
+):
+    """Regression for #86: items with an item-level explicit override
+    (``project_id_inherited=False``) must have their Qdrant payload rewritten
+    even when ``apply_inherited_access_control`` is a no-op on the SQL row.
+
+    Item-level overrides have no event-driven dispatch path (only data-source
+    config changes trigger ``update_source_access_control``), so the periodic
+    sweep is the only thing that can land the override in Qdrant. The
+    ``before == after`` short-circuit silently assumes Qdrant is already in
+    sync, which is exactly what breaks when the override was just applied.
+    """
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    msg = messages[0]
+    other_project = Project(title="Override Project", state="open")
+    db_session.add(other_project)
+    db_session.flush()
+    # Direct assignment trips the `set` listener -> project_id_inherited=False.
+    msg.project_id = other_project.id
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=msg,
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+    assert msg.project_id_inherited is False  # precondition
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        result = reconcile_access_control()
+
+    assert result["changed"] == 1
+    mock_set.assert_called_once()
+    _client, collection, point_id, payload = mock_set.call_args.args
+    assert collection == "mail"
+    assert point_id == chunk_id
+    assert payload == {"project_id": other_project.id, "sensitivity": "basic"}

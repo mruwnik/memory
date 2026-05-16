@@ -986,9 +986,19 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
                 before = (item.project_id, item.sensitivity)
                 project_id, sensitivity = item.apply_inherited_access_control()
                 reconciled += 1
-                # Resolved values unchanged -> SQL row and Qdrant payload are
-                # already correct; skip the redundant payload rewrites.
-                if (item.project_id, item.sensitivity) == before:
+                # Skip the Qdrant rewrite only when the row is fully
+                # inherited AND the resolved values didn't change — that's
+                # the case where we can trust Qdrant is in sync, because
+                # this same loop is the only thing that ever wrote it.
+                # For rows with any explicit override there is no
+                # event-driven dispatch from item-level writes (see #86),
+                # so the periodic sweep is the only path that can land
+                # the override in Qdrant — always rewrite. set_payload is
+                # idempotent, so the redundant case is cheap.
+                fully_inherited = (
+                    item.project_id_inherited and item.sensitivity_inherited
+                )
+                if fully_inherited and (item.project_id, item.sensitivity) == before:
                     continue
                 changed += 1
                 for chunk in item.chunks:
