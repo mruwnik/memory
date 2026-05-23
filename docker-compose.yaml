@@ -242,6 +242,7 @@ services:
       # story for the SlowAPI bucket-key proxy list. Defaults are loopback so
       # operators not behind a proxy stay secure-by-default.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1}
+      OAUTH_REDIRECT_URI_ALLOWLIST: ${OAUTH_REDIRECT_URI_ALLOWLIST:-}
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
     secrets: [postgres_password, openai_key, anthropic_key, secrets_encryption_key]
     volumes:
