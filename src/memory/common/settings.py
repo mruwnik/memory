@@ -304,6 +304,13 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 
+# Maximum number of concurrently running Claude session containers a single
+# user may have. Bounds host CPU/memory usage. Enforced in the /claude/spawn
+# endpoint, which also covers cron-triggered spawns (they call that endpoint).
+MAX_CONCURRENT_SESSIONS_PER_USER = int(
+    os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", 4)
+)
+
 # Maximum allowed body size for `/claude/transfer/push` (tar uploads to a
 # Claude container). The endpoint buffers the body in API memory before
 # proxying to the orchestrator, so an unbounded read is a single-request

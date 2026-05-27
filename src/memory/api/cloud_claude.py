@@ -531,6 +531,32 @@ async def spawn_session(
     # Note: mutual exclusivity of snapshot_id/environment_id is validated by
     # SpawnRequest.check_source_mutual_exclusivity (returns 422 on violation)
 
+    client = get_orchestrator_client()
+
+    # Enforce per-user limit on concurrent running sessions to bound host
+    # CPU/memory usage. Checked up front (before any volume work) so we fail
+    # fast and don't leave an orphan snapshot volume behind on rejection.
+    # NOTE: soft limit — a TOCTOU race is possible with simultaneous spawns,
+    # which is acceptable here. This also covers cron-triggered spawns, which
+    # reach this same endpoint via the scheduler worker.
+    async with map_orchestrator_errors(
+        log_msg="Failed to list sessions for concurrency check",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
+        containers = await client.list_containers()
+    active_count = sum(
+        1 for c in containers if user_owns_session(user, c.session_id)
+    )
+    if active_count >= settings.MAX_CONCURRENT_SESSIONS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Maximum of {settings.MAX_CONCURRENT_SESSIONS_PER_USER} "
+                "concurrent sessions per user reached"
+            ),
+        )
+
     host_snapshot_path: str | None = None
     volume_name: str | None = None
     environment: ClaudeEnvironment | None = None
@@ -576,7 +602,6 @@ async def spawn_session(
         environment_id=request.environment_id,
         snapshot_id=request.snapshot_id,
     )
-    client = get_orchestrator_client()
 
     image = "claude-cloud:latest"
     env: dict[str, str] = {}
