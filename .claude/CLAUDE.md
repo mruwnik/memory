@@ -296,6 +296,48 @@ _CSP_FORBIDDEN_CHARS = frozenset(...)
 
 This matters because today's "file-private" helper often becomes tomorrow's "imported from another file" helper, and renaming on import day generates churn that obscures the actual change.
 
+### Comments describe the present, not the past
+
+Comments and docstrings should describe **what the current code does and
+why it must be this way**. They should **not** narrate what the code
+used to be, what a previous implementation got wrong, or what was
+"replaced". Git history (``git log``, ``git blame``, PR descriptions)
+is where archaeology belongs.
+
+Keep the security/correctness *rationale* — the constraint on the code
+("comparing parsed origins is load-bearing because a prefix match would
+let an attacker register `localhost.evil.com/cb`"). Drop the
+*archaeology* ("the previous implementation used ``str.startswith``
+which let an attacker…").
+
+```python
+# Bad — narrates history
+def get_cipher() -> Fernet:
+    """Replaces the previous bare-SHA-256 derivation which had no work
+    factor, no salt, and was inconsistent with the codebase…"""
+
+# Good — describes the current constraint
+def get_cipher() -> Fernet:
+    """PBKDF2-HMAC-SHA256 with 480k iterations (OWASP-recommended) so a
+    leaked backup ciphertext is not feasibly brute-forceable. The pinned
+    salt is distinct from ``SECRETS_ENCRYPTION_SALT`` so backup and
+    at-rest ciphertexts cannot be cross-attacked under a shared
+    passphrase."""
+```
+
+The same applies to NOTE/FIXME blocks that exist only to explain why a
+dead entry was removed — once it's removed, the explanation belongs in
+the commit, not the file. The exception is operator-facing migration
+guidance (e.g. "v1 archives need the matching code revision to
+decrypt") — that's operational documentation, not archaeology.
+
+This also applies to MCP tool docstrings specifically: those are
+surfaced to clients via ``tools/list`` and must describe what the tool
+does, not how it's implemented or what it used to do. The MCP client
+has no visibility into the rest of the file, so references to
+"the gate comment below" or "previous behavior" are dead text on the
+wire.
+
 ## Testing
 
 ```bash

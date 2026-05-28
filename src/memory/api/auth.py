@@ -54,13 +54,6 @@ WHITELIST = {
     "/oauth/",
     "/.well-known/",
     "/ui",
-    # NOTE: ``/admin/statics/`` was previously listed here for SQLAdmin's
-    # static assets, but no SQLAdmin app was ever mounted (a grep across
-    # src/ for ``sqladmin``/``SQLAdmin`` returns nothing). The trailing-
-    # slash form is a prefix match, so the dead entry pre-granted
-    # unauthenticated access to any future ``/admin/statics/*`` route. If
-    # an admin UI is reintroduced later, scope the carve-out to that exact
-    # mount path at the time it's added — don't pre-create one.
     "/google-drive/callback",  # Google OAuth callback
     "/polls/respond",  # Public poll response endpoints
     # Cloud-claude file transfer: gated by HMAC-signed presigned tokens

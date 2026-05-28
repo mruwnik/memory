@@ -54,9 +54,9 @@ class NoAccess:
         return "NO_ACCESS"
 
     def __bool__(self) -> bool:
-        # Falsy so existing ``if access_conditions:`` checks behave like
-        # they did with the empty-tuple sentinel. ``isinstance`` is the
-        # authoritative discriminator; falsiness is compatibility only.
+        # Falsy so ``if access_conditions:`` skips the deny branch the
+        # same way it does for an empty list. ``isinstance`` is the
+        # authoritative discriminator; falsiness is a convenience only.
         return False
 
 
@@ -377,11 +377,11 @@ async def search_chunks(
     # Wrap in a nested Filter inside must for consistent structure
     access_filter = filters.get("access_filter")
     access_conditions = build_access_qdrant_filter(access_filter)
-    # Detect "no access" via the type-distinct ``NoAccess`` sentinel. The
-    # deny-all return is a separate type from ``list[...]`` so it cannot
-    # be confused with ``[]`` (superadmin / no filter needed) by any of
-    # the natural-looking refactors that broke the previous empty-tuple
-    # sentinel. ``isinstance`` is the canonical discriminator.
+    # Detect "no access" via the type-distinct ``NoAccess`` sentinel.
+    # The deny-all return is a separate type from ``list[...]`` so it
+    # cannot be confused with ``[]`` (superadmin / no filter needed) by
+    # any consumer — ``isinstance`` is the canonical discriminator and
+    # ``==``-based refactors cannot silently turn deny into allow-all.
     if isinstance(access_conditions, NoAccess):
         return {}
     if access_conditions:

@@ -189,24 +189,16 @@ def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
 def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
     """Resolve effective scopes for a request authenticated by API key.
 
-    The previous implementation used ``api_key_record.scopes or list(user.scopes or [])``,
-    which conflated two distinct values:
+    Distinguishes "no override declared" from "explicit empty override"
+    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
+    back to the user's full system scopes via a truthiness fallback:
 
-    * ``scopes is None`` → "no override; inherit user scopes" (the intent
-      documented in the column docstring).
-    * ``scopes == []`` → an explicit empty list, set by an admin/UI to
-      mean "no override scopes." Falsy ``[]`` triggered the same fallback,
-      silently re-granting the user's full system scopes (incl. ``"*"``).
-
-    That collapse was a privilege-escalation footgun: an admin trying to
-    create a low-privilege key by passing ``scopes=[]`` got an admin key.
-    This helper distinguishes the two cases:
-
-    * ``None`` → inherit user scopes (or [SCOPE_READ] if the user has none).
+    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
+      the user themselves has none).
     * Non-empty list → use as-is.
-    * Explicit empty list → fail closed: ``[SCOPE_READ]`` only, never the
-      user's system scopes. This is the safe default for "this key has no
-      privileges beyond read."
+    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
+      the user's system scopes. This is the safe default for "this key
+      has no privileges beyond read."
     """
     override = api_key_record.scopes
     if override is None:
@@ -267,11 +259,9 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
       anything based on its own scope/return-type contract.
     * For APIKey matches: ``handle_api_key_use`` is called *here* so the
       last_used_at bump and one-time-key delete happen atomically with the
-      lookup. Both ``verify_token`` and ``load_access_token`` previously
-      did this themselves; centralizing it is the anti-drift fix the
-      audit task called for. If a future revocation column / audit hook /
-      key-was-used webhook is added to ``handle_api_key_use``, both
-      callers get it for free.
+      lookup. Centralising it means both callers run it exactly once, and
+      a future revocation column / audit hook / key-was-used webhook
+      added to ``handle_api_key_use`` reaches both call sites for free.
 
     Returns ``None`` on:
     * unknown token
@@ -302,10 +292,8 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
             # detached-row bug shouldn't escalate to 500.
             return None
         # Side effect: bumps last_used_at; for one-time keys, atomically
-        # deletes the row. Doing it here means both callers run it exactly
-        # once, never twice, never zero times — the duplication that
-        # previously existed in verify_token/load_access_token is
-        # eliminated by extraction.
+        # deletes the row. Doing it here means every caller of
+        # lookup_principal runs it exactly once — never twice, never zero.
         handle_api_key_use(api_key_record, session)
         return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
 
@@ -600,10 +588,11 @@ class SimpleOAuthProvider(OAuthProvider):
 
         Validates that every redirect_uri's *origin* (scheme + host + port)
         matches one in the allowlist exactly, to prevent authorization-code
-        phishing via open dynamic client registration.  A previous version
-        used ``str.startswith`` which let an attacker register
-        ``http://localhost.evil.com/cb`` (it starts with ``http://localhost``)
-        and harvest auth codes; comparing parsed origins closes that hole.
+        phishing via open dynamic client registration. Comparing parsed
+        origins rather than string prefixes is load-bearing: a prefix
+        match would let an attacker register ``http://localhost.evil.com/cb``
+        against an ``http://localhost`` allowlist entry and harvest auth
+        codes.
 
         Configure OAUTH_REDIRECT_URI_ALLOWLIST (comma-separated URIs) to
         expand the default localhost-only allowlist.  ``*`` disables the

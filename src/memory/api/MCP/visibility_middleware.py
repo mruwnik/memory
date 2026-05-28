@@ -10,10 +10,6 @@ about authorization defaults to "denied" rather than "anonymous read".
 
 A user can access a tool if:
 - The tool's visibility checker returns True for the user.
-
-This was previously fail-open (no checker = anonymous access) which
-left e.g. ``meta.notify_user`` and ``forecast.*`` reachable by every
-authenticated MCP client regardless of OAuth-grant scopes.
 """
 
 import logging
