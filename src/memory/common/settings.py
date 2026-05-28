@@ -1,11 +1,11 @@
 import logging
 import os
 import pathlib
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from dotenv import load_dotenv
+
+from memory.common.crypto import derive_transfer_token_secret
 
 load_dotenv()
 
@@ -363,76 +363,6 @@ DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 # flag is also set to the literal "yes-i-am-sure" value.
 DISABLE_AUTH_CONFIRM = os.getenv("I_KNOW_THIS_DISABLES_AUTH", "")
 
-
-def is_loopback_url(url: str) -> bool:
-    """Return True if ``url`` clearly points at the local machine.
-
-    We deliberately accept only the exact loopback hostnames; anything
-    else (including IPv6 link-local, .local mDNS, private RFC1918, etc.)
-    is treated as non-loopback so the safety check fails closed.
-
-    ``0.0.0.0`` is intentionally **not** in the loopback set even though
-    "the box itself" is a common interpretation. ``0.0.0.0`` is the
-    wildcard bind address (``INADDR_ANY``) — semantically "listen on
-    every interface" — so a ``SERVER_URL=http://0.0.0.0:8000`` is a
-    statement of intent to reach the API from elsewhere on the network,
-    not a loopback declaration. The platform's resolution of dialing
-    ``0.0.0.0`` is also OS-dependent (loopback on Linux, the public IP
-    on Windows / some routed setups) so silently treating it as
-    loopback would be a false-negative for the safety check.
-    """
-    if not url:
-        return True
-    host = (urlparse(url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"}
-
-
-def validate_disable_auth_safety() -> None:
-    """Refuse to start when DISABLE_AUTH=true and prod-like signals are set.
-
-    Called eagerly at FastAPI app startup so a misconfigured deployment
-    crash-loops at boot rather than serving every endpoint anonymously.
-    Operators who knowingly want anonymous access in a non-loopback
-    environment must set ``I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure``.
-    """
-    if not DISABLE_AUTH:
-        return
-
-    prod_signals: list[str] = []
-    if not is_loopback_url(SERVER_URL):
-        prod_signals.append(f"SERVER_URL={SERVER_URL!r} is not loopback")
-    if S3_BACKUP_ENABLED:
-        prod_signals.append("S3_BACKUP_ENABLED=true")
-    non_loopback_redirects = [
-        p for p in OAUTH_REDIRECT_URI_ALLOWLIST if p != "*" and not is_loopback_url(p)
-    ]
-    if non_loopback_redirects:
-        prod_signals.append(
-            f"OAUTH_REDIRECT_URI_ALLOWLIST contains non-loopback entries: {non_loopback_redirects}"
-        )
-    if "*" in OAUTH_REDIRECT_URI_ALLOWLIST:
-        prod_signals.append("OAUTH_REDIRECT_URI_ALLOWLIST contains wildcard '*'")
-
-    if not prod_signals:
-        return
-
-    if DISABLE_AUTH_CONFIRM == "yes-i-am-sure":
-        logger.warning(
-            "DISABLE_AUTH=true with production signals %s, but "
-            "I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure is set. Proceeding.",
-            prod_signals,
-        )
-        return
-
-    raise RuntimeError(
-        "DISABLE_AUTH=true is set alongside production signals: "
-        + "; ".join(prod_signals)
-        + ". Refusing to start to avoid serving the API anonymously. "
-        "If this is genuinely a development environment, switch "
-        "SERVER_URL to localhost / disable S3 backup / restrict the "
-        "OAuth redirect allowlist to loopback. To override anyway, "
-        "set I_KNOW_THIS_DISABLES_AUTH=yes-i-am-sure."
-    )
 STATIC_DIR = pathlib.Path(
     os.getenv(
         "STATIC_DIR",
@@ -578,36 +508,13 @@ MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
 #    (``transfer_tokens._require_secret``). Operators who never use cloud-
 #    claude transfers don't need to configure either secret.
 #
-# Domain-separating ``info`` includes ``v1`` so that rotating the
-# derivation scheme (e.g. switching to a different hash) cleanly
-# invalidates all existing tokens by bumping the version tag.
-TRANSFER_TOKEN_SECRET_HKDF_INFO = b"memory:transfer-token-secret:v1"
-
-
-def derive_transfer_token_secret(master_key: str) -> str:
-    """HKDF-SHA256-derive a 32-byte (256-bit) HMAC key from ``master_key``.
-
-    Returns hex (the existing ``transfer_tokens._sign`` calls
-    ``secret.encode("utf-8")`` so any printable string works; hex keeps
-    the value greppable in process listings if it ever leaks). The
-    derivation is deterministic — same input → same output — which is
-    required so all API instances in a deployment compute the same
-    transfer secret without coordination.
-    """
-    derived_bytes = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=SECRETS_ENCRYPTION_SALT,
-        info=TRANSFER_TOKEN_SECRET_HKDF_INFO,
-    ).derive(master_key.encode("utf-8"))
-    return derived_bytes.hex()
-
-
 _explicit_transfer_secret = secret_env("TRANSFER_TOKEN_SECRET")
 if _explicit_transfer_secret:
     TRANSFER_TOKEN_SECRET: str | None = _explicit_transfer_secret
 elif SECRETS_ENCRYPTION_KEY:
-    TRANSFER_TOKEN_SECRET = derive_transfer_token_secret(SECRETS_ENCRYPTION_KEY)
+    TRANSFER_TOKEN_SECRET = derive_transfer_token_secret(
+        SECRETS_ENCRYPTION_KEY, SECRETS_ENCRYPTION_SALT
+    )
 else:
     TRANSFER_TOKEN_SECRET = None
 

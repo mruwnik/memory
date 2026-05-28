@@ -55,6 +55,7 @@ from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.celery_overview import router as celery_overview_router
 from memory.api.MCP.base import mcp
+from memory.api.safety import validate_disable_auth_safety
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ logger = logging.getLogger(__name__)
 # silently turns the entire API into an anonymous read/write surface is
 # an unacceptable footgun; this raises before the FastAPI app is even
 # constructed so a misconfigured deploy crash-loops rather than serving.
-settings.validate_disable_auth_safety()
+validate_disable_auth_safety()
 
 
 # Rate limiter setup
