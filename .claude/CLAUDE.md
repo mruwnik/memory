@@ -338,6 +338,25 @@ has no visibility into the rest of the file, so references to
 "the gate comment below" or "previous behavior" are dead text on the
 wire.
 
+### Red CI is yours to fix, even if you didn't break it
+
+If ``lint-and-test`` is failing on the branch you're working on — for
+any reason, regardless of whose change introduced the failure — fix
+it before merging your own PR. "Pre-existing master breakage" is not
+an exemption; the next PR after this one will inherit the same red
+CI and the cycle continues. Fix the actual errors (typing gaps,
+missing stubs, real bugs), don't disable the check, and call out the
+unrelated fix in the commit message so reviewers see the scope
+expansion is deliberate.
+
+When the failure is a third-party library type-stub gap (e.g.
+``discord.py``'s ``from .x import *`` re-exports that pyright can't
+resolve), the right fix is a scoped pragma at the top of the
+affected file — ``# pyright: reportAttributeAccessIssue=false`` — not
+a per-line ``type: ignore`` sweep, and not a project-wide config
+relaxation. The pragma's scope makes it greppable when the upstream
+library ships proper stubs and the suppression should be removed.
+
 ## Testing
 
 ```bash

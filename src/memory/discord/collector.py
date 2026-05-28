@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """
 Discord message collector bot.
 
