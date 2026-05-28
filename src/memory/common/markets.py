@@ -106,13 +106,18 @@ class Market(TypedDict):
 # TTLCache is not thread-safe, so we use locks for concurrent access
 
 # Search results cache: 5 minute TTL
-_search_cache: TTLCache[str, list[dict]] = TTLCache(maxsize=500, ttl=300)
+# Note: ``cachetools.TTLCache``'s own stubs declare ``[_KT, _VT, _TT]``
+# (key, value, timer type) while typeshed has ``[_KT, _VT]``; pyright
+# disagrees with itself depending on which one it picks first. Skip the
+# generic parameterisation entirely and rely on the constructor's
+# overload-driven inference at use sites.
+_search_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
 _search_cache_lock = threading.Lock()
 # Market details/history cache: 10 minute TTL
-_history_cache: TTLCache[str, dict] = TTLCache(maxsize=100, ttl=600)
+_history_cache: TTLCache = TTLCache(maxsize=100, ttl=600)
 _history_cache_lock = threading.Lock()
 # Market depth cache: 1 minute TTL (more volatile)
-_depth_cache: TTLCache[str, dict] = TTLCache(maxsize=100, ttl=60)
+_depth_cache: TTLCache = TTLCache(maxsize=100, ttl=60)
 _depth_cache_lock = threading.Lock()
 
 
