@@ -210,10 +210,18 @@ async def test_search_returns_serialized_results(
 # ====== observe tests ======
 
 
+def _fake_mcp_user(user_id: int = 99):
+    """Build a minimal user proxy that the observe gate accepts."""
+    user = MagicMock()
+    user.id = user_id
+    return user
+
+
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user())
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_single_observation(mock_settings, mock_celery):
+async def test_observe_single_observation(mock_settings, mock_celery, _user):
     """Record single observation dispatches Celery task."""
     mock_settings.CELERY_QUEUE_PREFIX = "test"
     mock_task = MagicMock()
@@ -234,9 +242,10 @@ async def test_observe_single_observation(mock_settings, mock_celery):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user())
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_multiple_observations(mock_settings, mock_celery):
+async def test_observe_multiple_observations(mock_settings, mock_celery, _user):
     """Record multiple observations dispatches multiple tasks."""
     mock_settings.CELERY_QUEUE_PREFIX = "test"
     mock_task1 = MagicMock()
@@ -254,9 +263,10 @@ async def test_observe_multiple_observations(mock_settings, mock_celery):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user(42))
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_with_all_fields(mock_settings, mock_celery):
+async def test_observe_with_all_fields(mock_settings, mock_celery, _user):
     """Observation with all fields passes them to Celery task."""
     mock_settings.CELERY_QUEUE_PREFIX = "test"
     mock_task = MagicMock()
@@ -284,12 +294,16 @@ async def test_observe_with_all_fields(mock_settings, mock_celery):
     assert call_kwargs["tags"] == ["programming", "typescript"]
     assert call_kwargs["session_id"] == "session-456"
     assert call_kwargs["agent_model"] == "gpt-4"
+    # creator_id is now threaded through so the row is owned and the
+    # caller can read back their own observations (audit 56ad2afa).
+    assert call_kwargs["creator_id"] == 42
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user())
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_truncates_long_content_in_task_ids(mock_settings, mock_celery):
+async def test_observe_truncates_long_content_in_task_ids(mock_settings, mock_celery, _user):
     """Long observation content is truncated in task_ids."""
     mock_settings.CELERY_QUEUE_PREFIX = "test"
     mock_task = MagicMock()
@@ -307,9 +321,10 @@ async def test_observe_truncates_long_content_in_task_ids(mock_settings, mock_ce
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user())
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_default_values(mock_settings, mock_celery):
+async def test_observe_default_values(mock_settings, mock_celery, _user):
     """Observation uses default values when not specified."""
     mock_settings.CELERY_QUEUE_PREFIX = "test"
     mock_task = MagicMock()
@@ -329,9 +344,10 @@ async def test_observe_default_values(mock_settings, mock_celery):
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=_fake_mcp_user())
 @patch("memory.api.MCP.servers.core.celery_app")
 @patch("memory.api.MCP.servers.core.settings")
-async def test_observe_queue_name(mock_settings, mock_celery):
+async def test_observe_queue_name(mock_settings, mock_celery, _user):
     """Observation task sent to correct queue."""
     mock_settings.CELERY_QUEUE_PREFIX = "prod"
     mock_task = MagicMock()
@@ -343,6 +359,28 @@ async def test_observe_queue_name(mock_settings, mock_celery):
 
     call_args = mock_celery.send_task.call_args
     assert call_args[1]["queue"] == "prod-notes"
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=None)
+@patch("memory.api.MCP.servers.core.celery_app")
+@patch("memory.api.MCP.servers.core.settings")
+async def test_observe_rejects_unauthenticated(mock_settings, mock_celery, _user):
+    """Without an authenticated principal we refuse to mint an unowned row.
+
+    The visibility middleware already gates on SCOPE_OBSERVE_WRITE, so
+    reaching this branch in production means an auth-context drift.
+    The function must fail closed rather than create a row with no
+    creator_id (which would be admin-only and silently dropped from
+    the caller's read-back).
+    """
+    mock_settings.CELERY_QUEUE_PREFIX = "test"
+
+    obs = RawObservation(subject="test", content="test content")
+    result = await observe.fn(observations=[obs])
+
+    assert result["status"] == "rejected"
+    mock_celery.send_task.assert_not_called()
 
 
 # ====== search_observations tests ======

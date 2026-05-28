@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 
+from memory.common.crypto import derive_transfer_token_secret
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -334,7 +336,33 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
 
+# Per-request size caps for the authenticated content-upload endpoints
+# (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three
+# previously called ``await file.read()`` with no upper bound, which
+# meant any authenticated user could buffer multi-GB uploads in API
+# RAM (OOM kill the API container) or fill ``FILE_STORAGE_DIR`` (which
+# Postgres + Qdrant + every other service shares). Defaults match what
+# real users actually upload: 100 MiB ebooks, 50 MiB photos, 25 MiB
+# reports. Raise via env var if a deployment needs larger artifacts.
+MAX_BOOK_UPLOAD_BYTES = int(
+    os.getenv("MAX_BOOK_UPLOAD_BYTES", 100 * 1024 * 1024)
+)
+MAX_PHOTO_UPLOAD_BYTES = int(
+    os.getenv("MAX_PHOTO_UPLOAD_BYTES", 50 * 1024 * 1024)
+)
+MAX_REPORT_UPLOAD_BYTES = int(
+    os.getenv("MAX_REPORT_UPLOAD_BYTES", 25 * 1024 * 1024)
+)
+
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
+# Paired confirmation flag for DISABLE_AUTH. The single-flag toggle is an
+# anti-pattern for kill-switches of this magnitude (a stray env-var leak
+# from .env.dev into prod silently turns the entire knowledge base into an
+# anonymous read/write API). When DISABLE_AUTH=true and any "this looks
+# like prod" signal is set, startup refuses unless this confirmation
+# flag is also set to the literal "yes-i-am-sure" value.
+DISABLE_AUTH_CONFIRM = os.getenv("I_KNOW_THIS_DISABLES_AUTH", "")
+
 STATIC_DIR = pathlib.Path(
     os.getenv(
         "STATIC_DIR",
@@ -444,9 +472,51 @@ SECRETS_ENCRYPTION_SALT = os.getenv(
 MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
 
 # HMAC secret for short-lived signed URLs used by the cloud-claude session
-# file transfer endpoints. Falls back to SECRETS_ENCRYPTION_KEY in dev so
-# operators don't need to configure two secrets to get started.
-TRANSFER_TOKEN_SECRET = secret_env("TRANSFER_TOKEN_SECRET") or SECRETS_ENCRYPTION_KEY
+# file transfer endpoints.
+#
+# Two operator-facing modes:
+#
+# 1. ``TRANSFER_TOKEN_SECRET`` env var explicitly set → used as-is.
+#    Operators who want independently-rotatable secrets configure this
+#    directly. Rotation only invalidates in-flight transfer URLs (~60s)
+#    instead of forcing a full secrets-encryption-key migration.
+#
+# 2. ``TRANSFER_TOKEN_SECRET`` empty AND ``SECRETS_ENCRYPTION_KEY`` set →
+#    *derive* a domain-separated key from ``SECRETS_ENCRYPTION_KEY`` via
+#    HKDF-SHA256 (RFC 5869). The derived key is mathematically distinct
+#    from the input key (HKDF is a one-way pseudo-random function with a
+#    domain-separating ``info`` string), so HMAC-SHA256 tags computed on
+#    transfer URLs do NOT leak any information about the at-rest AES-GCM
+#    key that protects user secrets in the DB.
+#
+#    This gives operators the "single secret to configure" UX the previous
+#    bare-``or`` fallback intended, without the crypto-isolation cost of
+#    sharing key material across two distinct primitives:
+#
+#    | Use                      | Algorithm                | Boundary |
+#    |--------------------------|--------------------------|----------|
+#    | ``SECRETS_ENCRYPTION_KEY`` (raw)     | AES-GCM (Fernet) for at-rest secrets    | DB |
+#    | ``TRANSFER_TOKEN_SECRET`` (HKDF-derived) | HMAC-SHA256 of presigned URL | URL |
+#
+#    Rotating ``SECRETS_ENCRYPTION_KEY`` still rotates the derived
+#    transfer secret implicitly — that's expected; the input key changing
+#    means every output key changes. But a leak of one no longer trivially
+#    discloses the other.
+#
+# 3. Both empty → ``TRANSFER_TOKEN_SECRET`` stays None and the transfer
+#    code path raises a clear error at first mint/verify
+#    (``transfer_tokens._require_secret``). Operators who never use cloud-
+#    claude transfers don't need to configure either secret.
+#
+_explicit_transfer_secret = secret_env("TRANSFER_TOKEN_SECRET")
+if _explicit_transfer_secret:
+    TRANSFER_TOKEN_SECRET: str | None = _explicit_transfer_secret
+elif SECRETS_ENCRYPTION_KEY:
+    TRANSFER_TOKEN_SECRET = derive_transfer_token_secret(
+        SECRETS_ENCRYPTION_KEY, SECRETS_ENCRYPTION_SALT
+    )
+else:
+    TRANSFER_TOKEN_SECRET = None
 
 # Default lifetime (seconds) for cloud-claude file transfer URLs.
 TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))

@@ -11,6 +11,27 @@ User-controlled URLs reaching server-side HTTP requests are SSRF sinks
 ``validate_public_url`` resolves the hostname and rejects anything in
 private / loopback / link-local / multicast / reserved ranges. Re-resolve
 at fetch time when feasible to defeat DNS rebinding.
+
+# Known limitation: DNS-rebinding TOCTOU
+
+This module closes the **single-resolve** SSRF attacker — anyone whose
+authoritative DNS returns a single private IP for a malicious URL gets
+caught here at validation time. It does **not** close the
+**DNS-rebinding** attacker who controls authoritative DNS for a public
+domain and can flip the A record between two lookups (TTL=0): the
+validation lookup sees ``8.8.8.8``, the subsequent fetch lookup sees
+``169.254.169.254``.
+
+This is a structural property of any "validate then fetch" guard that
+doesn't pin the resolved IP across both calls. The proper fix is a
+custom transport that dials the validated IP directly while keeping
+the original hostname in the Host header (for TLS SNI / virtual
+hosts) — see follow-up task ``5a471003`` on the kanban. We treat that
+as out of scope here because exploitation requires running an
+authoritative DNS server for a public domain (non-trivial threshold).
+Until then, callers should at minimum re-call ``validate_public_url``
+immediately before each network operation to keep the rebinding
+window narrow.
 """
 
 from __future__ import annotations
@@ -67,6 +88,42 @@ def resolve_hostname(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IP
     return out
 
 
+def ensure_endpoint_public(host: str, *, label: str) -> None:
+    """Raise ``UnsafeURLError`` unless ``host`` is an IP-literal or
+    resolves only to public IPs.
+
+    Shared body of :func:`validate_public_url` and
+    :func:`validate_public_hostname`; the only difference between the
+    two callers used to be the prefix on the IP-literal error
+    (``URL targets...`` vs ``hostname targets...``), which is now
+    parametrised via the ``label`` kwarg. Centralising means a fix to
+    the resolve-loop or the safe-IP policy lands once for both surfaces
+    instead of needing to be mirrored.
+
+    The hostname-resolves-to-mix and could-not-resolve messages were
+    already identical between the two callers and are reused as-is.
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+
+    if ip is not None:
+        if not is_safe_ip(ip):
+            raise UnsafeURLError(f"{label} targets non-public IP: {ip}")
+        return
+
+    addrs = resolve_hostname(host)
+    if not addrs:
+        raise UnsafeURLError(f"Could not resolve hostname: {host}")
+
+    for addr in addrs:
+        if not is_safe_ip(addr):
+            raise UnsafeURLError(
+                f"Hostname {host} resolves to non-public IP: {addr}"
+            )
+
+
 def validate_public_url(url: str) -> None:
     """Raise ``UnsafeURLError`` if ``url`` is not safe to fetch server-side.
 
@@ -74,6 +131,15 @@ def validate_public_url(url: str) -> None:
     URL doesn't point at a private/internal host. Caller should re-call
     this immediately before the fetch (e.g. inside the worker job too)
     to limit DNS-rebinding windows.
+
+    DNS-rebinding TOCTOU caveat: this function does an independent
+    ``getaddrinfo`` from the one ``requests``/``aiohttp`` will perform
+    when actually dialing the URL. An attacker who controls
+    authoritative DNS for a public domain can return a public IP here
+    and a private IP at fetch time. We accept that residual risk
+    (exploitation requires running auth DNS for a public domain). See
+    the module docstring + follow-up task ``5a471003`` for the proper
+    fix (pin the validated IP across validate→fetch).
     """
     parsed = urlparse(url)
     if parsed.scheme.lower() not in ALLOWED_SCHEMES:
@@ -83,25 +149,28 @@ def validate_public_url(url: str) -> None:
     if not hostname:
         raise UnsafeURLError("URL has no hostname")
 
-    # Direct IP literal — no DNS lookup.
-    try:
-        ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        ip = None
+    ensure_endpoint_public(hostname, label="URL")
 
-    if ip is not None:
-        if not is_safe_ip(ip):
-            raise UnsafeURLError(
-                f"URL targets non-public IP: {ip}"
-            )
-        return
 
-    addrs = resolve_hostname(hostname)
-    if not addrs:
-        raise UnsafeURLError(f"Could not resolve hostname: {hostname}")
+def validate_public_hostname(hostname: str) -> None:
+    """Schemeless variant of :func:`validate_public_url` for non-HTTP servers.
 
-    for addr in addrs:
-        if not is_safe_ip(addr):
-            raise UnsafeURLError(
-                f"Hostname {hostname} resolves to non-public IP: {addr}"
-            )
+    Use for things like IMAP/SMTP/CalDAV server names where the user
+    supplies a bare hostname (no ``https://`` scheme) and the worker
+    later opens a TCP connection to it. Same ``is_safe_ip`` policy: an
+    IP-literal or every resolved A/AAAA record must be public.
+    Raises ``UnsafeURLError`` on violation; returns silently on success.
+
+    Caller should re-validate immediately before connecting (DNS
+    rebinding window).
+
+    Same DNS-rebinding TOCTOU caveat as :func:`validate_public_url`
+    applies — see the module docstring + follow-up task ``5a471003``.
+    """
+    if not hostname or not isinstance(hostname, str):
+        raise UnsafeURLError("hostname must be a non-empty string")
+    hostname = hostname.strip()
+    if not hostname:
+        raise UnsafeURLError("hostname must not be blank")
+
+    ensure_endpoint_public(hostname, label="hostname")

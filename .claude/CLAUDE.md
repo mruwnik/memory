@@ -296,6 +296,67 @@ _CSP_FORBIDDEN_CHARS = frozenset(...)
 
 This matters because today's "file-private" helper often becomes tomorrow's "imported from another file" helper, and renaming on import day generates churn that obscures the actual change.
 
+### Comments describe the present, not the past
+
+Comments and docstrings should describe **what the current code does and
+why it must be this way**. They should **not** narrate what the code
+used to be, what a previous implementation got wrong, or what was
+"replaced". Git history (``git log``, ``git blame``, PR descriptions)
+is where archaeology belongs.
+
+Keep the security/correctness *rationale* — the constraint on the code
+("comparing parsed origins is load-bearing because a prefix match would
+let an attacker register `localhost.evil.com/cb`"). Drop the
+*archaeology* ("the previous implementation used ``str.startswith``
+which let an attacker…").
+
+```python
+# Bad — narrates history
+def get_cipher() -> Fernet:
+    """Replaces the previous bare-SHA-256 derivation which had no work
+    factor, no salt, and was inconsistent with the codebase…"""
+
+# Good — describes the current constraint
+def get_cipher() -> Fernet:
+    """PBKDF2-HMAC-SHA256 with 480k iterations (OWASP-recommended) so a
+    leaked backup ciphertext is not feasibly brute-forceable. The pinned
+    salt is distinct from ``SECRETS_ENCRYPTION_SALT`` so backup and
+    at-rest ciphertexts cannot be cross-attacked under a shared
+    passphrase."""
+```
+
+The same applies to NOTE/FIXME blocks that exist only to explain why a
+dead entry was removed — once it's removed, the explanation belongs in
+the commit, not the file. The exception is operator-facing migration
+guidance (e.g. "v1 archives need the matching code revision to
+decrypt") — that's operational documentation, not archaeology.
+
+This also applies to MCP tool docstrings specifically: those are
+surfaced to clients via ``tools/list`` and must describe what the tool
+does, not how it's implemented or what it used to do. The MCP client
+has no visibility into the rest of the file, so references to
+"the gate comment below" or "previous behavior" are dead text on the
+wire.
+
+### Red CI is yours to fix, even if you didn't break it
+
+If ``lint-and-test`` is failing on the branch you're working on — for
+any reason, regardless of whose change introduced the failure — fix
+it before merging your own PR. "Pre-existing master breakage" is not
+an exemption; the next PR after this one will inherit the same red
+CI and the cycle continues. Fix the actual errors (typing gaps,
+missing stubs, real bugs), don't disable the check, and call out the
+unrelated fix in the commit message so reviewers see the scope
+expansion is deliberate.
+
+When the failure is a third-party library type-stub gap (e.g.
+``discord.py``'s ``from .x import *`` re-exports that pyright can't
+resolve), the right fix is a scoped pragma at the top of the
+affected file — ``# pyright: reportAttributeAccessIssue=false`` — not
+a per-line ``type: ignore`` sweep, and not a project-wide config
+relaxation. The pragma's scope makes it greppable when the upstream
+library ships proper stubs and the suppression should be removed.
+
 ## Testing
 
 ```bash

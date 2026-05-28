@@ -1,12 +1,15 @@
 """
 Middleware for filtering MCP tools based on visibility checkers.
 
-Tools can register visibility checkers via the @visible_when decorator.
-If no checker is registered, the tool is visible to everyone.
+Tools register visibility checkers via the @visible_when decorator.
+*The middleware fails closed*: a tool with no checker registered is
+invisible to everyone. Genuinely public tools must opt in explicitly
+via ``@visible_when()`` (which registers an always-True checker), so
+every public tool is grep-able and adding a new tool without thinking
+about authorization defaults to "denied" rather than "anonymous read".
 
 A user can access a tool if:
-- The tool has no visibility checker registered (public)
-- The tool's visibility checker returns True for the user
+- The tool's visibility checker returns True for the user.
 """
 
 import logging
@@ -70,8 +73,18 @@ class VisibilityMiddleware(Middleware):
         checker = get_visibility_checker(base_name)
 
         if checker is None:
-            # No checker registered = visible to everyone
-            return True
+            # No checker registered = fail closed. Tools that should
+            # be reachable by anyone must register an explicit
+            # always-True checker via @visible_when(). This prevents
+            # silent "every authenticated MCP client can call this"
+            # exposure when a tool author forgets to decorate.
+            logger.warning(
+                "Tool %s has no visibility checker registered; denying. "
+                "Decorate it with @visible_when(...) (or @visible_when() "
+                "for genuinely public tools) to expose it.",
+                tool.name,
+            )
+            return False
 
         try:
             return await checker(user_info, session)
@@ -128,7 +141,25 @@ class VisibilityMiddleware(Middleware):
         checker = get_visibility_checker(base_name)
 
         if checker is None:
-            return await call_next(context)
+            # Fail closed: refuse to invoke a tool that hasn't opted
+            # in to the visibility system. See the docstring above for
+            # rationale; this matches the on_list_tools default.
+            logger.warning(
+                "Refusing to call tool %s: no visibility checker registered",
+                tool_name,
+            )
+            return ToolResult(
+                content=[
+                    mt.TextContent(
+                        type="text",
+                        text=(
+                            f"Access denied: {tool_name} has no visibility "
+                            "policy. Decorate it with @visible_when(...) to "
+                            "expose it."
+                        ),
+                    )
+                ],
+            )
 
         user_info = self.get_user_info()
 

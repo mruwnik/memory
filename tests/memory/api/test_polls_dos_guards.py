@@ -12,11 +12,13 @@ import pytest
 from fastapi import HTTPException
 
 from memory.api.polls import (
+    MAX_EMAIL_LENGTH,
     MAX_POLL_AVAILABILITIES_PER_REQUEST,
     POLL_RESPONSE_RATE_LIMIT,
     PollResponseRequest,
     enforce_poll_response_rate_limit,
     reject_oversized_poll_request,
+    sanitize_email,
 )
 from memory.common import rate_limit
 
@@ -244,3 +246,99 @@ def test_rate_limit_honors_xff_from_trusted_proxy():
         with pytest.raises(HTTPException) as exc_info:
             enforce_poll_response_rate_limit(request_alice, "slug-y")
     assert exc_info.value.status_code == 429
+
+
+# ====== sanitize_email ======
+#
+# /polls/respond is a public unauthenticated endpoint, so respondent_email
+# was a stored-XSS / DoS / PII-harvest sink (CWE-20, CWE-79). The fix is
+# the same hardening pattern as sanitize_name: trim, length-cap, basic
+# shape check, HTML-escape on the way in.
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("alice@example.com", "alice@example.com"),
+        # Whitespace is trimmed.
+        ("  bob@example.com  ", "bob@example.com"),
+        # Plus-addressing and dots survive intact.
+        ("alice+tag@sub.example.co.uk", "alice+tag@sub.example.co.uk"),
+    ],
+)
+def test_sanitize_email_accepts_valid(raw, expected):
+    assert sanitize_email(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # CRLF / whitespace / control-char smuggling — header-injection
+        # vector if the value ever flows into an outbound mail header.
+        "spaces in@local.example",
+        "newline\n@injection.example",
+        "carriage\r@injection.example",
+        "\x01ctrl@example.com",
+        # HTML metacharacters: rejected at the shape-check layer to avoid
+        # the html.escape inflation footgun (a 252-char string of "<" would
+        # balloon to ~1k chars after escaping and overflow the
+        # respondent_email String(255) column on insert).
+        "a<svg>@evil.example",
+        "a>tag@evil.example",
+        "a&amp@evil.example",
+        'a"quote@evil.example',
+        "a'quote@evil.example",
+    ],
+)
+def test_sanitize_email_rejects_smuggling_chars(raw):
+    """We don't validate email structure (RFC-5321/5322 parsing is hard,
+    homegrown checks reject valid input or accept invalid input). What
+    we *do* reject are the chars that turn a stored value into a
+    security problem: whitespace/control chars (header-injection vector)
+    and HTML metacharacters (stored-XSS + column-overflow via
+    html.escape inflation)."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(raw)
+    assert exc_info.value.status_code == 400
+
+
+def test_sanitize_email_rejects_oversized():
+    """RFC 5321 caps at 254 chars. Above that we 400 to prevent column-
+    overflow / DoS via multi-megabyte payloads."""
+    from fastapi import HTTPException
+
+    over = "a" * (MAX_EMAIL_LENGTH + 1) + "@example.com"
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(over)
+    assert exc_info.value.status_code == 400
+    assert "characters or less" in exc_info.value.detail
+
+
+def test_sanitize_email_at_cap_passes():
+    """Exactly MAX_EMAIL_LENGTH chars must still be accepted."""
+    local = "a" * (MAX_EMAIL_LENGTH - len("@example.com"))
+    addr = f"{local}@example.com"
+    assert len(addr) == MAX_EMAIL_LENGTH
+    assert sanitize_email(addr) == addr
+
+
+def test_sanitize_email_html_escape_does_not_overflow_column():
+    """Regression: discovered during validation of bf148366.
+
+    The 254-char input cap previously sat *before* html.escape, so an input
+    of 248 ``<`` chars + ``@a.b`` (252 chars) passed both the shape check
+    and the cap, then ballooned to ~1k chars after html.escape and 500'd on
+    insert into the String(255) column. With the metacharacter check the
+    pre-escape rejection short-circuits the inflation entirely.
+    """
+    from fastapi import HTTPException
+
+    addr = "<" * 248 + "@a.b"  # 252 chars, would have passed pre-fix
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_email(addr)
+    assert exc_info.value.status_code == 400

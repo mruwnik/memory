@@ -38,12 +38,17 @@ from memory.common import settings
         "/oauth/login",
         "/oauth/callback/google",
         "/.well-known/openid-configuration",
-        "/admin/statics/css/main.css",
         "/google-drive/callback",
         "/polls/respond",
         "/polls/respond/abc-123",
         "/claude/transfer/pull",
         "/claude/transfer/push",
+        # Slack push-events webhook authenticates via x-slack-signature
+        # (HMAC over body), not session cookies. Without this carve-out
+        # the AuthenticationMiddleware 401s every Slack POST before the
+        # in-endpoint HMAC check fires.
+        "/slack/events/5",
+        "/slack/events/123?wizard_nonce=abc",
         # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
         # at root by the MCP SDK. DCR clients have no credentials at
         # registration time by definition, so the middleware bypass is
@@ -87,11 +92,139 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/google-drive/config",  # admin-gated; must NOT be whitelisted
         "/polls",  # the public list endpoint is /polls/respond, /polls itself is auth'd
         "/claude/u1-x-deadbeef/logs",  # gated by route-level user check
+        # Regression: ``/admin/statics/*`` was previously whitelisted for a
+        # SQLAdmin app that never shipped, pre-granting unauthenticated
+        # access to anything mounted under that prefix. Pin that nothing
+        # under /admin/* is whitelisted by default.
+        "/admin/statics/css/main.css",
+        "/admin/statics/js/app.js",
+        "/admin",
+        "/admin/users",
+        # Defense pin against the natural-but-wrong operator workaround
+        # for the events-webhook 401 (broaden ``/slack/events/`` to
+        # ``/slack/`` and accidentally expose every authenticated Slack
+        # admin route). These sibling routes MUST stay auth'd.
+        "/slack/workspaces",
+        "/slack/workspaces/abc",
+        "/slack/apps",
+        "/slack/apps/123",
+        "/slack/channels/456",
+        "/slack/eventslog",  # prefix-overrun against /slack/events
         "",
     ],
 )
 def test_is_whitelisted_path_blocks_prefix_overrun(path):
     assert is_whitelisted_path(path) is False
+
+
+# --- _CLAUDE_SESSION_PATTERN: middleware auth-bypass regex ------------------
+#
+# This regex is consulted in ``AuthenticationMiddleware.dispatch`` alongside
+# ``is_whitelisted_path``. A path that matches it bypasses session/Bearer
+# authentication so that WebSocket routes mounted under ``/claude/{session_id}``
+# can authenticate via ``?token=`` query param (HTTP headers don't survive
+# the WS upgrade for browser clients). Any future route that lands under
+# this prefix and forgets ``Depends(get_current_user)`` would inherit
+# unauthenticated access — so the regex MUST anchor on a path-segment
+# boundary and reject:
+#
+#   1. paths whose adjacent characters extend past the session-id (no
+#      ``/claude/u1-e2-abcdef012345foo`` smuggling)
+#   2. session-ids with too-short hex suffixes (``token_hex(6)`` is 12
+#      chars; matching ``[a-fA-F0-9]+`` would let a single hex char pass)
+#   3. invalid source segments (only ``e\d+``, ``s\d+``, or ``x``)
+
+
+# The hex suffix is now ``secrets.token_hex(16)`` = 32 hex chars (128 bits).
+_HEX32 = "abcdef0123456789abcdef0123456789"  # exact length 32, hex-only
+_HEX32_UPPER = _HEX32.upper()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Bare session-id with no subpath
+        f"/claude/u1-e2-{_HEX32}",
+        f"/claude/u1-s2-{_HEX32}",
+        f"/claude/u1-x-{_HEX32}",
+        # Multi-digit user_id and source numbers
+        f"/claude/u12345-e98765-{_HEX32}",
+        f"/claude/u12345-s98765-{_HEX32}",
+        # Subpath under a valid session id (websocket endpoints)
+        f"/claude/u1-e2-{_HEX32}/ws",
+        f"/claude/u1-x-{_HEX32}/files/foo.txt",
+        f"/claude/u123-s456-{_HEX32}/diff/preview",
+        # Uppercase hex (regex is IGNORECASE)
+        f"/claude/u1-e2-{_HEX32_UPPER}",
+        # Longer hex tail (token rotations may extend; floor is the
+        # generator length, ceiling is unbounded)
+        f"/claude/u1-e2-{_HEX32}{_HEX32}",
+    ],
+)
+def test_claude_session_pattern_matches_valid_paths(path):
+    assert auth._CLAUDE_SESSION_PATTERN.match(path) is not None, path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # ── Adjacent-character smuggling. Bypass would let an attacker
+        # land on a future route mounted at e.g. ``/claude/u1-e2-XXXXfoo``
+        # without auth.
+        f"/claude/u1-e2-{_HEX32}foo",
+        f"/claude/u1-e2-{_HEX32}-shell",
+        f"/claude/u1-e2-{_HEX32}admin",
+        f"/claude/u1-e2-{_HEX32}.json",
+        # ── Hex floor enforcement. Short prefixes shrink the search
+        # space dramatically; the regex must reject anything below the
+        # actual ``token_hex(16)`` generator length (32).
+        "/claude/u1-e2-a",
+        "/claude/u1-e2-abc",
+        "/claude/u1-e2-abcdef",                            # 6 hex < 32
+        "/claude/u1-e2-abcdef0123456789",                  # 16 hex < 32
+        "/claude/u1-e2-abcdef0123456789abcdef0123456",    # 31 hex < 32 (one shy)
+        # ── Invalid source segments. The auth.py regex used to accept
+        # any ``[a-z]\d*`` source; tighten to match cloud_claude's
+        # canonical ``(e\d+|s\d+|x)`` source format only.
+        f"/claude/u1-q5-{_HEX32}",   # 'q' is not e/s/x
+        f"/claude/u1-foo-{_HEX32}",
+        f"/claude/u1-ee-{_HEX32}",   # source must be single letter
+        # ── Wrong path prefix. Adjacent characters before /claude/
+        # must not match either.
+        f"/claude-debug/u1-e2-{_HEX32}",
+        f"/claudex/u1-e2-{_HEX32}",
+        # ── Empty / malformed
+        "",
+        "/",
+        "/claude/",
+        "/claude/u1",
+        "/claude/u1-e2-",  # no hex tail
+        # ── Non-claude paths
+        f"/users/u1-e2-{_HEX32}",
+        f"/api/claude/u1-e2-{_HEX32}",
+    ],
+)
+def test_claude_session_pattern_rejects_invalid_paths(path):
+    assert auth._CLAUDE_SESSION_PATTERN.match(path) is None, path
+
+
+def test_claude_session_pattern_hex_floor_matches_token_hex_16():
+    """REGRESSION GUARD: the hex-length floor in the regex must match
+    the actual session-id generator's hex length (``secrets.token_hex(16)``
+    yields 32 hex chars = 128 bits). If the generator changes
+    (e.g. ``token_hex(8)``), this regex's ``{32,}`` floor must change
+    in lockstep with ``cloud_claude._SESSION_ID_RE`` — both regexes
+    encode the same invariant.
+    """
+    import secrets
+
+    # Verify the generator parameter still produces exactly 32 hex chars,
+    # so the floor in our regex remains tight.
+    assert len(secrets.token_hex(16)) == 32
+
+    # And the floor passes when the generator's exact output is used.
+    real_session_path = f"/claude/u1-e2-{secrets.token_hex(16)}"
+    assert auth._CLAUDE_SESSION_PATTERN.match(real_session_path) is not None
 
 
 # --- AuthenticationMiddleware end-to-end ------------------------------------
@@ -205,6 +338,38 @@ def test_logout_handles_missing_session(_mock_get_user_session):
     assert result == {"message": "Logged out successfully"}
     db.delete.assert_not_called()
     db.commit.assert_not_called()
+    # No session → no refresh-token revocation either.
+    db.execute.assert_not_called()
+
+
+@patch("memory.api.auth.get_user_session")
+def test_logout_revokes_paired_refresh_tokens(mock_get_user_session):
+    """Regression for audit-1775774f: deleting the UserSession alone is
+    insufficient — any OAuthRefreshToken paired with it via
+    ``access_token_session_id`` survives and can mint fresh access tokens
+    after "logout". The fix issues a bulk UPDATE that flips every active
+    paired refresh token to revoked=True in the same transaction.
+    """
+    from sqlalchemy import update as sa_update
+
+    from memory.common.db.models import OAuthRefreshToken
+
+    db = MagicMock()
+    session = MagicMock()
+    session.id = "session-uuid-123"
+    mock_get_user_session.return_value = session
+    request = SimpleNamespace()
+
+    auth.logout(cast(Any, request), db)
+
+    # Exactly one bulk UPDATE issued before the session delete.
+    assert db.execute.call_count == 1
+    # The statement must be an UPDATE on OAuthRefreshToken.
+    stmt = db.execute.call_args[0][0]
+    assert isinstance(stmt, type(sa_update(OAuthRefreshToken).values(revoked=True)))
+    # The session delete + commit still happen.
+    db.delete.assert_called_once_with(session)
+    db.commit.assert_called_once()
 
 
 def _mock_oauth_make_session():

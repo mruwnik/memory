@@ -9,6 +9,7 @@ from sqlalchemy.pool import QueuePool
 
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
+    resolve_api_key_scopes,
     resolve_session_scopes,
     make_token,
 )
@@ -341,6 +342,266 @@ async def test_verify_token_with_api_key_uses_key_scopes_when_set(db_session):
     assert "write" in result.scopes
     assert "organizer" in result.scopes
     assert "*" not in result.scopes
+
+
+# --- resolve_api_key_scopes — empty-list privilege-escalation regression ---
+#
+# Pre-fix bug: ``api_key.scopes or list(user.scopes or [])`` collapsed
+# ``None`` and ``[]`` to the same fallback. An admin who passes
+# ``scopes=[]`` to "make a low-privilege key" got a key carrying
+# ``user.scopes`` — including ``["*"]``. Now ``[]`` is treated as
+# "no override privileges" and falls through to ``[SCOPE_READ]``.
+
+
+def test_resolve_api_key_scopes_none_inherits_user_scopes():
+    """``scopes=None`` is the documented inherit-from-user case (hermetic)."""
+    user = MagicMock(spec=User)
+    user.scopes = ["organizer", "github"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert sorted(resolve_api_key_scopes(key, user)) == ["github", "organizer"]
+
+
+def test_resolve_api_key_scopes_empty_list_does_not_inherit_user_scopes():
+    """REGRESSION: ``scopes=[]`` must NOT silently grant user.scopes.
+
+    A key with explicit empty scopes should be the most-restricted state,
+    not the most-permissive.
+    """
+    user = MagicMock(spec=User)
+    user.scopes = ["*"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = []
+    resolved = resolve_api_key_scopes(key, user)
+    assert "*" not in resolved, "Empty-list override silently granted admin"
+    # Falls back to read-only (which is the safe default).
+    assert resolved == ["read"]
+
+
+def test_resolve_api_key_scopes_explicit_list_used_verbatim():
+    """Non-empty explicit override is used as-is, ignoring user.scopes."""
+    user = MagicMock(spec=User)
+    user.scopes = ["*"]
+    key = MagicMock(spec=APIKey)
+    key.scopes = ["read", "organizer"]
+    assert sorted(resolve_api_key_scopes(key, user)) == ["organizer", "read"]
+
+
+def test_resolve_api_key_scopes_inherit_with_no_user_scopes_defaults_to_read():
+    """If we inherit from a user with no scopes, default to [SCOPE_READ]."""
+    user = MagicMock(spec=User)
+    user.scopes = []
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert resolve_api_key_scopes(key, user) == ["read"]
+
+
+def test_resolve_api_key_scopes_inherit_with_user_scopes_none():
+    """``user.scopes`` itself is None (uninitialised) — fall back to read."""
+    user = MagicMock(spec=User)
+    user.scopes = None
+    key = MagicMock(spec=APIKey)
+    key.scopes = None
+    assert resolve_api_key_scopes(key, user) == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_verify_token_empty_api_key_scopes_does_not_inherit_user_admin(db_session):
+    """End-to-end regression: empty-list key on an admin user must not grant ``*``."""
+    user = create_test_user(db_session, scopes=["*"])
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=APIKeyType.INTERNAL,
+        name="Empty-scope key",
+        scopes=[],
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    key_value = api_key.key
+
+    provider = SimpleOAuthProvider()
+    result = await provider.verify_token(key_value)
+
+    assert result is not None
+    # The empty-list key must NOT silently re-grant the user's admin scope.
+    assert "*" not in result.scopes
+    # It collapses to the safe default — read only.
+    assert result.scopes == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_load_access_token_empty_api_key_scopes_does_not_inherit_user_admin(
+    db_session,
+):
+    """Same regression but via load_access_token (the second call site)."""
+    user = create_test_user(db_session, scopes=["*"])
+
+    api_key = APIKey.create(
+        user_id=user.id,
+        key_type=APIKeyType.INTERNAL,
+        name="Empty-scope key 2",
+        scopes=[],
+    )
+    db_session.add(api_key)
+    db_session.commit()
+    key_value = api_key.key
+
+    provider = SimpleOAuthProvider()
+    result = await provider.load_access_token(key_value)
+
+    assert result is not None
+    assert "*" not in result.scopes
+    assert result.scopes == ["read"]
+
+
+# --- lookup_principal: anti-drift extraction (audit 2bb3e9c6) ---
+#
+# verify_token and load_access_token used to maintain two parallel
+# implementations of the same lookup logic. PR #76 already proved that
+# duplication drifts in security-impacting ways. The extraction collapses
+# both methods onto a single shared lookup helper; these tests pin the
+# invariants the extraction exists to enforce.
+
+
+@pytest.mark.asyncio
+async def test_verify_and_load_share_lookup_principal(monkeypatch):
+    """Both methods must route token lookup through ``lookup_principal``.
+
+    Hermetic anti-drift pin: when ``lookup_principal`` returns None, both
+    methods must return None too — neither may have a side path that
+    bypasses the shared helper. Patching the helper to always return None
+    and asserting both methods comply is the structural test that the
+    extraction in audit-2bb3e9c6 is honored.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    calls: list[str] = []
+
+    def fake_lookup(token, session):
+        calls.append(token)
+        return None
+
+    monkeypatch.setattr(op, "lookup_principal", fake_lookup)
+    provider = SimpleOAuthProvider()
+    assert await provider.verify_token("token-A") is None
+    assert await provider.load_access_token("token-B") is None
+    assert calls == ["token-A", "token-B"]
+
+
+@pytest.mark.asyncio
+async def test_verify_and_load_agree_on_expired_session(db_session):
+    """A session whose expires_at is in the past is rejected by both
+    methods. Previously each method had its own copy of the
+    ``user_session.expires_at < now`` check — this test pins that the
+    extraction kept them in lockstep."""
+    user = create_test_user(db_session)
+    expired = UserSession(
+        user_id=user.id,
+        expires_at=datetime.now() - timedelta(hours=1),  # naive UTC, in the past
+    )
+    db_session.add(expired)
+    db_session.commit()
+    token = str(expired.id)
+
+    provider = SimpleOAuthProvider()
+    assert await provider.verify_token(token) is None
+    assert await provider.load_access_token(token) is None
+
+
+@pytest.mark.asyncio
+async def test_verify_token_handles_tz_aware_expires_at(db_session):
+    """Audit 7affa983 — naive vs aware datetime mismatch could crash both
+    methods under non-UTC pool configs. The shared lookup uses
+    ``is_expired``, which converts naive→aware safely. A future-aware
+    ``expires_at`` must compare correctly (i.e. the session must NOT be
+    expired)."""
+    from datetime import timezone
+
+    user = create_test_user(db_session)
+    aware_future = datetime.now(timezone.utc) + timedelta(hours=1)
+    user_session = UserSession(
+        user_id=user.id,
+        expires_at=aware_future,  # tz-aware
+    )
+    db_session.add(user_session)
+    db_session.commit()
+    token = str(user_session.id)
+
+    provider = SimpleOAuthProvider()
+    # Must not raise TypeError on aware-vs-naive comparison.
+    result = await provider.verify_token(token)
+    assert result is not None
+
+
+# --- Symmetric fail-closed for orphan APIKey rows (audit follow-up d8a9a590) ---
+#
+# The session-path branch of ``lookup_principal`` already returns None when
+# ``user_session.user is None``. Today's FK constraints make api_key.user
+# orphans unreachable, but a future cascade race or a detached-row bug
+# shouldn't have license to escalate from "no user" into a 500. The two
+# tests below pin the symmetric fail-closed: an APIKey whose ``.user`` is
+# None must produce ``lookup_principal -> None`` AND must NOT have its
+# ``handle_api_key_use`` side effect run (which would bump last_used_at /
+# delete a one-time row for a key the caller can't actually use).
+
+
+def _orphan_api_key_stub():
+    """Stand in for an APIKey whose row is FK-detached from its user.
+
+    Real schema FK constraints rule out producing this with a row write,
+    so we shape the surface lookup_principal touches: ``is_valid()`` ->
+    True, ``user`` -> None, no other attributes accessed.
+    """
+    record = MagicMock(spec=APIKey)
+    record.is_valid.return_value = True
+    record.user = None
+    return record
+
+
+def test_lookup_principal_returns_none_for_orphan_api_key(monkeypatch):
+    """An APIKey with no attached User must NOT mint a TokenLookup.
+
+    Symmetric with the existing ``user_session.user is None`` guard above
+    it — the principal model relies on ``TokenLookup.user`` being a real
+    User (callers do ``principal.user.id`` / ``principal.user.scopes``).
+    A future cascade-delete race must fail closed at the lookup, not 500
+    in the caller.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    monkeypatch.setattr(
+        op, "lookup_api_key", lambda token, session: _orphan_api_key_stub()
+    )
+    fake_session = MagicMock()
+    fake_session.get.return_value = None  # no UserSession match → API key path
+
+    assert op.lookup_principal("orphan-token", fake_session) is None
+
+
+def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
+    """Discriminator: the ``user is None`` guard MUST come BEFORE
+    ``handle_api_key_use`` so a detached row doesn't get its
+    ``last_used_at`` bumped (or, for one-time keys, deleted) on behalf
+    of a caller who can't actually be authenticated. If a future
+    refactor reorders the guards, this test pins the regression.
+    """
+    from memory.api.MCP import oauth_provider as op
+
+    orphan = _orphan_api_key_stub()
+    monkeypatch.setattr(op, "lookup_api_key", lambda token, session: orphan)
+
+    handle_calls = []
+
+    def fake_handle(record, session):
+        handle_calls.append(record)
+
+    monkeypatch.setattr(op, "handle_api_key_use", fake_handle)
+    fake_session = MagicMock()
+    fake_session.get.return_value = None
+
+    assert op.lookup_principal("orphan-token", fake_session) is None
+    assert handle_calls == []
 
 
 # --- One-time API key tests ---

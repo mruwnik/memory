@@ -741,3 +741,60 @@ def test_search_sources_empty_chunks_returns_empty():
 
     assert result == []
     mock_session.assert_not_called()
+
+
+# ============================================================================
+# _fetch_chunks_by_title — fail-closed on missing access_filter
+# ============================================================================
+#
+# The title-match fetch is the fourth reader of SourceItem/Chunk in this
+# pipeline. Before this gate, a caller that forgot to thread access_filter
+# silently fell through to an unfiltered query — and because _run_searches
+# wraps the embedding/BM25 calls in asyncio.gather(return_exceptions=True),
+# their ValueError got swallowed into empty scores and execution still
+# reached the title-match path with LLM-supplied titles driving an
+# unfiltered match. These tests pin the gate.
+
+
+def test_fetch_chunks_by_title_raises_on_none_filters():
+    from memory.api.search.search import _fetch_chunks_by_title
+
+    with pytest.raises(ValueError, match="`access_filter`"):
+        _fetch_chunks_by_title(["some title"], {"text"}, None)
+
+
+def test_fetch_chunks_by_title_raises_on_missing_key():
+    from memory.api.search.search import _fetch_chunks_by_title
+
+    with pytest.raises(ValueError, match="`access_filter`"):
+        _fetch_chunks_by_title(["some title"], {"text"}, {"person_id": 5})  # type: ignore[arg-type]
+
+
+def test_fetch_chunks_by_title_early_returns_skip_gate():
+    """No titles / no modalities short-circuits before the gate would fire.
+
+    The function returns ``{}`` without inspecting filters when there's
+    no work to do — useful because callers in _run_searches always pass
+    valid filters but may pass empty titles/modalities.
+    """
+    from memory.api.search.search import _fetch_chunks_by_title
+
+    assert _fetch_chunks_by_title([], {"text"}, None) == {}
+    assert _fetch_chunks_by_title(["t"], set(), None) == {}
+
+
+def test_fetch_chunks_by_title_accepts_explicit_none():
+    """``access_filter=None`` is the explicit superadmin opt-in."""
+    from memory.api.search.search import _fetch_chunks_by_title
+
+    with patch("memory.api.search.search.make_session") as mock_session:
+        mock_db = MagicMock()
+        mock_session.return_value.__enter__.return_value = mock_db
+        mock_db.query.return_value.filter.return_value.limit.return_value.all.return_value = []
+
+        result = _fetch_chunks_by_title(
+            ["some title"], {"text"}, {"access_filter": None}
+        )
+
+    assert result == {}
+    mock_session.assert_called_once()

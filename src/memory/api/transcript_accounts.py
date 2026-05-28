@@ -16,6 +16,10 @@ from memory.api.auth import (
 )
 from memory.common.celery_app import RESCAN_TRANSCRIPT_ACCOUNT, SYNC_TRANSCRIPT_ACCOUNT
 from memory.common.celery_app import app as celery_app
+from memory.common.data_source_access import (
+    enqueue_access_control_propagation,
+    mark_access_control_changed_if_needed,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import TranscriptAccount
@@ -196,6 +200,7 @@ def update_account(
     """Update a transcript account."""
     account = get_user_account(db, TranscriptAccount, account_id, user)
 
+    snap_pid, snap_sens = account.project_id, account.sensitivity
     if updates.name is not None:
         account.name = updates.name
     if updates.api_key is not None:
@@ -222,8 +227,17 @@ def update_account(
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
 
+    access_changed = mark_access_control_changed_if_needed(
+        account,
+        snapshot_project_id=snap_pid,
+        snapshot_sensitivity=snap_sens,
+    )
+
     db.commit()
     db.refresh(account)
+
+    if access_changed:
+        enqueue_access_control_propagation("transcript_account", account)
 
     return account_to_response(account)
 

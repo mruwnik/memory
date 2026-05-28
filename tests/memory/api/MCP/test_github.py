@@ -829,7 +829,7 @@ def mock_upsert_deps():
 @pytest.mark.asyncio
 async def test_upsert_issue_accepts_project_fields_as_json_string(mock_upsert_deps):
     """project_fields passed as a JSON-encoded string should be parsed into a dict."""
-    result = await upsert_issue.fn(
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
         repo="owner/name",
         title="hello",
         project="P",
@@ -845,7 +845,7 @@ async def test_upsert_issue_accepts_project_fields_as_json_string(mock_upsert_de
 @pytest.mark.asyncio
 async def test_upsert_issue_coerces_project_fields_values_to_strings(mock_upsert_deps):
     """Numeric values in a project_fields dict should be stringified."""
-    result = await upsert_issue.fn(
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
         repo="owner/name",
         title="hello",
         project="P",
@@ -859,7 +859,7 @@ async def test_upsert_issue_coerces_project_fields_values_to_strings(mock_upsert
 async def test_upsert_issue_rejects_invalid_json_project_fields(mock_upsert_deps):
     """Invalid JSON in project_fields should raise ValueError."""
     with pytest.raises(ValueError, match="invalid JSON"):
-        await upsert_issue.fn(
+        await upsert_issue.fn(  # type: ignore[attr-defined]
             repo="owner/name",
             title="hello",
             project_fields="not valid json {",
@@ -870,7 +870,7 @@ async def test_upsert_issue_rejects_invalid_json_project_fields(mock_upsert_deps
 async def test_upsert_issue_rejects_non_object_json_project_fields(mock_upsert_deps):
     """JSON that doesn't decode to an object should raise ValueError."""
     with pytest.raises(ValueError, match="must decode to an object"):
-        await upsert_issue.fn(
+        await upsert_issue.fn(  # type: ignore[attr-defined]
             repo="owner/name",
             title="hello",
             project_fields='["Status", "Ready"]',
@@ -880,7 +880,7 @@ async def test_upsert_issue_rejects_non_object_json_project_fields(mock_upsert_d
 @pytest.mark.asyncio
 async def test_upsert_issue_accepts_number_as_string(mock_upsert_deps):
     """number passed as a string should be coerced to int and used to update."""
-    result = await upsert_issue.fn(
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
         repo="owner/name",
         number="46",  # type: ignore[arg-type]
         title="hello",
@@ -896,7 +896,7 @@ async def test_upsert_issue_accepts_number_as_string(mock_upsert_deps):
 @pytest.mark.asyncio
 async def test_upsert_issue_title_optional_for_update(mock_upsert_deps):
     """Updating an existing issue should not require a title."""
-    result = await upsert_issue.fn(repo="owner/name", number=46)
+    result = await upsert_issue.fn(repo="owner/name", number=46)  # type: ignore[attr-defined]
 
     assert result["action"] == "updated"
     # update_issue should be called with title=None
@@ -908,7 +908,7 @@ async def test_upsert_issue_title_optional_for_update(mock_upsert_deps):
 async def test_upsert_issue_title_required_for_create(mock_upsert_deps):
     """Creating a new issue (no number) without a title should raise."""
     with pytest.raises(ValueError, match="title is required"):
-        await upsert_issue.fn(repo="owner/name")
+        await upsert_issue.fn(repo="owner/name")  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

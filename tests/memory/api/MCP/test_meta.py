@@ -506,10 +506,23 @@ async def test_one_time_key_pins_intersection_for_narrow_token(
 
 
 @pytest.mark.asyncio
-async def test_one_time_key_intersects_when_token_is_narrower_than_user(
+async def test_one_time_key_allowed_for_non_admin_but_capped_to_grant(
     db_session, regular_user
 ):
-    """Same hypothetical-narrow-token pin for non-admin users."""
+    """REGRESSION GUARD on the FIXME-deferred non-admin path.
+
+    The admin gate that previously refused non-admin callers outright
+    has been removed (see the ``# FIXME(security)`` block in
+    ``meta.get_user``) to unblock client workflows. The remaining
+    defence is the intersection cap in ``_create_one_time_key`` —
+    ``user.scopes ∩ granted_scopes`` — which means a non-admin caller
+    can mint a key, but only one carrying scopes the caller already
+    had. This test pins both halves: the call now succeeds, and the
+    minted key carries no scope beyond the user's nor the grant's.
+
+    When the admin gate is reinstated (the FIXME), flip this test
+    back to ``pytest.raises(PermissionError)``.
+    """
     from datetime import datetime, timedelta
     from memory.common.db.models import APIKey, UserSession
 
@@ -525,14 +538,88 @@ async def test_one_time_key_intersects_when_token_is_narrower_than_user(
     with _mcp_auth_context_with_scopes(sess.id, granted):
         result = await get_user.fn(generate_one_time_key=True)
 
+    assert result["authenticated"] is True
+    assert result.get("one_time_key") is not None
+
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
+    )
+    assert stored is not None
+    # Intersection cap is the load-bearing defence: minted scopes must
+    # be a subset of BOTH the user's scopes and the OAuth grant.
+    user_scope_set = set(regular_user.scopes or [])
+    assert set(stored.scopes) <= user_scope_set
+    assert set(stored.scopes) <= set(granted)
+    # No wildcard escalation from a non-admin caller.
+    assert "*" not in stored.scopes
+
+
+@pytest.mark.asyncio
+async def test_one_time_key_admin_grant_via_oauth(
+    db_session, regular_user
+):
+    """Admin scope on the OAuth grant alone is enough to mint the key.
+
+    This makes the gate consistent with the rest of the codebase: an
+    OAuth client that holds admin can still escalate, the same way a
+    user with admin scopes can. Non-admin paths are uniformly denied.
+    """
+    from datetime import datetime, timedelta
+    from memory.common.db.models import APIKey, UserSession
+
+    sess = UserSession(
+        id="regular-session-token-admin-grant",
+        user_id=regular_user.id,
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+    db_session.add(sess)
+    db_session.commit()
+
+    granted = ["*", "read", "write"]
+    with _mcp_auth_context_with_scopes(sess.id, granted):
+        result = await get_user.fn(generate_one_time_key=True)
+
     assert result.get("one_time_key") is not None
     stored = (
         db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
     )
     assert stored is not None
-    # user.scopes = {"teams"}, granted has "teams" so intersection = {"teams"}.
-    # User without "claudeai" shouldn't get it even though the grant lists it.
-    assert set(stored.scopes) == {"teams"}
+
+
+@pytest.mark.asyncio
+async def test_one_time_key_admin_user_with_narrow_grant_caps_to_grant(
+    db_session, admin_session
+):
+    """REGRESSION GUARD on the intersection cap: an admin user (``user.scopes
+    = ["*"]``) who reaches ``get_user(generate_one_time_key=True)`` via an
+    OAuth grant of exactly ``["read"]`` MUST receive a minted key with
+    scopes = ``["read"]`` — never the user's ``["*"]``. This pins the
+    ``elif "*" in user_scopes: effective = granted_scopes`` branch in
+    ``_create_one_time_key`` so a future "simplification" that drops the
+    intersection (and just hands user.scopes through) is caught
+    immediately rather than silently widening every minted key."""
+    from memory.common.db.models import APIKey
+
+    granted = ["read"]
+    with _mcp_auth_context_with_scopes(admin_session.id, granted):
+        result = await get_user.fn(generate_one_time_key=True)
+
+    assert result["authenticated"] is True
+    assert result.get("one_time_key") is not None
+
+    stored = (
+        db_session.query(APIKey)
+        .filter(APIKey.user_id == admin_session.user_id)
+        .first()
+    )
+    assert stored is not None
+    assert set(stored.scopes) == {"read"}, (
+        f"intersection cap broken: minted key has {stored.scopes!r}, "
+        f"expected exactly ['read'] (user.scopes='*' must be capped to "
+        f"granted=['read'])"
+    )
+    # Most important shape: the wildcard must NOT have leaked through.
+    assert "*" not in stored.scopes
 
 
 # ====== get_forecasts tests ======

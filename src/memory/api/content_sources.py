@@ -4,7 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
@@ -24,6 +24,69 @@ from memory.common.rate_limit import check_rate_limit_spec
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["content-sources"])
+
+
+# Default chunk size for streaming UploadFile reads. Picked to match
+# Starlette's internal SpooledTemporaryFile rollover threshold; large
+# enough that we don't cycle the loop excessively, small enough that
+# a 413 fires within ~1 MiB of the cap rather than after a full read.
+_UPLOAD_READ_CHUNK = 1024 * 1024  # 1 MiB
+
+
+async def read_upload_with_cap(
+    upload: UploadFile,
+    cap_bytes: int,
+    *,
+    request: Request | None = None,
+) -> bytes:
+    """Read the entire UploadFile body but refuse to exceed ``cap_bytes``.
+
+    Borrows the early-413 + chunked-read shape of
+    ``cloud_claude.transfer_push``, but unlike ``transfer_push`` this
+    helper does **not** stream the body to a destination — it buffers
+    every chunk in memory and returns ``bytes``. Peak RAM use is therefore
+    bounded by ``cap_bytes`` (plus a transient ~2× spike during the final
+    ``b"".join``), not by the chunk size; callers that hand the result to
+    ``Path.write_bytes`` will buffer once more on disk-write. The cap is
+    purely a DoS bound, not a streaming guarantee. (See follow-up audit
+    task for a real ``read_upload_streaming_to(destination)`` variant
+    that would let large uploads bypass API RAM entirely.)
+
+    1. If a ``request`` is supplied, do the cheap pre-check on the
+       declared ``Content-Length`` so an honestly-too-large client gets
+       413 before we read any bytes.
+    2. Read in 1 MiB chunks while accumulating a running total. As soon
+       as the running total exceeds ``cap_bytes`` raise a 413 — this
+       catches Transfer-Encoding: chunked uploads and Content-Length-
+       lying clients that the pre-check can't.
+
+    Returns the full body bytes on success.
+    """
+    if request is not None:
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > cap_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload too large. Maximum size is "
+                    f"{cap_bytes // (1024 * 1024)} MB"
+                ),
+            )
+
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(_UPLOAD_READ_CHUNK):
+        total += len(chunk)
+        if total > cap_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload too large. Maximum size is "
+                    f"{cap_bytes // (1024 * 1024)} MB"
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # === Photos ===
@@ -146,6 +209,7 @@ ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", "
 
 @router.post("/books/upload")
 async def upload_book(
+    request: Request,
     file: UploadFile = File(...),
     title: str = Form(default=""),
     author: str = Form(default=""),
@@ -172,8 +236,13 @@ async def upload_book(
     # Ensure storage directory exists
     settings.EBOOK_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Generate unique filename to avoid collisions
-    content = await file.read()
+    # Generate unique filename to avoid collisions. Streaming-cap read
+    # bounds API memory and disk so a single authenticated user can't
+    # OOM the API container or fill FILE_STORAGE_DIR (shared with
+    # Postgres/Qdrant volumes) with a multi-GB upload.
+    content = await read_upload_with_cap(
+        file, settings.MAX_BOOK_UPLOAD_BYTES, request=request
+    )
     content_hash = hashlib.sha256(content).hexdigest()[:12]
     safe_filename = f"{content_hash}_{Path(file.filename).name}"
     file_path = settings.EBOOK_STORAGE_DIR / safe_filename
@@ -217,6 +286,7 @@ async def upload_book(
 
 @router.post("/photos/upload")
 async def upload_photo(
+    request: Request,
     file: UploadFile = File(...),
     tags: str = Form(default=""),
     user: User = Depends(get_current_user),
@@ -241,8 +311,11 @@ async def upload_photo(
     # Ensure storage directory exists
     settings.PHOTO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Generate unique filename to avoid collisions
-    content = await file.read()
+    # Generate unique filename to avoid collisions. See upload_book for
+    # the rationale behind the streaming size cap.
+    content = await read_upload_with_cap(
+        file, settings.MAX_PHOTO_UPLOAD_BYTES, request=request
+    )
     content_hash = hashlib.sha256(content).hexdigest()[:12]
     safe_filename = f"{content_hash}_{Path(file.filename).name}"
     file_path = settings.PHOTO_STORAGE_DIR / safe_filename
@@ -289,6 +362,7 @@ ALLOWED_REPORT_EXTENSIONS = {".pdf", ".html", ".htm"}
 
 @router.post("/reports/upload")
 async def upload_report(
+    request: Request,
     file: UploadFile = File(...),
     title: str = Form(default=""),
     tags: str = Form(default=""),
@@ -339,7 +413,10 @@ async def upload_report(
 
     settings.REPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    content = await file.read()
+    # Streaming size cap, see upload_book for rationale.
+    content = await read_upload_with_cap(
+        file, settings.MAX_REPORT_UPLOAD_BYTES, request=request
+    )
     content_hash = hashlib.sha256(content).hexdigest()[:12]
     safe_filename = f"{content_hash}_{Path(file.filename).name}"
     file_path = settings.REPORT_STORAGE_DIR / safe_filename

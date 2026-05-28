@@ -1,6 +1,11 @@
+"""Tests for memory.common.settings env-reading helpers."""
+
 import pytest
 
 from memory.common.settings import secret_env
+
+
+# --- secret_env (file or env var fallback) ---------------------------------
 
 
 def test_secret_env_reads_plain_env_var(monkeypatch):

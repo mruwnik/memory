@@ -10,6 +10,8 @@ import requests
 from memory.common import paths, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Comic, clean_filename
+from memory.common.downloads import safe_get, stream_download_to_bytes
+from memory.common.ssrf import UnsafeURLError
 from memory.parsers import comics
 from memory.common.celery_app import (
     app,
@@ -33,14 +35,23 @@ SMBC_RSS_URL = "https://www.smbc-comics.com/comic/rss"
 BASE_XKCD_URL = "https://xkcd.com/"
 XKCD_RSS_URL = "https://xkcd.com/atom.xml"
 
+# Hard cap on comic image size (10 MB). XKCD/SMBC comics are typically
+# well under 1 MB; this is a DoS guard for attacker-controlled image URLs.
+MAX_COMIC_IMAGE_SIZE = 10 * 1024 * 1024
+
 
 def find_new_urls(base_url: str, rss_url: str) -> set[str]:
     try:
         # Pre-fetch RSS content to avoid feedparser making direct requests
-        # This provides better control over timeouts and avoids potential XXE issues
-        response = requests.get(rss_url, timeout=30)
+        # This provides better control over timeouts and avoids potential XXE issues.
+        # ``safe_get`` validates the URL against SSRF policy and revalidates
+        # each redirect target.
+        response = safe_get(rss_url, timeout=30)
         response.raise_for_status()
         feed = feedparser.parse(response.content)
+    except UnsafeURLError as e:
+        logger.error(f"Refusing to fetch unsafe RSS URL {rss_url}: {e}")
+        return set()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch {rss_url}: {e}")
         return set()
@@ -95,11 +106,16 @@ def sync_comic(
         if existing_comic:
             return {"status": "already_exists", "comic_id": existing_comic.id}
 
-    response = requests.get(image_url, timeout=30)
-    if response.status_code != 200:
+    # ``stream_download_to_bytes`` validates the URL against SSRF, caps body
+    # size, and revalidates each redirect hop. ``image_url`` is parsed from
+    # third-party comic pages — attacker-influenceable.
+    image_bytes = stream_download_to_bytes(
+        image_url, max_bytes=MAX_COMIC_IMAGE_SIZE, timeout=30
+    )
+    if image_bytes is None:
         return {
             "status": "failed",
-            "error": f"Failed to download image: {response.status_code}",
+            "error": f"Failed to download image: {image_url}",
         }
 
     # Strip query string from extension (e.g., "png?v=123" -> "png")
@@ -112,7 +128,7 @@ def sync_comic(
     )
 
     filename.parent.mkdir(parents=True, exist_ok=True)
-    filename.write_bytes(response.content)
+    filename.write_bytes(image_bytes)
 
     comic = Comic(
         title=title,
@@ -121,7 +137,7 @@ def sync_comic(
         author=author,
         filename=paths.to_db_filename(filename),
         mime_type=mime_type,
-        size=len(response.content),
+        size=len(image_bytes),
         sha256=create_content_hash(f"{image_url}{published_date}"),
         tags={"comic", author},
         modality="comic",
@@ -160,7 +176,9 @@ def trigger_comic_sync():
     def prev_smbc_comic(url: str) -> str | None:
         from bs4 import BeautifulSoup
 
-        response = requests.get(url, timeout=30)
+        # SSRF-safe fetch — `url` walks the smbc-comics.com chain but the
+        # parsed `cc-prev` link can in principle redirect anywhere.
+        response = safe_get(url, timeout=30)
         soup = BeautifulSoup(response.text, "html.parser")
         if link := soup.find("a", attrs={"class": "cc-prev"}):
             return link.attrs["href"]  # type: ignore

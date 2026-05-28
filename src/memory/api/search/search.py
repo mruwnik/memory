@@ -17,7 +17,7 @@ from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
-from memory.api.search.embeddings import search_chunks_embeddings
+from memory.api.search.embeddings import require_access_filter, search_chunks_embeddings
 from memory.api.search import scorer
 from memory.api.search.constants import (
     RRF_K,
@@ -368,18 +368,20 @@ def _fetch_chunks_by_title(
     if not titles or not modalities:
         return {}
 
-    # Normalize titles for matching
+    # Same fail-closed gate as the embedding/BM25 layers — a missing
+    # ``access_filter`` key here would otherwise silently fall through to
+    # an unfiltered SourceItem query (apply_access_filter_to_query treats
+    # None as "no filter"), which is the exact prompt-injection
+    # exfiltration path the docstring above describes.
+    filters = require_access_filter(filters, "_fetch_chunks_by_title")
+    access_filter = filters.get("access_filter")
+
     titles_lower = [t.lower() for t in titles[:5]]
-
-    # Import here to avoid circular dependency
-    from memory.api.search.bm25 import apply_access_filter
-
-    access_filter = (filters or {}).get("access_filter")
 
     with make_session() as db:
         # Query sources in requested modalities, applying access control
         sources_query = db.query(SourceItem).filter(SourceItem.modality.in_(modalities))
-        sources_query = apply_access_filter(sources_query, access_filter)
+        sources_query = apply_access_filter_to_query(sources_query, access_filter)
         sources = (
             sources_query
             .limit(200)  # Reduced from 500; access filter narrows the set

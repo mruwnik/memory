@@ -4,7 +4,6 @@ from unittest.mock import Mock, patch
 
 from memory.common.db.models import Comic
 from memory.workers.tasks import comic
-import requests
 
 
 @pytest.fixture
@@ -32,19 +31,23 @@ def mock_feed_data():
 
 @pytest.fixture(autouse=True)
 def mock_rss_request():
-    """find_new_urls calls requests.get(rss_url) before handing to feedparser.
-    Stub it so the tests don't hit the network."""
+    """find_new_urls calls safe_get(rss_url) before handing to feedparser.
+    Stub it so the tests don't hit the network or run SSRF DNS lookups."""
     response = Mock()
     response.status_code = 200
     response.content = b"<rss/>"
     response.raise_for_status = Mock()
-    with patch.object(requests, "get", return_value=response):
+    with patch("memory.workers.tasks.comic.safe_get", return_value=response):
         yield
 
 
 @pytest.fixture
 def mock_image_response():
-    """Mock HTTP response for comic image."""
+    """Mock the streaming download for comic images.
+
+    The image fetch is now ``stream_download_to_bytes`` (validates URL +
+    caps body size). Patch it in the comic-tasks module namespace.
+    """
     # 1x1 PNG image (smallest valid PNG)
     png_data = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -52,11 +55,11 @@ def mock_image_response():
         b"\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\nIDATx\x9cc```"
         b"\x00\x00\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
     )
-    response = Mock()
-    response.status_code = 200
-    response.content = png_data
-    with patch.object(requests, "get", return_value=response):
-        yield response
+    with patch(
+        "memory.workers.tasks.comic.stream_download_to_bytes",
+        return_value=png_data,
+    ) as mock:
+        yield mock
 
 
 @patch("memory.workers.tasks.comic.feedparser.parse")
@@ -192,10 +195,8 @@ def test_fetch_new_comics_multiple_urls(
     assert mock_sync_delay.call_count == 2
 
 
-@patch("memory.workers.tasks.comic.requests.get")
-def test_sync_comic_success(mock_get, mock_image_response, db_session, qdrant):
+def test_sync_comic_success(mock_image_response, db_session, qdrant):
     """Test successful comic synchronization."""
-    mock_get.return_value = mock_image_response
 
     comic.sync_comic(
         url="https://example.com/comic/1",
@@ -215,7 +216,7 @@ def test_sync_comic_success(mock_get, mock_image_response, db_session, qdrant):
     assert saved_comic.title == "Test Comic"
     assert saved_comic.author == "https://example.com"
     assert saved_comic.mime_type == "image/png"
-    assert saved_comic.size == len(mock_image_response.content)
+    assert saved_comic.size == 90  # length of the mocked PNG body
     assert "comic" in saved_comic.tags
     assert "https://example.com" in saved_comic.tags
 
@@ -256,7 +257,7 @@ def test_sync_comic_already_exists(db_session):
     db_session.add(existing_comic)
     db_session.commit()
 
-    with patch("memory.workers.tasks.comic.requests.get") as mock_get:
+    with patch("memory.workers.tasks.comic.stream_download_to_bytes") as mock_dl:
         result = comic.sync_comic(
             url="https://example.com/comic/1",
             image_url="https://example.com/image.png",
@@ -264,18 +265,17 @@ def test_sync_comic_already_exists(db_session):
             author="https://example.com",
         )
 
-        # Should return early without making HTTP request
-        mock_get.assert_not_called()
+        # Should return early without downloading anything
+        mock_dl.assert_not_called()
         assert result == {"comic_id": existing_comic.id, "status": "already_exists"}
 
 
-@patch("memory.workers.tasks.comic.requests.get")
-def test_sync_comic_http_error(mock_get, db_session, qdrant):
+@patch("memory.workers.tasks.comic.stream_download_to_bytes")
+def test_sync_comic_http_error(mock_dl, db_session, qdrant):
     """Test handling of HTTP errors when downloading image."""
-    mock_response = Mock()
-    mock_response.status_code = 404
-    mock_response.content = b""
-    mock_get.return_value = mock_response
+    # ``stream_download_to_bytes`` returns ``None`` on any failure
+    # (HTTP error, SSRF rejection, size cap, transport error).
+    mock_dl.return_value = None
 
     comic.sync_comic(
         url="https://example.com/comic/1",
@@ -291,12 +291,10 @@ def test_sync_comic_http_error(mock_get, db_session, qdrant):
     )
 
 
-@patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_no_published_date(
-    mock_get, mock_image_response, db_session, qdrant
+    mock_image_response, db_session, qdrant
 ):
     """Test comic sync without published date."""
-    mock_get.return_value = mock_image_response
 
     comic.sync_comic(
         url="https://example.com/comic/1",
@@ -323,12 +321,10 @@ def test_sync_comic_no_published_date(
         ("January 15, 2024", 2024),
     ],
 )
-@patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_string_published_date(
-    mock_get, mock_image_response, db_session, qdrant, date_input, expected_year
+    mock_image_response, db_session, qdrant, date_input, expected_year
 ):
     """Test comic sync with published_date as string (as returned by parsers)."""
-    mock_get.return_value = mock_image_response
 
     comic.sync_comic(
         url=f"https://example.com/comic/{date_input}",
@@ -350,12 +346,10 @@ def test_sync_comic_string_published_date(
 
 
 @pytest.mark.transactional_db
-@patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_empty_string_published_date(
-    mock_get, mock_image_response, db_session, qdrant
+    mock_image_response, db_session, qdrant
 ):
     """Test comic sync with empty string published_date (SMBC returns '' when missing)."""
-    mock_get.return_value = mock_image_response
 
     comic.sync_comic(
         url="https://example.com/comic/empty",
@@ -374,12 +368,10 @@ def test_sync_comic_empty_string_published_date(
     assert saved_comic.published is None
 
 
-@patch("memory.workers.tasks.comic.requests.get")
 def test_sync_comic_special_characters_in_title(
-    mock_get, mock_image_response, db_session, qdrant
+    mock_image_response, db_session, qdrant
 ):
     """Test comic sync with special characters in title."""
-    mock_get.return_value = mock_image_response
 
     comic.sync_comic(
         url="https://example.com/comic/1",
@@ -442,12 +434,13 @@ def test_sync_all_comics(mock_smbc_delay, mock_xkcd_delay):
 @patch("memory.workers.tasks.comic.sync_comic.delay")
 @patch("memory.workers.tasks.comic.comics.extract_xkcd")
 @patch("memory.workers.tasks.comic.comics.extract_smbc")
-@patch("requests.get")
+@patch("memory.workers.tasks.comic.safe_get")
 def test_trigger_comic_sync_smbc_navigation(
     mock_get, mock_extract_smbc, mock_extract_xkcd, mock_sync_delay, mock_comic_info
 ):
     """Test full SMBC comic sync with navigation."""
-    # Mock HTML responses for navigation
+    # ``trigger_comic_sync.prev_smbc_comic`` now uses ``safe_get`` for the
+    # SSRF-validated walk back through the smbc-comics archive.
     mock_responses = [
         Mock(text='<a class="cc-prev" href="https://smbc.com/comic/2"></a>'),
         Mock(text='<a class="cc-prev" href="https://smbc.com/comic/1"></a>'),
@@ -472,12 +465,19 @@ def test_trigger_comic_sync_smbc_navigation(
 
 
 @patch("memory.workers.tasks.comic.sync_comic.delay")
+@patch("memory.workers.tasks.comic.comics.extract_xkcd")
 @patch("memory.workers.tasks.comic.comics.extract_smbc")
-@patch("requests.get")
+@patch("memory.workers.tasks.comic.safe_get")
 def test_trigger_comic_sync_smbc_extraction_error(
-    mock_get, mock_extract_smbc, mock_sync_delay
+    mock_get, mock_extract_smbc, mock_extract_xkcd, mock_sync_delay
 ):
-    """Test handling of extraction errors during full sync."""
+    """Test handling of extraction errors during full sync.
+
+    Both extractors are mocked to raise, so the XKCD loop that runs
+    after the SMBC loop also no-ops — without mocking ``extract_xkcd``
+    the real parser hits the network and the assertion below depends on
+    the runner having no DNS for xkcd.com (which is CI-fragile).
+    """
     # Mock responses: first one has a prev link, second one doesn't
     mock_responses = [
         Mock(text='<a class="cc-prev" href="https://smbc.com/comic/1"></a>'),
@@ -485,17 +485,19 @@ def test_trigger_comic_sync_smbc_extraction_error(
     ]
     mock_get.side_effect = mock_responses
     mock_extract_smbc.side_effect = Exception("Extraction failed")
+    mock_extract_xkcd.side_effect = Exception("XKCD extraction failed")
 
-    # Should not raise exception, just log error
+    # Should not raise exception, just log errors
     comic.trigger_comic_sync()
 
     mock_extract_smbc.assert_called_once_with("https://smbc.com/comic/1")
+    # SMBC and XKCD both raised — nothing enqueued.
     mock_sync_delay.assert_not_called()
 
 
 @patch("memory.workers.tasks.comic.sync_comic.delay")
 @patch("memory.workers.tasks.comic.comics.extract_xkcd")
-@patch("requests.get")
+@patch("memory.workers.tasks.comic.safe_get")
 def test_trigger_comic_sync_xkcd_extraction_error(
     mock_get, mock_extract_xkcd, mock_sync_delay
 ):

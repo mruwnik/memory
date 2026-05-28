@@ -124,7 +124,7 @@ async def test_int_snowflake_rejected_at_mcp_boundary(tool, kwargs):
 @pytest.mark.asyncio
 async def test_create_role_schema_accepts_string_snowflake():
     """The string form must round-trip cleanly through schema validation."""
-    schema = create_role.parameters
+    schema = create_role.parameters  # type: ignore[attr-defined]
     guild_schema = schema["properties"]["guild"]
     bot_id_schema = schema["properties"]["bot_id"]
 

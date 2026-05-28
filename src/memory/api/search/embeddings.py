@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import Any, Callable, cast, TYPE_CHECKING
+from typing import Any, Callable, Final, cast, TYPE_CHECKING
 
 import qdrant_client
 from qdrant_client.http import models as qdrant_models
@@ -18,23 +18,57 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Sentinel returned by build_access_qdrant_filter when the user has no
-# access at all (no project access, no person override, no public bypass).
-# Compared with `is`, so consumers cannot accidentally match it via shape
-# inspection, and the value cannot collide with any real data (unlike the
-# previous `project_id == -1` magic value, which a future caller storing
-# negative project IDs in test fixtures or partition shards could trip).
-#
-# Immutable tuple rather than `[]`: a mutable list singleton can be
-# corrupted by a stray `result.append(...)` before the `is`-check, polluting
-# every subsequent caller. ``()`` is identity-comparable, falsy, and
-# can't be mutated.
-NO_ACCESS: tuple[dict[str, Any], ...] = ()
+class NoAccess:
+    """Sentinel type for the deny-all return of ``build_access_qdrant_filter``.
+
+    The deny-all return must be unambiguously distinguishable from the
+    "superadmin / no filter needed" return (an empty ``list``). A
+    type-distinct sentinel (rather than an empty container) prevents the
+    natural refactors that would silently turn deny into allow-all:
+
+    1. ``access_conditions == []`` short-circuiting before a deny-check —
+       a ``NoAccess`` instance is not equal to ``[]``.
+    2. Reordering ``if access_conditions:`` before the deny-check so an
+       empty deny would fall through as "no filter applied" — ``NoAccess``
+       remains falsy (compat) but ``isinstance(x, NoAccess)`` still
+       discriminates regardless of falsiness.
+    3. Normalising return values to a single type — ``list[...] | NoAccess``
+       in the signature catches at type-check time.
+
+    Identity / pickle round-tripping is **not** load-bearing: the only
+    production consumer uses ``isinstance(x, NoAccess)``. We therefore
+    keep the class minimal — no ``__new__``/``__eq__``/``__hash__``/
+    ``__reduce__`` machinery — and rely on type-distinctness rather than
+    instance-distinctness. ``__slots__ = ()`` keeps it cheap and prevents
+    accidental attribute attachment.
+
+    The module-level :data:`NO_ACCESS` is the canonical instance returned
+    from :func:`build_access_qdrant_filter`. Constructing additional
+    ``NoAccess()`` instances is fine — they all pass ``isinstance(x,
+    NoAccess)`` — but production code returns the module singleton.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NO_ACCESS"
+
+    def __bool__(self) -> bool:
+        # Falsy so ``if access_conditions:`` skips the deny branch the
+        # same way it does for an empty list. ``isinstance`` is the
+        # authoritative discriminator; falsiness is a convenience only.
+        return False
+
+
+# Canonical instance returned from ``build_access_qdrant_filter``. The
+# ``Final`` annotation flags accidental rebinding from elsewhere in the
+# codebase to the type checker.
+NO_ACCESS: Final[NoAccess] = NoAccess()
 
 
 def build_access_qdrant_filter(
     access_filter: "AccessFilter | None",
-) -> "list[dict[str, Any]] | tuple[dict[str, Any], ...]":
+) -> "list[dict[str, Any]] | NoAccess":
     """
     Build Qdrant filter conditions from an AccessFilter.
 
@@ -48,9 +82,11 @@ def build_access_qdrant_filter(
 
     - ``[]`` (fresh empty list): superadmin / no filtering needed. Caller
       must apply no access filter to the Qdrant query.
-    - ``NO_ACCESS`` (distinct empty-tuple singleton): user has no access
-      at all. Caller must short-circuit and return zero results. Detect
-      with ``is NO_ACCESS``; do not compare with ``==``.
+    - :data:`NO_ACCESS` (the canonical :class:`NoAccess` instance): user
+      has no access at all. Caller must short-circuit and return zero
+      results. Detect with ``isinstance(x, NoAccess)`` — the canonical
+      check; type-distinct from ``list``/``tuple``/empty containers so
+      no accidental ``== []`` short-circuit can mask the deny.
     - non-empty list: ``should`` conditions to include in the Qdrant
       filter.
 
@@ -89,11 +125,11 @@ def build_access_qdrant_filter(
         should_conditions.append(project_condition)
 
     if not should_conditions:
-        # No access conditions at all - return the distinct NO_ACCESS
-        # sentinel. Consumers MUST detect this via `is NO_ACCESS` and
-        # short-circuit; otherwise the empty list would silently fall
-        # through as "no filter applied" — i.e. the user would see
-        # everything.
+        # No access conditions at all - return the type-distinct NO_ACCESS
+        # sentinel. Consumers MUST detect this via ``isinstance(x,
+        # NoAccess)`` and short-circuit; otherwise the empty list would
+        # silently fall through as "no filter applied" — i.e. the user
+        # would see everything.
         return NO_ACCESS
 
     return should_conditions
@@ -248,6 +284,32 @@ def merge_filters(
     return filters
 
 
+def require_access_filter(filters: "SearchFilters | None", caller: str) -> "SearchFilters":
+    """Fail-closed gate on the documented three-layer access invariant.
+
+    The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+    filters are applied at three layers — Qdrant payload, BM25 SQL, and
+    final source merge. Pre-fix only the third layer raised on missing
+    ``access_filter``; the first two silently fell through to "no filter"
+    when callers forgot to thread the key. This helper makes the same
+    fail-closed semantics uniform across all three.
+
+    Pass ``filters={"access_filter": None}`` for the explicit superadmin
+    case (admin builds the filter as ``None`` deliberately). A *missing*
+    key is treated as a programming error — defense-in-depth that's only
+    effective when callers remember to opt in is a hint, not a defense.
+    """
+    if filters is None or "access_filter" not in filters:
+        raise ValueError(
+            f"{caller} requires `filters` with an `access_filter` key. "
+            "Pass `access_filter=None` for explicit superadmin/no-filter "
+            "semantics. The check matches the documented three-layer "
+            "access-control invariant — see search_sources for the "
+            "matching final-merge fail-closed."
+        )
+    return filters
+
+
 async def search_chunks(
     data: list[extract.DataChunk],
     modalities: set[str] | None = None,
@@ -264,19 +326,25 @@ async def search_chunks(
     - modalities: List of modalities to search in (e.g., "text", "photo", "doc")
     - limit: Maximum number of results
     - min_score: Minimum score to include in the search results
-    - filters: Filters to apply to the search results
+    - filters: Filters to apply to the search results — MUST contain an
+      ``access_filter`` key. Pass ``access_filter=None`` for explicit
+      superadmin / no-filter semantics.
     - multimodal: Whether to search in multimodal collections
 
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
+
+    Raises:
+        ValueError: ``filters`` is None, or ``access_filter`` is not a key
+            in ``filters``. Closes the documented three-layer access-control
+            invariant for the Qdrant layer (search_sources / final-merge
+            already enforces this; this is the same fail-closed at the
+            vector-search layer so a future caller that forgets
+            ``access_filter`` cannot silently widen results).
     """
-    # ``None`` sentinels: shared mutable defaults would be a cross-request
-    # leak waiting to happen if anyone in this call chain ever mutates
-    # ``filters`` (e.g. ``filters.setdefault('access_filter', X)``).
+    filters = require_access_filter(filters, "search_chunks")
     if modalities is None:
         modalities = set()
-    if filters is None:
-        filters = {}
     search_filters: list[dict[str, Any]] = []
     for key, val in filters.items():
         if key in ("access_filter", "person_id"):
@@ -309,12 +377,12 @@ async def search_chunks(
     # Wrap in a nested Filter inside must for consistent structure
     access_filter = filters.get("access_filter")
     access_conditions = build_access_qdrant_filter(access_filter)
-    # IMPORTANT: detect "no access" via `is NO_ACCESS`, BEFORE the truthy
-    # check on access_conditions. Both `[]` (superadmin) and `NO_ACCESS`
-    # (deny everything) are empty lists; `is` is the only way to tell
-    # them apart. Getting this wrong = no filter applied = user sees
-    # everything they shouldn't.
-    if access_conditions is NO_ACCESS:
+    # Detect "no access" via the type-distinct ``NoAccess`` sentinel.
+    # The deny-all return is a separate type from ``list[...]`` so it
+    # cannot be confused with ``[]`` (superadmin / no filter needed) by
+    # any consumer — ``isinstance`` is the canonical discriminator and
+    # ``==``-based refactors cannot silently turn deny into allow-all.
+    if isinstance(access_conditions, NoAccess):
         return {}
     if access_conditions:
         if "must" not in qdrant_filter:
@@ -359,13 +427,15 @@ async def search_chunks_embeddings(
     """
     Search chunks using embeddings across text and multimodal collections.
 
+    ``filters`` MUST carry an ``access_filter`` key (use ``None`` for
+    explicit superadmin) — see :func:`require_access_filter`.
+
     Returns:
     - Dictionary mapping chunk IDs to their similarity scores
     """
+    filters = require_access_filter(filters, "search_chunks_embeddings")
     if modalities is None:
         modalities = set()
-    if filters is None:
-        filters = SearchFilters()
     # Note: Multimodal embeddings typically produce higher similarity scores,
     # so we use a higher threshold (0.4) to maintain selectivity.
     # Text embeddings produce lower scores, so we use 0.25.

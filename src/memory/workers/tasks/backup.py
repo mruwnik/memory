@@ -1,7 +1,5 @@
 """S3 backup tasks for memory files."""
 
-import base64
-import hashlib
 import logging
 import os
 import subprocess
@@ -17,6 +15,7 @@ from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
+from memory.common.db.models.secrets import derive_encryption_key
 from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
@@ -59,14 +58,39 @@ def backup_lock(lock_name: str = "backup_all"):
         redis_client.eval(release_script, 1, lock_key, lock_value)
 
 
+# Domain-separating salt for the small-file Fernet backup KDF.
+#
+# Pinned as a module-level constant so backup decryption is stable across
+# code restarts and so a fresh-cloned repo at the same version can decrypt
+# its own backups. Distinct from ``SECRETS_ENCRYPTION_SALT`` so backup
+# ciphertext cannot be brute-forced in tandem with at-rest secrets
+# ciphertext under a shared passphrase.
+#
+# The version suffix is the KDF format identifier. Bumping it invalidates
+# all existing backups; operators must keep the matching code revision
+# available to decrypt archives at the prior version.
+_BACKUP_KEY_SALT = b"memory-backup-encryption-salt-v2"
+
+
 def get_cipher() -> Fernet:
-    """Create Fernet cipher from password in settings."""
+    """Create Fernet cipher from ``BACKUP_ENCRYPTION_KEY`` via PBKDF2.
+
+    Routes through ``derive_encryption_key`` (PBKDF2-HMAC-SHA256 with
+    480k iterations, OWASP-recommended) so the work factor matches the
+    rest of the secrets infrastructure. The pinned ``_BACKUP_KEY_SALT``
+    is distinct from ``SECRETS_ENCRYPTION_SALT`` so a leaked backup
+    ciphertext cannot be brute-forced in tandem with a leaked at-rest
+    secrets ciphertext — even when an operator reuses the same
+    passphrase for both.
+
+    The ``v2`` suffix in ``_BACKUP_KEY_SALT`` is the format version.
+    Operators restoring archives from before this version must use the
+    matching code revision; the ciphertext format is identical, only
+    the key derivation changes across version bumps.
+    """
     if not settings.BACKUP_ENCRYPTION_KEY:
         raise ValueError("BACKUP_ENCRYPTION_KEY not set in environment")
-
-    # Derive key from password using SHA256
-    key_bytes = hashlib.sha256(settings.BACKUP_ENCRYPTION_KEY.encode()).digest()
-    key = base64.urlsafe_b64encode(key_bytes)
+    key = derive_encryption_key(settings.BACKUP_ENCRYPTION_KEY, _BACKUP_KEY_SALT)
     return Fernet(key)
 
 
@@ -233,7 +257,10 @@ def backup_encrypted_directory(path: Path) -> dict:
                 if os.path.exists(enc_path):
                     os.unlink(enc_path)
         else:
-            # Small files: use Fernet (keeps backward compatibility)
+            # Small files (<MAX_FERNET_SIZE): use Fernet with the v2 KDF
+            # (PBKDF2-HMAC-SHA256 + 480k iterations + pinned salt — see
+            # ``get_cipher`` docstring for the salt-versioning contract
+            # and operator migration notes).
             cipher = get_cipher()
             tarball_bytes = tar_path.read_bytes()
             encrypted_bytes = cipher.encrypt(tarball_bytes)

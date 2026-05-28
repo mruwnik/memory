@@ -681,12 +681,13 @@ class _ResilientQdrantContainer:
         self._client = None
 
     def _start(self):
-        self._container = QdrantContainer()
-        self._container.__enter__()
+        container = QdrantContainer()
+        container.__enter__()
+        self._container = container
         # 30s timeout (default is 5s) — under -n 4 xdist, 4 qdrant containers
         # share the host's docker engine and CPU, and the 5s default tripped
         # cascading ReadTimeouts on writes.
-        client = self._container.get_client(timeout=30)
+        client = container.get_client(timeout=30)
         self._client = client
         from memory.common.collections import ALL_COLLECTIONS
         from memory.common.qdrant import ensure_collection_exists

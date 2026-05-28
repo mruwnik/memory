@@ -9,6 +9,7 @@ from urllib.parse import urlencode, urljoin
 import aiohttp
 from memory.common import settings
 from memory.common.db.models import MCPServer
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,25 @@ def generate_pkce_pair() -> tuple[str, str]:
 
 
 async def discover_oauth_metadata(server_url: str) -> dict | None:
-    """Discover OAuth metadata from an MCP server."""
+    """Discover OAuth metadata from an MCP server.
+
+    Validates the resolved discovery URL against private/internal address
+    ranges before issuing the request — ``server_url`` is operator-supplied
+    and reachable from the API process, so without this check it doubles
+    as an SSRF gateway to AWS IMDS / docker-network services / loopback.
+    """
     # Try the standard OAuth discovery endpoint
     discovery_url = urljoin(server_url, "/.well-known/oauth-authorization-server")
+
+    try:
+        validate_public_url(discovery_url)
+    except UnsafeURLError as exc:
+        logger.warning(
+            "Refusing OAuth metadata discovery for unsafe URL %s: %s",
+            discovery_url,
+            exc,
+        )
+        return None
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -133,6 +150,16 @@ async def register_oauth_client(
     # confidential client) and emitting both at ERROR amounts to "every OAuth
     # registration loudly logs every detail of the client".
     logger.debug("Registering OAuth client at %s", endpoints.registration_endpoint)
+    # registration_endpoint is supplied by the upstream discovery JSON and
+    # therefore attacker-controllable when the upstream server is malicious.
+    # Re-validate at fetch time to reject internal addresses (CWE-918).
+    try:
+        validate_public_url(endpoints.registration_endpoint)
+    except UnsafeURLError as exc:
+        raise ValueError(
+            f"Refusing to register OAuth client against unsafe registration endpoint "
+            f"{endpoints.registration_endpoint}: {exc}"
+        )
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -244,6 +271,21 @@ async def complete_oauth_flow(
             "client_id": mcp_server.client_id,
             "code_verifier": mcp_server.code_verifier,
         }
+
+        # token_endpoint is supplied by the upstream discovery JSON and is
+        # therefore attacker-controllable when the upstream server is
+        # malicious. Re-validate at fetch time to reject internal addresses
+        # (CWE-918) — a hostile server otherwise tricks us into POSTing a
+        # body to qdrant/redis/AWS IMDS.
+        try:
+            validate_public_url(endpoints.token_endpoint)
+        except UnsafeURLError as exc:
+            logger.error(
+                "Refusing token exchange against unsafe token_endpoint %s: %s",
+                endpoints.token_endpoint,
+                exc,
+            )
+            return 500, "Token endpoint rejected as unsafe"
 
         async with aiohttp.ClientSession() as http_session:
             async with http_session.post(

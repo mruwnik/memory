@@ -2,13 +2,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import copy
+import pickle
+
 from memory.api.search.embeddings import (
     merge_range_filter,
     merge_filters,
     build_person_filter,
     build_access_qdrant_filter,
     NO_ACCESS,
+    NoAccess,
+    require_access_filter,
     search_chunks,
+    search_chunks_embeddings,
 )
 from memory.common.access_control import AccessFilter, AccessCondition
 from memory.common.extract import DataChunk
@@ -285,11 +291,110 @@ def test_build_access_qdrant_filter_no_access_is_distinct_from_superadmin():
         AccessFilter(conditions=[], include_public=False)
     )
 
-    # Both are empty list values, but they must NOT share identity:
-    # `is` is the only check the consumer uses to disambiguate.
+    # The deny-all sentinel is a typed singleton instance, distinguishable
+    # from the empty-list superadmin return at multiple levels.
     assert superadmin_result == []
     assert no_access_result is NO_ACCESS
+    assert isinstance(no_access_result, NoAccess)
     assert superadmin_result is not NO_ACCESS
+    assert not isinstance(superadmin_result, NoAccess)
+
+
+# ---------------------------------------------------------------------------
+# Discriminator tests for the NoAccess sentinel.
+#
+# These tests assert each of the regression vectors that broke the previous
+# empty-tuple sentinel design is now blocked. Each test corresponds to a
+# specific natural-looking refactor that would silently turn "deny" into
+# "allow all" if the sentinel were just an empty container.
+# ---------------------------------------------------------------------------
+
+
+def test_no_access_sentinel_not_equal_to_empty_list():
+    """REGRESSION GUARD: a static analyzer / contributor swapping
+    ``access_conditions is NO_ACCESS`` for ``access_conditions == NO_ACCESS``
+    must NOT silently match `[]` (the superadmin/no-filter return).
+    """
+    # The deny-all sentinel must NOT compare equal to ``[]``: otherwise an
+    # ``access_conditions == []`` comparison anywhere in the consumer chain
+    # would short-circuit superadmin queries instead.
+    assert NO_ACCESS != []
+    assert [] != NO_ACCESS
+    assert NO_ACCESS != ()
+    assert () != NO_ACCESS
+    assert NO_ACCESS != {}
+
+
+def test_no_access_sentinel_equal_to_itself():
+    """The sentinel compares equal to itself (default object equality
+    on the same instance). The module-level ``NO_ACCESS`` is the
+    canonical instance returned from production code; constructing
+    additional ``NoAccess()`` instances is fine but they're separate
+    objects — type-distinctness, not instance-distinctness, is the
+    load-bearing property."""
+    assert NO_ACCESS == NO_ACCESS
+    assert NO_ACCESS is NO_ACCESS
+
+
+def test_no_access_sentinel_falsy():
+    """The sentinel is falsy so ``if access_conditions:`` continues to
+    skip the deny branch the same way it did with the empty-tuple
+    sentinel. The ``isinstance`` check (or ``is NO_ACCESS``) is the
+    authoritative discriminator — falsiness is a compatibility property,
+    not a security signal."""
+    assert not bool(NO_ACCESS)
+    assert not NO_ACCESS
+
+
+def test_no_access_sentinel_survives_copy_as_isinstance():
+    """REGRESSION GUARD: ``copy.copy``/``deepcopy`` of NO_ACCESS may
+    produce a different instance (we no longer enforce singleton via
+    ``__reduce__``), but the copy must still ``isinstance(_, NoAccess)``.
+    The canonical check is type-distinctness, not identity."""
+    assert isinstance(copy.copy(NO_ACCESS), NoAccess)
+    assert isinstance(copy.deepcopy(NO_ACCESS), NoAccess)
+
+
+def test_no_access_sentinel_survives_pickle_as_isinstance():
+    """REGRESSION GUARD: pickling round-trips to a NoAccess instance
+    (different object, same type). If a future caller depends on the
+    rehydrated value being literally ``NO_ACCESS`` (identity) — and
+    such a caller does not exist today — restore ``__reduce__`` and
+    pin identity here too."""
+    rehydrated = pickle.loads(pickle.dumps(NO_ACCESS))
+    assert isinstance(rehydrated, NoAccess)
+
+
+def test_no_access_sentinel_isinstance_canonical():
+    """The canonical detection method is ``isinstance(x, NoAccess)`` — it
+    works regardless of singleton-ness and is what the consumer uses."""
+    assert isinstance(NO_ACCESS, NoAccess)
+    assert not isinstance([], NoAccess)
+    assert not isinstance((), NoAccess)
+    assert not isinstance({}, NoAccess)
+    assert not isinstance(None, NoAccess)
+    assert not isinstance([{"key": "x"}], NoAccess)
+
+
+def test_no_access_sentinel_not_iterable_as_conditions():
+    """If a consumer accidentally tries to iterate ``access_conditions``
+    as if it were a list of Qdrant 'should' clauses, the deny-all
+    sentinel must produce a clear error (not silently iterate as empty,
+    which would yield "no filter applied")."""
+    # The sentinel is intentionally NOT iterable: any code path that
+    # forgets the ``isinstance`` discriminator and tries to splat
+    # access_conditions into a Qdrant filter will raise a TypeError
+    # rather than silently produce an unfiltered query.
+    import pytest as _pytest
+
+    with _pytest.raises(TypeError):
+        list(NO_ACCESS)  # type: ignore[call-overload]
+
+
+def test_no_access_sentinel_repr_is_descriptive():
+    """The repr is the canonical name so debugging output ("got
+    NO_ACCESS instead of a list") is unambiguous."""
+    assert repr(NO_ACCESS) == "NO_ACCESS"
 
 
 def test_build_access_qdrant_filter_no_access_with_public():
@@ -297,7 +402,9 @@ def test_build_access_qdrant_filter_no_access_with_public():
     access_filter = AccessFilter(conditions=[], include_public=True)
     result = build_access_qdrant_filter(access_filter)
 
-    # Should allow public items only
+    # Should allow public items only — narrow the union return type
+    # before indexing.
+    assert isinstance(result, list)
     assert len(result) == 1
     assert result[0]["key"] == "sensitivity"
     assert result[0]["match"]["value"] == "public"
@@ -312,6 +419,7 @@ def test_build_access_qdrant_filter_single_project():
     access_filter = AccessFilter(conditions=[condition], include_public=False)
     result = build_access_qdrant_filter(access_filter)
 
+    assert isinstance(result, list)
     assert len(result) == 1
     # Should have must conditions for project_id and sensitivity
     assert "must" in result[0]
@@ -337,6 +445,7 @@ def test_build_access_qdrant_filter_single_project_with_public():
     result = build_access_qdrant_filter(access_filter)
 
     # Should have 2 conditions: public bypass + project access
+    assert isinstance(result, list)
     assert len(result) == 2
 
     # Find public bypass condition
@@ -365,6 +474,7 @@ def test_build_access_qdrant_filter_multiple_projects():
     result = build_access_qdrant_filter(access_filter)
 
     # Should have two "should" conditions (one per project)
+    assert isinstance(result, list)
     assert len(result) == 2
 
     # Find conditions by project_id
@@ -404,7 +514,11 @@ async def test_search_chunks_passes_person_filter_to_query():
         mock_query.return_value = {}
 
         data = [DataChunk(data=["test query"])]
-        await search_chunks(data, modalities={"text"}, filters={"person_id": 42})
+        await search_chunks(
+            data,
+            modalities={"text"},
+            filters={"person_id": 42, "access_filter": None},
+        )
 
         # Verify query_chunks was called
         mock_query.assert_called_once()
@@ -544,3 +658,65 @@ async def test_search_chunks_superadmin_no_access_filter():
                 )
             ]
             assert access_conditions == []
+
+
+# --- require_access_filter — three-layer fail-closed regression ---
+#
+# The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+# filters are applied at three layers — Qdrant payload, BM25 SQL, and
+# final source merge. Pre-fix only the third layer raised on missing
+# ``access_filter``; the first two silently fell through to "no filter".
+# These tests pin the new uniform fail-closed behaviour at the chunk
+# layer so a future caller cannot regress to the old fail-open shape.
+
+
+def test_require_access_filter_raises_on_none():
+    with pytest.raises(ValueError, match="requires `filters`"):
+        require_access_filter(None, "test")
+
+
+def test_require_access_filter_raises_on_missing_key():
+    """Missing ``access_filter`` key (NOT ``access_filter=None``)."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        require_access_filter({"person_id": 5}, "test")  # type: ignore[arg-type]
+
+
+def test_require_access_filter_accepts_explicit_none():
+    """``access_filter=None`` is the explicit superadmin opt-in."""
+    out = require_access_filter({"access_filter": None}, "test")
+    assert out == {"access_filter": None}
+
+
+def test_require_access_filter_accepts_real_filter():
+    af = AccessFilter(conditions=[])
+    out = require_access_filter({"access_filter": af}, "test")
+    assert out.get("access_filter") is af
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_raises_on_none_filters():
+    """Top-level search_chunks must fail-closed on None filters."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks([DataChunk(data=["q"])], modalities={"text"})
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_raises_on_missing_access_filter_key():
+    """Filters dict without access_filter key must fail-closed."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks(
+            [DataChunk(data=["q"])],
+            modalities={"text"},
+            filters={"person_id": 5},  # type: ignore[typeddict-item]
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_embeddings_raises_on_missing_access_filter():
+    """Outer entry-point search_chunks_embeddings also fail-closes."""
+    with pytest.raises(ValueError, match="`access_filter`"):
+        await search_chunks_embeddings(
+            [DataChunk(data=["q"])],
+            modalities={"text"},
+            filters={"min_size": 100},  # type: ignore[typeddict-item]
+        )

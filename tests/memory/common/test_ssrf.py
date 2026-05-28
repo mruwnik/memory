@@ -11,6 +11,7 @@ import pytest
 from memory.common.ssrf import (
     UnsafeURLError,
     is_safe_ip,
+    validate_public_hostname,
     validate_public_url,
 )
 
@@ -164,3 +165,82 @@ def test_validate_public_url_strips_ipv6_scope_id():
     with patch("memory.common.ssrf.socket.getaddrinfo", return_value=fake_resolution):
         with pytest.raises(UnsafeURLError):
             validate_public_url("https://link-local.example.com/")
+
+
+# --- validate_public_hostname (schemeless variant for IMAP / SMTP / CalDAV) -
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        "127.0.0.1",
+        "10.0.0.5",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",  # AWS / GCP / Azure metadata
+        "0.0.0.0",
+        "::1",
+        "fe80::1",
+        "fc00::1",
+    ],
+)
+def test_validate_public_hostname_rejects_private_ip_literals(hostname):
+    with pytest.raises(UnsafeURLError) as exc:
+        validate_public_hostname(hostname)
+    assert "non-public IP" in str(exc.value)
+
+
+def test_validate_public_hostname_accepts_public_ip_literal():
+    validate_public_hostname("8.8.8.8")  # must not raise
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n"])
+def test_validate_public_hostname_rejects_blank(blank):
+    with pytest.raises(UnsafeURLError):
+        validate_public_hostname(blank)
+
+
+def test_validate_public_hostname_rejects_resolved_to_private():
+    """A hostname (no scheme) that DNS-resolves to an internal IP is rejected."""
+    fake_resolution = [
+        (socket.AF_INET, 0, 0, "", ("10.0.0.5", 0)),
+    ]
+    with patch("memory.common.ssrf.socket.getaddrinfo", return_value=fake_resolution):
+        with pytest.raises(UnsafeURLError):
+            validate_public_hostname("imap.internal.example.com")
+
+
+def test_validate_public_hostname_accepts_resolved_to_public():
+    """8.8.8.8 (Google DNS) is a routable public IP. Note: TEST-NET
+    blocks like 203.0.113.0/24 are flagged ``is_reserved`` by Python's
+    ipaddress module, so they cannot be used as a stand-in for "public"
+    in tests. The other URL test for resolved-to-public uses 8.8.8.8
+    for the same reason."""
+    fake_resolution = [
+        (socket.AF_INET, 0, 0, "", ("8.8.8.8", 0)),
+    ]
+    with patch("memory.common.ssrf.socket.getaddrinfo", return_value=fake_resolution):
+        validate_public_hostname("imap.example.com")  # must not raise
+
+
+def test_validate_public_hostname_rejects_unresolvable():
+    with patch(
+        "memory.common.ssrf.socket.getaddrinfo",
+        side_effect=socket.gaierror("Name or service not known"),
+    ):
+        with pytest.raises(UnsafeURLError):
+            validate_public_hostname("no-such-imap.example")
+
+
+def test_validate_public_hostname_rejects_mixed_resolution():
+    """If the hostname resolves to BOTH public and private IPs, refuse
+    on the private one. This is the same defence the URL validator
+    applies — useful when an attacker plants an extra A record on a
+    legitimate-looking domain."""
+    fake_resolution = [
+        (socket.AF_INET, 0, 0, "", ("203.0.113.7", 0)),
+        (socket.AF_INET, 0, 0, "", ("169.254.169.254", 0)),
+    ]
+    with patch("memory.common.ssrf.socket.getaddrinfo", return_value=fake_resolution):
+        with pytest.raises(UnsafeURLError):
+            validate_public_hostname("attacker.example.com")

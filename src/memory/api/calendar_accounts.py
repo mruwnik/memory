@@ -14,11 +14,85 @@ from memory.api.auth import (
 )
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import SYNC_CALENDAR_ACCOUNT, app as celery_app
+from memory.common.data_source_access import (
+    enqueue_access_control_propagation,
+    mark_access_control_changed_if_needed,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
+from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 router = APIRouter(prefix="/calendar-accounts", tags=["calendar-accounts"])
+
+
+def _validate_caldav_url(url: str | None) -> None:
+    """Refuse a CalDAV URL that would leak credentials or reach internal hosts.
+
+    Two distinct attacks are gated:
+
+    * **Credential exfil / laundering**: an authenticated user can set
+      ``caldav_url=http://attacker.example.com/caldav/`` and the worker
+      would later POST Basic Auth (the user's stored caldav_password)
+      to attacker. Forcing ``https://`` keeps creds off the wire in
+      cleartext; ``validate_public_url`` rejects internal hosts so the
+      same trick can't point the worker at, e.g.,
+      ``http://qdrant:6333/``.
+
+    * **Internal port probe**: same recon surface as the IMAP test
+      endpoint — a private/loopback URL combined with the worker's
+      sync error reporting leaks reachability of internal services.
+
+    Caller passes ``None`` to mean "field unchanged"; we no-op in that
+    case (the existing row was validated at write time).
+    """
+    if url is None:
+        return
+    try:
+        validate_public_url(url)
+    except UnsafeURLError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid caldav_url: {exc}"
+        ) from exc
+    # Force HTTPS. Plain http:// would still pass validate_public_url for
+    # a public hostname, but Basic Auth over plain HTTP travels in the
+    # clear and is a credential-leak primitive against any on-path
+    # observer (the worker network may not be hostile but the user's
+    # ISP / WiFi commonly is).
+    if not url.lower().startswith("https://"):
+        raise HTTPException(
+            status_code=400,
+            detail="caldav_url must use https:// (refuses cleartext credentials)",
+        )
+
+
+# Header-injection metacharacters: an attacker who can stash one of these
+# in caldav_username / caldav_password could — under any future Basic Auth
+# code path that constructs ``Authorization: Basic ...`` without
+# base64-encoding (e.g. ``f"Basic {user}:{pw}"``) — smuggle a second HTTP
+# header. Today's worker uses base64-encoded Basic Auth so this is latent,
+# but pinning it at the API boundary kills the class instead of relying
+# on every future caller to remember the encoding requirement.
+_CALDAV_CRED_FORBIDDEN_CHARS = frozenset({"\r", "\n", "\x00"})
+
+
+def _validate_caldav_credential(value: str | None, field_name: str) -> None:
+    """Reject CR / LF / NUL in CalDAV username/password fields.
+
+    Caller passes ``None`` to mean "field unchanged"; we no-op (the
+    existing row was validated at write time).
+    """
+    if value is None:
+        return
+    bad = _CALDAV_CRED_FORBIDDEN_CHARS.intersection(value)
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid {field_name}: CR / LF / NUL characters are "
+                "forbidden (HTTP header smuggling guard)"
+            ),
+        )
 
 
 class CalendarAccountCreate(BaseModel):
@@ -150,6 +224,14 @@ def create_account(
                 status_code=400,
                 detail="CalDAV accounts require caldav_url, caldav_username, and caldav_password",
             )
+        # SSRF + cleartext-credential guard on the user-supplied URL.
+        # Without this, an attacker can store
+        # caldav_url=http://attacker.example.com/caldav and the worker
+        # later sends Basic Auth (the user's caldav_password) to the
+        # attacker (CWE-918, CWE-522).
+        _validate_caldav_url(data.caldav_url)
+        _validate_caldav_credential(data.caldav_username, "caldav_username")
+        _validate_caldav_credential(data.caldav_password, "caldav_password")
     elif data.calendar_type == "google":
         if not data.google_account_id:
             raise HTTPException(
@@ -208,13 +290,17 @@ def update_account(
     """Update a calendar account."""
     account = get_user_account(db, CalendarAccount, account_id, user)
 
+    snap_pid, snap_sens = account.project_id, account.sensitivity
     if updates.name is not None:
         account.name = updates.name
     if updates.caldav_url is not None:
+        _validate_caldav_url(updates.caldav_url)
         account.caldav_url = updates.caldav_url
     if updates.caldav_username is not None:
+        _validate_caldav_credential(updates.caldav_username, "caldav_username")
         account.caldav_username = updates.caldav_username
     if updates.caldav_password is not None:
+        _validate_caldav_credential(updates.caldav_password, "caldav_password")
         account.caldav_password = updates.caldav_password
     if updates.google_account_id is not None:
         # Verify the Google account exists AND belongs to the caller (or admin)
@@ -243,8 +329,17 @@ def update_account(
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
 
+    access_changed = mark_access_control_changed_if_needed(
+        account,
+        snapshot_project_id=snap_pid,
+        snapshot_sensitivity=snap_sens,
+    )
+
     db.commit()
     db.refresh(account)
+
+    if access_changed:
+        enqueue_access_control_propagation("calendar_account", account)
 
     return account_to_response(account)
 

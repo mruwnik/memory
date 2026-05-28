@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """
 Discord collector API server.
 

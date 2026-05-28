@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import (
+    APIKey,
     OAuthClientInformation,
     OAuthRefreshToken,
     OAuthState,
@@ -184,6 +186,31 @@ def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
     return "frontend", list(user_scopes or [])
 
 
+def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
+    """Resolve effective scopes for a request authenticated by API key.
+
+    Distinguishes "no override declared" from "explicit empty override"
+    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
+    back to the user's full system scopes via a truthiness fallback:
+
+    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
+      the user themselves has none).
+    * Non-empty list → use as-is.
+    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
+      the user's system scopes. This is the safe default for "this key
+      has no privileges beyond read."
+    """
+    override = api_key_record.scopes
+    if override is None:
+        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
+        # user themselves has no scopes set (matches prior behaviour).
+        return list(user.scopes or []) or [SCOPE_READ]
+    # Explicit list — empty list means "no privileges beyond read",
+    # NOT "fall back to user.scopes". This is the security-critical
+    # distinction.
+    return list(override) or [SCOPE_READ]
+
+
 def create_refresh_token_record(
     client_id: str,
     user_id: int,
@@ -199,6 +226,91 @@ def create_refresh_token_record(
         expires_at=create_expiration(REFRESH_TOKEN_LIFETIME),
         access_token_session_id=access_token_session_id,
     )
+
+
+@dataclass
+class TokenLookup:
+    """Result of looking up a bearer token.
+
+    Exactly one of ``user_session`` / ``api_key_record`` is non-None — they
+    encode which credential matched. Both ``verify_token`` and
+    ``load_access_token`` route on this distinction to project the right
+    scope dimension; the lookup, expiry/validity check, and one-time-key
+    consumption are all shared via :func:`lookup_principal` so the two
+    methods can never drift on those concerns.
+    """
+
+    user: User
+    user_session: UserSession | None = None
+    api_key_record: APIKey | None = None
+
+
+def lookup_principal(token: str, session: Session) -> TokenLookup | None:
+    """Resolve a bearer token to its (user, credential) pair.
+
+    Tries the token as a ``UserSession`` row first (OAuth access tokens and
+    frontend cookie sessions are both keyed on ``UserSession.id``); on miss,
+    falls back to ``lookup_api_key`` for bot / discord / mcp / one-time
+    keys.
+
+    Side effects on success:
+
+    * For UserSession matches: none — the caller decides whether to refresh
+      anything based on its own scope/return-type contract.
+    * For APIKey matches: ``handle_api_key_use`` is called *here* so the
+      last_used_at bump and one-time-key delete happen atomically with the
+      lookup. Centralising it means both callers run it exactly once, and
+      a future revocation column / audit hook / key-was-used webhook
+      added to ``handle_api_key_use`` reaches both call sites for free.
+
+    Returns ``None`` on:
+    * unknown token
+    * expired UserSession (uses :func:`is_expired` so a tz-aware
+      ``expires_at`` from a non-UTC pool doesn't crash, addressing the
+      naive-vs-aware comparison bug noted in audit 7affa983)
+    * UserSession with no attached User (fail-closed)
+    * APIKey not in valid state per ``is_valid``
+    * APIKey with no attached User (fail-closed; symmetric with the
+      session-path guard above. Schema-level FK constraints make this
+      shape unreachable today, but pinning it here keeps a stale-FK or
+      cascade-delete race from turning into a 500 — and lets downstream
+      ``principal.user.id`` be a non-Optional access without comment.)
+    """
+    user_session = session.get(UserSession, token)
+    if user_session is not None:
+        if is_expired(user_session.expires_at):
+            return None
+        if user_session.user is None:
+            return None
+        return TokenLookup(user=user_session.user, user_session=user_session)
+
+    api_key_record = lookup_api_key(token, session)
+    if api_key_record is not None and api_key_record.is_valid():
+        if api_key_record.user is None:
+            # Match the session-path fail-closed above. Today's FK
+            # constraints rule this out, but a future cascade race or
+            # detached-row bug shouldn't escalate to 500.
+            return None
+        # Side effect: bumps last_used_at; for one-time keys, atomically
+        # deletes the row. Doing it here means every caller of
+        # lookup_principal runs it exactly once — never twice, never zero.
+        handle_api_key_use(api_key_record, session)
+        return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
+
+    return None
+
+
+def session_expires_at_unix(user_session: UserSession) -> int:
+    """Return ``expires_at`` as a POSIX timestamp, tz-correct.
+
+    The column is naive UTC; calling ``.timestamp()`` on a naive datetime
+    interprets it as *local* time, which silently shifts the expiry by
+    the host's UTC offset. Convert explicitly before serializing.
+    """
+    exp = cast(datetime, user_session.expires_at)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return int(exp.timestamp())
 
 
 def revoke_refresh_token_family(
@@ -385,36 +497,36 @@ class SimpleOAuthProvider(OAuthProvider):
         ``load_access_token`` separately uses the OAuth scopes (via
         ``resolve_session_scopes``) — that's the right shape for the OAuth
         auth gate, since FastMCP just checks for ``read`` there.
+
+        Implementation note: the lookup, expiry check, and one-time-key
+        consumption are shared with ``load_access_token`` via
+        :func:`lookup_principal`. Each method only contains its own
+        scope-projection / return-type logic. This is the structural fix
+        for the PR-#76 / audit-2bb3e9c6 class of drift bug — neither
+        method can quietly diverge from the other on lookup semantics.
         """
         with make_session() as session:
-            # Try as OAuth access token first
-            user_session = session.get(UserSession, token)
-            if user_session:
-                now = now_naive_utc()
-                if user_session.expires_at < now:
-                    return None
+            principal = lookup_principal(token, session)
+            if principal is None:
+                return None
 
-                user_scopes = (
-                    list(user_session.user.scopes or [])
-                    if user_session.user
-                    else []
-                )
-                # Add read/write so the OAuth gate passes regardless of which
-                # named scopes the admin granted on the user account.
+            if principal.user_session is not None:
+                # OAuth/cookie session path: project SYSTEM scopes
+                # (User.scopes) + the OAuth-gate primer (read/write).
+                user_scopes = list(principal.user.scopes or [])
                 scopes: list[str] = sorted(
                     set(user_scopes) | {SCOPE_READ, SCOPE_WRITE}
                 )
                 client_id = (
-                    cast(str, user_session.oauth_state.client_id)
-                    if user_session.oauth_state is not None
+                    cast(str, principal.user_session.oauth_state.client_id)
+                    if principal.user_session.oauth_state is not None
                     else "frontend"
                 )
-
                 # Tokens themselves stay out of the log; correlate via the
                 # SHA-prefix id so a leaked log can't be replayed.
                 logger.info(
                     f"verify_token: token_id={token_id(token)}, "
-                    f"user={user_session.user_id}, scopes={scopes}, client={client_id}"
+                    f"user={principal.user.id}, scopes={scopes}, client={client_id}"
                 )
                 return FastMCPAccessToken(
                     token=token,
@@ -422,24 +534,48 @@ class SimpleOAuthProvider(OAuthProvider):
                     scopes=scopes or [SCOPE_READ],
                 )
 
-            # Try as API key (bot or user)
-            api_key_record = lookup_api_key(token, session)
-            if api_key_record and api_key_record.is_valid():
-                user = api_key_record.user
-                logger.info(
-                    f"User {user.name} (id={user.id}) authenticated via API key"
-                )
-                # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
-                # Handle API key usage (update last_used_at, delete one-time keys)
-                handle_api_key_use(api_key_record, session)
-                return FastMCPAccessToken(
-                    token=token,
-                    client_id=cast(str, user.name or user.email),
-                    scopes=scopes,
-                )
-
-            return None
+            # API key path. ``scopes is None`` inherits user scopes;
+            # ``scopes == []`` is treated as "no override privileges"
+            # (read-only), NOT silent fallback to user.scopes —
+            # see resolve_api_key_scopes.
+            #
+            # Deliberate asymmetry with the session path above: API key
+            # scopes are NOT unioned with {SCOPE_READ, SCOPE_WRITE}. The
+            # session path adds the OAuth-gate primer because OAuth
+            # clients negotiate scopes at registration time and may pick
+            # something narrower than ``required_scopes`` (BASE_SCOPES =
+            # [read]) — so the gate would fail any session that didn't
+            # carry ``read``, even if the user is an admin. We keep them
+            # working by primed-default.
+            #
+            # API keys are minted by an admin with intentional scope
+            # selection (e.g. ``scopes=["github"]`` for a GitHub-only
+            # service key). Auto-adding {read, write} would override the
+            # admin's choice and force every API key to also be capable
+            # of generic read/write — defeating the point of a narrowly-
+            # scoped service key. The trade-off: an admin who wants the
+            # key to work through MCP must explicitly include ``read``
+            # in the scope list (``scopes=["github", "read"]``); the
+            # OAuth gate's ``required_scopes=[read]`` will reject any
+            # key that omits it. This is the documented contract — the
+            # ``resolve_api_key_scopes`` floor of ``[SCOPE_READ]`` for
+            # ``None``/``[]`` keeps the common case working without
+            # silently elevating an admin-minted single-scope key.
+            assert principal.api_key_record is not None
+            scopes = resolve_api_key_scopes(
+                principal.api_key_record, principal.user
+            )
+            logger.info(
+                f"User {principal.user.name} (id={principal.user.id}) "
+                f"authenticated via API key"
+            )
+            return FastMCPAccessToken(
+                token=token,
+                client_id=cast(
+                    str, principal.user.name or principal.user.email
+                ),
+                scopes=scopes,
+            )
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Get OAuth client information."""
@@ -452,10 +588,11 @@ class SimpleOAuthProvider(OAuthProvider):
 
         Validates that every redirect_uri's *origin* (scheme + host + port)
         matches one in the allowlist exactly, to prevent authorization-code
-        phishing via open dynamic client registration.  A previous version
-        used ``str.startswith`` which let an attacker register
-        ``http://localhost.evil.com/cb`` (it starts with ``http://localhost``)
-        and harvest auth codes; comparing parsed origins closes that hole.
+        phishing via open dynamic client registration. Comparing parsed
+        origins rather than string prefixes is load-bearing: a prefix
+        match would let an attacker register ``http://localhost.evil.com/cb``
+        against an ``http://localhost`` allowlist entry and harvest auth
+        codes.
 
         Configure OAUTH_REDIRECT_URI_ALLOWLIST (comma-separated URIs) to
         expand the default localhost-only allowlist.  ``*`` disables the
@@ -805,43 +942,53 @@ class SimpleOAuthProvider(OAuthProvider):
             return token
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
-        """Load and validate an access token (or bot API key)."""
+        """Load and validate an access token (or bot API key).
+
+        Companion to :meth:`verify_token`; both share lookup + expiry +
+        one-time-key consumption via :func:`lookup_principal`. This
+        method differs only in projecting OAuth-grant scopes (via
+        :func:`resolve_session_scopes`) instead of system scopes, and
+        returning an ``AccessToken`` rather than ``FastMCPAccessToken``.
+        """
         with make_session() as session:
-            # Try as OAuth access token first
-            user_session = session.get(UserSession, token)
-            if user_session:
-                now = now_naive_utc()  # Make naive for DB comparison
+            principal = lookup_principal(token, session)
+            if principal is None:
+                return None
 
-                if user_session.expires_at < now:
-                    return None
-
-                client_id, scopes = resolve_session_scopes(user_session)
+            if principal.user_session is not None:
+                # OAuth-grant scopes path — what FastMCP checks at the
+                # OAuth gate, NOT the system scopes that gate tool
+                # visibility (those live on verify_token's path).
+                client_id, scopes = resolve_session_scopes(
+                    principal.user_session
+                )
                 return AccessToken(
                     token=token,
                     client_id=client_id,
                     scopes=scopes,
-                    expires_at=int(user_session.expires_at.timestamp()),
+                    expires_at=session_expires_at_unix(
+                        principal.user_session
+                    ),
                 )
 
-            # Try as API key (bot or user)
-            api_key_record = lookup_api_key(token, session)
-            if api_key_record and api_key_record.is_valid():
-                user = api_key_record.user
-                logger.info(
-                    f"User {user.name} (id={user.id}) authenticated via API key"
-                )
-                # Use API key scopes if set, otherwise fall back to user scopes
-                scopes = api_key_record.scopes or list(user.scopes or []) or [SCOPE_READ]
-                # Handle API key usage (update last_used_at, delete one-time keys)
-                handle_api_key_use(api_key_record, session)
-                return AccessToken(
-                    token=token,
-                    client_id=cast(str, user.name or user.email),
-                    scopes=scopes,
-                    expires_at=2147483647,  # Far future (2038)
-                )
-
-            return None
+            # API key path — same scope source as verify_token, just
+            # different return type.
+            assert principal.api_key_record is not None
+            scopes = resolve_api_key_scopes(
+                principal.api_key_record, principal.user
+            )
+            logger.info(
+                f"User {principal.user.name} (id={principal.user.id}) "
+                f"authenticated via API key"
+            )
+            return AccessToken(
+                token=token,
+                client_id=cast(
+                    str, principal.user.name or principal.user.email
+                ),
+                scopes=scopes,
+                expires_at=2147483647,  # Far future (2038)
+            )
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str

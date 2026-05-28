@@ -5,12 +5,24 @@ from typing import Any, AsyncGenerator
 
 import aiohttp
 
+from memory.common.ssrf import UnsafeURLError, validate_public_url
+
 logger = logging.getLogger(__name__)
 
 
 async def mcp_call(
     url: str, access_token: str, method: str, params: dict = {}
 ) -> AsyncGenerator[Any, None]:
+    # ``url`` is operator-supplied (the MCPServer row) and reachable from
+    # the API host's network, so this is an SSRF sink (CWE-918). Re-validate
+    # immediately before fetch — without this, a row pointing at e.g.
+    # http://qdrant:6333/... lets us forward the bearer-decorated POST to an
+    # internal service.
+    try:
+        validate_public_url(url)
+    except UnsafeURLError as exc:
+        raise ValueError(f"Refusing MCP call to unsafe URL {url}: {exc}")
+
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",

@@ -55,8 +55,18 @@ from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.celery_overview import router as celery_overview_router
 from memory.api.MCP.base import mcp
+from memory.api.safety import validate_disable_auth_safety
 
 logger = logging.getLogger(__name__)
+
+
+# Refuse to boot when DISABLE_AUTH is set in a production-shaped
+# environment (non-loopback SERVER_URL, S3 backups enabled, or a
+# non-loopback OAuth redirect allowlist). A single env-var toggle that
+# silently turns the entire API into an anonymous read/write surface is
+# an unacceptable footgun; this raises before the FastAPI app is even
+# constructed so a misconfigured deploy crash-loops rather than serving.
+validate_disable_auth_safety()
 
 
 # Rate limiter setup
@@ -471,15 +481,29 @@ app.mount("/", mcp_http_app)
 
 
 def main(reload: bool = False):
-    """Run the FastAPI server in debug mode with auto-reloading."""
+    """Run the FastAPI server (default log level: info).
+
+    The previous hardcoded ``log_level="debug"`` made Uvicorn emit raw
+    request lines (including query strings) at every request. That is
+    fine for active dev sessions but becomes a credential-leak vector
+    when this entrypoint is invoked in any non-dev context (e.g. an
+    operator running ``python -m memory.api.app`` once on a server with
+    journald scraping logs): the validation-error handler at
+    ``handle_validation_error`` carefully redacts sensitive query params,
+    but Uvicorn's access log fires *before* that handler and logs the
+    raw request line. Reading ``LOG_LEVEL`` from env makes the verbose
+    behaviour opt-in instead of the default.
+    """
     import uvicorn
+
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
 
     uvicorn.run(
         "memory.api.app:app",
         host="0.0.0.0",
         port=8000,
         reload=reload,
-        log_level="debug",
+        log_level=log_level,
     )
 
 

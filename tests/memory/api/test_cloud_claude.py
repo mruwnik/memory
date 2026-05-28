@@ -2,6 +2,7 @@
 
 import asyncio
 import pathlib
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,9 +15,11 @@ from memory.api.cloud_claude import (
     is_valid_session_id,
     make_session_id,
     require_session_access,
+    require_session_access_websocket,
     spawn_session,
     user_owns_session,
     validate_differ_subpath,
+    validate_scheduled_secret_refs,
 )
 from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
@@ -33,9 +36,11 @@ def test_make_session_id_includes_user_id():
     # With no environment_id or snapshot_id, source is 'x'
     session_id = make_session_id(42)
     assert session_id.startswith("u42-x-")
-    # Should have random hex after the source indicator
+    # Should have 16-byte (32 hex char) random tail = 128 bits of entropy
     random_part = session_id.split("-")[2]
-    assert len(random_part) == 12  # 6 bytes = 12 hex chars
+    assert len(random_part) == 32  # 16 bytes = 32 hex chars
+    # And it must actually be lowercase hex (token_hex contract).
+    assert all(c in "0123456789abcdef" for c in random_part)
 
     # With environment_id
     session_id = make_session_id(42, environment_id=5)
@@ -101,6 +106,19 @@ def test_spawn_request_accepts_only_environment_id(id_value):
     assert req.snapshot_id is None
 
 
+def test_spawn_request_repo_url_passes_through_any_string():
+    """``repo_url`` is intentionally NOT validated by the API — see the
+    module-level note in ``cloud_claude``. The value executes only
+    inside the requester's own container with their own per-user
+    credentials (``extract_secret(db, user.id, …)``), so any
+    git-side footguns (``ext::``, ``--upload-pack``, ``git://`` MITM,
+    etc.) are self-harm rather than a boundary cross.
+    """
+    weird_url = "ext::sh -c whoami"
+    req = SpawnRequest(snapshot_id=1, repo_url=weird_url)
+    assert req.repo_url == weird_url
+
+
 def test_get_user_id_from_session_valid():
     """Test extracting user ID from valid session IDs."""
     assert get_user_id_from_session("u42-abc123") == 42
@@ -155,12 +173,17 @@ def test_require_session_access_rejects_malformed(session_id):
     assert exc_info.value.status_code == 404
 
 
+# 32-char hex tails matching the new ``token_hex(16)`` floor.
+_SAMPLE_HEX32 = "abcdef0123456789abcdef0123456789"
+_SAMPLE_HEX32_UPPER = _SAMPLE_HEX32.upper()
+
+
 @pytest.mark.parametrize(
     "session_id",
     [
-        "u42-x-abc123",
-        "u42-e1-deadbeef",
-        "u42-s99-CAFE0123",
+        f"u42-x-{_SAMPLE_HEX32}",
+        f"u42-e1-{_SAMPLE_HEX32}",
+        f"u42-s99-{_SAMPLE_HEX32_UPPER}",
     ],
 )
 def test_require_session_access_allows_owned_well_formed(session_id):
@@ -174,19 +197,141 @@ def test_require_session_access_rejects_other_users_session():
     user = MagicMock()
     user.id = 42
     with pytest.raises(HTTPException) as exc_info:
-        require_session_access(user, "u9999-x-abc123")
+        require_session_access(user, f"u9999-x-{_SAMPLE_HEX32}")
     assert exc_info.value.status_code == 404
+
+
+# --- require_session_access_websocket: WebSocket close-code uniformity ----
+#
+# The WS analog used to be open-coded at three sites with three slightly
+# different close codes / messages / failure orderings. Centralisation
+# pins the "single 4004 + uniform reason" property so a contributor
+# editing one site can't drift the others.
+
+
+class _FakeWebSocket:
+    """Minimal WebSocket double for testing close-frame uniformity.
+
+    Records the (code, reason) pair from ``await close(...)`` so tests
+    can assert the central helper always closes with the same uniform
+    Session-not-found framing.
+    """
+
+    def __init__(self) -> None:
+        self.closed: tuple[int, str] | None = None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.closed = (code, reason)
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_user_none():
+    """Token didn't authenticate to a user → close 4004 with the
+    canonical Session-not-found reason. Must NOT use a distinct code
+    that would let a caller distinguish "valid token, wrong session"
+    from "no/expired token". Token-only failures keep their 4001 close
+    in the calling code (handled before this helper)."""
+    ws = _FakeWebSocket()
+    granted = await require_session_access_websocket(
+        cast(Any, ws), None, f"u42-x-{_SAMPLE_HEX32}"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_invalid_session_format():
+    """Malformed session id → uniform 4004. The previous open-coded
+    sites used ``"Invalid session ID format"`` here, which leaked
+    "this id failed regex" vs. "this id is unknown to you" — the
+    centralised helper collapses both into the same reason."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, "this-is-not-a-session-id"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_closes_on_other_users_session():
+    """Well-formed session belonging to a different user → uniform 4004."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, f"u9999-x-{_SAMPLE_HEX32}"
+    )
+    assert granted is False
+    assert ws.closed == (4004, "Session not found")
+
+
+@pytest.mark.asyncio
+async def test_require_session_access_websocket_returns_true_on_success():
+    """Owner + well-formed session id → no close, returns True."""
+    ws = _FakeWebSocket()
+    user = MagicMock()
+    user.id = 42
+
+    granted = await require_session_access_websocket(
+        cast(Any, ws), user, f"u42-e1-{_SAMPLE_HEX32}"
+    )
+    assert granted is True
+    assert ws.closed is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_id,session_id",
+    [
+        (None, f"u42-x-{_SAMPLE_HEX32}"),                       # no user
+        (42, "malformed"),                                       # bad format
+        (42, f"u9999-x-{_SAMPLE_HEX32}"),                       # other user
+        (42, f"u42-x-{_SAMPLE_HEX32}foo"),                      # adjacent-char smuggling
+        (42, "u42-x-abcdef"),                                   # short hex prefix
+    ],
+)
+async def test_require_session_access_websocket_uniform_reason_across_failure_modes(
+    user_id, session_id
+):
+    """REGRESSION GUARD: every failure mode the helper handles MUST
+    surface the same (code, reason) pair, so an attacker can't binary-
+    search session existence by toggling one input at a time. The
+    previous open-coded sites used DIFFERENT messages per failure
+    branch — that's the leak this helper centralises away.
+    """
+    ws = _FakeWebSocket()
+    if user_id is None:
+        user = None
+    else:
+        user = MagicMock()
+        user.id = user_id
+
+    granted = await require_session_access_websocket(cast(Any, ws), user, session_id)
+    assert granted is False
+    # Pin the exact close frame: code AND reason. A future contributor
+    # editing one of those is a regression visible immediately.
+    assert ws.closed == (4004, "Session not found")
 
 
 @pytest.mark.parametrize(
     "session_id,expected",
     [
-        ("u1-x-abc", True),
-        ("u123-e456-deadbeef", True),
-        ("u123-s456-DEADBEEF", True),
-        ("u123-abc", False),  # missing source
-        ("u123-y-abc", False),  # invalid source
-        ("u-x-abc", False),  # missing user id
+        (f"u1-x-{_SAMPLE_HEX32}", True),
+        (f"u123-e456-{_SAMPLE_HEX32}", True),
+        (f"u123-s456-{_SAMPLE_HEX32_UPPER}", True),
+        # Hex floor: anything below 32 chars is rejected (was 12 before
+        # the entropy bump).
+        ("u1-x-abc", False),
+        ("u123-e456-deadbeef", False),  # 8 hex < 32
+        # Well-formed but malformed structure
+        (f"u123-{_SAMPLE_HEX32}", False),  # missing source
+        (f"u123-y-{_SAMPLE_HEX32}", False),  # invalid source
+        (f"u-x-{_SAMPLE_HEX32}", False),  # missing user id
         ("u123-x-../etc/hosts", False),
         ("u123-x-abc.log", False),
         ("", False),
@@ -864,6 +1009,95 @@ def test_spawn_session_swallows_cleanup_failure(tmp_path):
     assert exc_info.value.status_code == 503
     assert "primary failure" in exc_info.value.detail
     assert client.delete_volume.await_count == 1
+
+
+# --- validate_scheduled_secret_refs (audit-f10d10a1) -----------------------
+#
+# The schedule_session validation block previously called extract_secret,
+# whose contract is "fall back to literal" — i.e. it never raised on an
+# unknown name, so the try/except wrapping it was dead code. A misspelled
+# secret name was silently accepted and persisted as a literal token in
+# ScheduledTask.data. The fix routes through find_secret directly.
+
+
+def _make_spawn_config(**fields):
+    """Build a SpawnRequest-shaped object with just the fields under test.
+
+    SpawnRequest is heavy (validators + cross-field rules), and this helper
+    only needs the github_token / github_token_write attributes the
+    validator reads via getattr.
+    """
+    config = MagicMock(spec=["github_token", "github_token_write"])
+    config.github_token = fields.get("github_token")
+    config.github_token_write = fields.get("github_token_write")
+    return config
+
+
+def test_validate_scheduled_secret_refs_rejects_unknown_secret_name():
+    db = MagicMock()
+    spawn_config = _make_spawn_config(github_token="my-token-typo")
+    with patch(
+        "memory.api.cloud_claude.find_secret", return_value=None
+    ) as fake_find:
+        with pytest.raises(HTTPException) as exc_info:
+            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    assert exc_info.value.status_code == 400
+    detail = exc_info.value.detail
+    # Error must NOT echo the supplied value (credential-reflection trap).
+    assert "my-token-typo" not in detail
+    # Error must name the field, so the operator can find the typo.
+    assert "github_token" in detail
+    fake_find.assert_called_once_with(db, 42, "my-token-typo")
+
+
+def test_validate_scheduled_secret_refs_rejects_for_each_token_field():
+    """Both github_token and github_token_write get the same validation."""
+    db = MagicMock()
+    spawn_config = _make_spawn_config(
+        github_token="ok-name", github_token_write="bad-write-typo"
+    )
+
+    def fake_find_secret(_db, _uid, name):
+        # ok-name resolves; bad-write-typo doesn't.
+        return MagicMock() if name == "ok-name" else None
+
+    with patch(
+        "memory.api.cloud_claude.find_secret", side_effect=fake_find_secret
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    assert exc_info.value.status_code == 400
+    assert "github_token_write" in exc_info.value.detail
+    assert "bad-write-typo" not in exc_info.value.detail
+
+
+def test_validate_scheduled_secret_refs_passes_when_all_resolve():
+    db = MagicMock()
+    spawn_config = _make_spawn_config(
+        github_token="prod-pat", github_token_write="prod-pat-write"
+    )
+
+    fake_secret = MagicMock()
+    with patch(
+        "memory.api.cloud_claude.find_secret", return_value=fake_secret
+    ) as fake_find:
+        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+
+    # Both fields validated.
+    assert fake_find.call_count == 2
+
+
+def test_validate_scheduled_secret_refs_skips_unset_fields():
+    """None / empty token fields don't query the DB at all."""
+    db = MagicMock()
+    spawn_config = _make_spawn_config()  # both None
+    with patch(
+        "memory.api.cloud_claude.find_secret"
+    ) as fake_find:
+        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
+    fake_find.assert_not_called()
 
 
 # --- spawn_session: per-user concurrent session limit ----------------------

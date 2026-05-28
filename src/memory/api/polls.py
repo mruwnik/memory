@@ -266,6 +266,10 @@ def validate_slot(slot: AvailabilitySlot, poll: AvailabilityPoll) -> None:
 
 MAX_NAME_LENGTH = 255
 
+# RFC 5321 caps an email address (local-part + "@" + domain) at 254 chars.
+# Anything longer is either malformed or a DoS / column-overflow attempt.
+MAX_EMAIL_LENGTH = 254
+
 
 def sanitize_name(name: str | None) -> str | None:
     """Sanitize respondent name: trim, limit length, escape HTML."""
@@ -281,6 +285,64 @@ def sanitize_name(name: str | None) -> str | None:
         )
     # Escape HTML entities to prevent XSS
     return html.escape(name)
+
+
+def sanitize_email(email: str | None) -> str | None:
+    """Sanitize respondent email: trim, length-cap, escape.
+
+    The poll respond endpoints are public (no auth), so this field is a
+    canonical PII / DoS / stored-XSS sink (CWE-20, CWE-79). Mirror the
+    discipline applied to ``respondent_name``: enforce a length ceiling
+    well below the column limit, reject smuggling characters, and
+    HTML-escape on the way in so any future renderer that drops the value
+    into HTML inherits a safe-by-default behavior.
+
+    No structural email parsing happens here: RFC-5321/5322 addresses
+    are notoriously hard to parse (quoted local-parts, IP-literal hosts,
+    bracketed-domain forms, IDN punycode) and any homegrown check
+    rejects valid input or accepts invalid input. The threats we
+    actually defend against — DoS via huge bodies, header-injection via
+    CR/LF, stored-XSS via HTML metacharacters — are covered by the
+    length cap, the control-character reject, and ``html.escape``
+    below; the structural validity of the address is the operator's
+    problem, not this endpoint's.
+    """
+    if email is None:
+        return None
+    email = email.strip()
+    if not email:
+        return None
+    if len(email) > MAX_EMAIL_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Email must be {MAX_EMAIL_LENGTH} characters or less",
+        )
+    # Reject control chars, whitespace, and CRLF — the latter is a header-
+    # injection vector if the value ever flows into an outbound mail header.
+    if any(c.isspace() or ord(c) < 0x20 for c in email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email contains invalid whitespace or control characters",
+        )
+    # Reject HTML metacharacters at the shape-check layer rather than relying
+    # on html.escape to massage them. The defense-in-depth html.escape below
+    # inflates each ``<`` / ``>`` / ``&`` / ``"`` / ``'`` to 4–6 chars, so a
+    # 252-char string of ``<`` would balloon to ~1k chars after escaping and
+    # overflow the ``respondent_email`` String(255) column on insert (500
+    # error rather than a clean 400). None of these chars are valid in an
+    # RFC-5321 addr-spec, so dropping them at the front door is also more
+    # honest than escaping them and pretending the address is well-formed.
+    if any(c in "<>&\"'" for c in email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email contains invalid HTML metacharacters",
+        )
+    # Defense-in-depth: HTML-escape for any future UI/email pipeline that
+    # forgets to escape on render. With the metacharacter check above this is
+    # currently a no-op for accepted inputs, but the call is kept so a future
+    # relaxation of the metacharacter check (e.g. quoted local-parts) doesn't
+    # silently re-open the renderer-side risk.
+    return html.escape(email)
 
 
 def deduplicate_slots(slots: list[AvailabilitySlot]) -> list[AvailabilitySlot]:
@@ -324,8 +386,9 @@ def submit_response(
     if not poll.is_open:
         raise HTTPException(status_code=400, detail="Poll is closed")
 
-    # Sanitize name
+    # Sanitize name and email (public endpoint — must validate strictly)
     sanitized_name = sanitize_name(data.respondent_name)
+    sanitized_email = sanitize_email(data.respondent_email)
 
     # Deduplicate and validate all slots
     unique_slots = deduplicate_slots(data.availabilities)
@@ -335,7 +398,7 @@ def submit_response(
     response = PollResponse(
         poll_id=poll.id,
         respondent_name=sanitized_name,
-        respondent_email=data.respondent_email,
+        respondent_email=sanitized_email,
     )
     db.add(response)
     db.flush()
@@ -425,7 +488,7 @@ def update_response(
     if data.respondent_name is not None:
         response.respondent_name = sanitize_name(data.respondent_name)
     if data.respondent_email is not None:
-        response.respondent_email = data.respondent_email
+        response.respondent_email = sanitize_email(data.respondent_email)
 
     # Replace availabilities atomically using bulk delete
     db.query(PollAvailability).filter(PollAvailability.response_id == response.id).delete()

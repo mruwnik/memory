@@ -76,7 +76,10 @@ class TestDiscoverOauthMetadata:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             result = await discover_oauth_metadata("https://example.com")
 
         assert result == metadata
@@ -100,7 +103,10 @@ class TestDiscoverOauthMetadata:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             result = await discover_oauth_metadata("https://example.com")
 
         assert result is None
@@ -118,7 +124,10 @@ class TestDiscoverOauthMetadata:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             result = await discover_oauth_metadata("https://example.com")
 
         assert result is None
@@ -221,7 +230,10 @@ class TestRegisterOauthClient:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             client_id = await register_oauth_client(
                 endpoints,
                 "https://example.com",
@@ -259,7 +271,10 @@ class TestRegisterOauthClient:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             with pytest.raises(ValueError, match="Failed to register OAuth client"):
                 await register_oauth_client(
                     endpoints,
@@ -295,7 +310,10 @@ class TestRegisterOauthClient:
         mock_session_ctx.__aenter__.return_value = mock_session
         mock_session_ctx.__aexit__.return_value = None
 
-        with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with (
+            patch("memory.common.oauth.validate_public_url"),
+            patch("aiohttp.ClientSession", return_value=mock_session_ctx),
+        ):
             with pytest.raises(ValueError, match="Failed to register OAuth client"):
                 await register_oauth_client(
                     endpoints,
@@ -390,6 +408,7 @@ class TestCompleteOauthFlow:
 
         with (
             patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+            patch("memory.common.oauth.validate_public_url"),
             patch("aiohttp.ClientSession", return_value=mock_session_ctx),
         ):
             status, message = await complete_oauth_flow(
@@ -458,6 +477,7 @@ class TestCompleteOauthFlow:
 
         with (
             patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+            patch("memory.common.oauth.validate_public_url"),
             patch("aiohttp.ClientSession", return_value=mock_session_ctx),
         ):
             status, message = await complete_oauth_flow(
@@ -507,6 +527,7 @@ class TestCompleteOauthFlow:
 
         with (
             patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+            patch("memory.common.oauth.validate_public_url"),
             patch("aiohttp.ClientSession", return_value=mock_session_ctx),
         ):
             status, message = await complete_oauth_flow(
@@ -671,6 +692,7 @@ async def test_complete_oauth_flow_token_expires_at_is_tz_aware_utc(
 
     with (
         patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+        patch("memory.common.oauth.validate_public_url"),
         patch("aiohttp.ClientSession", return_value=mock_session_ctx),
     ):
         status, _ = await complete_oauth_flow(
@@ -727,6 +749,7 @@ async def test_complete_oauth_flow_garbage_expires_in_falls_back_to_default(capl
 
     with (
         patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+        patch("memory.common.oauth.validate_public_url"),
         patch("aiohttp.ClientSession", return_value=mock_session_ctx),
         caplog.at_level(logging.WARNING, logger="memory.common.oauth"),
     ):
@@ -740,3 +763,89 @@ async def test_complete_oauth_flow_garbage_expires_in_falls_back_to_default(capl
     # The warning should mention the bad value so operators can find the offender.
     log_text = "\n".join(rec.getMessage() for rec in caplog.records)
     assert "not-a-number" in log_text
+
+
+# ----- SSRF protection on aiohttp call sites -----
+#
+# Discovery URL, registration_endpoint, and token_endpoint are all derived
+# from operator/upstream-controlled input. Each must be validated against
+# private/internal address ranges before issuing the request, otherwise
+# memory becomes an SSRF gateway to AWS IMDS / qdrant / redis / loopback
+# (CWE-918).
+
+
+@pytest.mark.parametrize(
+    "server_url",
+    [
+        "http://127.0.0.1/",
+        "http://localhost/",
+        "http://169.254.169.254/",  # AWS IMDS
+        "http://10.0.0.1/",
+        "http://[::1]/",
+        "file:///etc/passwd",
+    ],
+)
+@pytest.mark.asyncio
+async def test_discover_oauth_metadata_rejects_unsafe_url(server_url):
+    """discover_oauth_metadata must refuse to fetch private/loopback/IMDS URLs."""
+    # If we ever reach aiohttp.ClientSession, the SSRF check failed.
+    sentinel = AsyncMock(side_effect=AssertionError("aiohttp must not be called"))
+    with patch("aiohttp.ClientSession", sentinel):
+        result = await discover_oauth_metadata(server_url)
+    assert result is None
+    sentinel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_register_oauth_client_rejects_unsafe_endpoint():
+    """register_oauth_client must refuse a hostile registration_endpoint."""
+    endpoints = OAuthEndpoints(
+        authorization_endpoint="https://example.com/auth",
+        registration_endpoint="http://169.254.169.254/latest/meta-data/",
+        token_endpoint="https://example.com/token",
+        redirect_uri="https://myapp.com/callback",
+    )
+
+    sentinel = AsyncMock(side_effect=AssertionError("aiohttp must not be called"))
+    with patch("aiohttp.ClientSession", sentinel):
+        with pytest.raises(ValueError, match="unsafe registration endpoint"):
+            await register_oauth_client(
+                endpoints, "https://example.com", "Test Client"
+            )
+    sentinel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_complete_oauth_flow_rejects_unsafe_token_endpoint(db_session):
+    """complete_oauth_flow must refuse a hostile token_endpoint and never POST."""
+    mcp_server = MCPServer(
+        name="Test Server",
+        mcp_server_url="https://example.com",
+        client_id="test-client-123",
+        state="test-state",
+        code_verifier="test-verifier",
+    )
+    db_session.add(mcp_server)
+    db_session.commit()
+
+    metadata = {
+        "authorization_endpoint": "https://example.com/auth",
+        "registration_endpoint": "https://example.com/register",
+        # Internal docker-network host; must be rejected before POST.
+        "token_endpoint": "http://qdrant:6333/collections/x/points/delete",
+    }
+
+    sentinel = AsyncMock(side_effect=AssertionError("aiohttp must not be called"))
+    with (
+        patch("memory.common.oauth.discover_oauth_metadata", return_value=metadata),
+        patch("aiohttp.ClientSession", sentinel),
+    ):
+        status, _message = await complete_oauth_flow(
+            mcp_server, "auth-code", "test-state"
+        )
+
+    # The endpoint URL is rejected — get_endpoints will fail to resolve
+    # "qdrant" via the public-DNS check, surfacing as a 500 from
+    # discover_oauth_metadata. Either way, no aiohttp.post must fire.
+    sentinel.assert_not_called()
+    assert status >= 400

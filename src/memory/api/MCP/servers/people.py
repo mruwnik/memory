@@ -114,10 +114,38 @@ def _deep_merge(base: dict, updates: dict) -> dict:
     return result
 
 
-def link_user_from_contact_info(session: DBSession, person: Person, contact_info: dict | None) -> int | None:
+def _caller_owns_person(person: Person, caller_id: int | None) -> bool:
+    """Whether ``person`` is already linked to ``caller_id``.
+
+    Used for the "owner override" path in identity-link checks. A
+    Person without ``user_id`` set is treated as having no owner — a
+    non-admin caller can therefore not "claim" Discord re-attribution
+    targeting an unlinked Person owned by nobody, which closes the
+    spoof path where attacker creates a fresh Person with someone
+    else's contact info and then steals Discord rows under it.
+    """
+    if caller_id is None or person.user_id is None:
+        return False
+    return person.user_id == caller_id
+
+
+def link_user_from_contact_info(
+    session: DBSession,
+    person: Person,
+    contact_info: dict | None,
+    *,
+    caller_id: int | None,
+    caller_is_admin: bool = False,
+) -> int | None:
     """Link a User to a Person based on email in contact_info.
 
-    Returns User ID that was linked, or None if no match found.
+    Auto-linking is gated to prevent identity-hijack: a non-admin caller
+    can only auto-link a Person to themselves. If the matched User row
+    is someone other than the caller, the link is refused (logged at
+    WARNING) and the Person record is otherwise unchanged. Mirrors the
+    REST endpoint's policy (``api/discord.py:link_discord_user``).
+
+    Returns the User ID that was linked, or None if no link was made.
     """
     if not contact_info:
         return None
@@ -136,16 +164,45 @@ def link_user_from_contact_info(session: DBSession, person: Person, contact_info
 
     # Find user by email
     user = session.query(User).filter(User.email.ilike(email)).first()
-    if user:
-        person.user_id = user.id
-        logger.info(f"Linked Person {person.identifier} to User {user.email} (id={user.id})")
-        return user.id
+    if not user:
+        return None
 
-    return None
+    if not caller_is_admin and user.id != caller_id:
+        # Identity-hijack guard: refuse to attach this Person to a
+        # User row owned by someone else. The Person record is still
+        # created/updated (free-form contact info is fine); only the
+        # auto-link is suppressed.
+        logger.warning(
+            "Refusing to auto-link Person %s to User id=%s (email=%s): "
+            "non-admin caller id=%s cannot bind another user's identity",
+            person.identifier,
+            user.id,
+            user.email,
+            caller_id,
+        )
+        return None
+
+    person.user_id = user.id
+    logger.info(
+        "Linked Person %s to User %s (id=%s)", person.identifier, user.email, user.id
+    )
+    return user.id
 
 
-def link_discord_from_contact_info(session: DBSession, person: Person, contact_info: dict | None) -> list[int]:
+def link_discord_from_contact_info(
+    session: DBSession,
+    person: Person,
+    contact_info: dict | None,
+    *,
+    caller_id: int | None,
+    caller_is_admin: bool = False,
+) -> list[int]:
     """Link Discord users to a Person based on contact_info.
+
+    Auto-linking is gated to prevent identity-hijack via DiscordUser
+    re-attribution: a non-admin caller may only link a DiscordUser
+    that is currently unlinked OR already linked to a Person owned by
+    the caller. Re-attributing someone else's DiscordUser is refused.
 
     Returns list of Discord user IDs that were linked.
     """
@@ -192,17 +249,46 @@ def link_discord_from_contact_info(session: DBSession, person: Person, contact_i
                 .first()
             )
 
-        if discord_user:
-            # Link to person if not already linked
-            if discord_user.person_id != person.id:
-                discord_user.person_id = person.id
-                logger.info(
-                    f"Linked Discord user {discord_user.username} ({discord_user.id}) "
-                    f"to person {person.identifier}"
-                )
-            linked_ids.append(discord_user.id)
-        else:
+        if not discord_user:
             logger.debug(f"Discord user not found for identifier: {identifier}")
+            continue
+
+        # Already attached to this Person — nothing to do, just report it.
+        if discord_user.person_id == person.id:
+            linked_ids.append(discord_user.id)
+            continue
+
+        if not caller_is_admin:
+            # Allow only when discord_user is unlinked OR already
+            # linked to a Person the caller owns (and we're moving it
+            # to another caller-owned Person).
+            current_owner_ok = True
+            if discord_user.person_id is not None:
+                current = session.get(Person, discord_user.person_id)
+                current_owner_ok = current is not None and _caller_owns_person(
+                    current, caller_id
+                )
+            target_owner_ok = _caller_owns_person(person, caller_id)
+            if not current_owner_ok or not target_owner_ok:
+                logger.warning(
+                    "Refusing to re-attribute Discord user %s (id=%s) to "
+                    "Person %s: non-admin caller id=%s lacks ownership "
+                    "(current_person_id=%s, target_person_user_id=%s)",
+                    discord_user.username,
+                    discord_user.id,
+                    person.identifier,
+                    caller_id,
+                    discord_user.person_id,
+                    person.user_id,
+                )
+                continue
+
+        discord_user.person_id = person.id
+        logger.info(
+            f"Linked Discord user {discord_user.username} ({discord_user.id}) "
+            f"to person {person.identifier}"
+        )
+        linked_ids.append(discord_user.id)
 
     return linked_ids
 
@@ -266,6 +352,7 @@ async def upsert(
     # Get current user for creator_id
     user = get_mcp_current_user()
     creator_id = user.id if user else None
+    caller_is_admin = has_admin_scope(user) if user else False
 
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()
@@ -309,11 +396,30 @@ async def upsert(
 
         session.flush()
 
-        # Auto-link User from contact_info email
-        linked_user = link_user_from_contact_info(session, person, person.contact_info)
+        # Auto-link User from contact_info email. The auto-link is
+        # gated by caller authorization — a non-admin upsert with
+        # someone else's email creates the Person record but does NOT
+        # bind person.user_id, blocking the identity-claim attack
+        # where an attacker spoofs admin's email to mint a Person row
+        # attached to admin's User identity.
+        linked_user = link_user_from_contact_info(
+            session,
+            person,
+            person.contact_info,
+            caller_id=creator_id,
+            caller_is_admin=caller_is_admin,
+        )
 
-        # Auto-link Discord users from contact_info
-        linked_discord = link_discord_from_contact_info(session, person, person.contact_info)
+        # Auto-link Discord users from contact_info, with the same
+        # caller-authorization gate (only admins or the caller-as-owner
+        # may re-attribute Discord rows between Person records).
+        linked_discord = link_discord_from_contact_info(
+            session,
+            person,
+            person.contact_info,
+            caller_id=creator_id,
+            caller_is_admin=caller_is_admin,
+        )
 
         session.commit()
 

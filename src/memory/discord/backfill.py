@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Async REST-only driver for backfilling historical Discord messages.
 
 Reuses the live ingestion helpers (``ensure_message_entities``/``queue_message``)

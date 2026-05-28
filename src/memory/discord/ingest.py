@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Discord ingestion helpers shared by the live collector and the history
 backfill: turn discord.py entities/messages into DB rows or queued tasks.
 

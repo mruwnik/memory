@@ -159,11 +159,26 @@ class RSSAtomParser(FeedParser):
     """Parser for RSS and Atom feeds using feedparser."""
 
     def fetch_items(self) -> Sequence[Any]:
-        """Fetch items from the feed."""
-        if self.since:
-            feed = feedparser.parse(self.content or self.url, modified=self.since)
-        else:
-            feed = feedparser.parse(self.content or self.url)
+        """Fetch items from the feed.
+
+        SSRF safety: ``feedparser.parse(url)`` would otherwise dispatch its
+        own urllib fetch, bypassing :func:`fetch_html`'s SSRF gate. An
+        attacker-controlled HTML page could auto-discover a feed link
+        pointing at e.g. ``http://169.254.169.254/`` and feedparser would
+        fetch it without validation. We always pre-fetch via ``fetch_html``
+        (which routes through ``safe_get`` for redirect-aware validation)
+        so feedparser only ever sees in-memory bytes.
+
+        Incremental sync: feedparser's own ``modified=`` shortcut only
+        fires when feedparser performs the fetch, so handing it in-memory
+        bytes would silently disable it. We instead let ``fetch_html``
+        make the conditional request — it sends ``If-Modified-Since`` from
+        ``self.since`` and returns empty content on a 304, which parses to
+        zero entries.
+        """
+        if not self.content:
+            self.content = cast(str, fetch_html(self.url, modified=self.since))
+        feed = feedparser.parse(self.content)
         return feed.entries
 
     def extract_title(self, entry: Any) -> str:

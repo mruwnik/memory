@@ -7,11 +7,13 @@ from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
+from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
@@ -49,13 +51,16 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
 
     Returns the key string (only available at creation time).
 
-    The minted key carries the user's full ``user.scopes``. OAuth in this
-    codebase is just the MCP-server gate — real authorization runs off the
-    user's session/api-key scopes — so we deliberately don't try to cap by
-    the OAuth grant here. ``access_token.scopes`` from ``verify_token``
-    is already ``user.scopes ∪ {read, write}``, so the intersection below
-    is a no-op for OAuth callers and just the user's literal scopes for
-    direct-API-key callers.
+    The issued key carries ``user.scopes ∩ access_token.scopes`` (with a
+    short-circuit for either side carrying admin — see the conditional
+    below). In production today ``access_token.scopes`` from
+    ``verify_token`` equals ``user.scopes ∪ {read, write}``, so the
+    intersection collapses to ``user.scopes`` and the cap is a no-op for
+    OAuth callers — but the math is here so a future ``verify_token``
+    change that DOES emit narrower access-token scopes flows through
+    correctly without a parallel edit. For direct-API-key callers
+    (where ``access_token.scopes`` carries the API key's resolved
+    scopes) the intersection is the live cap.
     """
     user_scopes = set(user_session.user.scopes or [])
     access_token = get_access_token()
@@ -247,6 +252,7 @@ def get_schema(klass: type[SourceItem]) -> dict[str, SchemaArg]:
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
 async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
     """Get the metadata schema for each collection used in the knowledge base.
 
@@ -276,6 +282,7 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
 
 
 @meta_mcp.tool()
+@visible_when()  # genuinely public utility — no PII, no side effects
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
     logger.info("get_current_time tool called")
@@ -283,17 +290,26 @@ async def get_current_time() -> dict:
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
 async def get_user(generate_one_time_key: bool = False) -> dict:
     """Get information about the authenticated user.
 
     Args:
-        generate_one_time_key: If True, generates a one-time API key for client operations.
-                               The key will be deleted after first use.
+        generate_one_time_key: If True, generates a one-time API key for
+            client operations. The key will be deleted after first use.
     """
     with make_session() as session:
         result = _get_current_user(session)
 
         if generate_one_time_key and result.get("authenticated"):
+            # FIXME(security): non-admin callers can mint a one-time key here.
+            # `_create_one_time_key` still caps the issued scopes to
+            # `user.scopes ∩ granted_scopes`, so the minted key never carries
+            # more scope than the caller already had — but minting key
+            # material from a non-admin path is a confused-deputy shape that
+            # should be gated on admin (on either the user or the OAuth
+            # grant). Deliberately left open for now to unblock client
+            # workflows; reinstate the admin gate when those are migrated.
             if user_session := _get_user_session_from_token(session):
                 result["one_time_key"] = _create_one_time_key(session, user_session)
 
@@ -395,6 +411,7 @@ def create_notification(
 
 
 @meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_WRITE))
 async def notify_user(
     subject: str,
     message: str,

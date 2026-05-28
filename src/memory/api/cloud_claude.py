@@ -63,7 +63,10 @@ from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, ScheduledTask, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.api.claude_environments import mark_environment_used
-from memory.common.db.models.secrets import extract as extract_secret
+from memory.common.db.models.secrets import (
+    extract as extract_secret,
+    find_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,30 @@ RESERVED_ENV_VARS = {
 }
 
 
+# ``repo_url`` is intentionally unvalidated by the API.
+#
+# The value flows to the spawned container as ``$GIT_REPO_URL`` and is
+# consumed by ``git clone`` running with the requester's own SSH key +
+# GitHub PATs (per-user, looked up via ``extract_secret(db, user.id, …)``
+# below). The known git-side footguns — leading ``-`` for flag-injection
+# CVEs, ``ext::sh -c …`` / ``transport-helper::`` remote helpers,
+# ``git://`` MITM, ``file://`` mounts — all execute strictly inside that
+# container with credentials the requester already controls. The
+# requester has root in their own container; anything malicious they put
+# in ``repo_url`` is self-harm, not a boundary cross.
+#
+# The host side is not at risk either: ``repo_url`` is passed via the
+# container runtime env (not interpolated into a host shell), so an
+# arbitrary string here cannot reach the orchestrator host.
+#
+# If a future revision introduces *shared* credentials in the spawned
+# container (a service GitHub token, a shared SSH key, etc.) this
+# precondition no longer holds and the validator should come back at
+# minimum to reject ``ext::`` / ``transport-helper::`` schemes and a
+# leading ``-``, which are the only shapes that exfiltrate secrets
+# rather than just owning the requester's own session.
+
+
 def make_session_id(
     user_id: int,
     *,
@@ -100,6 +127,14 @@ def make_session_id(
 
     Format: u{user_id}-{source}-{random_hex}
     Where source is e{env_id} for environments or s{snap_id} for snapshots.
+
+    The random suffix is 16 bytes / 32 hex chars (128 bits) — the same
+    width as ``secrets.token_hex(16)`` and the standard floor for
+    unguessable session tokens. This is load-bearing here because the
+    suffix doubles as a Docker container hostname and as a key in
+    orchestrator URLs, so an attacker enumerating active container
+    suffixes is in scope. The matching regexes in ``auth.py`` and below
+    enforce the 32-hex-char floor in lockstep.
     """
     if environment_id is not None:
         source = f"e{environment_id}"
@@ -107,7 +142,7 @@ def make_session_id(
         source = f"s{snapshot_id}"
     else:
         source = "x"  # Unknown source (shouldn't happen)
-    return f"u{user_id}-{source}-{secrets.token_hex(6)}"
+    return f"u{user_id}-{source}-{secrets.token_hex(16)}"
 
 
 def get_user_id_from_session(session_id: str) -> int | None:
@@ -240,7 +275,7 @@ async def map_orchestrator_errors(
 
 # Strict session-id regex used by both is_valid_session_id and the
 # require_session_access defense-in-depth check below.
-_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]+$")
+_SESSION_ID_RE = re.compile(r"^u\d+-(e\d+|s\d+|x)-[a-fA-F0-9]{32,}$")
 
 
 def is_valid_session_id(session_id: str) -> bool:
@@ -323,6 +358,57 @@ def require_session_access(user: User, session_id: str) -> None:
         user, session_id
     ):
         raise HTTPException(status_code=404, detail="Session not found")
+
+
+# WebSocket-specific session-access close code. Distinct from the HTTP
+# 404 because WebSockets don't have status codes — they have close
+# frames. 4004 is in the application-defined range (4000-4999) and the
+# message stays uniform across format-failure and ownership-failure so
+# the client can't distinguish "this session ID is invalid syntax" from
+# "this session exists but isn't yours" — same info-disclosure rule as
+# the HTTP path.
+_WEBSOCKET_SESSION_NOT_FOUND_CODE = 4004
+_WEBSOCKET_SESSION_NOT_FOUND_REASON = "Session not found"
+
+
+async def require_session_access_websocket(
+    websocket: WebSocket, user: User | None, session_id: str
+) -> bool:
+    """WebSocket analog of ``require_session_access``.
+
+    Closes ``websocket`` with a uniform 4004 ``Session not found`` frame
+    and returns ``False`` if any of these fails:
+      * ``session_id`` doesn't match ``_SESSION_ID_RE`` (path-traversal
+        defense-in-depth — the id flows into orchestrator URL paths)
+      * ``user`` is ``None`` (token didn't authenticate to a user)
+      * ``user_owns_session(user, session_id)`` is False
+
+    Returns ``True`` if the caller should proceed (the session is
+    well-formed, owned by ``user``, and the websocket has NOT been
+    closed). The caller is then responsible for ``await
+    websocket.accept()`` and the rest of the handshake.
+
+    Why this exists: three open-coded copies of the same checks drifted
+    in ``proxy_differ`` (HTTP), ``proxy_differ_ws``, and the terminal
+    WebSocket — each with slightly different close codes / messages /
+    failure ordering. The HTTP variant additionally returned distinct
+    400/403 status codes pre-collapse, which leaked "session exists vs.
+    syntactically invalid" to unauthenticated callers. Centralising
+    here pins the "single 4004 + uniform reason" property for every WS
+    route, so a future contributor can't accidentally split the failure
+    modes apart by editing one site.
+    """
+    if (
+        user is None
+        or not _SESSION_ID_RE.match(session_id)
+        or not user_owns_session(user, session_id)
+    ):
+        await websocket.close(
+            code=_WEBSOCKET_SESSION_NOT_FOUND_CODE,
+            reason=_WEBSOCKET_SESSION_NOT_FOUND_REASON,
+        )
+        return False
+    return True
 
 
 class SpawnRequest(BaseModel):
@@ -715,6 +801,39 @@ async def spawn_session(
     )
 
 
+def validate_scheduled_secret_refs(
+    db: DBSession, user_id: int, spawn_config: "SpawnRequest"
+) -> None:
+    """Reject scheduled-session requests whose token fields don't resolve
+    to a stored Secret row.
+
+    Unlike the spawn-time path (which uses ``extract_secret``'s silent
+    literal-fallback by design), scheduled-session token values are
+    persisted in ``ScheduledTask.data``. Accepting literals here means a
+    typo ("gihub-token") gets stored verbatim and shipped to the
+    container later as a literal — turning a misspelled secret name into
+    a plaintext credential leak in the DB.
+
+    The error message intentionally does NOT echo ``token_value``. The
+    field accepts either a secret-name OR a literal token at runtime; if
+    a future contributor relaxes that contract, an unintended echo would
+    become a credential-reflection vector via 4xx response bodies.
+    """
+    for token_field in ("github_token", "github_token_write"):
+        token_value = getattr(spawn_config, token_field, None)
+        if token_value and find_secret(db, user_id, token_value) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Secret reference for '{token_field}' not found. "
+                    "Scheduled sessions require a stored-secret name "
+                    "(create one via /secrets); literal tokens are not "
+                    "accepted because they would be persisted in "
+                    "plaintext in the schedule's data column."
+                ),
+            )
+
+
 @router.post("/schedule")
 async def schedule_session(
     request: ScheduleRequest,
@@ -775,17 +894,8 @@ async def schedule_session(
             detail="Scheduled sessions require an initial_prompt",
         )
 
-    # Validate that referenced secrets can be resolved (early feedback)
-    for token_field in ("github_token", "github_token_write"):
-        token_value = getattr(request.spawn_config, token_field, None)
-        if token_value:
-            try:
-                extract_secret(db, user.id, token_value)
-            except (KeyError, ValueError) as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Secret '{token_value}' not found for {token_field}",
-                ) from e
+    # Validate token fields against stored secrets (raises 400 on miss).
+    validate_scheduled_secret_refs(db, user.id, request.spawn_config)
 
     prompt = request.spawn_config.initial_prompt
     topic = prompt[:100]
@@ -969,18 +1079,21 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
     that the token's user actually owns. Raises HTTPException on failure.
 
     Re-validates ``session_id`` and ``path`` defensively. Mint-time validation
-    already enforces these, but if ``TRANSFER_TOKEN_SECRET`` ever leaks (it
-    falls back to ``SECRETS_ENCRYPTION_KEY`` in dev), or a future code path
-    skips the mint helpers, this is the only line of defense before the
-    orchestrator URL is constructed.
+    already enforces these, but if ``TRANSFER_TOKEN_SECRET`` ever leaks
+    (or a future code path skips the mint helpers), this is the only
+    line of defense before the orchestrator URL is constructed.
+
+    Note: ``settings.py`` derives ``TRANSFER_TOKEN_SECRET`` from
+    ``SECRETS_ENCRYPTION_KEY`` via HKDF-SHA256 with a domain-separating
+    ``info`` string when the operator has not set it explicitly, so a
+    leak of either secret does not compromise the other.
     """
     try:
         payload = verify_token(token)
     except TransferTokenExpiredError:
-        # Distinct exception type means we can't accidentally classify a
-        # tampered/malformed token as expired (the previous substring sniff
-        # over `str(exc)` was vulnerable to "expired" appearing in unrelated
-        # error text — and it leaked the inner reason via the response).
+        # Distinct exception type — a tampered/malformed token cannot
+        # accidentally classify as expired, and the inner reason is not
+        # leaked back to the caller via the response detail.
         raise HTTPException(status_code=401, detail="Token expired")
     except TransferTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
@@ -1271,10 +1384,10 @@ async def proxy_differ(
     Injects a <base href> tag into HTML responses so the differ SPA
     resolves relative URLs through this proxy.
     """
-    if not is_valid_session_id(session_id):
-        raise HTTPException(status_code=404, detail="Invalid session ID format")
-    if not user_owns_session(user, session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # Centralised: format check + ownership + uniform 404 reason so we
+    # don't leak "session exists but isn't yours" vs. "session ID is
+    # syntactically invalid" to unauthorised callers.
+    require_session_access(user, session_id)
 
     # Extract the differ subpath from raw_path (bytes) to preserve
     # percent-encoding — scope["path"] decodes %2F to /, which breaks
@@ -1379,16 +1492,14 @@ async def proxy_differ_ws(
     Relays frames bidirectionally between the client and the differ server
     through the orchestrator's WebSocket proxy.
     """
-    if not is_valid_session_id(session_id):
-        await websocket.close(code=4004, reason="Invalid session ID format")
-        return
-
-    # Authenticate
+    # Authenticate first, then route through the centralised helper so
+    # format-failure / no-user / wrong-owner all surface as the same
+    # 4004 close frame ("Session not found"). Distinguishing them would
+    # leak existence to unauthenticated callers.
     with make_session() as db:
         user = get_user_from_token(token, db) if token else None
-        if not user or not user_owns_session(user, session_id):
-            await websocket.close(code=4004, reason="Session not found")
-            return
+    if not await require_session_access_websocket(websocket, user, session_id):
+        return
 
     # Extract subpath from raw_path to preserve percent-encoding (see proxy_differ)
     # Must happen BEFORE accept() so we can close with an error code on bad input.
@@ -1485,19 +1596,22 @@ async def stream_session_logs(
     Client -> Server messages (JSON):
     - {"type": "input", "keys": "..."}: Send keystrokes to tmux
     """
-    if not is_valid_session_id(session_id):
-        await websocket.close(code=4004, reason="Invalid session ID format")
-        return
-
-    # Authenticate and authorize
+    # Authenticate first, then route through the centralised helper.
+    #
+    # Note the deliberate distinction here: an *invalid token* still uses
+    # a separate 4001 close code (clients need to distinguish "your
+    # token is expired, get a new one" from "the session you asked for
+    # doesn't exist") — but everything else (bad session-id format,
+    # token-without-user, ownership mismatch) collapses to a uniform
+    # 4004 ``Session not found`` so we don't leak existence to callers
+    # who hold a valid token but for the wrong session.
     with make_session() as db:
         user = get_user_from_token(token, db)
-        if not user:
-            await websocket.close(code=4001, reason="Invalid or expired token")
-            return
-        if not user_owns_session(user, session_id):
-            await websocket.close(code=4004, reason="Session not found")
-            return
+    if user is None:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return
+    if not await require_session_access_websocket(websocket, user, session_id):
+        return
 
     await websocket.accept()
     client = get_orchestrator_client()
