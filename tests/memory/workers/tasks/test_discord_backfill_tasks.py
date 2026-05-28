@@ -11,6 +11,11 @@ from memory.common.celery_app import (
     SCHEDULE_DISCORD_BACKFILLS,
 )
 from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer
+from memory.workers.tasks import discord_backfill
+from memory.workers.tasks.discord_backfill import (
+    collectible_channels,
+    resolve_channel_bot_token,
+)
 
 
 def test_backfill_task_names():
@@ -59,15 +64,11 @@ def make_bot_server_channel(db_session, *, token="bot-token", channel_id=10):
 
 
 def test_resolve_channel_bot_token_happy_path(db_session):
-    from memory.workers.tasks.discord_backfill import resolve_channel_bot_token
-
     make_bot_server_channel(db_session, token="abc")
     assert resolve_channel_bot_token(10) == (42, "abc")
 
 
 def test_resolve_channel_bot_token_none_without_server(db_session):
-    from memory.workers.tasks.discord_backfill import resolve_channel_bot_token
-
     db_session.add(DiscordChannel(id=99, server_id=None, name="dm",
                                   channel_type="dm"))
     db_session.commit()
@@ -75,8 +76,6 @@ def test_resolve_channel_bot_token_none_without_server(db_session):
 
 
 def test_backfill_channel_skips_when_no_token(db_session):
-    from memory.workers.tasks import discord_backfill
-
     with patch.object(discord_backfill, "resolve_channel_bot_token",
                       return_value=None):
         result = discord_backfill.backfill_channel(10)
@@ -84,8 +83,6 @@ def test_backfill_channel_skips_when_no_token(db_session):
 
 
 def test_backfill_channel_skips_when_locked(db_session):
-    from memory.workers.tasks import discord_backfill
-
     with patch.object(discord_backfill, "resolve_channel_bot_token",
                       return_value=(42, "tok")), \
          patch.object(discord_backfill, "distributed_lock", held_lock):
@@ -94,8 +91,6 @@ def test_backfill_channel_skips_when_locked(db_session):
 
 
 def test_backfill_channel_redispatches_when_not_done(db_session):
-    from memory.workers.tasks import discord_backfill
-
     with patch.object(discord_backfill, "resolve_channel_bot_token",
                       return_value=(42, "tok")), \
          patch.object(discord_backfill, "distributed_lock", acquired_lock), \
@@ -117,8 +112,6 @@ def test_backfill_channel_redispatches_when_not_done(db_session):
 
 
 def test_backfill_channel_no_redispatch_when_done(db_session):
-    from memory.workers.tasks import discord_backfill
-
     with patch.object(discord_backfill, "resolve_channel_bot_token",
                       return_value=(42, "tok")), \
          patch.object(discord_backfill, "distributed_lock", acquired_lock), \
@@ -147,8 +140,6 @@ def test_backfill_channel_no_redispatch_when_done(db_session):
 def test_collectible_channels_inheritance(
     db_session, server_collect, channel_collect, channel_type, expected
 ):
-    from memory.workers.tasks.discord_backfill import collectible_channels
-
     db_session.add(DiscordServer(id=1, name="s", collect_messages=server_collect))
     db_session.add(
         DiscordChannel(id=10, server_id=1, name="c",
@@ -161,8 +152,6 @@ def test_collectible_channels_inheritance(
 
 
 def test_collectible_channels_excludes_serverless_by_default(db_session):
-    from memory.workers.tasks.discord_backfill import collectible_channels
-
     db_session.add(DiscordChannel(id=20, server_id=None, name="dm",
                                   channel_type="dm", collect_messages=None))
     db_session.commit()
@@ -170,8 +159,6 @@ def test_collectible_channels_excludes_serverless_by_default(db_session):
 
 
 def test_schedule_dispatches_backfill_per_channel_and_threads_for_parents(db_session):
-    from memory.workers.tasks import discord_backfill
-
     db_session.add(DiscordServer(id=1, name="s", collect_messages=True))
     db_session.add(DiscordChannel(id=10, server_id=1, name="text",
                                   channel_type="text"))

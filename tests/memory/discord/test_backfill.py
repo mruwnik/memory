@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
 from discord import MessageType
 
@@ -11,6 +12,8 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
 )
+from memory.discord import backfill
+from memory.discord.backfill import oldest_stored_message_id
 
 
 def make_discord_rows(db_session):
@@ -77,8 +80,6 @@ def async_iter(items):
 
 
 def test_oldest_stored_message_id_returns_min(db_session):
-    from memory.discord.backfill import oldest_stored_message_id
-
     make_discord_rows(db_session)
     add_message(db_session, 300)
     add_message(db_session, 100)
@@ -89,8 +90,6 @@ def test_oldest_stored_message_id_returns_min(db_session):
 
 
 def test_oldest_stored_message_id_none_when_empty(db_session):
-    from memory.discord.backfill import oldest_stored_message_id
-
     make_discord_rows(db_session)
     db_session.commit()
     assert oldest_stored_message_id(10) is None
@@ -98,8 +97,6 @@ def test_oldest_stored_message_id_none_when_empty(db_session):
 
 @pytest.mark.asyncio
 async def test_backfill_channel_messages_queues_each_and_reports_done(db_session):
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     db_session.commit()
 
@@ -127,8 +124,6 @@ async def test_backfill_channel_messages_queues_each_and_reports_done(db_session
 
 @pytest.mark.asyncio
 async def test_backfill_channel_messages_not_done_when_budget_filled(db_session):
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     db_session.commit()
 
@@ -151,9 +146,6 @@ async def test_backfill_channel_messages_not_done_when_budget_filled(db_session)
 
 @pytest.mark.asyncio
 async def test_backfill_uses_min_message_id_as_before_cursor(db_session):
-    import discord as discordpy
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     add_message(db_session, 100)
     db_session.commit()
@@ -179,7 +171,7 @@ async def test_backfill_uses_min_message_id_as_before_cursor(db_session):
             "tok", 10, bot_id=42, celery_app=MagicMock(), max_messages=100
         )
 
-    assert isinstance(captured["before"], discordpy.Object)
+    assert isinstance(captured["before"], discord.Object)
     assert captured["before"].id == 100
 
 
@@ -187,9 +179,6 @@ async def test_backfill_uses_min_message_id_as_before_cursor(db_session):
 async def test_backfill_explicit_before_id_used_verbatim(db_session):
     """A continuation passes its cursor in before_id; it must be used directly,
     not overridden by MIN(stored). Here MIN=100 but before_id=50 wins."""
-    import discord as discordpy
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     add_message(db_session, 100)  # MIN(stored) is 100
     db_session.commit()
@@ -217,7 +206,7 @@ async def test_backfill_explicit_before_id_used_verbatim(db_session):
         )
 
     # Explicit cursor wins over MIN(stored)=100.
-    assert isinstance(captured["before"], discordpy.Object)
+    assert isinstance(captured["before"], discord.Object)
     assert captured["before"].id == 50
     # Nothing fetched, so the continuation cursor is None.
     assert result == {"processed": 0, "done": True, "oldest_message_id": None}
@@ -231,8 +220,6 @@ async def test_backfill_channel_messages_forum_channel_is_noop(db_session):
     is genuinely False, mirroring the real discord.py 2.3.2 ForumChannel which
     is not Messageable and has no history() method.
     """
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     db_session.commit()
 
@@ -260,15 +247,11 @@ async def test_backfill_channel_messages_forum_channel_is_noop(db_session):
 
 @pytest.mark.asyncio
 async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session):
-    import discord as discordpy
-    from memory.common.db.models import DiscordChannel
-    from memory.discord import backfill
-
     make_discord_rows(db_session)  # bot 42, server 1, channel 10, author 100
     db_session.commit()
 
     def fake_thread(tid):
-        th = MagicMock(spec=discordpy.Thread)
+        th = MagicMock(spec=discord.Thread)
         th.id = tid
         th.parent_id = 10
         th.guild = MagicMock(id=1)
@@ -311,15 +294,11 @@ async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session):
 async def test_discover_channel_threads_swallows_private_forbidden(db_session):
     """If the private-archived enumeration raises discord.Forbidden (missing
     Manage Threads), the public/active threads are STILL ensured + dispatched."""
-    import discord as discordpy
-    from memory.common.db.models import DiscordChannel
-    from memory.discord import backfill
-
     make_discord_rows(db_session)
     db_session.commit()
 
     def fake_thread(tid):
-        th = MagicMock(spec=discordpy.Thread)
+        th = MagicMock(spec=discord.Thread)
         th.id = tid
         th.parent_id = 10
         th.guild = MagicMock(id=1)
@@ -333,7 +312,7 @@ async def test_discover_channel_threads_swallows_private_forbidden(db_session):
     def archived_threads(*args, **kwargs):
         if kwargs.get("private"):
             response = MagicMock(status=403, reason="Forbidden")
-            raise discordpy.Forbidden(response, "missing Manage Threads")
+            raise discord.Forbidden(response, "missing Manage Threads")
         return async_iter([public_archived])()
 
     fake_channel = MagicMock()
@@ -359,4 +338,58 @@ async def test_discover_channel_threads_swallows_private_forbidden(db_session):
     assert db_session.get(DiscordChannel, 202) is not None
     dispatched = {c.kwargs["args"][0] for c in celery_app.send_task.call_args_list}
     assert dispatched == {201, 202}
+    fake_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_channel_messages_forbidden_is_skip(db_session):
+    """A channel the bot can't read (archived / not a member) is a clean skip,
+    not a crash — the weekly sweep must not fail on inaccessible channels."""
+    make_discord_rows(db_session)
+    db_session.commit()
+
+    fake_client = MagicMock()
+    fake_client.login = AsyncMock()
+    fake_client.close = AsyncMock()
+    fake_client.fetch_channel = AsyncMock(
+        side_effect=discord.Forbidden(
+            MagicMock(status=403, reason="Forbidden"), "Missing Access"
+        )
+    )
+    celery_app = MagicMock()
+
+    with patch("discord.Client", return_value=fake_client):
+        result = await backfill.backfill_channel_messages(
+            "tok", 10, bot_id=42, celery_app=celery_app, max_messages=100
+        )
+
+    assert result == {"processed": 0, "done": True, "oldest_message_id": None}
+    celery_app.send_task.assert_not_called()
+    fake_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_discover_channel_threads_forbidden_channel_is_skip(db_session):
+    """If the bot can't access the parent channel at all, discovery skips
+    cleanly (returns no threads, dispatches nothing) instead of raising."""
+    make_discord_rows(db_session)
+    db_session.commit()
+
+    fake_client = MagicMock()
+    fake_client.login = AsyncMock()
+    fake_client.close = AsyncMock()
+    fake_client.fetch_channel = AsyncMock(
+        side_effect=discord.Forbidden(
+            MagicMock(status=403, reason="Forbidden"), "Missing Access"
+        )
+    )
+    celery_app = MagicMock()
+
+    with patch("discord.Client", return_value=fake_client):
+        thread_ids = await backfill.discover_channel_threads(
+            "tok", 10, celery_app=celery_app
+        )
+
+    assert thread_ids == []
+    celery_app.send_task.assert_not_called()
     fake_client.close.assert_awaited_once()
