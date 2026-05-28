@@ -465,12 +465,19 @@ def test_trigger_comic_sync_smbc_navigation(
 
 
 @patch("memory.workers.tasks.comic.sync_comic.delay")
+@patch("memory.workers.tasks.comic.comics.extract_xkcd")
 @patch("memory.workers.tasks.comic.comics.extract_smbc")
 @patch("memory.workers.tasks.comic.safe_get")
 def test_trigger_comic_sync_smbc_extraction_error(
-    mock_get, mock_extract_smbc, mock_sync_delay
+    mock_get, mock_extract_smbc, mock_extract_xkcd, mock_sync_delay
 ):
-    """Test handling of extraction errors during full sync."""
+    """Test handling of extraction errors during full sync.
+
+    Both extractors are mocked to raise, so the XKCD loop that runs
+    after the SMBC loop also no-ops — without mocking ``extract_xkcd``
+    the real parser hits the network and the assertion below depends on
+    the runner having no DNS for xkcd.com (which is CI-fragile).
+    """
     # Mock responses: first one has a prev link, second one doesn't
     mock_responses = [
         Mock(text='<a class="cc-prev" href="https://smbc.com/comic/1"></a>'),
@@ -478,11 +485,13 @@ def test_trigger_comic_sync_smbc_extraction_error(
     ]
     mock_get.side_effect = mock_responses
     mock_extract_smbc.side_effect = Exception("Extraction failed")
+    mock_extract_xkcd.side_effect = Exception("XKCD extraction failed")
 
-    # Should not raise exception, just log error
+    # Should not raise exception, just log errors
     comic.trigger_comic_sync()
 
     mock_extract_smbc.assert_called_once_with("https://smbc.com/comic/1")
+    # SMBC and XKCD both raised — nothing enqueued.
     mock_sync_delay.assert_not_called()
 
 
