@@ -18,7 +18,7 @@ import secrets
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode
 
 import httpx
 import websockets
@@ -33,7 +33,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from croniter import croniter
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, get_user_from_token, require_scope
@@ -93,120 +93,28 @@ RESERVED_ENV_VARS = {
 }
 
 
-# --- Git remote URL validation ---------------------------------------------
+# ``repo_url`` is intentionally unvalidated by the API.
 #
-# ``SpawnRequest.repo_url`` flows through to the spawned container as the
-# ``GIT_REPO_URL`` env var, which the entrypoint feeds to ``git clone``.
-# An unvalidated string here is a documented git-side attack surface:
+# The value flows to the spawned container as ``$GIT_REPO_URL`` and is
+# consumed by ``git clone`` running with the requester's own SSH key +
+# GitHub PATs (per-user, looked up via ``extract_secret(db, user.id, …)``
+# below). The known git-side footguns — leading ``-`` for flag-injection
+# CVEs, ``ext::sh -c …`` / ``transport-helper::`` remote helpers,
+# ``git://`` MITM, ``file://`` mounts — all execute strictly inside that
+# container with credentials the requester already controls. The
+# requester has root in their own container; anything malicious they put
+# in ``repo_url`` is self-harm, not a boundary cross.
 #
-# * Leading ``-`` makes git treat the URL as an option flag.
-#   CVE-2017-1000117 / CVE-2018-17456 turned ``git clone --upload-pack=...``
-#   into arbitrary command execution by getting the URL parsed as
-#   ``--upload-pack=<cmd>``. Modern git refuses leading hyphens, but
-#   reproducing that defense at the API boundary is cheap insurance and
-#   blocks the same shape from reaching scheduled tasks.
+# The host side is not at risk either: ``repo_url`` is passed via the
+# container runtime env (not interpolated into a host shell), so an
+# arbitrary string here cannot reach the orchestrator host.
 #
-# * ``ext::sh -c <cmd>`` invokes the ``ext`` git remote helper which
-#   executes the rest as a shell command — no PATH lookup, no clone,
-#   just ``sh -c``. ``transport-helper::`` and other custom-helper
-#   schemes are similarly dangerous.
-#
-# * Inside the spawned container the SSH key + GITHUB_TOKEN are already in
-#   the env, so a malicious clone can also exfiltrate via outbound HTTP/SSH.
-#
-# * ``git://`` (bare git wire protocol) provides no TLS, no integrity, and
-#   no authentication, so an on-path attacker can swap the repo content
-#   between this side and the operator's git server. GitHub disabled
-#   ``git://`` access in 2022; most other forges followed. Symmetric risk
-#   with ``http://`` (also rejected). Anonymous read-only access still
-#   works via the scp-like ``user@host:path`` form over SSH.
-#
-# Defense: allowlist schemes to {https, ssh} (urlparse-able), accept
-# the common scp-like ``user@host:path`` form for ssh, and reject leading
-# hyphens / control characters / over-length values.
-#
-# The schedule path (``ScheduleRequest.spawn_config: SpawnRequest``) reuses
-# this validator transitively because Pydantic validates nested models on
-# construction. So a malicious ``repo_url`` is rejected at the same boundary
-# whether it arrives via ``POST /spawn`` or via a stored ``POST /schedule``.
-
-GIT_REPO_URL_SCHEMES: frozenset[str] = frozenset({"https", "ssh"})
-GIT_REPO_URL_MAX_LEN = 2000  # generous; attacker is the one paying the cost
-GIT_REPO_URL_FORBIDDEN_CHARS: frozenset[str] = frozenset({"\x00", "\r", "\n"})
-
-# scp-like SSH form that git understands natively: ``user@host:path``.
-# Username is alphanumeric+._-, host is alphanumeric+.-, path is anything
-# without control chars (already pre-screened above). This regex is
-# intentionally narrow: no whitespace, no scheme separator beyond the
-# single ``:``, no ``--`` smuggling because the user/host segments don't
-# allow ``-`` as a leading char (the path can but the leading-``-`` check
-# upstream would have already caught a ``-foo@host:bar`` shape).
-_SCP_LIKE_GIT_URL = re.compile(
-    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s\x00\r\n]+$"
-)
-
-
-def validate_git_repo_url(url: str) -> str:
-    """Validate a git remote URL before it flows to ``$GIT_REPO_URL``.
-
-    Returns the URL unchanged on success; raises ``ValueError`` on failure
-    (Pydantic will surface that as 422; calling code can also catch and
-    re-raise as 400 if it prefers).
-
-    Acceptance criteria (any one path passes):
-
-    * URL with explicit scheme in ``GIT_REPO_URL_SCHEMES`` AND a hostname
-    * scp-like form ``user@host:path``
-
-    Common-rejection criteria (apply in either branch):
-
-    * leading ``-`` (CVE-style flag injection)
-    * ``\\x00`` / CR / LF anywhere (smuggling)
-    * length above ``GIT_REPO_URL_MAX_LEN``
-    * empty string
-    * any other ``ext::``, ``transport-helper::``, ``http://``,
-      ``git://``, ``file://`` URL (non-allowlisted scheme)
-    """
-    if not url:
-        raise ValueError("repo_url must not be empty")
-    if len(url) > GIT_REPO_URL_MAX_LEN:
-        raise ValueError(
-            f"repo_url is too long ({len(url)} chars; max {GIT_REPO_URL_MAX_LEN})"
-        )
-    if any(ch in url for ch in GIT_REPO_URL_FORBIDDEN_CHARS):
-        raise ValueError(
-            "repo_url must not contain NUL or CR/LF (control-character smuggling)"
-        )
-    if url.startswith("-"):
-        # Defense against ``git clone <flag>`` interpretation. Git's own
-        # safety net catches this in newer versions, but reproducing the
-        # check at the API boundary is cheap and blocks the same shape
-        # from being stored via the schedule path and replayed later.
-        raise ValueError(
-            "repo_url must not start with '-' (looks like a CLI flag, not a URL)"
-        )
-
-    parsed = urlparse(url)
-    if parsed.scheme:
-        if parsed.scheme not in GIT_REPO_URL_SCHEMES:
-            raise ValueError(
-                f"repo_url scheme must be one of {sorted(GIT_REPO_URL_SCHEMES)} "
-                f"(got {parsed.scheme!r}); ext::, transport-helper::, "
-                f"git:// (no TLS / MITM-able) and file:// are deliberately "
-                f"excluded"
-            )
-        if not parsed.hostname:
-            raise ValueError("repo_url must include a hostname")
-        return url
-
-    # No scheme parsed: try the scp-like ``user@host:path`` form.
-    if _SCP_LIKE_GIT_URL.match(url):
-        return url
-
-    raise ValueError(
-        "repo_url must be https://, ssh://, or scp-like "
-        "(user@host:path) — got an unrecognised shape"
-    )
+# If a future revision introduces *shared* credentials in the spawned
+# container (a service GitHub token, a shared SSH key, etc.) this
+# precondition no longer holds and the validator should come back at
+# minimum to reject ``ext::`` / ``transport-helper::`` schemes and a
+# leading ``-``, which are the only shapes that exfiltrate secrets
+# rather than just owning the requester's own session.
 
 
 def make_session_id(
@@ -220,14 +128,13 @@ def make_session_id(
     Format: u{user_id}-{source}-{random_hex}
     Where source is e{env_id} for environments or s{snap_id} for snapshots.
 
-    The random suffix is 16 bytes / 32 hex chars (128 bits). The previous
-    6-byte (48-bit) suffix was below the modern bar for unguessable
-    session tokens — the suffix doubles as a Docker container hostname
-    and as a key in orchestrator URLs, so a sufficiently determined
-    attacker enumerating active container suffixes was a credible
-    threat. 128 bits matches the standard ``secrets.token_hex(16)``
-    recommendation. The matching regexes in ``auth.py`` and below
-    enforce a floor of 32 hex chars in lockstep.
+    The random suffix is 16 bytes / 32 hex chars (128 bits) — the same
+    width as ``secrets.token_hex(16)`` and the standard floor for
+    unguessable session tokens. This is load-bearing here because the
+    suffix doubles as a Docker container hostname and as a key in
+    orchestrator URLs, so an attacker enumerating active container
+    suffixes is in scope. The matching regexes in ``auth.py`` and below
+    enforce the 32-hex-char floor in lockstep.
     """
     if environment_id is not None:
         source = f"e{environment_id}"
@@ -524,29 +431,6 @@ class SpawnRequest(BaseModel):
     custom_env: dict[str, str] | None = None  # Custom environment variables
     initial_prompt: str | None = None  # Prompt to start Claude with immediately
     run_id: str | None = None  # Custom run ID for branch naming (defaults to session_id)
-
-    @field_validator("repo_url", mode="before")
-    @classmethod
-    def _validate_repo_url(cls, v: object) -> object:
-        """Reject git-flag-injection / non-allowlisted scheme shapes in
-        ``repo_url`` before the value flows to ``$GIT_REPO_URL`` in the
-        spawned container.
-
-        ``mode="before"`` so we see the raw client value (and short-circuit
-        non-string types into Pydantic's normal type-error path). The
-        helper is also called by the ``/schedule`` endpoint via this same
-        Pydantic validation chain (``ScheduleRequest.spawn_config:
-        SpawnRequest``), so a malicious ``repo_url`` cannot be stored as a
-        scheduled task and replayed past the boundary.
-        """
-        if v is None:
-            return None
-        if not isinstance(v, str):
-            # Defer the type error to Pydantic's normal coercion path so
-            # callers see a clean ``Input should be a valid string`` rather
-            # than a confusing assertion from the URL parser.
-            return v
-        return validate_git_repo_url(v)
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
@@ -1199,21 +1083,17 @@ def verify_transfer_token(token: str, expected_action: str) -> TransferTokenPayl
     (or a future code path skips the mint helpers), this is the only
     line of defense before the orchestrator URL is constructed.
 
-    Note: the previous comment claimed ``TRANSFER_TOKEN_SECRET`` "falls
-    back to ``SECRETS_ENCRYPTION_KEY`` in dev" — that fallback was the
-    raw key, which exposed the at-rest AES-GCM secret to HMAC-tag-based
-    side channels. ``settings.py`` now derives the transfer secret from
+    Note: ``settings.py`` derives ``TRANSFER_TOKEN_SECRET`` from
     ``SECRETS_ENCRYPTION_KEY`` via HKDF-SHA256 with a domain-separating
-    ``info`` string, so leaking the transfer secret no longer compromises
-    the at-rest encryption key (and vice versa).
+    ``info`` string when the operator has not set it explicitly, so a
+    leak of either secret does not compromise the other.
     """
     try:
         payload = verify_token(token)
     except TransferTokenExpiredError:
-        # Distinct exception type means we can't accidentally classify a
-        # tampered/malformed token as expired (the previous substring sniff
-        # over `str(exc)` was vulnerable to "expired" appearing in unrelated
-        # error text — and it leaked the inner reason via the response).
+        # Distinct exception type — a tampered/malformed token cannot
+        # accidentally classify as expired, and the inner reason is not
+        # leaked back to the caller via the response detail.
         raise HTTPException(status_code=401, detail="Token expired")
     except TransferTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")

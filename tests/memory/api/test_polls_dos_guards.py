@@ -276,15 +276,12 @@ def test_sanitize_email_accepts_valid(raw, expected):
 @pytest.mark.parametrize(
     "raw",
     [
-        "no-at-sign",
-        "@nolocal.example",
-        "no-domain@",
-        "two@@ats.example",
-        "no-tld@nodomain",
+        # CRLF / whitespace / control-char smuggling — header-injection
+        # vector if the value ever flows into an outbound mail header.
         "spaces in@local.example",
-        "newline\n@injection.example",  # CRLF injection
+        "newline\n@injection.example",
         "carriage\r@injection.example",
-        "\x01ctrl@example.com",  # control char
+        "\x01ctrl@example.com",
         # HTML metacharacters: rejected at the shape-check layer to avoid
         # the html.escape inflation footgun (a 252-char string of "<" would
         # balloon to ~1k chars after escaping and overflow the
@@ -296,7 +293,13 @@ def test_sanitize_email_accepts_valid(raw, expected):
         "a'quote@evil.example",
     ],
 )
-def test_sanitize_email_rejects_malformed(raw):
+def test_sanitize_email_rejects_smuggling_chars(raw):
+    """We don't validate email structure (RFC-5321/5322 parsing is hard,
+    homegrown checks reject valid input or accept invalid input). What
+    we *do* reject are the chars that turn a stored value into a
+    security problem: whitespace/control chars (header-injection vector)
+    and HTML metacharacters (stored-XSS + column-overflow via
+    html.escape inflation)."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:

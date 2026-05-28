@@ -288,21 +288,24 @@ def sanitize_name(name: str | None) -> str | None:
 
 
 def sanitize_email(email: str | None) -> str | None:
-    """Sanitize respondent email: trim, length-cap, basic shape check, escape.
+    """Sanitize respondent email: trim, length-cap, escape.
 
     The poll respond endpoints are public (no auth), so this field is a
     canonical PII / DoS / stored-XSS sink (CWE-20, CWE-79). Mirror the
     discipline applied to ``respondent_name``: enforce a length ceiling
-    well below the column limit, reject obviously-malformed values, and
+    well below the column limit, reject smuggling characters, and
     HTML-escape on the way in so any future renderer that drops the value
     into HTML inherits a safe-by-default behavior.
 
-    We intentionally do *not* use ``pydantic.EmailStr`` here: it would
-    accept perfectly-valid addresses containing characters that future
-    renderers might mishandle (display-name forms, IDN punycode, etc.),
-    and adding an MX/DNS check on a public unauthenticated endpoint is
-    its own SSRF-adjacent footgun. A loose shape check (one ``@``, both
-    sides non-empty, no whitespace/CRLF) is enough at this layer.
+    No structural email parsing happens here: RFC-5321/5322 addresses
+    are notoriously hard to parse (quoted local-parts, IP-literal hosts,
+    bracketed-domain forms, IDN punycode) and any homegrown check
+    rejects valid input or accepts invalid input. The threats we
+    actually defend against — DoS via huge bodies, header-injection via
+    CR/LF, stored-XSS via HTML metacharacters — are covered by the
+    length cap, the control-character reject, and ``html.escape``
+    below; the structural validity of the address is the operator's
+    problem, not this endpoint's.
     """
     if email is None:
         return None
@@ -333,12 +336,6 @@ def sanitize_email(email: str | None) -> str | None:
         raise HTTPException(
             status_code=400,
             detail="Email contains invalid HTML metacharacters",
-        )
-    parts = email.split("@")
-    if len(parts) != 2 or not parts[0] or not parts[1] or "." not in parts[1]:
-        raise HTTPException(
-            status_code=400,
-            detail="Email must be of the form local@domain.tld",
         )
     # Defense-in-depth: HTML-escape for any future UI/email pipeline that
     # forgets to escape on render. With the metacharacter check above this is
