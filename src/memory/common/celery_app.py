@@ -22,6 +22,7 @@ NOTES_ROOT = "memory.workers.tasks.notes"
 OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
 SCHEDULED_TASKS_ROOT = "memory.workers.tasks.scheduled_tasks"
 DISCORD_ROOT = "memory.workers.tasks.discord"
+DISCORD_BACKFILL_ROOT = "memory.workers.tasks.discord_backfill"
 SLACK_ROOT = "memory.workers.tasks.slack"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
@@ -36,6 +37,9 @@ VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
+BACKFILL_DISCORD_CHANNEL = f"{DISCORD_BACKFILL_ROOT}.backfill_channel"
+DISCOVER_DISCORD_THREADS = f"{DISCORD_BACKFILL_ROOT}.discover_threads"
+SCHEDULE_DISCORD_BACKFILLS = f"{DISCORD_BACKFILL_ROOT}.schedule_discord_backfills"
 
 # Slack tasks
 SYNC_ALL_SLACK_WORKSPACES = f"{SLACK_ROOT}.sync_all_slack_workspaces"
@@ -282,6 +286,9 @@ app.conf.update(
         f"{BLOGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-blogs"},
         f"{COMIC_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-comic"},
         f"{DISCORD_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
+        f"{DISCORD_BACKFILL_ROOT}.*": {
+            "queue": f"{settings.CELERY_QUEUE_PREFIX}-backfill"
+        },
         f"{SLACK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack"},
         f"{EMAIL_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-email"},
         f"{FORUMS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-forums"},
@@ -398,6 +405,10 @@ def build_beat_schedule() -> dict:
         "sync-slack-workspaces": {
             "task": SYNC_ALL_SLACK_WORKSPACES,
             "schedule": settings.SLACK_SYNC_INTERVAL,
+        },
+        "schedule-discord-backfills": {
+            "task": SCHEDULE_DISCORD_BACKFILLS,
+            "schedule": settings.DISCORD_BACKFILL_INTERVAL,
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,

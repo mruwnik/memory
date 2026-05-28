@@ -14,29 +14,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from discord import (
-    DMChannel,
-    GroupChannel,
-    Guild,
     Intents,
     Message,
-    MessageType,
     RawReactionActionEvent,
-    TextChannel,
-    Thread,
-    VoiceChannel,
     abc,
 )
 from discord.ext import commands
 from sqlalchemy.exc import IntegrityError
 
-from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import (
-    DiscordBot,
-    DiscordChannel,
-    DiscordServer,
-    DiscordUser,
+from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, UPDATE_REACTIONS
+from memory.common.db.connection import make_session
+from memory.common.db.models import DiscordBot, DiscordChannel
+from memory.discord.ingest import (
+    ensure_channel,
+    ensure_message_entities,
+    ensure_server,
+    ensure_user,
+    queue_message,
+    should_collect,
 )
-from memory.common.celery_app import ADD_DISCORD_MESSAGE, UPDATE_REACTIONS
 
 if TYPE_CHECKING:
     from celery import Celery
@@ -51,116 +47,6 @@ class BotInfo:
     token: str
 
 logger = logging.getLogger(__name__)
-
-
-def get_channel_type(channel: abc.Messageable) -> str:
-    """Determine the type of a Discord channel."""
-    if isinstance(channel, DMChannel):
-        return "dm"
-    if isinstance(channel, GroupChannel):
-        return "group_dm"
-    if isinstance(channel, Thread):
-        return "thread"
-    if isinstance(channel, VoiceChannel):
-        return "voice"
-    if isinstance(channel, TextChannel):
-        return "text"
-    return getattr(getattr(channel, "type", None), "name", "unknown")
-
-
-def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -> DiscordServer:
-    """Ensure a Discord server record exists.
-
-    Args:
-        session: Database session.
-        guild: Discord Guild object.
-        bot_id: ID of the bot that is registering this server.  Stored on
-            first creation so that the API can scope visibility to the
-            servers each user's bots are in.
-    """
-    server = session.get(DiscordServer, guild.id)
-    if server is None:
-        server = DiscordServer(
-            id=guild.id,
-            name=guild.name or f"Server {guild.id}",
-            description=getattr(guild, "description", None),
-            member_count=getattr(guild, "member_count", None),
-            bot_id=bot_id,
-        )
-        session.add(server)
-        session.flush()
-    else:
-        if guild.name and server.name != guild.name:
-            server.name = guild.name
-        description = getattr(guild, "description", None)
-        if description and server.description != description:
-            server.description = description
-        member_count = getattr(guild, "member_count", None)
-        if member_count is not None:
-            server.member_count = member_count
-        # Back-fill bot_id if not yet set
-        if server.bot_id is None and bot_id is not None:
-            server.bot_id = bot_id
-    return server
-
-
-def ensure_channel(
-    session: DBSession,
-    channel: abc.Messageable,
-    guild_id: int | None,
-) -> DiscordChannel:
-    """Ensure a Discord channel record exists."""
-    channel_id = getattr(channel, "id", None)
-    if channel_id is None:
-        raise ValueError("Channel is missing an identifier.")
-
-    # Get category_id if available (TextChannel, VoiceChannel have it)
-    category_id = getattr(channel, "category_id", None)
-
-    channel_model = session.get(DiscordChannel, channel_id)
-    if channel_model is None:
-        channel_model = DiscordChannel(
-            id=channel_id,
-            server_id=guild_id,
-            category_id=category_id,
-            name=getattr(channel, "name", f"Channel {channel_id}"),
-            channel_type=get_channel_type(channel),
-        )
-        session.add(channel_model)
-        session.flush()
-    else:
-        name = getattr(channel, "name", None)
-        if name and channel_model.name != name:
-            channel_model.name = name
-        # Update category_id if changed
-        if category_id is not None and channel_model.category_id != category_id:
-            channel_model.category_id = category_id
-    return channel_model
-
-
-def ensure_user(session: DBSession, discord_user: abc.User) -> DiscordUser:
-    """Ensure a Discord user record exists."""
-    user = session.get(DiscordUser, discord_user.id)
-    display_name = getattr(discord_user, "display_name", discord_user.name)
-    if user is None:
-        user = DiscordUser(
-            id=discord_user.id,
-            username=discord_user.name,
-            display_name=display_name,
-        )
-        session.add(user)
-        session.flush()
-    else:
-        if user.username != discord_user.name:
-            user.username = discord_user.name
-        if display_name and user.display_name != display_name:
-            user.display_name = display_name
-    return user
-
-
-def should_collect(channel: DiscordChannel) -> bool:
-    """Check if messages should be collected for this channel."""
-    return channel.should_collect
 
 
 class MessageCollector(commands.Bot):
@@ -242,21 +128,32 @@ class MessageCollector(commands.Bot):
 
     async def on_guild_channel_create(self, channel: abc.GuildChannel) -> None:
         """Persist newly-created text-like channels so name-based lookups work
-        before any message lands. Categories are intentionally skipped to match
-        the rest of the system, which only tracks messageable channels.
+        before any message lands, and immediately backfill if the channel is
+        collectible (usually a no-op for brand-new channels, but pulls full
+        history when collection is enabled on a channel that already existed on
+        Discord). Categories are intentionally skipped.
         """
         if not hasattr(channel, "send"):
             return
+        collect = False
         try:
             with make_session() as session:
-                ensure_channel(session, channel, channel.guild.id)  # type: ignore[arg-type]
+                channel_model = ensure_channel(session, channel, channel.guild.id)  # type: ignore[arg-type]
+                collect = should_collect(channel_model)
                 session.commit()
         except IntegrityError:
             # Race with MCP's eager ensure_channel_record — the row is already
             # present, no work to do. Don't let it surface as an error.
             logger.debug(f"Channel {channel.id} already persisted (race with MCP)")
+            return
         except Exception:
             logger.exception(f"Failed to persist created channel {channel.id}")
+            return
+
+        if collect:
+            self.celery_app.send_task(
+                BACKFILL_DISCORD_CHANNEL, args=[channel.id]
+            )
 
     async def on_guild_channel_update(
         self, _before: abc.GuildChannel, after: abc.GuildChannel
@@ -349,80 +246,15 @@ class MessageCollector(commands.Bot):
     ) -> None:
         """Process a message - check collection settings and queue for storage."""
         with make_session() as session:
-            # Ensure entities exist
-            guild_id = message.guild.id if message.guild else None
-            if message.guild:
-                ensure_server(session, message.guild)
-
-            channel_model = ensure_channel(session, message.channel, guild_id)
-            ensure_user(session, message.author)
-
-            # Check if we should collect for this channel
+            channel_model = ensure_message_entities(
+                session, message, self.bot_info.id
+            )
             if not should_collect(channel_model):
                 return
-
             session.commit()
 
-        # Extract image URLs from attachments
-        images = [
-            a.url
-            for a in message.attachments
-            if a.content_type and a.content_type.startswith("image/")
-        ]
-
-        # Extract embed data
-        embeds = [embed.to_dict() for embed in message.embeds] if message.embeds else None
-
-        # Extract non-image attachments
-        attachments = [
-            {
-                "filename": a.filename,
-                "content_type": a.content_type,
-                "size": a.size,
-                "url": a.url,
-            }
-            for a in message.attachments
-            if not (a.content_type and a.content_type.startswith("image/"))
-        ]
-
-        # Queue for Celery processing
-        self.celery_app.send_task(
-            ADD_DISCORD_MESSAGE,
-            kwargs={
-                "bot_id": self.bot_info.id,
-                "message_id": message.id,
-                "channel_id": message.channel.id,
-                "server_id": guild_id,
-                "author_id": message.author.id,
-                "content": message.content,
-                "sent_at": message.created_at.isoformat(),
-                "edited_at": message.edited_at.isoformat() if message.edited_at else None,
-                "reply_to_message_id": (
-                    message.reference.message_id if message.reference else None
-                ),
-                "thread_id": (
-                    getattr(getattr(message, "thread", None), "id", None)
-                ),
-                "message_type": self._get_message_type(message),
-                "is_pinned": message.pinned,
-                "images": images or None,
-                "embeds": embeds,
-                "attachments": attachments or None,
-                "is_edit": is_edit,
-            },
-        )
-
+        queue_message(self.celery_app, message, self.bot_info.id, is_edit)
         logger.debug(f"Queued message {message.id} for processing")
-
-    def _get_message_type(self, message: Message) -> str:
-        """Determine the message type."""
-        if message.reference:
-            return "reply"
-        if getattr(message, "thread", None):
-            return "thread_starter"
-        if message.type != MessageType.default:
-            return "system"
-        return "default"
 
     async def send_message(self, channel_id: int, content: str) -> bool:
         """Send a message to a channel."""

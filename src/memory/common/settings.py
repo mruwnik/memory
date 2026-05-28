@@ -362,6 +362,17 @@ DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
 DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
 
+# Discord history backfill
+DISCORD_BACKFILL_INTERVAL = int(
+    os.getenv("DISCORD_BACKFILL_INTERVAL", 60 * 60 * 24 * 7)  # weekly (seconds)
+)
+DISCORD_BACKFILL_JITTER_SECONDS = int(
+    os.getenv("DISCORD_BACKFILL_JITTER_SECONDS", 60 * 60 * 3)  # spread dispatch over 3h
+)
+DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
+    os.getenv("DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN", 5000)
+)
+
 # Slack integration settings
 # Polling interval is the safety net behind the push events endpoint
 # (slack-changes.md §3.5). Slack's webhook retry window is ~3h and we want

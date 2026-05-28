@@ -251,6 +251,15 @@ Key settings (see `src/memory/common/settings.py`):
 
 ## Code Style
 
+### `from __future__ import annotations`
+
+Don't add it by default. The project runs Python 3.12, where PEP 604 unions
+(`int | None`) and builtin generics (`list[int]`, `dict[str, int]`) already
+work at runtime. Only add the future import when you genuinely need deferred
+annotation evaluation (e.g. a real forward reference to a not-yet-defined name).
+Note that dropping it means annotations are evaluated eagerly, so any type used
+in a signature must be a real runtime import — not a `TYPE_CHECKING`-only one.
+
 ### Naming Conventions
 
 #### Underscore Prefix (`_name`)
