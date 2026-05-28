@@ -57,6 +57,11 @@ Examples:
 ./tools/deploy.sh run "alembic upgrade head"
 ```
 
+### Orchestrator / session (advanced)
+`./tools/deploy.sh orchestrator` sets up the Claude session orchestrator on the server.
+`./tools/deploy.sh session [opts]` runs a claude-cloud session (syncs + rebuilds first).
+Run `./tools/deploy.sh` with no arguments to see the full session option list.
+
 ## Typical Workflows
 
 **Standard deployment:**

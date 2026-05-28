@@ -407,7 +407,7 @@ async def refresh_metadata() -> dict[str, Any]:
     mgr = get_manager()
 
     from memory.common.db.connection import make_session
-    from memory.discord.collector import ensure_channel, ensure_server, ensure_user
+    from memory.discord.ingest import ensure_channel, ensure_server, ensure_user
 
     updated = {"servers": 0, "channels": 0, "users": 0}
 

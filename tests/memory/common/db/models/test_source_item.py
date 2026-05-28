@@ -16,6 +16,7 @@ from memory.common.db.models.source_item import (
     add_pics,
     clean_filename,
 )
+from memory.common.db.models.sources import Project
 
 
 @pytest.fixture
@@ -710,15 +711,25 @@ def test_handle_duplicate_sha256_records_expunged_in_session_info(db_session: Se
 
 def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: Session):
     """Successive flushes with no SourceItems should not surface a stale
-    ``expunged_dupes`` list from a previous flush."""
+    ``expunged_dupes`` list from a previous flush.
+
+    Note: SQLAlchemy short-circuits ``flush()`` when nothing is pending and
+    does NOT fire ``before_flush`` in that case. To exercise the listener's
+    reset path we must include at least one non-SourceItem pending change
+    on the second flush.
+    """
+    from memory.common.db.models.sources import Person
+
     # Flush 1: produce an expunge so session.info has a non-empty list
     db_session.add(SourceItem(sha256=b"x", content="a", modality="text"))
     db_session.add(SourceItem(sha256=b"x", content="b", modality="text"))
-    db_session.commit()
+    db_session.flush()
     assert db_session.info.get("expunged_dupes")  # non-empty
 
-    # Flush 2: no new SourceItems — list must be reset
-    db_session.commit()
+    # Flush 2: no new SourceItems but at least one other pending change
+    # so SQLAlchemy actually invokes before_flush — list must be reset.
+    db_session.add(Person(identifier="some-person", display_name="Some Person"))
+    db_session.flush()
     assert db_session.info.get("expunged_dupes") == []
 
 
@@ -738,26 +749,52 @@ class _FakeMessage:
     """Plain Python stand-in for a SourceItem subclass with hierarchical sources.
 
     Has the same surface that resolve_access_control reads (project_id,
-    sensitivity, default_project_id, default_sensitivity, get_data_source_chain).
+    sensitivity, project_id_inherited, sensitivity_inherited,
+    default_project_id, default_sensitivity, get_data_source_chain).
     """
 
     default_project_id: int | None = None
     default_sensitivity: str = "basic"
 
-    def __init__(self, project_id, sensitivity, chain):
+    def __init__(
+        self,
+        project_id,
+        sensitivity,
+        chain,
+        project_id_inherited=None,
+        sensitivity_inherited=None,
+    ):
         self.project_id = project_id
         self.sensitivity = sensitivity
         self._chain = chain
+        # A value supplied to the constructor models an explicit override
+        # (inherited=False) by default; pass *_inherited=True explicitly to
+        # model a value the row merely *inherited* on a previous run.
+        self.project_id_inherited = (
+            project_id is None
+            if project_id_inherited is None
+            else project_id_inherited
+        )
+        self.sensitivity_inherited = (
+            not sensitivity
+            if sensitivity_inherited is None
+            else sensitivity_inherited
+        )
 
     def get_data_source_chain(self):
         return self._chain
 
-    # Bind the real method off SourceItem so we test the actual algorithm,
+    # Bind the real methods off SourceItem so we test the actual algorithm,
     # not a hand-rolled clone.
     def resolve_access_control(self):
         from memory.common.db.models.source_item import SourceItem
 
         return SourceItem.resolve_access_control(self)  # type: ignore[arg-type]
+
+    def apply_inherited_access_control(self):
+        from memory.common.db.models.source_item import SourceItem
+
+        return SourceItem.apply_inherited_access_control(self)  # type: ignore[arg-type]
 
 
 class _FakeSource:
@@ -835,6 +872,112 @@ def test_resolve_access_control_field_resolution_uses_first_non_empty():
     assert msg.resolve_access_control() == (99, "X")
 
 
+# ====== resolve_access_control inherited vs explicit ======
+
+
+def test_resolve_access_control_reresolves_inherited_value():
+    """A stored value with *_inherited=True is NOT treated as the item's own
+    — it is re-resolved from the chain, so a source that moved to a new
+    project propagates instead of the stale value sticking."""
+    chain = [_FakeSource(10, "internal")]
+    msg = _FakeMessage(
+        project_id=42,
+        sensitivity="confidential",
+        chain=chain,
+        project_id_inherited=True,
+        sensitivity_inherited=True,
+    )
+    # Stored (42, confidential) is ignored; chain wins.
+    assert msg.resolve_access_control() == (10, "internal")
+
+
+def test_resolve_access_control_keeps_explicit_override():
+    """A stored value with *_inherited=False is an explicit override and
+    short-circuits resolution even when the chain disagrees."""
+    chain = [_FakeSource(10, "internal")]
+    msg = _FakeMessage(
+        project_id=42,
+        sensitivity="confidential",
+        chain=chain,
+        project_id_inherited=False,
+        sensitivity_inherited=False,
+    )
+    assert msg.resolve_access_control() == (42, "confidential")
+
+
+def test_resolve_access_control_mixed_inherited_and_explicit():
+    """The two fields are independent: an explicit project_id can coexist
+    with an inherited sensitivity that re-resolves from the chain."""
+    chain = [_FakeSource(10, "internal")]
+    msg = _FakeMessage(
+        project_id=42,
+        sensitivity="confidential",
+        chain=chain,
+        project_id_inherited=False,  # explicit — kept
+        sensitivity_inherited=True,  # inherited — re-resolved
+    )
+    assert msg.resolve_access_control() == (42, "internal")
+
+
+# ====== apply_inherited_access_control ======
+
+
+def test_apply_inherited_access_control_persists_resolved_values():
+    """For an inherited row, apply_* writes the chain-resolved values back
+    onto the row and keeps the *_inherited flags True."""
+    chain = [_FakeSource(10, "internal")]
+    msg = _FakeMessage(None, None, chain)  # both inherited
+
+    effective = msg.apply_inherited_access_control()
+
+    assert effective == (10, "internal")
+    assert msg.project_id == 10
+    assert msg.sensitivity == "internal"
+    assert msg.project_id_inherited is True
+    assert msg.sensitivity_inherited is True
+
+
+def test_apply_inherited_access_control_reresolves_stale_inherited_value():
+    """A previously-resolved inherited value is overwritten when the chain
+    changes (source moved between projects)."""
+    chain = [_FakeSource(99, "confidential")]
+    msg = _FakeMessage(
+        project_id=10,
+        sensitivity="internal",
+        chain=chain,
+        project_id_inherited=True,
+        sensitivity_inherited=True,
+    )
+
+    effective = msg.apply_inherited_access_control()
+
+    assert effective == (99, "confidential")
+    assert msg.project_id == 99
+    assert msg.sensitivity == "confidential"
+
+
+def test_apply_inherited_access_control_leaves_explicit_override_untouched():
+    """An explicit override (*_inherited=False) is never overwritten, even
+    when the chain resolves to something else."""
+    chain = [_FakeSource(10, "internal")]
+    msg = _FakeMessage(
+        project_id=42,
+        sensitivity="confidential",
+        chain=chain,
+        project_id_inherited=False,
+        sensitivity_inherited=False,
+    )
+
+    effective = msg.apply_inherited_access_control()
+
+    # Returned values reflect what is in effect on the row (the explicit ones).
+    assert effective == (42, "confidential")
+    assert msg.project_id == 42
+    assert msg.sensitivity == "confidential"
+    assert msg.project_id_inherited is False
+    assert msg.sensitivity_inherited is False
+
+
 def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     """Pure-unit regression: previously the dead ``if not new_items: return``
     after the loop never short-circuited because ``new_items`` is computed
@@ -859,3 +1002,104 @@ def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     fake_session.query.assert_not_called()
     # Empty list because nothing was expunged.
     assert fake_session.info["expunged_dupes"] == []
+
+
+# ====== inherited-flag columns: set-listener + flush round-trip ======
+
+
+def test_inherited_flags_default_true_after_flush(db_session: Session):
+    """A row created without an explicit project_id / sensitivity persists
+    with both *_inherited flags True."""
+    item = SourceItem(sha256=b"inh" + bytes(29), modality="text", content="x")
+    db_session.add(item)
+    db_session.commit()
+    db_session.refresh(item)
+
+    assert item.project_id_inherited is True
+    assert item.sensitivity_inherited is True
+
+
+def test_explicit_project_id_marks_flag_false(db_session: Session):
+    """Assigning project_id flips project_id_inherited to False, and the
+    flag survives a commit / reload."""
+    project = Project(title="P", state="open")
+    db_session.add(project)
+    db_session.flush()
+
+    item = SourceItem(
+        sha256=b"exp" + bytes(29),
+        modality="text",
+        content="x",
+        project_id=project.id,
+    )
+    assert item.project_id_inherited is False  # listener fired on the kwarg
+
+    db_session.add(item)
+    db_session.commit()
+    db_session.expire(item)
+
+    assert item.project_id_inherited is False
+    assert item.sensitivity_inherited is True  # sensitivity never touched
+
+
+def test_explicit_sensitivity_marks_flag_false(db_session: Session):
+    """Assigning sensitivity flips only sensitivity_inherited to False."""
+    item = SourceItem(sha256=b"sen" + bytes(29), modality="text", content="x")
+    item.sensitivity = "confidential"
+
+    assert item.sensitivity_inherited is False
+    assert item.project_id_inherited is True
+
+    db_session.add(item)
+    db_session.commit()
+    db_session.expire(item)
+
+    assert item.sensitivity_inherited is False
+    assert item.project_id_inherited is True
+
+
+def test_loading_inherited_row_does_not_mark_it_explicit(db_session: Session):
+    """Reloading an inherited row from the DB must not fire the set-listener
+    — population during a load is not an explicit assignment."""
+    item = SourceItem(sha256=b"load" + bytes(28), modality="text", content="x")
+    db_session.add(item)
+    db_session.commit()
+    item_id = item.id
+
+    # Drop it from the identity map and re-query from the database.
+    db_session.expunge(item)
+    reloaded = db_session.get(SourceItem, item_id)
+
+    assert reloaded is not None
+    assert reloaded.project_id_inherited is True
+    assert reloaded.sensitivity_inherited is True
+
+
+def test_apply_inherited_access_control_public_default_subclass(db_session: Session):
+    """A subclass with default_sensitivity='public' (BlogPost) is created as
+    an ordinary inherited row — NOT flagged as an explicit override — and
+    apply_inherited_access_control resolves it to the class default."""
+    from memory.common.db.models.source_items import BlogPost
+
+    post = BlogPost(
+        sha256=b"blogpost" + bytes(24),
+        modality="blog",
+        url="https://example.com/post",
+        title="Post",
+        content="body",
+    )
+    db_session.add(post)
+    db_session.commit()
+    db_session.refresh(post)
+
+    # Ingestion never set sensitivity, so the row is inherited, not explicit
+    # — this is the case the migration backfill must not mis-flag.
+    assert post.sensitivity_inherited is True
+    assert post.project_id_inherited is True
+
+    effective = post.apply_inherited_access_control()
+
+    # No data-source chain -> falls through to the class default "public".
+    assert effective == (None, "public")
+    assert post.sensitivity == "public"
+    assert post.sensitivity_inherited is True

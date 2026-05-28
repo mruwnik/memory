@@ -49,14 +49,16 @@ Memory is a **self-hosted, privacy-first knowledge base** supporting both person
 src/memory/
 ├── api/                    # FastAPI application
 │   ├── app.py              # Main entry point
-│   ├── search/             # Search implementation (embeddings, BM25, HyDE, reranking)
-│   ├── MCP/                # Model Context Protocol tools
-│   ├── projects.py         # Project management API
-│   └── teams.py            # Team management API
+│   ├── search/             # Search implementation (embeddings, BM25, HyDE, rerank, scorer)
+│   ├── MCP/                # MCP server + per-domain subservers (under MCP/servers/)
+│   ├── auth.py             # Sessions, API keys, OAuth
+│   └── ...                 # Other route modules
 ├── common/                 # Shared code
 │   ├── db/models/          # SQLAlchemy ORM models
 │   ├── access_control.py   # Role-based access control
 │   ├── celery_app.py       # Task queue configuration
+│   ├── embedding.py        # Voyage embedding client
+│   ├── llms/               # OpenAI / Anthropic LLM providers
 │   ├── qdrant.py           # Vector DB client
 │   └── settings.py         # Environment configuration
 ├── parsers/                # Content type parsers (email, ebook, comics, etc.)
@@ -66,6 +68,8 @@ frontend/                   # React 19 + TypeScript + Vite
 db/migrations/              # Alembic database migrations
 tools/                      # CLI utilities (add_user, run tasks, etc.)
 ```
+
+Project- and team-level operations are exposed as MCP tools rather than dedicated FastAPI routers; see `src/memory/api/MCP/servers/projects.py` and `src/memory/api/MCP/servers/teams.py`.
 
 ## Development Environment
 
@@ -81,14 +85,18 @@ workon memory
 ~/.virtualenvs/memory/bin/pytest
 ```
 
-### Service Ports (from docker-compose.override.yml)
+### Service Ports
 
-| Service | Local Port | Container Port |
-|---------|------------|----------------|
+Only the API publishes a host port by default (`${API_PORT:-8000}:8000` in `docker-compose.yaml`). Postgres, Redis, and Qdrant stay on the internal `kbnet` network. To reach them from the host for local development, create a `docker-compose.override.yml` (gitignored) that publishes them:
+
+| Service | Suggested Local Port | Container Port |
+|---------|----------------------|----------------|
 | PostgreSQL | 15432 | 5432 |
 | Redis | 16379 | 6379 |
 | Qdrant | 6333 | 6333 |
 | API | 8000 | 8000 |
+
+`tools/install.sh` writes `DB_PORT=15432` etc. into `.env`, so those are the conventional ports — but the override file that actually publishes them is not checked in.
 
 ### Deployment
 
@@ -96,9 +104,12 @@ Use `tools/deploy.sh` to manage the production server:
 
 ```bash
 ./tools/deploy.sh deploy          # git pull + restart services (most common)
+./tools/deploy.sh pull            # git pull on the server only
 ./tools/deploy.sh sync            # rsync local code (bypasses git)
 ./tools/deploy.sh restart         # restart docker without pulling
 ./tools/deploy.sh run "<command>" # run command on server
+./tools/deploy.sh orchestrator    # set up the Claude session orchestrator
+./tools/deploy.sh session ...     # manage Claude sessions on the server
 ```
 
 ### Common Commands
@@ -126,15 +137,16 @@ alembic revision --autogenerate -m "description"
 
 ## Search Pipeline
 
-The search system combines multiple strategies:
+The search system combines multiple strategies (each toggleable via an `ENABLE_*` setting):
 
-1. **Vector Search** - OpenAI embeddings (text-embedding-3-small, 1536d) in Qdrant
-2. **BM25 Full-text** - PostgreSQL tsvector for keyword matching
-3. **HyDE** - Hypothetical Document Embeddings for query expansion
-4. **Query Analysis** - LLM understands search intent (via Claude Haiku)
-5. **Reranking** - Scores consider recency, popularity, title matches
+1. **Vector Search** - Voyage embeddings (`voyage-3-large`, 1024d for text; `voyage-multimodal-3` for mixed) in Qdrant
+2. **BM25 Full-text** - PostgreSQL tsvector for keyword matching (`ENABLE_BM25_SEARCH`)
+3. **HyDE** - Hypothetical Document Embeddings for query expansion (`ENABLE_HYDE_EXPANSION`)
+4. **Query Analysis** - LLM understands search intent (`ENABLE_QUERY_ANALYSIS`)
+5. **Reranking** - Voyage `rerank-2-lite` cross-encoder reorders candidates (`ENABLE_RERANKING`)
+6. **Scoring** - recency / popularity / title-match boosts applied to ranked results (`ENABLE_SEARCH_SCORING`)
 
-Results are merged using Reciprocal Rank Fusion (RRF).
+Vector and BM25 result lists are merged with Reciprocal Rank Fusion (`fuse_scores_rrf`, `RRF_K=60`). HyDE, query analysis, reranking, and scoring are separate stages around that fusion, not inputs to it.
 
 **Access Control in Search**: Filters are applied at multiple layers (Qdrant vector queries, BM25 full-text, and final result merge) for defense in depth. Users only see content they have access to based on their team/project memberships.
 
@@ -144,16 +156,20 @@ The full list of available MCP tools can be fetched via `tools/list` on the MCP 
 
 ## Content Types Supported
 
-| Type | Parser Location | Celery Queue |
-|------|-----------------|--------------|
-| Email | `parsers/email.py` | `email` |
-| Ebooks (EPUB/PDF) | `parsers/ebook.py` | `ebook` |
-| Blog/Web pages | `parsers/blogs.py` | `blogs` |
-| Comics (SMBC, XKCD) | `parsers/comics.py` | `comics` |
-| Discord messages | `workers/tasks/discord.py` | `discord` |
-| Forum posts | `parsers/lesswrong.py` | `forums` |
-| Notes | `workers/tasks/notes.py` | `notes` |
-| Photos/Images | `workers/tasks/content_processing.py` | `generic` |
+The parser turns raw content into items; the Celery task module drives ingestion and routes to a queue.
+
+| Type | Parser | Task module | Celery Queue |
+|------|--------|-------------|--------------|
+| Email | `parsers/email.py` | `workers/tasks/email.py` | `email` |
+| Ebooks (EPUB/PDF) | `parsers/ebook.py` | `workers/tasks/ebook.py` | `ebooks` |
+| Blog/Web pages | `parsers/blogs.py` | `workers/tasks/blogs.py` | `blogs` |
+| Comics (SMBC, XKCD) | `parsers/comics.py` | `workers/tasks/comic.py` | `comic` |
+| Discord messages | — | `workers/tasks/discord.py` | `discord` |
+| Forum posts | `parsers/lesswrong.py` | `workers/tasks/forums.py` | `forums` |
+| Notes | — | `workers/tasks/notes.py` | `notes` |
+| Photos/Images | — | `workers/tasks/photo.py` | `photos` |
+
+The full queue list lives in `docker-compose.yaml` (worker `QUEUES` env var) — see [Adding a New Celery Worker/Queue](#adding-a-new-celery-workerqueue).
 
 ## Adding a New Celery Worker/Queue
 
@@ -174,11 +190,11 @@ When adding a new worker type or queue, update these locations:
    - Import the task module
 
 4. **Update docker-compose.yaml**:
-   - Add queue name to worker service `QUEUES` env var (line ~240)
+   - Add queue name to the worker service's `QUEUES` env var (search for `QUEUES:`)
    - Format: comma-separated list like `"email,blogs,<newqueue>"`
 
 5. **Update worker Dockerfile** (`docker/workers/Dockerfile`):
-   - Add queue to default `QUEUES` env var (line ~47)
+   - Add queue to the default `QUEUES` env var (search for `ENV QUEUES=`)
 
 ### Example: Adding a "reports" queue
 
@@ -219,17 +235,30 @@ Key models in `src/memory/common/db/models/`:
 - `sources.py` - Person, Team, Project models with membership relationships
 - `observations.py` - AgentObservation for AI-recorded insights
 - `users.py` - User, HumanUser, BotUser, UserSession, APIKey
+- `sessions.py` - Claude session records (separate from `UserSession` auth sessions)
+
+The directory holds many more model files (`deadlines.py`, `discord.py`, `journal.py`, `mcp.py`, `people.py`, `polls.py`, `slack.py`, etc.) — list it for the full set.
 
 ## Environment Variables
 
 Key settings (see `src/memory/common/settings.py`):
 
-- `OPENAI_API_KEY` - For embeddings and LLM responses
-- `ANTHROPIC_API_KEY` - For Claude (query analysis, reranking)
+- `VOYAGE_API_KEY` - All embeddings (`voyage-3-large` / `voyage-multimodal-3`) and reranking (`rerank-2-lite`)
+- `ANTHROPIC_API_KEY` - Query analysis, HyDE expansion, summarization
+- `OPENAI_API_KEY` - Misc LLM-backed features (notes, observation extraction)
 - `FILE_STORAGE_DIR` - Where uploaded files are stored
-- `ENABLE_BM25_SEARCH`, `ENABLE_HYDE_EXPANSION`, `ENABLE_RERANKING`, `ENABLE_QUERY_ANALYSIS` - Search feature toggles
+- `ENABLE_BM25_SEARCH`, `ENABLE_HYDE_EXPANSION`, `ENABLE_RERANKING`, `ENABLE_QUERY_ANALYSIS`, `ENABLE_SEARCH_SCORING` - Search feature toggles
 
 ## Code Style
+
+### `from __future__ import annotations`
+
+Don't add it by default. The project runs Python 3.12, where PEP 604 unions
+(`int | None`) and builtin generics (`list[int]`, `dict[str, int]`) already
+work at runtime. Only add the future import when you genuinely need deferred
+annotation evaluation (e.g. a real forward reference to a not-yet-defined name).
+Note that dropping it means annotations are evaluated eagerly, so any type used
+in a signature must be a real runtime import — not a `TYPE_CHECKING`-only one.
 
 ### Naming Conventions
 

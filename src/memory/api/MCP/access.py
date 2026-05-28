@@ -43,7 +43,8 @@ class UserLike(Protocol):
 
 
 def get_project_roles_by_user_id(
-    user_id: int, session: "Session | scoped_session[Session] | None" = None
+    user_id: int | None,
+    session: "Session | scoped_session[Session] | None" = None,
 ) -> dict[int, str]:
     """
     Fetch project roles for a user by their ID.
@@ -52,23 +53,29 @@ def get_project_roles_by_user_id(
     and that person's project collaborations.
 
     Args:
-        user_id: The user's database ID
+        user_id: The user's database ID. None (an unauthenticated /
+            id-less user) yields no roles.
         session: Optional existing session to use (avoids nested session issues)
 
     Returns:
         Dict mapping project_id to role string
     """
+    # No user id -> no roles. Skip the pointless `WHERE id IS NULL` query
+    # (never matches a PK) and the misleading "user None not found" warning.
+    if user_id is None:
+        return {}
+
     if session is not None:
         user = session.query(User).filter(User.id == user_id).first()
         if user is None:
-            logger.warning("get_project_roles_by_user_id: user %d not found", user_id)
+            logger.warning("get_project_roles_by_user_id: user %s not found", user_id)
             return {}
         return get_user_project_roles(session, user)
 
     with make_session() as db:
         user = db.query(User).filter(User.id == user_id).first()
         if user is None:
-            logger.warning("get_project_roles_by_user_id: user %d not found", user_id)
+            logger.warning("get_project_roles_by_user_id: user %s not found", user_id)
             return {}
         return get_user_project_roles(db, user)
 

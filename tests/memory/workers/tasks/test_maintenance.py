@@ -1,15 +1,23 @@
 # FIXME: Most of this was vibe-coded
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, call
 from typing import cast
 
 import pytest
 from PIL import Image
+from sqlalchemy import update
 
 from memory.common import qdrant as qd
 from memory.common import settings
-from memory.common.db.models import Chunk, SourceItem, MailMessage, BlogPost
+from memory.common.db.models import (
+    Chunk,
+    SourceItem,
+    MailMessage,
+    BlogPost,
+    EmailAccount,
+    Project,
+)
 from memory.workers.tasks.maintenance import (
     clean_collection,
     reingest_chunk,
@@ -19,6 +27,8 @@ from memory.workers.tasks.maintenance import (
     reingest_empty_source_items,
     update_metadata_for_item,
     update_metadata_for_source_items,
+    update_source_access_control,
+    reconcile_access_control,
     get_item_class,
     _payloads_equal,
 )
@@ -1156,3 +1166,370 @@ def test_get_item_class_does_not_use_private_class_registry():
     m = maintenance_module._build_item_class_map()
     assert "mail_message" in m
     assert "blog_post" in m
+
+
+def test_update_source_access_control_persists_to_sql_rows(
+    db_session, qdrant, test_user
+):
+    """update_source_access_control writes the resolved project_id /
+    sensitivity onto inherited SQL rows (the BM25/vector-search asymmetry
+    fix) while leaving explicit overrides untouched."""
+    account_project = Project(title="Account Project", state="open")
+    other_project = Project(title="Other Project", state="open")
+    db_session.add_all([account_project, other_project])
+    db_session.flush()
+
+    account = EmailAccount(
+        name="AC Account",
+        email_address="ac@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="ac@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=test_user.id,
+        project_id=account_project.id,
+        sensitivity="internal",
+    )
+    db_session.add(account)
+    db_session.flush()
+
+    # Inherited message: no project assigned -> should inherit the account's.
+    inherited = MailMessage(
+        sha256=b"inherited" + bytes(23),
+        subject="inherited",
+        email_account_id=account.id,
+    )
+    # Explicit override: pinned to a different project -> must NOT be touched.
+    explicit = MailMessage(
+        sha256=b"explicit" + bytes(24),
+        subject="explicit",
+        email_account_id=account.id,
+        project_id=other_project.id,
+    )
+    db_session.add_all([inherited, explicit])
+    db_session.commit()
+
+    # Preconditions: the set-listener classified the rows on assignment.
+    assert inherited.project_id is None
+    assert inherited.project_id_inherited is True
+    assert explicit.project_id == other_project.id
+    assert explicit.project_id_inherited is False
+
+    result = update_source_access_control(
+        "email_account", account.id, account.config_version
+    )
+    assert result["status"] == "success"
+
+    db_session.refresh(inherited)
+    db_session.refresh(explicit)
+
+    # Inherited row now carries the account's resolved values...
+    assert inherited.project_id == account_project.id
+    assert inherited.sensitivity == "internal"
+    assert inherited.project_id_inherited is True
+    # ...and the explicit override is left exactly as it was.
+    assert explicit.project_id == other_project.id
+    assert explicit.project_id_inherited is False
+
+
+def test_update_source_access_control_reresolves_when_source_moves(
+    db_session, qdrant, test_user
+):
+    """A row whose project_id was previously resolved (inherited=True) is
+    re-resolved — not skipped — when the source moves to a new project."""
+    project_a = Project(title="Project A", state="open")
+    project_b = Project(title="Project B", state="open")
+    db_session.add_all([project_a, project_b])
+    db_session.flush()
+
+    account = EmailAccount(
+        name="Moving Account",
+        email_address="move@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="move@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=test_user.id,
+        project_id=project_a.id,
+        sensitivity="basic",
+    )
+    db_session.add(account)
+    db_session.flush()
+
+    msg = MailMessage(
+        sha256=b"moving" + bytes(26),
+        subject="moving",
+        email_account_id=account.id,
+    )
+    db_session.add(msg)
+    db_session.commit()
+
+    # First run: resolves to project A.
+    update_source_access_control("email_account", account.id, account.config_version)
+    db_session.refresh(msg)
+    assert msg.project_id == project_a.id
+    assert msg.project_id_inherited is True
+
+    # Source moves to project B; bump config_version like the real flow does.
+    account.project_id = project_b.id
+    account.config_version += 1
+    db_session.commit()
+
+    # Second run: the stale inherited value must be re-resolved, not kept.
+    update_source_access_control("email_account", account.id, account.config_version)
+    db_session.refresh(msg)
+    assert msg.project_id == project_b.id
+    assert msg.project_id_inherited is True
+
+
+def test_update_source_access_control_crosses_batch_boundary(
+    db_session, qdrant, test_user
+):
+    """>100 inherited items on one source: every row across the 100-item
+    batch boundary is resolved. Exercises the per-batch commit and the
+    ordered pagination in get_items_for_source."""
+    project = Project(title="Batch Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+
+    account = EmailAccount(
+        name="Batch Account",
+        email_address="batch@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="batch@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=test_user.id,
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    db_session.add(account)
+    db_session.flush()
+
+    n = 150  # > one 100-item batch
+    messages = [
+        MailMessage(
+            sha256=b"batchmsg" + str(i).zfill(24).encode(),
+            subject=f"m{i}",
+            email_account_id=account.id,
+        )
+        for i in range(n)
+    ]
+    db_session.add_all(messages)
+    db_session.commit()
+    message_ids = [m.id for m in messages]
+
+    result = update_source_access_control(
+        "email_account", account.id, account.config_version
+    )
+    assert result["status"] == "success"
+    assert result["updated_items"] == n
+
+    # update_source_access_control wrote through its own session; force the
+    # test session to re-read from DB rather than return cached instances.
+    db_session.expire_all()
+    rows = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.id.in_(message_ids))
+        .all()
+    )
+    assert len(rows) == n
+    # No row skipped or left stale across the batch boundary.
+    assert all(r.project_id == project.id for r in rows)
+    assert all(r.project_id_inherited is True for r in rows)
+
+
+def make_recon_setup(db_session, test_user, n_messages):
+    """Create a project, an EmailAccount on it, and n inherited MailMessages."""
+    project = Project(title="Reconcile Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+    account = EmailAccount(
+        name="Recon Account",
+        email_address="recon@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="recon@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=test_user.id,
+        project_id=project.id,
+    )
+    db_session.add(account)
+    db_session.flush()
+    messages = [
+        MailMessage(
+            sha256=b"recon" + str(i).zfill(27).encode(),
+            subject=f"m{i}",
+            email_account_id=account.id,
+        )
+        for i in range(n_messages)
+    ]
+    db_session.add_all(messages)
+    db_session.commit()
+    return project, account, messages
+
+
+def test_reconcile_access_control_full_resolves_all_items(
+    db_session, qdrant, test_user
+):
+    """With no window, the sweep reconciles every source item — inherited
+    rows get their project_id resolved onto the SQL row."""
+    project, account, messages = make_recon_setup(db_session, test_user, 3)
+    assert all(m.project_id is None for m in messages)  # precondition
+
+    result = reconcile_access_control()
+
+    assert result["status"] == "success"
+    assert result["reconciled"] == 3
+    assert result["changed"] == 3
+    for message in messages:
+        db_session.refresh(message)
+        assert message.project_id == project.id
+        assert message.project_id_inherited is True
+
+
+def test_reconcile_access_control_recent_window_includes_fresh_items(
+    db_session, qdrant, test_user
+):
+    """The recent-window mode reconciles just-ingested items (their
+    updated_at is within the window)."""
+    project, account, messages = make_recon_setup(db_session, test_user, 2)
+
+    result = reconcile_access_control(updated_within_seconds=3600)
+
+    assert result["reconciled"] == 2
+    for message in messages:
+        db_session.refresh(message)
+        assert message.project_id == project.id
+
+
+def test_reconcile_access_control_recent_window_excludes_old_items(
+    db_session, qdrant, test_user
+):
+    """An item whose updated_at predates the window is skipped entirely."""
+    project, account, messages = make_recon_setup(db_session, test_user, 2)
+    # Backdate one item via a Core UPDATE. updated_at is explicit in the SET
+    # clause, so onupdate=func.now() does not override it.
+    old = datetime.now(timezone.utc) - timedelta(hours=5)
+    db_session.execute(
+        update(SourceItem)
+        .where(SourceItem.id == messages[0].id)
+        .values(updated_at=old)
+    )
+    db_session.commit()
+
+    result = reconcile_access_control(updated_within_seconds=3600)
+
+    assert result["reconciled"] == 1  # only the fresh item examined
+    db_session.refresh(messages[0])
+    db_session.refresh(messages[1])
+    assert messages[0].project_id is None  # excluded -> still inherited NULL
+    assert messages[1].project_id == project.id  # included -> resolved
+
+
+def test_reconcile_access_control_updates_qdrant_payload(
+    db_session, qdrant, test_user
+):
+    """A reconciled item's chunks get their Qdrant payload rewritten with the
+    resolved project_id / sensitivity."""
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=messages[0],
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        result = reconcile_access_control()
+
+    assert result["changed"] == 1
+    mock_set.assert_called_once()
+    _client, collection, point_id, payload = mock_set.call_args.args
+    assert collection == "mail"
+    assert point_id == chunk_id
+    assert payload == {"project_id": project.id, "sensitivity": "basic"}
+
+
+def test_reconcile_access_control_crosses_batch_boundary(
+    db_session, qdrant, test_user
+):
+    """>100 items: the keyset-paginated sweep reconciles every one across
+    the batch boundary."""
+    n = 150
+    project, account, messages = make_recon_setup(db_session, test_user, n)
+
+    result = reconcile_access_control()
+
+    assert result["reconciled"] == n
+    assert result["changed"] == n
+    rows = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.id.in_([m.id for m in messages]))
+        .all()
+    )
+    assert len(rows) == n
+    assert all(r.project_id == project.id for r in rows)
+
+
+def test_reconcile_access_control_writes_qdrant_for_explicit_override(
+    db_session, qdrant, test_user
+):
+    """Regression for #86: items with an item-level explicit override
+    (``project_id_inherited=False``) must have their Qdrant payload rewritten
+    even when ``apply_inherited_access_control`` is a no-op on the SQL row.
+
+    Item-level overrides have no event-driven dispatch path (only data-source
+    config changes trigger ``update_source_access_control``), so the periodic
+    sweep is the only thing that can land the override in Qdrant. The
+    ``before == after`` short-circuit silently assumes Qdrant is already in
+    sync, which is exactly what breaks when the override was just applied.
+    """
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    msg = messages[0]
+    other_project = Project(title="Override Project", state="open")
+    db_session.add(other_project)
+    db_session.flush()
+    # Direct assignment trips the `set` listener -> project_id_inherited=False.
+    msg.project_id = other_project.id
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=msg,
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+    assert msg.project_id_inherited is False  # precondition
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        result = reconcile_access_control()
+
+    assert result["changed"] == 1
+    mock_set.assert_called_once()
+    _client, collection, point_id, payload = mock_set.call_args.args
+    assert collection == "mail"
+    assert point_id == chunk_id
+    assert payload == {"project_id": other_project.id, "sensitivity": "basic"}

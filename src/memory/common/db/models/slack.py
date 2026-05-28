@@ -13,7 +13,7 @@ Note: Slack user data is stored in Person.contact_info instead of a separate tab
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from sqlalchemy import (
     BigInteger,
@@ -172,6 +172,8 @@ class SlackWorkspace(Base):
     """
 
     __tablename__ = "slack_workspaces"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "slack_workspace"
 
     # Use Slack team_id as primary key for deduplication
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # Slack team_id
@@ -320,6 +322,8 @@ class SlackChannel(Base):
     """Slack channel, DM, group DM, or MPIM metadata and collection settings."""
 
     __tablename__ = "slack_channels"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "slack_channel"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # Slack channel_id
     workspace_id: Mapped[str] = mapped_column(

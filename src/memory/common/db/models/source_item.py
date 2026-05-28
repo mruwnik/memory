@@ -17,6 +17,7 @@ from sqlalchemy import (
     ARRAY,
     UUID,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -355,6 +356,12 @@ class AccessControlMixin:
     `apply_access_filter_to_query` in `memory.common.access_control`. The three
     columns are the contract between models and the AC filter; per-table
     indexes and the sensitivity CHECK constraint stay with each table.
+
+    Caveat: do NOT declare ``Index``, ``UniqueConstraint``, or
+    ``CheckConstraint`` on this mixin without ``declared_attr`` — SQLAlchemy
+    would share the same constraint object across every subclass and reject
+    the metadata at bind time. Per-table indexes and checks live in each
+    subclass's ``__table_args__``.
     """
 
     project_id: Mapped[int | None] = mapped_column(
@@ -365,6 +372,24 @@ class AccessControlMixin:
     )
     creator_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Whether project_id / sensitivity hold a *resolved* (inherited) value
+    # rather than an explicit override. True (the default) means the column
+    # was filled by inheritance resolution (data-source chain / class
+    # default) and the maintenance task may overwrite it as the source
+    # moves. False means a caller assigned the value directly — an explicit
+    # override that resolution must not touch. The `set` event listeners
+    # registered by `register_access_control_inheritance_tracking` flip
+    # these to False on direct assignment, so callers never have to
+    # remember. Note: (project_id=NULL, project_id_inherited=True) means
+    # "no project found via the chain", which is semantically distinct from
+    # (project_id=NULL, project_id_inherited=False) — an explicit NULL.
+    project_id_inherited: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    sensitivity_inherited: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
     )
 
     # Subclasses can override these (e.g., Book / BlogPost default to "public").
@@ -468,6 +493,9 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_project_idx", "project_id"),
         Index("source_sensitivity_idx", "sensitivity"),
         Index("source_creator_idx", "creator_id"),
+        # Drives the recent-tier access-control reconciliation sweep
+        # (reconcile_access_control filters on updated_at >= cutoff).
+        Index("source_updated_at_idx", "updated_at"),
     )
 
     @property
@@ -654,7 +682,10 @@ class SourceItem(AccessControlMixin, Base):
 
         Resolution order (first non-None / non-empty wins, evaluated
         independently for each field):
-        1. Item's own project_id/sensitivity
+        1. Item's own *explicit* project_id/sensitivity (``*_inherited`` is
+           False). A value the row merely inherited on a previous run is
+           NOT a candidate here — it is re-resolved from the chain so a
+           source that moved to a different project propagates.
         2. Each level of the data-source chain (e.g. channel, then workspace)
         3. Class-level defaults (default_project_id, default_sensitivity)
 
@@ -669,8 +700,10 @@ class SourceItem(AccessControlMixin, Base):
         """
         chain = self.get_data_source_chain()
 
-        # Resolve project_id: item -> walk chain -> class default.
-        project_id = self.project_id
+        # Resolve project_id: explicit override -> walk chain -> class
+        # default. An inherited value is treated as absent so it gets
+        # re-resolved (the source may have moved between projects).
+        project_id = None if self.project_id_inherited else self.project_id
         if project_id is None:
             for source in chain:
                 candidate = getattr(source, "project_id", None)
@@ -684,7 +717,7 @@ class SourceItem(AccessControlMixin, Base):
         # NOT NULL with server_default="basic", but SQLAlchemy may not
         # apply defaults until flush — so for in-memory pre-commit
         # objects sensitivity can be None or empty.
-        sensitivity = self.sensitivity
+        sensitivity = None if self.sensitivity_inherited else self.sensitivity
         if not sensitivity:
             for source in chain:
                 candidate = getattr(source, "sensitivity", None)
@@ -695,3 +728,76 @@ class SourceItem(AccessControlMixin, Base):
             sensitivity = self.default_sensitivity
 
         return project_id, sensitivity
+
+    def apply_inherited_access_control(self) -> tuple[int | None, str]:
+        """Resolve access control and persist inherited values onto this row.
+
+        Calls :meth:`resolve_access_control`, then writes the result back to
+        ``project_id`` / ``sensitivity`` for whichever fields are still
+        inherited (``*_inherited`` is True). Explicit overrides are left
+        untouched. The ``*_inherited`` flags are re-asserted to True because
+        the ``set`` event listeners flip them to False on assignment.
+
+        Writes are skipped when the value is unchanged, so calling this on
+        an already-resolved row does not mark it dirty.
+
+        Returns the effective ``(project_id, sensitivity)`` now on the row —
+        suitable for writing to the Qdrant payload.
+        """
+        project_id, sensitivity = self.resolve_access_control()
+
+        # Each assignment below synchronously fires the `set` listener, which
+        # flips the *_inherited flag to False — so the flag must be re-set to
+        # True on the line after. Order matters; don't reorder these pairs.
+        if self.project_id_inherited and self.project_id != project_id:
+            self.project_id = project_id
+            self.project_id_inherited = True
+
+        if self.sensitivity_inherited and self.sensitivity != sensitivity:
+            self.sensitivity = sensitivity
+            self.sensitivity_inherited = True
+
+        return project_id, sensitivity
+
+
+def register_access_control_inheritance_tracking(cls: type) -> None:
+    """Register ``set`` listeners that mark explicit access-control writes.
+
+    For a concrete ``AccessControlMixin`` model, listen for direct
+    assignment to ``project_id`` / ``sensitivity`` and flip the matching
+    ``*_inherited`` flag to False. This is what lets callers assign
+    ``item.project_id = 5`` without separately remembering to record that
+    it is an explicit override rather than an inherited value.
+
+    A ``set`` event fires for **constructor kwargs too**: ``Model(project_id=
+    x)`` marks the row explicit exactly as ``model.project_id = x`` would.
+    Two consequences worth knowing:
+
+    - Ingestion code must NOT pre-fill ``project_id`` / ``sensitivity`` as a
+      "helpful" seed — passing the kwarg disables inheritance for that row.
+      Inheriting content (mail, slack, ...) must simply omit the kwarg.
+    - Passing ``project_id=None`` *explicitly* is distinct from omitting it:
+      it yields ``(project_id=NULL, inherited=False)`` — an explicit NULL,
+      i.e. superadmin/creator-only — whereas omitting the kwarg leaves
+      ``inherited=True`` so the chain is re-resolved.
+
+    ``propagate=True`` so the listener also covers joined-table-inheritance
+    subclasses (``MailMessage``, ``SlackMessage``, ...). Call once per
+    top-level mapped class — see the ``SourceItem`` call below and the
+    ``Deadline`` call in ``deadlines.py``.
+
+    Note: ``set`` events do not fire when SQLAlchemy populates attributes
+    while loading a row from the database, so loading an inherited row does
+    not spuriously mark it explicit.
+    """
+
+    @event.listens_for(cls.project_id, "set", propagate=True)
+    def _project_id_set(target, value, oldvalue, initiator):
+        target.project_id_inherited = False
+
+    @event.listens_for(cls.sensitivity, "set", propagate=True)
+    def _sensitivity_set(target, value, oldvalue, initiator):
+        target.sensitivity_inherited = False
+
+
+register_access_control_inheritance_tracking(SourceItem)

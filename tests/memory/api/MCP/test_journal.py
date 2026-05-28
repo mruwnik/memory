@@ -40,6 +40,27 @@ def sample_project(db_session):
 
 
 @pytest.fixture
+def other_user(db_session):
+    """Create another user that's distinct from ``regular_user``/``admin_user``.
+
+    Used by access-control tests that need a ``creator_id`` for a journal
+    entry/poll which the calling user does NOT own. The FK to ``users``
+    means we can't use a synthetic id like 999.
+    """
+    from memory.common.db.models import HumanUser
+
+    user = HumanUser(
+        name="Other User",
+        email="other@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["teams"],
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+@pytest.fixture
 def sample_item(db_session, sample_project):
     """Create a sample source item for testing."""
     item = SourceItem(
@@ -306,7 +327,7 @@ async def test_add_inherits_project(db_session, admin_user, admin_session, sampl
 
 @pytest.mark.asyncio
 async def test_list_all_blocks_non_member_on_project(
-    db_session, regular_user, user_session, sample_project
+    db_session, regular_user, user_session, sample_project, other_user
 ):
     """A user without team membership in a project must NOT read its journal entries."""
     # Plant a non-private entry on the project so there's something to leak.
@@ -314,7 +335,7 @@ async def test_list_all_blocks_non_member_on_project(
         JournalEntry(
             target_type="project",
             target_id=sample_project.id,
-            creator_id=999,  # someone else
+            creator_id=other_user.id,  # someone else
             project_id=sample_project.id,
             content="confidential project note",
             private=False,
@@ -382,7 +403,7 @@ async def test_add_blocks_non_member_on_project(
 
 @pytest.mark.asyncio
 async def test_list_all_blocks_non_member_on_team(
-    db_session, regular_user, user_session
+    db_session, regular_user, user_session, other_user
 ):
     """A user not in a team must NOT read its journal entries."""
     other_team = Team(name="Other Team", slug="other-team", is_active=True)
@@ -393,7 +414,7 @@ async def test_list_all_blocks_non_member_on_team(
         JournalEntry(
             target_type="team",
             target_id=other_team.id,
-            creator_id=999,
+            creator_id=other_user.id,
             project_id=None,
             content="other-team-internal note",
             private=False,
@@ -411,7 +432,7 @@ async def test_list_all_blocks_non_member_on_team(
 
 @pytest.mark.asyncio
 async def test_list_all_blocks_non_creator_on_poll(
-    db_session, regular_user, user_session
+    db_session, regular_user, user_session, other_user
 ):
     """Polls have no project_id; only the creator (or admin) can read its journal."""
     from memory.common.db.models.polls import AvailabilityPoll
@@ -421,7 +442,7 @@ async def test_list_all_blocks_non_creator_on_poll(
         title="someone else's poll",
         datetime_start=datetime.now(timezone.utc),
         datetime_end=datetime.now(timezone.utc) + timedelta(days=7),
-        user_id=999,  # owned by a different user
+        user_id=other_user.id,  # owned by a different user
     )
     db_session.add(poll)
     db_session.commit()
@@ -430,7 +451,7 @@ async def test_list_all_blocks_non_creator_on_poll(
         JournalEntry(
             target_type="poll",
             target_id=poll.id,
-            creator_id=999,
+            creator_id=other_user.id,
             project_id=None,
             content="poll-creator note",
             private=False,
@@ -448,14 +469,14 @@ async def test_list_all_blocks_non_creator_on_poll(
 
 @pytest.mark.asyncio
 async def test_admin_bypasses_per_type_gate(
-    db_session, admin_session, sample_project
+    db_session, admin_session, sample_project, other_user
 ):
     """Admins bypass the per-target-type access gate (existing behaviour preserved)."""
     db_session.add(
         JournalEntry(
             target_type="project",
             target_id=sample_project.id,
-            creator_id=999,
+            creator_id=other_user.id,
             project_id=sample_project.id,
             content="admin should see this",
             private=False,

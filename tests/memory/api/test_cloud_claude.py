@@ -553,8 +553,6 @@ def test_orchestrator_get_logs_rejects_path_traversal():
     "%2e/relative",
     "a//b",
     "/leading-slash",
-    "trailing/",
-    "",
     "%252e%252e/other-session",
     "%25252e%25252e/other-session",
 ])
@@ -570,6 +568,12 @@ def test_validate_differ_subpath_rejects_traversal(bad_path):
     "api/v1/status",
     "files/workspace/project/main.py",
     "diff/path%20with%20spaces",
+    # Empty subpath = differ SPA root; the iframe loads this on expand.
+    "",
+    # Trailing slash on a real subpath = HTTP "directory" semantics;
+    # unambiguous destination, so safe to forward.
+    "trailing/",
+    "diff/some-dir/",
 ])
 def test_validate_differ_subpath_allows_normal_paths(good_path):
     validate_differ_subpath(good_path)  # Should not raise
@@ -1098,6 +1102,7 @@ def test_spawn_session_cleans_up_snapshot_volume_on_container_failure(tmp_path):
     snapshot_file.write_bytes(b"snapshot-payload")
 
     client = MagicMock()
+    client.list_containers = AsyncMock(return_value=[])
     client.create_initialized_volume = AsyncMock(return_value=None)
     client.create_container = AsyncMock(
         side_effect=OrchestratorError("container limit reached", status_code=503)
@@ -1132,6 +1137,7 @@ def test_spawn_session_does_not_delete_volume_when_volume_creation_fails(tmp_pat
     snapshot_file.write_bytes(b"snapshot-payload")
 
     client = MagicMock()
+    client.list_containers = AsyncMock(return_value=[])
     client.create_initialized_volume = AsyncMock(
         side_effect=OrchestratorError("disk full", status_code=507)
     )
@@ -1162,6 +1168,7 @@ def test_spawn_session_swallows_cleanup_failure(tmp_path):
     snapshot_file.write_bytes(b"snapshot-payload")
 
     client = MagicMock()
+    client.list_containers = AsyncMock(return_value=[])
     client.create_initialized_volume = AsyncMock(return_value=None)
     client.create_container = AsyncMock(
         side_effect=OrchestratorError("primary failure", status_code=503)
@@ -1273,3 +1280,78 @@ def test_validate_scheduled_secret_refs_skips_unset_fields():
     ) as fake_find:
         validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
     fake_find.assert_not_called()
+
+
+# --- spawn_session: per-user concurrent session limit ----------------------
+
+
+def test_spawn_session_rejects_over_concurrent_limit(tmp_path):
+    """When the user already has MAX_CONCURRENT_SESSIONS_PER_USER running
+    containers, a new spawn is rejected with 429 before any volume/container
+    work happens (so we never orphan a snapshot volume on rejection).
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    # fake_user.id == 7, so its sessions are "u7-...".
+    running = [
+        MagicMock(session_id=f"u7-s99-{i:06x}")
+        for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER)
+    ]
+
+    client = MagicMock()
+    client.list_containers = AsyncMock(return_value=running)
+    client.create_initialized_volume = AsyncMock()
+    client.create_container = AsyncMock()
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(spawn_session(request, fake_user, db))
+
+    assert exc_info.value.status_code == 429
+    assert "concurrent sessions" in exc_info.value.detail
+    client.create_initialized_volume.assert_not_awaited()
+    client.create_container.assert_not_awaited()
+
+
+def test_spawn_session_concurrent_limit_counts_only_owner(tmp_path):
+    """Sessions owned by other users must not count against this user's limit:
+    even with many foreign containers running, the spawn proceeds.
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    # All owned by other users (u999), none by u7 — must not block u7.
+    foreign = [
+        MagicMock(session_id=f"u999-s1-{i:06x}")
+        for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER + 3)
+    ]
+
+    result = MagicMock(
+        session_id="u7-s99-abc123",
+        container_name="claude-u7-s99-abc123",
+        status="running",
+        differ=None,
+    )
+
+    client = MagicMock()
+    client.list_containers = AsyncMock(return_value=foreign)
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(return_value=result)
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        info = asyncio.run(spawn_session(request, fake_user, db))
+
+    assert info.session_id == "u7-s99-abc123"
+    client.create_container.assert_awaited_once()

@@ -2,9 +2,9 @@
 """
 Script to run Celery tasks on the Docker Compose setup from your local machine.
 
-This script connects to the RabbitMQ broker running in Docker and sends tasks
-to the workers. It requires the same dependencies as the workers to import
-the task definitions.
+This script connects to the Celery broker (Redis) running in Docker and sends
+tasks to the workers. It requires the same dependencies as the workers to
+import the task definitions.
 
 Usage:
     python run_celery_task.py --help
@@ -115,7 +115,6 @@ TASK_MAPPINGS = {
 QUEUE_MAPPINGS = {
     "email": "email",
     "ebook": "ebooks",
-    "photo": "photo_embed",
 }
 
 
@@ -162,7 +161,8 @@ def cli(ctx, wait, timeout):
     except Exception as e:
         click.echo(f"Error connecting to Celery broker: {e}")
         click.echo(
-            "Make sure Docker Compose is running and RabbitMQ is accessible on localhost:15673"
+            "Make sure Docker Compose is running and the Redis broker is reachable "
+            "(REDIS_HOST/REDIS_PORT in .env)"
         )
         sys.exit(1)
 
@@ -379,10 +379,17 @@ def maintenance_reingest_all_empty_source_items(ctx):
 
 @maintenance.command("reingest-chunk")
 @click.option("--chunk-id", required=True, help="Chunk ID to reingest")
+@click.option(
+    "--collection",
+    required=True,
+    help="Qdrant collection the chunk belongs to (e.g. mail, blog, book)",
+)
 @click.pass_context
-def maintenance_reingest_chunk(ctx, chunk_id):
+def maintenance_reingest_chunk(ctx, chunk_id, collection):
     """Reingest a specific chunk."""
-    execute_task(ctx, "maintenance", "reingest_chunk", chunk_id=chunk_id)
+    execute_task(
+        ctx, "maintenance", "reingest_chunk", chunk_id=chunk_id, collection=collection
+    )
 
 
 @cli.group()  # type: ignore[attr-defined]
@@ -445,7 +452,7 @@ def blogs_add_article_feed(ctx, url, title, description, tags, active, check_int
         url=url,
         title=title,
         description=description,
-        tags=tags.split(","),
+        tags=[t.strip() for t in tags.split(",") if t.strip()],
         active=active,
         check_interval=check_interval,
     )

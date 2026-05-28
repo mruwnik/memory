@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 from sqlalchemy import (
@@ -104,6 +104,8 @@ class Book(Base):
 
 class ArticleFeed(Base):
     __tablename__ = "article_feeds"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "article_feed"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable for legacy rows that pre-date ownership tracking;
@@ -129,7 +131,7 @@ class ArticleFeed(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Access control: items inherit these unless overridden (default public for blogs)
@@ -165,6 +167,8 @@ class ArticleFeed(Base):
 
 class EmailAccount(Base):
     __tablename__ = "email_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "email_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -228,7 +232,7 @@ class EmailAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Access control: items inherit these unless overridden
@@ -298,7 +302,12 @@ class GithubAccount(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    name: Mapped[str] = mapped_column(Text, nullable=False)  # Display name
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Self-attested display name
+
+    # Login GitHub itself reports for the stored credentials. Unlike
+    # ``name`` this is never taken from user input, so it is the only
+    # field safe to use for identity decisions. NULL until verified.
+    verified_login: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Authentication - support both PAT and GitHub App
     auth_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pat' or 'app'
@@ -986,6 +995,8 @@ class GoogleFolder(Base):
     """Tracked Google Drive folder configuration."""
 
     __tablename__ = "google_folders"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "google_folder"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     account_id: Mapped[int] = mapped_column(
@@ -1038,7 +1049,7 @@ class GoogleFolder(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Access control: items inherit these unless overridden
@@ -1075,6 +1086,8 @@ class CalendarAccount(Base):
     """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
 
     __tablename__ = "calendar_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "calendar_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable only because a backfill migration cannot infer the owner
@@ -1151,7 +1164,7 @@ class CalendarAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     # Access control: items inherit these unless overridden
@@ -1198,6 +1211,8 @@ class TranscriptAccount(Base):
     """
 
     __tablename__ = "transcript_accounts"
+    # source_type key for the access-control reconciliation pipeline.
+    data_source_type: ClassVar[str] = "transcript_account"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -1248,7 +1263,7 @@ class TranscriptAccount(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     project_id: Mapped[int | None] = mapped_column(

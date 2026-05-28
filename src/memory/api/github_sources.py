@@ -86,7 +86,8 @@ class GithubRepoResponse(BaseModel):
 
 class GithubAccountResponse(BaseModel):
     id: int
-    name: str
+    name: str  # Self-attested display name — not an identity claim.
+    verified_login: str | None  # GitHub-verified login; None if unverified.
     auth_type: str
     has_access_token: bool
     has_private_key: bool
@@ -164,6 +165,7 @@ def account_to_response(account: GithubAccount) -> GithubAccountResponse:
     return GithubAccountResponse(
         id=cast(int, account.id),
         name=cast(str, account.name),
+        verified_login=cast(str | None, account.verified_login),
         auth_type=cast(str, account.auth_type),
         has_access_token=bool(account.access_token),
         has_private_key=bool(account.private_key),
@@ -175,6 +177,36 @@ def account_to_response(account: GithubAccount) -> GithubAccountResponse:
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         repos=[repo_to_response(repo) for repo in account.repos],
     )
+
+
+def account_credentials(account: GithubAccount) -> GithubCredentials:
+    """Build a GithubCredentials object from a stored account."""
+    return GithubCredentials(
+        auth_type=cast(str, account.auth_type),
+        access_token=cast(str | None, account.access_token),
+        app_id=cast(int | None, account.app_id),
+        installation_id=cast(int | None, account.installation_id),
+        private_key=cast(str | None, account.private_key),
+    )
+
+
+def verify_account_identity(account: GithubAccount) -> str | None:
+    """Resolve the real GitHub login for an account's stored credentials.
+
+    Returns the login GitHub itself reports, or None if the credentials
+    can't be verified (invalid, or GitHub unreachable). The result is
+    never derived from user input, so it is safe to store as a verified
+    identity. Verification failures are non-fatal: the account is still
+    usable, it just stays unverified until ``validate_account`` succeeds.
+    """
+    try:
+        client = GithubClient(account_credentials(account))
+        return client.get_authenticated_login()
+    except Exception as e:
+        logger.warning(
+            "GitHub identity verification failed for account %s: %s", account.id, e
+        )
+        return None
 
 
 # --- Account Endpoints ---
@@ -264,6 +296,16 @@ def create_account(
         private_key=data.private_key,
     )
     db.add(account)
+    # Commit the row first, *then* verify. Identity verification makes a
+    # GitHub network call (up to ~90s worst case for App auth); keeping it
+    # outside the transaction means the DB connection and INSERT are not
+    # held open for its duration. The account row itself is intentionally
+    # decoupled from GitHub uptime (see issue #84 design notes).
+    db.commit()
+    db.refresh(account)
+    # Resolve identity from the credentials themselves — never trust the
+    # client-supplied ``name`` as a GitHub identity (see issue #84).
+    account.verified_login = verify_account_identity(account)
     db.commit()
     db.refresh(account)
 
@@ -293,19 +335,35 @@ def update_account(
 
     if updates.name is not None:
         account.name = updates.name
-    if updates.access_token is not None:
-        account.access_token = updates.access_token
-    if updates.app_id is not None:
-        account.app_id = updates.app_id
-    if updates.installation_id is not None:
-        account.installation_id = updates.installation_id
-    if updates.private_key is not None:
-        account.private_key = updates.private_key
     if updates.active is not None:
         account.active = updates.active
 
+    # Track credential changes: if any change, the previously verified
+    # login no longer reflects the stored credentials and must be redone.
+    credentials_changed = False
+    if updates.access_token is not None:
+        account.access_token = updates.access_token
+        credentials_changed = True
+    if updates.app_id is not None:
+        account.app_id = updates.app_id
+        credentials_changed = True
+    if updates.installation_id is not None:
+        account.installation_id = updates.installation_id
+        credentials_changed = True
+    if updates.private_key is not None:
+        account.private_key = updates.private_key
+        credentials_changed = True
+
+    # Commit the field changes first so the transaction (and the row
+    # UPDATE lock) is not held open across the GitHub network call that
+    # identity verification performs. See create_account for rationale.
     db.commit()
     db.refresh(account)
+
+    if credentials_changed:
+        account.verified_login = verify_account_identity(account)
+        db.commit()
+        db.refresh(account)
 
     return account_to_response(account)
 
@@ -331,30 +389,28 @@ def validate_account(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Validate GitHub API access for an account."""
+    """Validate GitHub API access for an account.
+
+    On success this also (re)stores the GitHub-verified login, so it
+    doubles as the re-verification path for accounts whose verification
+    was skipped because GitHub was unreachable at create/update time.
+    """
     account = get_user_account(db, GithubAccount, account_id, user)
 
     try:
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
-
-        # Test by getting authenticated user info
-        user_info = client.get_authenticated_user()
-
-        return {
-            "status": "success",
-            "message": f"Authenticated as {user_info.get('login', 'unknown')}",
-            "user": user_info.get("login"),
-            "scopes": user_info.get("scopes", []),
-        }
+        client = GithubClient(account_credentials(account))
+        login = client.get_authenticated_login()
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+    account.verified_login = login
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Authenticated as {login}",
+        "user": login,
+    }
 
 
 class AvailableRepoResponse(BaseModel):
@@ -438,14 +494,7 @@ def list_available_repos(
             return [AvailableRepoResponse(**repo) for repo in cached]
 
     try:
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = GithubClient(account_credentials(account))
 
         repos_data = []
         for repo in client.list_repos(max_repos=max_repos, include_archived=include_archived):
@@ -480,14 +529,7 @@ def list_available_projects(
     account = get_user_account(db, GithubAccount, account_id, user)
 
     try:
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = GithubClient(account_credentials(account))
 
         projects = []
         for project in client.list_projects(owner, is_org, include_closed):
@@ -534,14 +576,7 @@ def add_repo(
 
     # Fetch repo from GitHub to validate and get canonical info
     try:
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = GithubClient(account_credentials(account))
         github_repo = client.get_repo(data.owner, data.name)
         if not github_repo:
             raise HTTPException(
@@ -794,14 +829,7 @@ def add_project(
 
     # Fetch project from GitHub
     try:
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = GithubClient(account_credentials(account))
 
         # Fetch the specific project directly via GraphQL
         project_data = client.fetch_project(data.owner, data.project_number, data.is_org)

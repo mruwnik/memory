@@ -14,6 +14,7 @@ secrets:
   postgres_password: { file: ./secrets/postgres_password.txt }
   openai_key: { file: ./secrets/openai_key.txt }
   anthropic_key: { file: ./secrets/anthropic_key.txt }
+  voyage_key: { file: ./secrets/voyage_key.txt }
   ssh_private_key: { file: ./secrets/ssh_private_key }
   ssh_public_key: { file: ./secrets/ssh_public_key }
   ssh_known_hosts: { file: ./secrets/ssh_known_hosts }
@@ -54,7 +55,7 @@ x-worker-base: &worker-base
     OPENAI_API_KEY_FILE: /run/secrets/openai_key
     ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
     SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
-    VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+    VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
     DISCORD_COLLECTOR_PORT: 8003
   secrets:
@@ -62,6 +63,7 @@ x-worker-base: &worker-base
       postgres_password,
       openai_key,
       anthropic_key,
+      voyage_key,
       ssh_private_key,
       ssh_public_key,
       ssh_known_hosts,
@@ -119,7 +121,6 @@ services:
         condition: service_healthy
     environment:
       <<: *env
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     secrets: [postgres_password, secrets_encryption_key]
@@ -218,11 +219,10 @@ services:
       SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       VITE_SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       STATIC_DIR: "/app/static"
-      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
       ENABLE_BM25_SEARCH: true
       OPENAI_API_KEY_FILE: /run/secrets/openai_key
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
@@ -242,8 +242,10 @@ services:
       # story for the SlowAPI bucket-key proxy list. Defaults are loopback so
       # operators not behind a proxy stay secure-by-default.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1}
+      OAUTH_REDIRECT_URI_ALLOWLIST: ${OAUTH_REDIRECT_URI_ALLOWLIST:-}
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
-    secrets: [postgres_password, openai_key, anthropic_key, secrets_encryption_key]
+    secrets:
+      [postgres_password, openai_key, anthropic_key, voyage_key, secrets_encryption_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
       # Socket for Claude session orchestrator
@@ -278,7 +280,7 @@ services:
     environment:
       <<: *worker-env
       INTERNAL_API_URL: "http://api:8000"
-      QUEUES: "backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
+      QUEUES: "backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:
       - ./memory_files:/app/memory_files:rw
@@ -291,7 +293,6 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
     environment:
       <<: *worker-env
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
       DISCORD_COLLECTOR_ENABLED: true
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}

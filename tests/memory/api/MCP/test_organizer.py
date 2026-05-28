@@ -137,7 +137,7 @@ class _AdminUserStub:
 
 
 @pytest.fixture(autouse=True)
-def _mock_admin_user():
+def _mock_admin_user(_mock_mcp_modules, db_session):
     """Default to an admin user for organizer tests.
 
     The pre-IDOR-fix tests called organizer tools without any auth context
@@ -145,8 +145,29 @@ def _mock_admin_user():
     entirely. Defaulting to an admin preserves the original test semantics
     while letting individual tests opt into a non-admin user (and verify
     IDOR-blocking) by re-patching.
+
+    Depends on ``_mock_mcp_modules`` so it runs AFTER the fastmcp/mcp
+    sys.modules swap. Otherwise the ``patch`` here resolves the target
+    against the real organizer module, then ``_mock_mcp_modules`` evicts
+    it from sys.modules; when the test re-imports organizer, the patch is
+    lost and ``get_mcp_current_user`` falls through to the real (no-auth)
+    code path which returns ``None``.
+
+    A real ``HumanUser`` row is created so that ``creator_id`` writes
+    (e.g. in ``create_task``) don't violate the FK to ``users``.
     """
-    admin = _AdminUserStub()
+    from memory.common.db.models import HumanUser
+
+    user = HumanUser(
+        name="Organizer Admin",
+        email="organizer-admin@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["*"],
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    admin = _AdminUserStub(user_id=user.id)
     with (
         patch(
             "memory.api.MCP.servers.organizer.get_mcp_current_user",
@@ -896,28 +917,58 @@ async def test_list_tasks_various_priorities(
 
 
 class _NonAdminUserStub:
-    """Non-admin caller for IDOR tests. id=999 so it never collides with task creators."""
+    """Non-admin caller for IDOR tests. id is set to a real DB user's id."""
 
-    def __init__(self, user_id: int = 999) -> None:
+    def __init__(self, user_id: int) -> None:
         self.id = user_id
         self.scopes = ["organizer", "organizer:write"]
 
 
+@pytest.fixture
+def access_users(db_session):
+    """Two real ``HumanUser`` rows used by the IDOR tests.
+
+    Returns ``(owner, caller)``. ``owner`` is the creator_id used when the
+    test wants the task to belong to *someone else*; ``caller`` is the
+    non-admin user the test impersonates via ``_NonAdminUserStub``. Both
+    must exist as real rows because ``source_item.creator_id`` has an FK
+    to ``users``.
+    """
+    from memory.common.db.models import HumanUser
+
+    owner = HumanUser(
+        name="Task Owner",
+        email="task-owner@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["organizer"],
+    )
+    caller = HumanUser(
+        name="Caller",
+        email="caller@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["organizer", "organizer:write"],
+    )
+    db_session.add_all([owner, caller])
+    db_session.commit()
+    return owner, caller
+
+
 @pytest.mark.asyncio
-async def test_fetch_blocks_non_owner_without_project_access(db_session, sample_tasks):
+async def test_fetch_blocks_non_owner_without_project_access(db_session, sample_tasks, access_users):
     """A non-admin without project access must NOT be able to fetch someone else's task."""
     from memory.api.MCP.servers.organizer import fetch
 
+    owner, caller = access_users
     # Pin the task to a project the caller has no membership in, set creator_id
     # to a different user so creator-bypass doesn't trigger.
     task = sample_tasks[0]
-    task.creator_id = 1  # owned by user 1
-    task.project_id = 12345  # caller has no role in this project
+    task.creator_id = owner.id  # owned by someone else
+    task.project_id = None  # NULL = superadmin-only project (caller has no role)
     task.sensitivity = "confidential"
     db_session.commit()
 
     fetch_fn = get_fn(fetch)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller.id)
 
     with (
         patch(
@@ -942,17 +993,18 @@ async def test_fetch_blocks_non_owner_without_project_access(db_session, sample_
 
 
 @pytest.mark.asyncio
-async def test_fetch_allows_creator(db_session, sample_tasks):
+async def test_fetch_allows_creator(db_session, sample_tasks, access_users):
     """The task's creator can fetch it even without project access."""
     from memory.api.MCP.servers.organizer import fetch
 
+    _owner, caller = access_users
     task = sample_tasks[0]
-    task.creator_id = 999  # owned by the calling user
+    task.creator_id = caller.id  # owned by the calling user
     task.project_id = None
     db_session.commit()
 
     fetch_fn = get_fn(fetch)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller.id)
 
     with (
         patch(
@@ -975,28 +1027,29 @@ async def test_fetch_allows_creator(db_session, sample_tasks):
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_filters_to_accessible(db_session, sample_tasks):
+async def test_list_tasks_filters_to_accessible(db_session, sample_tasks, access_users):
     """list_tasks must only return tasks the caller has access to."""
     from memory.api.MCP.servers.organizer import list_tasks
 
+    owner, caller = access_users
     # One task owned by the caller (creator override) — visible.
-    sample_tasks[0].creator_id = 999
+    sample_tasks[0].creator_id = caller.id
     sample_tasks[0].project_id = None
     sample_tasks[0].sensitivity = "basic"
 
     # Another task owned by someone else, in a project the caller can't see.
-    sample_tasks[1].creator_id = 1
-    sample_tasks[1].project_id = 12345
+    sample_tasks[1].creator_id = owner.id
+    sample_tasks[1].project_id = None  # NULL → superadmin-only project
     sample_tasks[1].sensitivity = "confidential"
 
     # Public task — anyone authenticated should see this.
-    sample_tasks[2].creator_id = 1
+    sample_tasks[2].creator_id = owner.id
     sample_tasks[2].project_id = None
     sample_tasks[2].sensitivity = "public"
     db_session.commit()
 
     list_tasks_fn = get_fn(list_tasks)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller.id)
 
     with (
         patch(
@@ -1023,18 +1076,20 @@ async def test_list_tasks_filters_to_accessible(db_session, sample_tasks):
 
 
 @pytest.mark.asyncio
-async def test_update_task_blocks_non_creator_non_admin(db_session, sample_tasks):
+async def test_update_task_blocks_non_creator_non_admin(db_session, sample_tasks, access_users):
     """A user who can READ a task but didn't create it cannot update it."""
     from memory.api.MCP.servers.organizer import update_task
 
+    owner, caller = access_users
     task = sample_tasks[0]
-    task.creator_id = 1  # owned by someone else
+    task.creator_id = owner.id  # owned by someone else
     task.project_id = None
     task.sensitivity = "public"  # readable to caller via public bypass
     db_session.commit()
+    task_id = task.id
 
     update_task_fn = get_fn(update_task)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller.id)
 
     with (
         patch(
@@ -1051,26 +1106,29 @@ async def test_update_task_blocks_non_creator_non_admin(db_session, sample_tasks
         ),
     ):
         with pytest.raises(PermissionError, match="only update tasks you created"):
-            await update_task_fn(task_id=task.id, title="hijack")
+            await update_task_fn(task_id=task_id, title="hijack")
 
-    # Title was not changed
-    db_session.refresh(task)
-    assert task.task_title == "Urgent task due today"
+    # Title was not changed — re-query rather than refresh, since the patched
+    # ``make_session`` context closed the test session on exit.
+    refreshed = db_session.query(Task).filter_by(id=task_id).first()
+    assert refreshed is not None
+    assert refreshed.task_title == "Urgent task due today"
 
 
 @pytest.mark.asyncio
-async def test_update_task_blocks_non_accessible_with_not_found(db_session, sample_tasks):
+async def test_update_task_blocks_non_accessible_with_not_found(db_session, sample_tasks, access_users):
     """A user who CANNOT see the task gets 'not found' (no existence leak)."""
     from memory.api.MCP.servers.organizer import update_task
 
+    owner, caller = access_users
     task = sample_tasks[0]
-    task.creator_id = 1
-    task.project_id = 12345  # caller has no access
+    task.creator_id = owner.id
+    task.project_id = None  # NULL → superadmin-only project (caller has no access)
     task.sensitivity = "confidential"
     db_session.commit()
 
     update_task_fn = get_fn(update_task)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller.id)
 
     with (
         patch(
@@ -1091,12 +1149,14 @@ async def test_update_task_blocks_non_accessible_with_not_found(db_session, samp
 
 
 @pytest.mark.asyncio
-async def test_create_task_sets_creator_id(db_session):
+async def test_create_task_sets_creator_id(db_session, access_users):
     """create_task must set creator_id so user_can_edit works thereafter."""
     from memory.api.MCP.servers.organizer import create_task
 
+    _owner, caller = access_users
+    caller_id = caller.id
     create_task_fn = get_fn(create_task)
-    non_admin = _NonAdminUserStub()
+    non_admin = _NonAdminUserStub(user_id=caller_id)
 
     with (
         patch(
@@ -1116,4 +1176,4 @@ async def test_create_task_sets_creator_id(db_session):
 
     task = db_session.query(Task).filter_by(id=result["id"]).first()
     assert task is not None
-    assert task.creator_id == 999
+    assert task.creator_id == caller_id

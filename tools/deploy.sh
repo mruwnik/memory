@@ -143,6 +143,7 @@ run_session() {
     local github_token_write=""
     local custom_cmd=""
     local rebuild=true
+    local temp_snapshot=""
 
     # Parse options
     while [[ $# -gt 0 ]]; do
@@ -204,11 +205,21 @@ run_session() {
     fi
 
     if [[ -n "$snapshot" ]]; then
-        # Use unique temp file to avoid race condition with concurrent sessions
-        local temp_snapshot="/tmp/snapshot-$$.tar.gz"
+        # mktemp on the server guarantees a unique path even with concurrent
+        # sessions / multiple operators (local $$ would not).
+        # Suppress stderr so a stray warning line cannot corrupt the captured path.
+        temp_snapshot=$(ssh "$REMOTE_HOST" "mktemp /tmp/snapshot-XXXXXX.tar.gz" 2>/dev/null)
+        if [[ -z "$temp_snapshot" ]]; then
+            echo -e "${RED}Error: failed to create temp snapshot path on $REMOTE_HOST${NC}"
+            return 1
+        fi
+        # Remove the server-side temp file on any script exit, including
+        # interrupts (Ctrl-C / SIGTERM), so it cannot leak. mktemp output is
+        # always a safe path (/tmp/snapshot-XXXXXX.tar.gz), so embedding it in
+        # the trap string is sound.
+        trap "ssh '$REMOTE_HOST' \"rm -f '$temp_snapshot'\" 2>/dev/null || true" EXIT
         ssh "$REMOTE_HOST" "cp '$snapshot' '$temp_snapshot'"
         docker_cmd="$docker_cmd -v $temp_snapshot:/snapshot/snapshot.tar.gz:ro"
-        # Note: temp file cleanup is handled by the next run or system tmpfs cleanup
     fi
 
     if [[ -n "$environment" ]]; then
@@ -229,9 +240,12 @@ run_session() {
 
     docker_cmd="$docker_cmd claude-cloud:latest"
 
-    # Run the session
-    ssh "$REMOTE_HOST" "$docker_cmd"
-    return $?
+    # Run the session. Capture the exit code via `|| ...` so that `set -e`
+    # does not abort before returning; the EXIT trap handles temp cleanup.
+    local session_status=0
+    ssh "$REMOTE_HOST" "$docker_cmd" || session_status=$?
+
+    return $session_status
 }
 
 # Main

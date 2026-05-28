@@ -383,7 +383,8 @@ def is_valid_session_id(session_id: str) -> bool:
 
 
 class UnsafeSubpathError(Exception):
-    """Internal sentinel: differ subpath contains a traversal or empty segment."""
+    """Internal sentinel: differ subpath contains a traversal sequence or an
+    unsafe (leading/interior) empty segment."""
 
 
 def check_no_traversal(differ_path: str) -> None:
@@ -397,9 +398,13 @@ def check_no_traversal(differ_path: str) -> None:
     changing (which is the only safe way to know there's no more decoding
     a downstream proxy could apply).
 
-    Empty segments (``a//b``) are also rejected because httpx (or a
-    downstream proxy) may normalise them into a different orchestrator
-    endpoint than what the user typed.
+    Leading or interior empty segments (``/foo``, ``a//b``) are rejected
+    because httpx or a downstream proxy may normalise them into a
+    different orchestrator endpoint than what the user typed.  A single
+    trailing empty segment (``foo/``) and the entirely-empty subpath are
+    allowed: both point to an unambiguous destination (the SPA's root
+    or a "directory" URL), and the differ SPA's iframe relies on the
+    empty-subpath form to load its index.
 
     Shared between the HTTP and WebSocket differ proxies so both surfaces
     stay in lock-step on what counts as "safe to forward".
@@ -410,8 +415,14 @@ def check_no_traversal(differ_path: str) -> None:
         if decoded == prev:
             break
         prev = decoded
-    for segment in decoded.split("/"):
-        if segment in ("", ".", ".."):
+    if decoded == "":
+        return
+    segments = decoded.split("/")
+    last = len(segments) - 1
+    for i, segment in enumerate(segments):
+        if segment in (".", ".."):
+            raise UnsafeSubpathError(segment)
+        if segment == "" and i != last:
             raise UnsafeSubpathError(segment)
 
 
@@ -722,6 +733,32 @@ async def spawn_session(
     # Note: mutual exclusivity of snapshot_id/environment_id is validated by
     # SpawnRequest.check_source_mutual_exclusivity (returns 422 on violation)
 
+    client = get_orchestrator_client()
+
+    # Enforce per-user limit on concurrent running sessions to bound host
+    # CPU/memory usage. Checked up front (before any volume work) so we fail
+    # fast and don't leave an orphan snapshot volume behind on rejection.
+    # NOTE: soft limit — a TOCTOU race is possible with simultaneous spawns,
+    # which is acceptable here. This also covers cron-triggered spawns, which
+    # reach this same endpoint via the scheduler worker.
+    async with map_orchestrator_errors(
+        log_msg="Failed to list sessions for concurrency check",
+        status_code=503,
+        detail_template="Orchestrator error: {e}",
+    ):
+        containers = await client.list_containers()
+    active_count = sum(
+        1 for c in containers if user_owns_session(user, c.session_id)
+    )
+    if active_count >= settings.MAX_CONCURRENT_SESSIONS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Maximum of {settings.MAX_CONCURRENT_SESSIONS_PER_USER} "
+                "concurrent sessions per user reached"
+            ),
+        )
+
     host_snapshot_path: str | None = None
     volume_name: str | None = None
     environment: ClaudeEnvironment | None = None
@@ -767,7 +804,6 @@ async def spawn_session(
         environment_id=request.environment_id,
         snapshot_id=request.snapshot_id,
     )
-    client = get_orchestrator_client()
 
     image = "claude-cloud:latest"
     env: dict[str, str] = {}

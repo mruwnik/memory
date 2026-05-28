@@ -18,6 +18,7 @@ class MCPServer(str, Enum):
     BOOKS = "books"
     CLAUDE = "claude"
     CORE = "core"
+    DEADLINES = "deadlines"
     DISCORD = "discord"
     EMAIL = "email"
     FORECAST = "forecast"
@@ -68,6 +69,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.core import core_mcp
 
             return core_mcp
+        case MCPServer.DEADLINES:
+            from memory.api.MCP.servers.deadlines import deadlines_mcp
+
+            return deadlines_mcp
         case MCPServer.DISCORD:
             from memory.api.MCP.servers.discord import discord_mcp
 

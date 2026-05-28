@@ -311,7 +311,9 @@ def upload_snapshot(host: str, api_key: str, name: str, data: bytes, hash_: str,
     headers = {"Authorization": f"Bearer {api_key}"}
 
     # Check if already exists
-    resp = requests.get(f"{host}/claude/snapshots/{hash_}", headers=headers)
+    resp = requests.get(
+        f"{host}/claude/snapshots/{hash_}", headers=headers, timeout=30
+    )
     if resp.status_code == 200:
         try:
             result = {"id": resp.json()["id"], "hash": hash_, "created": False}
@@ -330,6 +332,7 @@ def upload_snapshot(host: str, api_key: str, name: str, data: bytes, hash_: str,
         headers=headers,
         files={"file": ("snapshot.tar.gz", data, "application/gzip")},
         data={"name": name},
+        timeout=300,
     )
     if resp.status_code != 200:
         print(f"Error uploading: {resp.status_code}", file=sys.stderr)

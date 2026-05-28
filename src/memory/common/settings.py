@@ -175,6 +175,11 @@ ARTICLE_FEED_SYNC_INTERVAL = int(os.getenv("ARTICLE_FEED_SYNC_INTERVAL", 30 * 60
 CLEAN_COLLECTION_INTERVAL = int(os.getenv("CLEAN_COLLECTION_INTERVAL", 24 * 60 * 60))
 CHUNK_REINGEST_INTERVAL = int(os.getenv("CHUNK_REINGEST_INTERVAL", 60 * 60))
 NOTES_SYNC_INTERVAL = int(os.getenv("NOTES_SYNC_INTERVAL", 15 * 60))
+# How often the "recent" access-control reconciliation sweep runs (the
+# frequent backstop for the event-driven dispatch). The full sweep is daily.
+ACCESS_CONTROL_RECONCILE_INTERVAL = int(
+    os.getenv("ACCESS_CONTROL_RECONCILE_INTERVAL", 30 * 60)
+)
 LESSWRONG_SYNC_INTERVAL = int(os.getenv("LESSWRONG_SYNC_INTERVAL", 60 * 60 * 24))
 SCHEDULED_CALL_RUN_INTERVAL = int(os.getenv("SCHEDULED_CALL_RUN_INTERVAL", 60))
 GITHUB_SYNC_INTERVAL = int(os.getenv("GITHUB_SYNC_INTERVAL", 60 * 60))  # 1 hour
@@ -201,6 +206,11 @@ METRICS_SUMMARY_REFRESH_MINUTE = int(
 CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 * 24))
 
 # Embedding settings
+# Voyage powers both embeddings (embedding.py) and reranking (search/rerank.py).
+# Read via secret_env so it can be supplied as a Docker secret (VOYAGE_API_KEY_FILE)
+# instead of a plain env var. The voyageai SDK only reads the VOYAGE_API_KEY env
+# var itself, so call sites must pass this value explicitly as api_key=.
+VOYAGE_API_KEY = secret_env("VOYAGE_API_KEY")
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
 
@@ -298,6 +308,13 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
 # Claude scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
+
+# Maximum number of concurrently running Claude session containers a single
+# user may have. Bounds host CPU/memory usage. Enforced in the /claude/spawn
+# endpoint, which also covers cron-triggered spawns (they call that endpoint).
+MAX_CONCURRENT_SESSIONS_PER_USER = int(
+    os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", 4)
+)
 
 # Maximum allowed body size for `/claude/transfer/push` (tar uploads to a
 # Claude container). The endpoint buffers the body in API memory before
@@ -447,6 +464,17 @@ DISCORD_COLLECT_BOTS = boolean_env("DISCORD_COLLECT_BOTS", True)
 DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
 DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
+
+# Discord history backfill
+DISCORD_BACKFILL_INTERVAL = int(
+    os.getenv("DISCORD_BACKFILL_INTERVAL", 60 * 60 * 24 * 7)  # weekly (seconds)
+)
+DISCORD_BACKFILL_JITTER_SECONDS = int(
+    os.getenv("DISCORD_BACKFILL_JITTER_SECONDS", 60 * 60 * 3)  # spread dispatch over 3h
+)
+DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
+    os.getenv("DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN", 5000)
+)
 
 # Slack integration settings
 # Polling interval is the safety net behind the push events endpoint

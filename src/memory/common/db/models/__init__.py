@@ -167,6 +167,16 @@ from memory.common.db.models.journal import (
     user_can_access_journal_entry,
     build_journal_access_filter,
 )
+from memory.common.db.models.deadlines import (
+    Deadline,
+    DeadlinePayload,
+    deadline_attachments,
+)
+# Importing this registers the before_flush/after_commit listeners that
+# dispatch access-control reconciliation when a data source's config changes.
+from memory.common.db.models.access_control_events import (
+    ACCESS_CONTROLLED_SOURCE_MODELS,
+)
 
 Payload = (
     SourceItemPayload
@@ -184,9 +194,11 @@ Payload = (
     | TaskPayload
     | CalendarEventPayload
     | ReportPayload
+    | DeadlinePayload
 )
 
 __all__ = [
+    "ACCESS_CONTROLLED_SOURCE_MODELS",
     "Base",
     "Chunk",
     "clean_filename",
@@ -334,4 +346,8 @@ __all__ = [
     "JournalEntry",
     "user_can_access_journal_entry",
     "build_journal_access_filter",
+    # Deadlines
+    "Deadline",
+    "DeadlinePayload",
+    "deadline_attachments",
 ]
